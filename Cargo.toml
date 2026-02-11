@@ -24,6 +24,9 @@ thiserror = "1.0"
 # Secrets management (encrypted on-disk vault)
 securestore = "0.100.0"
 
+# TOTP 2FA support
+totp-rs = { version = "5.7", features = ["gen_secret", "otpauth"] }
+
 # File system and path handling
 dirs = "5.0"
 

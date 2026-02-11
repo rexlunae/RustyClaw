@@ -9,7 +9,7 @@ use std::io::{self, BufRead, Write};
 use anyhow::{Context, Result};
 use crossterm::terminal;
 
-use crate::config::{Config, ModelProvider};
+use crate::config::{Config, MessengerConfig, ModelProvider};
 use crate::providers::PROVIDERS;
 use crate::secrets::SecretsManager;
 use crate::soul::{SoulManager, DEFAULT_SOUL_CONTENT};
@@ -67,23 +67,34 @@ pub fn run_onboard_wizard(
     }
     println!();
 
-    // ── 1. Select model provider ───────────────────────────────────
-    let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
-    let provider = match arrow_select(&provider_names, "Select a model provider:")? {
-        Some(idx) => &PROVIDERS[idx],
-        None => {
-            println!("  {}", t::warn("Cancelled."));
-            return Ok(false);
-        }
-    };
+    // ── 1. Secrets vault setup ─────────────────────────────────────
+    let vault_path = config.credentials_dir().join("secrets.json");
+    let key_path = config.credentials_dir().join("secrets.key");
+    let vault_exists = vault_path.exists();
 
-    println!();
-    println!("  {}", t::icon_ok(&format!("Selected: {}", t::accent_bright(provider.display))));
-    println!();
+    // On reset, remove the old vault so we start fresh.
+    if reset && vault_exists {
+        let _ = std::fs::remove_file(&vault_path);
+        let _ = std::fs::remove_file(&key_path);
+        config.secrets_password_protected = false;
+        config.totp_enabled = false;
+        println!("  {}", t::icon_ok("Previous secrets vault removed."));
+        println!();
+    }
 
-    // ── 1b. Optional password for secrets vault ────────────────────
-    let vault_exists = config.credentials_dir().join("secrets.json").exists();
+    let vault_exists = vault_path.exists();
+
     if !vault_exists {
+        // ── First-time setup ───────────────────────────────────────
+        println!("{}", t::heading("Secrets vault setup:"));
+        println!();
+        println!("  RustyClaw stores API keys, tokens, and other credentials");
+        println!("  in an encrypted vault.  You can protect it with a");
+        println!("  passphrase and optionally enable 2FA via an authenticator");
+        println!("  app for an extra layer of security.");
+        println!();
+
+        // ── 1a. Optional password ──────────────────────────────────
         println!("{}", t::bold("You can protect your secrets vault with a password."));
         println!("{}", t::muted("If you skip this, a key file will be generated instead."));
         println!();
@@ -103,7 +114,7 @@ pub fn run_onboard_wizard(
             loop {
                 let confirm = prompt_secret(&mut reader, &format!("{} ", t::accent("Confirm password:")))?;
                 if confirm.trim() == pw {
-                    secrets.set_password(pw);
+                    secrets.set_password(pw.clone());
                     config.secrets_password_protected = true;
                     println!("  {}", t::icon_ok("Secrets vault will be password-protected."));
                     break;
@@ -112,14 +123,99 @@ pub fn run_onboard_wizard(
             }
         }
         println!();
-    } else if config.secrets_password_protected {
-        // Vault already exists with a password — make sure SecretsManager has it.
-        let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("Enter vault password:")))?;
-        secrets.set_password(pw.trim().to_string());
+
+        // ── 1b. Optional TOTP 2FA ──────────────────────────────────
+        setup_totp_enrollment(&mut reader, config, secrets)?;
+    } else {
+        // ── Existing vault — unlock it ─────────────────────────────
+        if config.secrets_password_protected {
+            let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("Enter vault password:")))?;
+            secrets.set_password(pw.trim().to_string());
+        }
+
+        // Verify TOTP if enabled.
+        if config.totp_enabled {
+            verify_totp_loop(&mut reader, secrets)?;
+        }
+
+        // Offer to reconfigure vault security.
+        println!("{}", t::heading("Secrets vault:"));
+        println!();
+        let pw_status = if config.secrets_password_protected { "password-protected" } else { "key-file (no password)" };
+        let totp_status = if config.totp_enabled { "enabled" } else { "disabled" };
+        println!("  Encryption : {}", t::info(pw_status));
+        println!("  2FA (TOTP) : {}", t::info(totp_status));
+        println!();
+
+        let reconfig = prompt_line(
+            &mut reader,
+            &format!("{} ", t::accent("Reconfigure vault security? [y/N]:")),
+        )?;
+
+        if reconfig.trim().eq_ignore_ascii_case("y") {
+            println!();
+
+            // ── Change password ────────────────────────────────────
+            println!("{}", t::bold("Change vault password:"));
+            println!("{}", t::muted("Leave blank to keep current setting."));
+            println!();
+
+            let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("New vault password (blank to keep):")))?;
+            let pw = pw.trim().to_string();
+
+            if !pw.is_empty() {
+                loop {
+                    let confirm = prompt_secret(&mut reader, &format!("{} ", t::accent("Confirm password:")))?;
+                    if confirm.trim() == pw {
+                        secrets.set_password(pw.clone());
+                        config.secrets_password_protected = true;
+                        println!("  {}", t::icon_ok("Vault password updated."));
+                        break;
+                    }
+                    println!("  {}", t::icon_warn("Passwords do not match — please try again."));
+                }
+            } else {
+                println!("  {}", t::muted("Keeping current password setting."));
+            }
+            println!();
+
+            // ── 2FA reconfigure ────────────────────────────────────
+            if config.totp_enabled {
+                let disable = prompt_line(
+                    &mut reader,
+                    &format!("{} ", t::accent("Disable 2FA? [y/N]:")),
+                )?;
+                if disable.trim().eq_ignore_ascii_case("y") {
+                    secrets.remove_totp()?;
+                    config.totp_enabled = false;
+                    println!("  {}", t::icon_ok("2FA disabled."));
+                } else {
+                    println!("  {}", t::muted("Keeping 2FA enabled."));
+                }
+            } else {
+                setup_totp_enrollment(&mut reader, config, secrets)?;
+            }
+        } else {
+            println!("  {}", t::muted("Keeping current vault settings."));
+        }
         println!();
     }
 
-    // ── 2. Authentication ──────────────────────────────────────────
+    // ── 2. Select model provider ───────────────────────────────────
+    let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
+    let provider = match arrow_select(&provider_names, "Select a model provider:")? {
+        Some(idx) => &PROVIDERS[idx],
+        None => {
+            println!("  {}", t::warn("Cancelled."));
+            return Ok(false);
+        }
+    };
+
+    println!();
+    println!("  {}", t::icon_ok(&format!("Selected: {}", t::accent_bright(provider.display))));
+    println!();
+
+    // ── 3. Authentication ──────────────────────────────────────────
     use crate::providers::AuthMethod;
 
     if let Some(secret_key) = provider.secret_key {
@@ -186,7 +282,7 @@ pub fn run_onboard_wizard(
         println!();
     }
 
-    // ── 3. Base URL (only for custom or copilot-proxy) ────────────
+    // ── 4. Base URL (only for custom or copilot-proxy) ────────────
     let base_url: String = if provider.id == "custom" || provider.id == "copilot-proxy" {
         let prompt_text = if provider.id == "copilot-proxy" {
             "Copilot Proxy URL:"
@@ -206,7 +302,7 @@ pub fn run_onboard_wizard(
         provider.base_url.unwrap_or("").to_string()
     };
 
-    // ── 4. Select a model ──────────────────────────────────────────
+    // ── 5. Select a model ──────────────────────────────────────────
 
     // Try to dynamically fetch models from the provider API.
     let api_key = provider.secret_key
@@ -264,7 +360,7 @@ pub fn run_onboard_wizard(
         println!("  {}", t::icon_ok(&format!("Default model: {}", t::accent_bright(&model))));
     }
 
-    // ── 5. Initialize / update SOUL.md ─────────────────────────────
+    // ── 6. Initialize / update SOUL.md ─────────────────────────────
     println!();
     let soul_path = config.soul_path();
 
@@ -294,7 +390,110 @@ pub fn run_onboard_wizard(
         println!("  {}", t::icon_ok("Keeping existing SOUL.md"));
     }
 
-    // ── 6. Write config ────────────────────────────────────────────
+    // ── 7. Configure messengers ────────────────────────────────────
+    println!();
+    println!("{}", t::heading("Configure messengers (optional):"));
+    println!();
+    println!("  Messengers let RustyClaw send and receive messages");
+    println!("  through external platforms.  You can enable any");
+    println!("  combination, or skip this step entirely.");
+    println!();
+
+    /// Available messenger definitions for onboarding.
+    struct MessengerDef {
+        id: &'static str,
+        display: &'static str,
+        secret_label: &'static str,
+        secret_key: &'static str,
+    }
+
+    const MESSENGERS: &[MessengerDef] = &[
+        MessengerDef {
+            id: "slack",
+            display: "Slack",
+            secret_label: "Bot token (xoxb-…)",
+            secret_key: "slack_bot_token",
+        },
+        MessengerDef {
+            id: "discord",
+            display: "Discord",
+            secret_label: "Bot token",
+            secret_key: "discord_bot_token",
+        },
+        MessengerDef {
+            id: "telegram",
+            display: "Telegram",
+            secret_label: "Bot token (from @BotFather)",
+            secret_key: "telegram_bot_token",
+        },
+    ];
+
+    let mut configured_messengers: Vec<MessengerConfig> = Vec::new();
+
+    // Allow the user to pick multiple messengers in a loop.
+    let mut remaining: Vec<usize> = (0..MESSENGERS.len()).collect();
+
+    loop {
+        if remaining.is_empty() {
+            break;
+        }
+
+        let mut choices: Vec<&str> = remaining.iter().map(|&i| MESSENGERS[i].display).collect();
+        choices.push("Done — no more messengers");
+
+        let heading = if configured_messengers.is_empty() {
+            "Select a messenger to configure:"
+        } else {
+            "Add another messenger?"
+        };
+
+        match arrow_select(&choices, heading)? {
+            None => break,
+            Some(idx) if idx == choices.len() - 1 => break,
+            Some(pick) => {
+                let orig_idx = remaining[pick];
+                let def = &MESSENGERS[orig_idx];
+                println!();
+
+                let token = prompt_secret(
+                    &mut reader,
+                    &format!("{} ", t::accent(&format!("{} — {}:", def.display, def.secret_label))),
+                )?;
+                let token = token.trim().to_string();
+
+                if token.is_empty() {
+                    println!("  {}", t::icon_warn(&format!(
+                        "No token entered — skipping {}.", def.display,
+                    )));
+                } else {
+                    secrets.store_secret(def.secret_key, &token)?;
+                    println!("  {}", t::icon_ok(&format!(
+                        "{} token stored securely.", def.display,
+                    )));
+
+                    configured_messengers.push(MessengerConfig {
+                        name: def.id.to_string(),
+                        enabled: true,
+                        config_path: None,
+                    });
+                }
+
+                remaining.remove(pick);
+                println!();
+            }
+        }
+    }
+
+    if configured_messengers.is_empty() {
+        println!("  {}", t::muted("No messengers configured. You can add them later."));
+    } else {
+        let names: Vec<&str> = configured_messengers.iter().map(|m| m.name.as_str()).collect();
+        println!("  {}", t::icon_ok(&format!(
+            "Messengers enabled: {}", names.join(", "),
+        )));
+    }
+
+    // ── 8. Write config ────────────────────────────────────────────
     config.model = Some(ModelProvider {
         provider: provider.id.to_string(),
         model: if model.is_empty() {
@@ -308,6 +507,7 @@ pub fn run_onboard_wizard(
             Some(base_url)
         },
     });
+    config.messengers = configured_messengers;
 
     // Ensure the full directory skeleton exists and save.
     config.ensure_dirs()
@@ -409,6 +609,112 @@ fn prompt_line(reader: &mut impl BufRead, prompt: &str) -> Result<String> {
     let mut buf = String::new();
     reader.read_line(&mut buf)?;
     Ok(buf.trim_end_matches('\n').trim_end_matches('\r').to_string())
+}
+
+/// Best-effort username for TOTP account labels.
+fn whoami() -> String {
+    std::env::var("USER")
+        .or_else(|_| std::env::var("USERNAME"))
+        .unwrap_or_else(|_| "user".to_string())
+}
+
+/// Walk the user through TOTP 2FA enrollment.
+fn setup_totp_enrollment(
+    reader: &mut impl BufRead,
+    config: &mut Config,
+    secrets: &mut SecretsManager,
+) -> Result<()> {
+    println!("{}", t::bold("Two-factor authentication (optional):"));
+    println!();
+    println!("  You can add TOTP-based 2FA using any authenticator app");
+    println!("  (Google Authenticator, Authy, 1Password, etc.).  This");
+    println!("  adds a second layer of protection — you will need to");
+    println!("  enter a 6-digit code each time you unlock the vault.");
+    println!();
+
+    let enable_2fa = prompt_line(
+        reader,
+        &format!("{} ", t::accent("Enable 2FA with an authenticator app? [y/N]:")),
+    )?;
+
+    if enable_2fa.trim().eq_ignore_ascii_case("y") {
+        // Need the vault to exist before we can store the TOTP secret.
+        // Force-create it now by storing a sentinel value.
+        config.ensure_dirs()
+            .context("Failed to create directory structure")?;
+        secrets.store_secret("__init", "")?;
+        secrets.delete_secret("__init")?;
+
+        let account = whoami();
+        let otpauth_url = secrets.setup_totp(&account)?;
+
+        println!();
+        println!("  {}", t::heading("Scan this with your authenticator app:"));
+        println!();
+        println!("  {}", t::accent_bright(&otpauth_url));
+        println!();
+        println!("  Or enter the setup key manually. The key is the");
+        println!("  {} parameter in the URL above.", t::bold("secret"));
+        println!();
+
+        // Verify the user can produce a valid code before committing.
+        loop {
+            let code = prompt_line(
+                reader,
+                &format!("{} ", t::accent("Enter the 6-digit code to verify:")),
+            )?;
+            let code = code.trim();
+            if code.is_empty() {
+                println!("  {}", t::icon_warn("2FA setup cancelled."));
+                secrets.remove_totp()?;
+                break;
+            }
+            match secrets.verify_totp(code) {
+                Ok(true) => {
+                    config.totp_enabled = true;
+                    println!("  {}", t::icon_ok("2FA enabled — authenticator verified successfully."));
+                    break;
+                }
+                Ok(false) => {
+                    println!("  {}", t::icon_warn("Invalid code. Please try again (or leave blank to cancel):"));
+                }
+                Err(e) => {
+                    println!("  {}", t::icon_warn(&format!("Error verifying code: {}. 2FA not enabled.", e)));
+                    secrets.remove_totp()?;
+                    break;
+                }
+            }
+        }
+    } else {
+        println!("  {}", t::muted("Skipping 2FA. You can enable it later."));
+    }
+    println!();
+    Ok(())
+}
+
+/// Prompt the user for a TOTP code in a retry loop.
+fn verify_totp_loop(
+    reader: &mut impl BufRead,
+    secrets: &mut SecretsManager,
+) -> Result<()> {
+    loop {
+        let code = prompt_line(
+            reader,
+            &format!("{} ", t::accent("Enter your 2FA code:")),
+        )?;
+        match secrets.verify_totp(code.trim()) {
+            Ok(true) => {
+                println!("  {}", t::icon_ok("2FA verified."));
+                return Ok(());
+            }
+            Ok(false) => {
+                println!("  {}", t::icon_warn("Invalid code. Please try again:"));
+            }
+            Err(e) => {
+                anyhow::bail!("2FA verification failed: {}", e);
+            }
+        }
+    }
 }
 
 /// Interactive arrow-key selector.

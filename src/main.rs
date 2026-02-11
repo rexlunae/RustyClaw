@@ -726,14 +726,32 @@ fn parse_gateway_defaults(config: &Config) -> (u16, &str) {
     (9001, "loopback")
 }
 
-/// Open the secrets vault, prompting for a password if required.
+/// Open the secrets vault, prompting for a password and TOTP if required.
 fn open_secrets(config: &Config) -> Result<SecretsManager> {
-    if config.secrets_password_protected {
+    let mut manager = if config.secrets_password_protected {
         let pw = prompt_password("Enter secrets vault password: ")?;
-        Ok(SecretsManager::with_password(config.credentials_dir(), pw))
+        SecretsManager::with_password(config.credentials_dir(), pw)
     } else {
-        Ok(SecretsManager::new(config.credentials_dir()))
+        SecretsManager::new(config.credentials_dir())
+    };
+
+    // If TOTP 2FA is enabled, verify before returning.
+    if config.totp_enabled {
+        loop {
+            let code = prompt_password("Enter your 2FA code: ")?;
+            match manager.verify_totp(code.trim()) {
+                Ok(true) => break,
+                Ok(false) => {
+                    eprintln!("Invalid code. Please try again.");
+                }
+                Err(e) => {
+                    anyhow::bail!("2FA verification failed: {}", e);
+                }
+            }
+        }
     }
+
+    Ok(manager)
 }
 
 fn prompt_password(prompt: &str) -> Result<String> {
@@ -864,12 +882,7 @@ fn config_unset(config: &mut Config, path: &str) -> Result<()> {
 }
 
 fn run_local_command(config: &Config, input: &str) -> Result<()> {
-    let mut secrets_manager = if config.secrets_password_protected {
-        let pw = prompt_password("Enter secrets vault password: ")?;
-        SecretsManager::with_password(config.credentials_dir(), pw)
-    } else {
-        SecretsManager::new(config.credentials_dir())
-    };
+    let mut secrets_manager = open_secrets(config)?;
     let skills_dir = config.skills_dir();
     let mut skill_manager = SkillManager::new(skills_dir);
     skill_manager.load_skills()?;

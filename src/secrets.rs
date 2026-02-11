@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use securestore::KeySource;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use totp_rs::{Algorithm, TOTP, Secret as TotpSecret};
 
 /// Secrets manager backed by an encrypted SecureStore vault.
 ///
@@ -181,6 +182,83 @@ impl SecretsManager {
         }
     }
 
+    // ── TOTP two-factor authentication ──────────────────────────────
+
+    /// The vault key used to store the TOTP shared secret.
+    const TOTP_SECRET_KEY: &'static str = "__rustyclaw_totp_secret";
+
+    /// Generate a fresh TOTP secret, store it in the vault, and return
+    /// the `otpauth://` URI (suitable for QR codes / manual entry in an
+    /// authenticator app).
+    pub fn setup_totp(&mut self, account_name: &str) -> Result<String> {
+        let secret = TotpSecret::generate_secret();
+        let secret_bytes = secret.to_bytes()
+            .map_err(|e| anyhow::anyhow!("Failed to generate TOTP secret bytes: {:?}", e))?;
+
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,  // digits
+            1,  // skew (allow ±1 step)
+            30, // step (seconds)
+            secret_bytes,
+            Some("RustyClaw".to_string()),
+            account_name.to_string(),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create TOTP: {:?}", e))?;
+
+        // Store the base32-encoded secret in the vault.
+        let encoded = secret.to_encoded().to_string();
+        self.store_secret(Self::TOTP_SECRET_KEY, &encoded)?;
+
+        Ok(totp.get_url())
+    }
+
+    /// Verify a 6-digit TOTP code against the stored secret.
+    /// Returns `Ok(true)` if the code is valid, `Ok(false)` if invalid,
+    /// or an error if no TOTP secret is configured.
+    pub fn verify_totp(&mut self, code: &str) -> Result<bool> {
+        let encoded = self.get_secret(Self::TOTP_SECRET_KEY, true)?
+            .ok_or_else(|| anyhow::anyhow!("No TOTP secret configured"))?;
+
+        let secret = TotpSecret::Encoded(encoded);
+        let secret_bytes = secret.to_bytes()
+            .map_err(|e| anyhow::anyhow!("Corrupted TOTP secret: {:?}", e))?;
+
+        let totp = TOTP::new(
+            Algorithm::SHA1,
+            6,
+            1,
+            30,
+            secret_bytes,
+            Some("RustyClaw".to_string()),
+            String::new(),
+        )
+        .map_err(|e| anyhow::anyhow!("Failed to create TOTP: {:?}", e))?;
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .context("System time error")?
+            .as_secs();
+
+        Ok(totp.check(code, now))
+    }
+
+    /// Check whether a TOTP secret is stored in the vault.
+    pub fn has_totp(&mut self) -> bool {
+        self.get_secret(Self::TOTP_SECRET_KEY, true)
+            .ok()
+            .flatten()
+            .is_some()
+    }
+
+    /// Remove the stored TOTP secret (disables 2FA).
+    pub fn remove_totp(&mut self) -> Result<()> {
+        if self.has_totp() {
+            self.delete_secret(Self::TOTP_SECRET_KEY)?;
+        }
+        Ok(())
+    }
+
     /// No-op kept for API compatibility.  The securestore crate
     /// decrypts on-demand so there is no separate cache to clear.
     pub fn clear_cache(&mut self) {}
@@ -330,6 +408,46 @@ mod tests {
             let mut m = SecretsManager::with_password(&dir, "wrong".to_string());
             assert!(m.get_secret("token", true).is_err());
         }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_totp_setup_and_verify() {
+        let dir = temp_dir();
+        let mut manager = SecretsManager::new(&dir);
+        manager.set_agent_access(true);
+
+        // No TOTP secret initially.
+        assert!(!manager.has_totp());
+
+        // Set up TOTP and get the otpauth:// URL.
+        let url = manager.setup_totp("testuser").unwrap();
+        assert!(url.starts_with("otpauth://totp/"));
+        assert!(url.contains("RustyClaw"));
+        assert!(manager.has_totp());
+
+        // Generate a valid code from the stored secret and verify it.
+        let encoded = manager.get_secret(SecretsManager::TOTP_SECRET_KEY, true)
+            .unwrap().unwrap();
+        let secret = TotpSecret::Encoded(encoded);
+        let secret_bytes = secret.to_bytes().unwrap();
+        let totp = TOTP::new(
+            Algorithm::SHA1, 6, 1, 30, secret_bytes,
+            Some("RustyClaw".to_string()), "testuser".to_string(),
+        ).unwrap();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();
+        let code = totp.generate(now);
+
+        assert!(manager.verify_totp(&code).unwrap());
+
+        // Wrong code should fail.
+        assert!(!manager.verify_totp("000000").unwrap());
+
+        // Remove TOTP.
+        manager.remove_totp().unwrap();
+        assert!(!manager.has_totp());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -39,6 +39,9 @@ pub struct Config {
     /// (as opposed to an auto-generated key file).
     #[serde(default)]
     pub secrets_password_protected: bool,
+    /// Whether TOTP two-factor authentication is enabled for the vault.
+    #[serde(default)]
+    pub totp_enabled: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -62,6 +65,7 @@ impl Default for Config {
             gateway_url: None,
             model: None,
             secrets_password_protected: false,
+            totp_enabled: false,
         }
     }
 }
