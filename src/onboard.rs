@@ -146,7 +146,7 @@ pub fn run_onboard_wizard(
     println!();
 
     // ── 1b. Optional password for secrets vault ────────────────────
-    let vault_exists = config.settings_dir.join("secrets.json").exists();
+    let vault_exists = config.credentials_dir().join("secrets.json").exists();
     if !vault_exists {
         println!("You can protect your secrets vault with a password.");
         println!("If you skip this, a key file will be generated instead.");
@@ -267,10 +267,7 @@ pub fn run_onboard_wizard(
 
     // ── 5. Initialize / update SOUL.md ─────────────────────────────
     println!();
-    let soul_path = config
-        .soul_path
-        .clone()
-        .unwrap_or_else(|| config.settings_dir.join("SOUL.md"));
+    let soul_path = config.soul_path();
 
     // Only prompt if the file exists AND has been customised (differs from the
     // default template).  A previous `rustyclaw tui` run may have already
@@ -312,11 +309,10 @@ pub fn run_onboard_wizard(
             Some(base_url)
         },
     });
-    config.soul_path = Some(soul_path);
 
-    // Ensure settings dir exists and save.
-    std::fs::create_dir_all(&config.settings_dir)
-        .context("Failed to create settings directory")?;
+    // Ensure the full directory skeleton exists and save.
+    config.ensure_dirs()
+        .context("Failed to create directory structure")?;
     config.save(None)?;
 
     println!();

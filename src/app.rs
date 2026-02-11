@@ -75,13 +75,13 @@ pub struct App {
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
-        let secrets_manager = SecretsManager::new(&config.settings_dir);
+        let secrets_manager = SecretsManager::new(config.credentials_dir());
         Self::build(config, secrets_manager)
     }
 
     /// Create the app with a password-protected secrets vault.
     pub fn with_password(config: Config, password: String) -> Result<Self> {
-        let secrets_manager = SecretsManager::with_password(&config.settings_dir, password);
+        let secrets_manager = SecretsManager::with_password(config.credentials_dir(), password);
         Self::build(config, secrets_manager)
     }
 
@@ -93,17 +93,11 @@ impl App {
             secrets_manager.set_agent_access(false);
         }
 
-        let skills_dir = config
-            .skills_dir
-            .clone()
-            .unwrap_or_else(|| config.settings_dir.join("skills"));
+        let skills_dir = config.skills_dir();
         let mut skill_manager = SkillManager::new(skills_dir);
         let _ = skill_manager.load_skills();
 
-        let soul_path = config
-            .soul_path
-            .clone()
-            .unwrap_or_else(|| config.settings_dir.join("SOUL.md"));
+        let soul_path = config.soul_path();
         let mut soul_manager = SoulManager::new(soul_path);
         let _ = soul_manager.load();
 

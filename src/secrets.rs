@@ -28,12 +28,12 @@ pub struct Secret {
 }
 
 impl SecretsManager {
-    /// Create a new `SecretsManager` rooted in `settings_dir`.
+    /// Create a new `SecretsManager` rooted in `credentials_dir`.
     ///
     /// The vault and key files are created on-demand the first time a
     /// mutating operation is performed.
-    pub fn new(settings_dir: impl Into<PathBuf>) -> Self {
-        let dir: PathBuf = settings_dir.into();
+    pub fn new(credentials_dir: impl Into<PathBuf>) -> Self {
+        let dir: PathBuf = credentials_dir.into();
         Self {
             vault_path: dir.join("secrets.json"),
             key_path: dir.join("secrets.key"),
@@ -45,8 +45,8 @@ impl SecretsManager {
 
     /// Create a `SecretsManager` that uses a password for encryption
     /// instead of a key file.
-    pub fn with_password(settings_dir: impl Into<PathBuf>, password: String) -> Self {
-        let dir: PathBuf = settings_dir.into();
+    pub fn with_password(credentials_dir: impl Into<PathBuf>, password: String) -> Self {
+        let dir: PathBuf = credentials_dir.into();
         Self {
             vault_path: dir.join("secrets.json"),
             key_path: dir.join("secrets.key"),

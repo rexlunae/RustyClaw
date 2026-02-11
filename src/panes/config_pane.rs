@@ -84,6 +84,10 @@ impl Pane for ConfigPane {
                 "Settings Directory: {}",
                 state.config.settings_dir.display()
             ),
+            format!(
+                "Workspace: {}",
+                state.config.workspace_dir().display()
+            ),
             format!("Model: {}", model_info),
             format!("SOUL Path: {}", state.soul_manager.get_path().display()),
             format!("Use Secrets: {}", state.config.use_secrets),

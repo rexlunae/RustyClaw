@@ -62,9 +62,9 @@ async fn main() -> Result<()> {
         Commands::Onboard(args) => {
             let mut secrets = if config.secrets_password_protected {
                 let pw = prompt_password("Enter secrets vault password: ")?;
-                SecretsManager::with_password(&config.settings_dir, pw)
+                SecretsManager::with_password(config.credentials_dir(), pw)
             } else {
-                SecretsManager::new(&config.settings_dir)
+                SecretsManager::new(config.credentials_dir())
             };
             run_onboard_wizard(&mut config, &mut secrets, args.reset)?;
         }
@@ -107,14 +107,11 @@ fn prompt_password(prompt: &str) -> Result<String> {
 fn run_local_command(config: &Config, input: &str) -> Result<()> {
     let mut secrets_manager = if config.secrets_password_protected {
         let pw = prompt_password("Enter secrets vault password: ")?;
-        SecretsManager::with_password(&config.settings_dir, pw)
+        SecretsManager::with_password(config.credentials_dir(), pw)
     } else {
-        SecretsManager::new(&config.settings_dir)
+        SecretsManager::new(config.credentials_dir())
     };
-    let skills_dir = config
-        .skills_dir
-        .clone()
-        .unwrap_or_else(|| config.settings_dir.join("skills"));
+    let skills_dir = config.skills_dir();
     let mut skill_manager = SkillManager::new(skills_dir);
     skill_manager.load_skills()?;
 
