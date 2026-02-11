@@ -64,8 +64,8 @@ impl MessengerManager {
     }
 
     /// Get a messenger by name
-    pub fn get_messenger(&self, name: &str) -> Option<&Box<dyn Messenger>> {
-        self.messengers.iter().find(|m| m.name() == name)
+    pub fn get_messenger(&self, name: &str) -> Option<&dyn Messenger> {
+        self.messengers.iter().find(|m| m.name() == name).map(|b| &**b)
     }
 
     /// Disconnect all messengers

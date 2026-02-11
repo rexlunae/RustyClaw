@@ -59,7 +59,7 @@ impl SkillManager {
         let content = std::fs::read_to_string(path)?;
         
         // Try to parse as JSON first, then YAML
-        let skill: Skill = if path.extension().map_or(false, |e| e == "json") {
+        let skill: Skill = if path.extension().is_some_and(|e| e == "json") {
             serde_json::from_str(&content)?
         } else {
             serde_yaml::from_str(&content)?

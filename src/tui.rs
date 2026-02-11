@@ -225,7 +225,7 @@ impl App {
             "Disabled"
         };
 
-        let text = vec![
+        let text = [
             format!("Agent Access: {}", agent_access),
             String::new(),
             "Commands:".to_string(),
@@ -251,7 +251,7 @@ impl App {
         let soul_content = self.soul_manager.get_content()
             .unwrap_or("No SOUL content loaded");
 
-        let text = vec![
+        let text = [
             format!("Settings Directory: {}", self.config.settings_dir.display()),
             format!("SOUL Path: {}", self.soul_manager.get_path().display()),
             format!("Use Secrets: {}", self.config.use_secrets),
