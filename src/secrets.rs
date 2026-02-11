@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use securestore::KeySource;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use totp_rs::{Algorithm, TOTP, Secret as TotpSecret};
 
@@ -21,6 +22,14 @@ pub enum SecretKind {
     SshKey,
     /// Generic single-value token (OAuth tokens, bot tokens, etc.).
     Token,
+    /// Form autofill data — arbitrary key/value pairs for filling web
+    /// forms (name, address, email, phone, etc.).
+    FormAutofill,
+    /// Payment method — credit/debit card details.
+    PaymentMethod,
+    /// Free-form encrypted note (recovery codes, license keys,
+    /// security questions, PIN codes, etc.).
+    SecureNote,
     /// Catch-all for anything that doesn't fit the above.
     Other,
 }
@@ -78,6 +87,17 @@ pub enum CredentialValue {
     /// SSH keypair — private key in OpenSSH PEM format, public key in
     /// `ssh-ed25519 AAAA…` format.
     SshKeyPair { private_key: String, public_key: String },
+    /// Arbitrary key/value pairs (form autofill fields).
+    FormFields(BTreeMap<String, String>),
+    /// Payment card details.
+    PaymentCard {
+        cardholder: String,
+        number: String,
+        expiry: String,
+        cvv: String,
+        /// Optional billing-address / notes fields.
+        extra: BTreeMap<String, String>,
+    },
 }
 
 /// Context supplied by the caller when requesting access to a
@@ -102,13 +122,16 @@ pub struct AccessContext {
 ///
 /// ## Storage layout
 ///
-/// | Key pattern          | Content                                      |
-/// |----------------------|----------------------------------------------|
-/// | `cred:<name>`        | JSON-serialized [`SecretEntry`] metadata      |
-/// | `val:<name>`         | Primary secret value (or private key PEM)     |
-/// | `val:<name>:user`    | Username (for `UsernamePassword` kind)         |
-/// | `val:<name>:pub`     | Public key string (for `SshKey` kind)          |
-/// | `<bare key>`         | Legacy / raw secrets (API keys, TOTP, etc.)   |
+/// | Key pattern            | Content                                          |
+/// |------------------------|--------------------------------------------------|
+/// | `cred:<name>`          | JSON-serialized [`SecretEntry`] metadata          |
+/// | `val:<name>`           | Primary secret value (or private key PEM / note)  |
+/// | `val:<name>:user`      | Username (for `UsernamePassword` kind)             |
+/// | `val:<name>:pub`       | Public key string (for `SshKey` kind)              |
+/// | `val:<name>:fields`    | JSON map of form-field key/value pairs             |
+/// | `val:<name>:card`      | JSON `{cardholder,number,expiry,cvv}`              |
+/// | `val:<name>:card_extra`| JSON map of additional payment card fields         |
+/// | `<bare key>`           | Legacy / raw secrets (API keys, TOTP, etc.)        |
 pub struct SecretsManager {
     /// Root credentials directory (for writing SSH pubkey file, etc.)
     credentials_dir: PathBuf,
@@ -320,6 +343,75 @@ impl SecretsManager {
         Ok(())
     }
 
+    /// Store a form-autofill credential (arbitrary key/value fields).
+    ///
+    /// `fields` maps field names (e.g. "email", "phone", "address")
+    /// to their values.  The `description` on the entry is a good
+    /// place to record the site URL or form name.
+    pub fn store_form_autofill(
+        &mut self,
+        name: &str,
+        entry: &SecretEntry,
+        fields: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        debug_assert_eq!(entry.kind, SecretKind::FormAutofill);
+
+        let meta_key = format!("cred:{}", name);
+        let fields_key = format!("val:{}:fields", name);
+
+        let meta_json = serde_json::to_string(entry)
+            .context("Failed to serialize credential metadata")?;
+        let fields_json = serde_json::to_string(fields)
+            .context("Failed to serialize form fields")?;
+
+        self.store_secret(&meta_key, &meta_json)?;
+        self.store_secret(&fields_key, &fields_json)?;
+        Ok(())
+    }
+
+    /// Store a payment-method credential.
+    pub fn store_payment_method(
+        &mut self,
+        name: &str,
+        entry: &SecretEntry,
+        cardholder: &str,
+        number: &str,
+        expiry: &str,
+        cvv: &str,
+        extra: &BTreeMap<String, String>,
+    ) -> Result<()> {
+        debug_assert_eq!(entry.kind, SecretKind::PaymentMethod);
+
+        let meta_key = format!("cred:{}", name);
+        let card_key = format!("val:{}:card", name);
+        let extra_key = format!("val:{}:card_extra", name);
+
+        let meta_json = serde_json::to_string(entry)
+            .context("Failed to serialize credential metadata")?;
+
+        #[derive(Serialize)]
+        struct Card<'a> {
+            cardholder: &'a str,
+            number: &'a str,
+            expiry: &'a str,
+            cvv: &'a str,
+        }
+        let card_json = serde_json::to_string(&Card {
+            cardholder, number, expiry, cvv,
+        }).context("Failed to serialize card details")?;
+
+        self.store_secret(&meta_key, &meta_json)?;
+        self.store_secret(&card_key, &card_json)?;
+
+        if !extra.is_empty() {
+            let extra_json = serde_json::to_string(extra)
+                .context("Failed to serialize card extras")?;
+            self.store_secret(&extra_key, &extra_json)?;
+        }
+
+        Ok(())
+    }
+
     /// Retrieve a typed credential from the vault.
     ///
     /// `context` drives the permission check:
@@ -372,6 +464,45 @@ impl SecretsManager {
                     .unwrap_or_default();
                 CredentialValue::SshKeyPair { private_key, public_key }
             }
+            SecretKind::FormAutofill => {
+                let fields_key = format!("val:{}:fields", name);
+                let fields_json = self.get_secret(&fields_key, true)?
+                    .unwrap_or_else(|| "{}".to_string());
+                let fields: BTreeMap<String, String> = serde_json::from_str(&fields_json)
+                    .context("Corrupted form-autofill fields")?;
+                CredentialValue::FormFields(fields)
+            }
+            SecretKind::PaymentMethod => {
+                let card_key = format!("val:{}:card", name);
+                let extra_key = format!("val:{}:card_extra", name);
+
+                let card_json = self.get_secret(&card_key, true)?
+                    .unwrap_or_else(|| "{}".to_string());
+
+                #[derive(Deserialize)]
+                struct Card {
+                    #[serde(default)] cardholder: String,
+                    #[serde(default)] number: String,
+                    #[serde(default)] expiry: String,
+                    #[serde(default)] cvv: String,
+                }
+                let card: Card = serde_json::from_str(&card_json)
+                    .context("Corrupted payment card data")?;
+
+                let extra: BTreeMap<String, String> = match self.get_secret(&extra_key, true)? {
+                    Some(j) => serde_json::from_str(&j)
+                        .context("Corrupted card extras")?,
+                    None => BTreeMap::new(),
+                };
+
+                CredentialValue::PaymentCard {
+                    cardholder: card.cardholder,
+                    number: card.number,
+                    expiry: card.expiry,
+                    cvv: card.cvv,
+                    extra,
+                }
+            }
             _ => {
                 let v = self.get_secret(&val_key, true)?
                     .unwrap_or_default();
@@ -400,16 +531,19 @@ impl SecretsManager {
 
     /// Delete a typed credential and all its associated vault keys.
     pub fn delete_credential(&mut self, name: &str) -> Result<()> {
-        let meta_key = format!("cred:{}", name);
-        let val_key = format!("val:{}", name);
-        let user_key = format!("val:{}:user", name);
-        let pub_key = format!("val:{}:pub", name);
-
-        // Best-effort removal of all possible sub-keys.
-        let _ = self.delete_secret(&meta_key);
-        let _ = self.delete_secret(&val_key);
-        let _ = self.delete_secret(&user_key);
-        let _ = self.delete_secret(&pub_key);
+        // Every possible sub-key pattern — best-effort removal.
+        let sub_keys = [
+            format!("cred:{}", name),
+            format!("val:{}", name),
+            format!("val:{}:user", name),
+            format!("val:{}:pub", name),
+            format!("val:{}:fields", name),
+            format!("val:{}:card", name),
+            format!("val:{}:card_extra", name),
+        ];
+        for key in &sub_keys {
+            let _ = self.delete_secret(key);
+        }
 
         // Also remove the pubkey file if it exists.
         let pubkey_path = self.credentials_dir.join(format!("{}.pub", name));
@@ -1048,6 +1182,139 @@ mod tests {
         // get_credential should return None now.
         let ctx = AccessContext::default();
         assert!(m.get_credential("tmp", &ctx).unwrap().is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── Web-navigation credential tests ─────────────────────────────
+
+    #[test]
+    fn test_store_and_retrieve_form_autofill() {
+        let dir = temp_dir();
+        let mut m = SecretsManager::new(&dir);
+
+        let entry = SecretEntry {
+            label: "Shipping address".to_string(),
+            kind: SecretKind::FormAutofill,
+            policy: AccessPolicy::WithApproval,
+            description: Some("https://example.com/checkout".to_string()),
+        };
+        let mut fields = BTreeMap::new();
+        fields.insert("name".to_string(), "Ada Lovelace".to_string());
+        fields.insert("email".to_string(), "ada@example.com".to_string());
+        fields.insert("phone".to_string(), "+1-555-0100".to_string());
+        fields.insert("address".to_string(), "1 Infinite Loop".to_string());
+
+        m.store_form_autofill("shipping", &entry, &fields).unwrap();
+
+        let ctx = AccessContext { user_approved: true, ..Default::default() };
+        let (meta, val) = m.get_credential("shipping", &ctx).unwrap().unwrap();
+        assert_eq!(meta.kind, SecretKind::FormAutofill);
+        assert_eq!(meta.label, "Shipping address");
+        match val {
+            CredentialValue::FormFields(f) => {
+                assert_eq!(f.len(), 4);
+                assert_eq!(f["name"], "Ada Lovelace");
+                assert_eq!(f["email"], "ada@example.com");
+            }
+            _ => panic!("Expected FormFields"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_store_and_retrieve_payment_method() {
+        let dir = temp_dir();
+        let mut m = SecretsManager::new(&dir);
+
+        let entry = SecretEntry {
+            label: "Visa ending 4242".to_string(),
+            kind: SecretKind::PaymentMethod,
+            policy: AccessPolicy::WithAuth,
+            description: None,
+        };
+        let mut extra = BTreeMap::new();
+        extra.insert("billing_zip".to_string(), "94025".to_string());
+
+        m.store_payment_method(
+            "visa_4242", &entry,
+            "A. Lovelace", "4242424242424242", "12/28", "123",
+            &extra,
+        ).unwrap();
+
+        // Needs authentication.
+        let ctx = AccessContext { user_approved: true, ..Default::default() };
+        assert!(m.get_credential("visa_4242", &ctx).is_err());
+
+        let ctx = AccessContext { authenticated: true, ..Default::default() };
+        let (meta, val) = m.get_credential("visa_4242", &ctx).unwrap().unwrap();
+        assert_eq!(meta.kind, SecretKind::PaymentMethod);
+        match val {
+            CredentialValue::PaymentCard { cardholder, number, expiry, cvv, extra } => {
+                assert_eq!(cardholder, "A. Lovelace");
+                assert_eq!(number, "4242424242424242");
+                assert_eq!(expiry, "12/28");
+                assert_eq!(cvv, "123");
+                assert_eq!(extra["billing_zip"], "94025");
+            }
+            _ => panic!("Expected PaymentCard"),
+        }
+
+        // Delete should clean everything up.
+        m.delete_credential("visa_4242").unwrap();
+        assert_eq!(m.list_credentials().len(), 0);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_store_and_retrieve_secure_note() {
+        let dir = temp_dir();
+        let mut m = SecretsManager::new(&dir);
+
+        let entry = SecretEntry {
+            label: "Recovery codes".to_string(),
+            kind: SecretKind::SecureNote,
+            policy: AccessPolicy::WithAuth,
+            description: Some("GitHub 2FA backup codes".to_string()),
+        };
+        let note = "abcde-12345\nfghij-67890\nklmno-13579";
+        m.store_credential("gh_recovery", &entry, note, None).unwrap();
+
+        let ctx = AccessContext { authenticated: true, ..Default::default() };
+        let (meta, val) = m.get_credential("gh_recovery", &ctx).unwrap().unwrap();
+        assert_eq!(meta.kind, SecretKind::SecureNote);
+        assert_eq!(meta.description, Some("GitHub 2FA backup codes".to_string()));
+        match val {
+            CredentialValue::Single(v) => assert_eq!(v, note),
+            _ => panic!("Expected Single"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_form_autofill_delete_cleans_fields() {
+        let dir = temp_dir();
+        let mut m = SecretsManager::new(&dir);
+
+        let entry = SecretEntry {
+            label: "Login form".to_string(),
+            kind: SecretKind::FormAutofill,
+            policy: AccessPolicy::Always,
+            description: None,
+        };
+        let mut fields = BTreeMap::new();
+        fields.insert("user".to_string(), "alice".to_string());
+        m.store_form_autofill("login", &entry, &fields).unwrap();
+        assert_eq!(m.list_credentials().len(), 1);
+
+        m.delete_credential("login").unwrap();
+        assert_eq!(m.list_credentials().len(), 0);
+
+        // The :fields sub-key should also be gone.
+        m.set_agent_access(true);
+        let raw = m.get_secret("val:login:fields", false).unwrap();
+        assert_eq!(raw, None);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
