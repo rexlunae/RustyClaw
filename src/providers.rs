@@ -440,3 +440,123 @@ pub async fn poll_device_token(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_by_id() {
+        let provider = provider_by_id("anthropic");
+        assert!(provider.is_some());
+        assert_eq!(provider.unwrap().display, "Anthropic (Claude)");
+
+        let provider = provider_by_id("github-copilot");
+        assert!(provider.is_some());
+        assert_eq!(provider.unwrap().display, "GitHub Copilot");
+        assert_eq!(provider.unwrap().auth_method, AuthMethod::DeviceFlow);
+
+        let provider = provider_by_id("nonexistent");
+        assert!(provider.is_none());
+    }
+
+    #[test]
+    fn test_provider_auth_methods() {
+        // API key providers
+        let anthropic = provider_by_id("anthropic").unwrap();
+        assert_eq!(anthropic.auth_method, AuthMethod::ApiKey);
+        assert!(anthropic.device_flow.is_none());
+
+        // Device flow providers
+        let copilot = provider_by_id("github-copilot").unwrap();
+        assert_eq!(copilot.auth_method, AuthMethod::DeviceFlow);
+        assert!(copilot.device_flow.is_some());
+
+        let copilot_proxy = provider_by_id("copilot-proxy").unwrap();
+        assert_eq!(copilot_proxy.auth_method, AuthMethod::DeviceFlow);
+        assert!(copilot_proxy.device_flow.is_some());
+
+        // No auth providers
+        let ollama = provider_by_id("ollama").unwrap();
+        assert_eq!(ollama.auth_method, AuthMethod::None);
+        assert!(ollama.secret_key.is_none());
+    }
+
+    #[test]
+    fn test_github_copilot_provider_config() {
+        let provider = provider_by_id("github-copilot").unwrap();
+        assert_eq!(provider.id, "github-copilot");
+        assert_eq!(provider.secret_key, Some("GITHUB_COPILOT_TOKEN"));
+        
+        let device_config = provider.device_flow.unwrap();
+        assert_eq!(device_config.device_auth_url, "https://github.com/login/device/code");
+        assert_eq!(device_config.token_url, "https://github.com/login/oauth/access_token");
+        assert!(device_config.client_id.len() > 0);
+    }
+
+    #[test]
+    fn test_copilot_proxy_provider_config() {
+        let provider = provider_by_id("copilot-proxy").unwrap();
+        assert_eq!(provider.id, "copilot-proxy");
+        assert_eq!(provider.secret_key, Some("COPILOT_PROXY_TOKEN"));
+        assert_eq!(provider.base_url, None); // Should prompt for URL
+        
+        let device_config = provider.device_flow.unwrap();
+        // Should use same device flow as github-copilot
+        assert_eq!(device_config.device_auth_url, "https://github.com/login/device/code");
+    }
+
+    #[test]
+    fn test_token_response_parsing() {
+        // Test successful token response
+        let json = r#"{"access_token":"test_token","token_type":"bearer"}"#;
+        let response: TokenResponse = serde_json::from_str(json).unwrap();
+        match response {
+            TokenResponse::Success { access_token, .. } => {
+                assert_eq!(access_token, "test_token");
+            }
+            _ => panic!("Expected Success variant"),
+        }
+
+        // Test pending response
+        let json = r#"{"error":"authorization_pending"}"#;
+        let response: TokenResponse = serde_json::from_str(json).unwrap();
+        match response {
+            TokenResponse::Pending { error, .. } => {
+                assert_eq!(error, "authorization_pending");
+            }
+            _ => panic!("Expected Pending variant"),
+        }
+    }
+
+    #[test]
+    fn test_all_providers_have_valid_config() {
+        for provider in PROVIDERS {
+            // Verify basic fields are set
+            assert!(!provider.id.is_empty());
+            assert!(!provider.display.is_empty());
+
+            // Verify auth consistency
+            match provider.auth_method {
+                AuthMethod::ApiKey => {
+                    assert!(provider.secret_key.is_some(), 
+                        "Provider {} with ApiKey auth must have secret_key", provider.id);
+                    assert!(provider.device_flow.is_none(),
+                        "Provider {} with ApiKey auth should not have device_flow", provider.id);
+                }
+                AuthMethod::DeviceFlow => {
+                    assert!(provider.secret_key.is_some(),
+                        "Provider {} with DeviceFlow auth must have secret_key", provider.id);
+                    assert!(provider.device_flow.is_some(),
+                        "Provider {} with DeviceFlow auth must have device_flow config", provider.id);
+                }
+                AuthMethod::None => {
+                    assert!(provider.secret_key.is_none(),
+                        "Provider {} with None auth should not have secret_key", provider.id);
+                    assert!(provider.device_flow.is_none(),
+                        "Provider {} with None auth should not have device_flow", provider.id);
+                }
+            }
+        }
+    }
+}
