@@ -1411,6 +1411,7 @@ dependencies = [
  "tokio-util",
  "toml",
  "tui-input",
+ "unicode-width 0.2.2",
  "url",
  "which",
 ]

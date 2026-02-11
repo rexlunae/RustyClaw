@@ -37,22 +37,44 @@ pub fn run_onboard_wizard(
         *config = Config::default();
     }
 
-    // ── 1. Select model provider ───────────────────────────────────
-    println!("{}", t::heading("Select a model provider:"));
+    // ── 0. Safety acknowledgment ───────────────────────────────────
+    println!("{}", t::warn("⚠  Important: Please read before continuing."));
     println!();
-    for (i, p) in PROVIDERS.iter().enumerate() {
-        println!("  {}. {}", t::accent_bright(&format!("{}", i + 1)), p.display);
+    println!("  RustyClaw is an {}, meaning it can",
+        t::accent_bright("agentic coding tool"));
+    println!("  read, write, and execute code on your machine on your");
+    println!("  behalf. Like any powerful tool, it should be used with");
+    println!("  care and awareness.");
+    println!();
+    println!("  • {} and modify files in your project", t::bold("It can create"));
+    println!("  • {} commands in your terminal", t::bold("It can run"));
+    println!("  • {} with external APIs using your credentials", t::bold("It can interact"));
+    println!();
+    println!("  Always review actions before approving them, especially");
+    println!("  in production environments. You are responsible for any");
+    println!("  changes made by the tool.");
+    println!();
+
+    let ack = prompt_line(
+        &mut reader,
+        &format!("{} ", t::accent("Do you acknowledge and wish to continue? [y/N]:")),
+    )?;
+    if !ack.trim().eq_ignore_ascii_case("y") {
+        println!();
+        println!("  {}", t::muted("Onboarding cancelled."));
+        println!();
+        return Ok(false);
     }
     println!();
 
-    let provider = loop {
-        let choice = prompt_line(&mut reader, &format!("{} ", t::accent(&format!("Provider [1-{}]:", PROVIDERS.len()))))?;
-        if let Ok(n) = choice.trim().parse::<usize>() {
-            if n >= 1 && n <= PROVIDERS.len() {
-                break &PROVIDERS[n - 1];
-            }
+    // ── 1. Select model provider ───────────────────────────────────
+    let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
+    let provider = match arrow_select(&provider_names, "Select a model provider:")? {
+        Some(idx) => &PROVIDERS[idx],
+        None => {
+            println!("  {}", t::warn("Cancelled."));
+            return Ok(false);
         }
-        println!("  {}", t::warn(&format!("Please enter a number between 1 and {}.", PROVIDERS.len())));
     };
 
     println!();
@@ -228,27 +250,12 @@ pub fn run_onboard_wizard(
         let m = prompt_line(&mut reader, &format!("{} ", t::accent("Model name:")))?;
         m.trim().to_string()
     } else {
-        println!("{}", t::heading("Select a default model:"));
-        println!();
-        for (i, m) in available_models.iter().enumerate() {
-            println!("  {}. {}", t::accent_bright(&format!("{}", i + 1)), m);
-        }
-        println!();
-
-        loop {
-            let choice = prompt_line(
-                &mut reader,
-                &format!("{} ", t::accent(&format!("Model [1-{}]:", available_models.len()))),
-            )?;
-            if let Ok(n) = choice.trim().parse::<usize>() {
-                if n >= 1 && n <= available_models.len() {
-                    break available_models[n - 1].clone();
-                }
+        match arrow_select(&available_models, "Select a default model:")? {
+            Some(idx) => available_models[idx].clone(),
+            None => {
+                println!("  {}", t::warn("Cancelled — no model selected."));
+                String::new()
             }
-            println!(
-                "  {}",
-                t::warn(&format!("Please enter a number between 1 and {}.", available_models.len()))
-            );
         }
     };
 
@@ -402,6 +409,135 @@ fn prompt_line(reader: &mut impl BufRead, prompt: &str) -> Result<String> {
     let mut buf = String::new();
     reader.read_line(&mut buf)?;
     Ok(buf.trim_end_matches('\n').trim_end_matches('\r').to_string())
+}
+
+/// Interactive arrow-key selector.
+///
+/// Renders a scrollable list of items with a `❯` marker and handles
+/// Up / Down / Home / End / Enter / Esc / Ctrl-C navigation in raw mode.
+/// Returns the selected index, or `None` if the user pressed Esc.
+fn arrow_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<usize>> {
+    use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::{cursor, execute, terminal as ct};
+
+    if items.is_empty() {
+        return Ok(None);
+    }
+
+    let mut selected: usize = 0;
+    let max_visible: usize = 14;
+
+    // Print the heading (above the interactive region)
+    println!("{}", t::heading(heading_text));
+    println!();
+
+    let visible_count = items.len().min(max_visible);
+    // We render `visible_count` lines for the items + 1 hint line.
+    let draw_height = visible_count + 1;
+
+    // Pre-allocate the lines so we can overwrite them.
+    for _ in 0..draw_height {
+        println!();
+    }
+
+    let mut stdout = io::stdout();
+
+    // Helper: draw the visible slice starting at `scroll_offset`.
+    let draw = |stdout: &mut io::Stdout, selected: usize, scroll_offset: usize| -> io::Result<()> {
+        // Move cursor up to the first item line.
+        execute!(stdout, cursor::MoveUp(draw_height as u16))?;
+
+        let end = (scroll_offset + max_visible).min(items.len());
+        for i in scroll_offset..end {
+            let label = items[i].as_ref();
+            let line = if i == selected {
+                format!(
+                    "  {} {}",
+                    t::accent("❯"),
+                    t::accent_bright(label),
+                )
+            } else {
+                format!("    {}", t::muted(label))
+            };
+            // Clear the line, print with \r\n (raw mode needs explicit CR).
+            execute!(stdout, ct::Clear(ct::ClearType::CurrentLine))?;
+            write!(stdout, "{}\r\n", line)?;
+        }
+
+        // Hint line
+        execute!(stdout, ct::Clear(ct::ClearType::CurrentLine))?;
+        if items.len() > max_visible {
+            write!(
+                stdout,
+                "  {}\r\n",
+                t::muted(&format!(
+                    "{}/{} · ↑↓ navigate · Enter select · Esc cancel",
+                    selected + 1,
+                    items.len(),
+                )),
+            )?;
+        } else {
+            write!(stdout, "  {}\r\n", t::muted("↑↓ navigate · Enter select · Esc cancel"))?;
+        }
+        stdout.flush()
+    };
+
+    ct::enable_raw_mode()?;
+
+    let result = (|| -> Result<Option<usize>> {
+        let mut scroll_offset: usize = 0;
+
+        // Initial draw
+        draw(&mut stdout, selected, scroll_offset)?;
+
+        loop {
+            if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+                match code {
+                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        anyhow::bail!("Interrupted");
+                    }
+                    KeyCode::Esc | KeyCode::Char('q') => {
+                        return Ok(None);
+                    }
+                    KeyCode::Enter => {
+                        return Ok(Some(selected));
+                    }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if selected > 0 {
+                            selected -= 1;
+                            if selected < scroll_offset {
+                                scroll_offset = selected;
+                            }
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if selected + 1 < items.len() {
+                            selected += 1;
+                            if selected >= scroll_offset + max_visible {
+                                scroll_offset = selected - max_visible + 1;
+                            }
+                        }
+                    }
+                    KeyCode::Home => {
+                        selected = 0;
+                        scroll_offset = 0;
+                    }
+                    KeyCode::End => {
+                        selected = items.len().saturating_sub(1);
+                        scroll_offset = items.len().saturating_sub(max_visible);
+                    }
+                    _ => continue,
+                }
+
+                draw(&mut stdout, selected, scroll_offset)?;
+            }
+        }
+    })();
+
+    // Always restore cooked mode.
+    let _ = ct::disable_raw_mode();
+
+    result
 }
 
 fn prompt_secret(_reader: &mut impl BufRead, prompt: &str) -> Result<String> {

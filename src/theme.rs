@@ -220,12 +220,12 @@ pub fn spinner_warn(pb: &ProgressBar, message: &str) {
 
 /// Print a styled header box (like openclaw's `intro()` from clack).
 pub fn print_header(title: &str) {
-    let width = 44;
-    let pad = if title.len() < width - 4 {
-        width - 4 - title.len()
-    } else {
-        2
-    };
+    use unicode_width::UnicodeWidthStr;
+
+    let display_w = UnicodeWidthStr::width(title);
+    // Inner width = display width of title + at least 4 chars padding (2 each side)
+    let inner = (display_w + 4).max(42);
+    let pad = inner - display_w;
     let left = pad / 2;
     let right = pad - left;
     println!();
@@ -233,7 +233,7 @@ pub fn print_header(title: &str) {
         "{}",
         accent(&format!(
             "┌{}┐",
-            "─".repeat(width - 2)
+            "─".repeat(inner)
         ))
     );
     println!(
@@ -249,7 +249,7 @@ pub fn print_header(title: &str) {
         "{}",
         accent(&format!(
             "└{}┘",
-            "─".repeat(width - 2)
+            "─".repeat(inner)
         ))
     );
     println!();

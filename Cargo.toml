@@ -44,6 +44,7 @@ which = "7"
 # Terminal styling
 colored = "2.1"
 indicatif = "0.17"
+unicode-width = "0.2"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
