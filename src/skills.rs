@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_skill_manager_creation() {
-        let temp_dir = std::env::temp_dir().join("ironclaw_test_skills");
+        let temp_dir = std::env::temp_dir().join("rustyclaw_test_skills");
         let manager = SkillManager::new(temp_dir);
         assert_eq!(manager.get_skills().len(), 0);
     }

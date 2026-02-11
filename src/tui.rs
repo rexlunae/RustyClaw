@@ -40,7 +40,7 @@ enum View {
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
-        let secrets_manager = SecretsManager::new("ironclaw");
+        let secrets_manager = SecretsManager::new("rustyclaw");
         let skills_dir = config.skills_dir.clone()
             .unwrap_or_else(|| config.settings_dir.join("skills"));
         let mut skill_manager = SkillManager::new(skills_dir);
@@ -58,7 +58,7 @@ impl App {
             soul_manager,
             input: String::new(),
             messages: vec![
-                "Welcome to IronClaw!".to_string(),
+                "Welcome to RustyClaw!".to_string(),
                 "Type 'help' for available commands".to_string(),
             ],
             current_view: View::Main,
@@ -153,7 +153,7 @@ impl App {
             .split(f.size());
 
         // Title
-        let title = Paragraph::new("IronClaw - Lightweight Secure Agent")
+        let title = Paragraph::new("RustyClaw - Lightweight Secure Agent")
             .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
             .block(Block::default().borders(Borders::ALL));
         f.render_widget(title, chunks[0]);

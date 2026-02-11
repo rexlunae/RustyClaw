@@ -27,7 +27,7 @@ impl Default for Config {
     fn default() -> Self {
         let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
         Self {
-            settings_dir: home_dir.join(".ironclaw"),
+            settings_dir: home_dir.join(".rustyclaw"),
             soul_path: None,
             skills_dir: None,
             messengers: Vec::new(),
@@ -43,7 +43,7 @@ impl Config {
             p
         } else {
             let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-            home_dir.join(".ironclaw").join("config.toml")
+            home_dir.join(".rustyclaw").join("config.toml")
         };
 
         if config_path.exists() {

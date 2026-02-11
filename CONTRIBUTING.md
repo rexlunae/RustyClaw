@@ -1,6 +1,6 @@
-# Contributing to IronClaw
+# Contributing to RustyClaw
 
-Thank you for your interest in contributing to IronClaw! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to RustyClaw! This document provides guidelines and information for contributors.
 
 ## Development Setup
 
@@ -15,8 +15,8 @@ Thank you for your interest in contributing to IronClaw! This document provides 
 1. Fork the repository
 2. Clone your fork:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/IronClaw.git
-   cd IronClaw
+   git clone https://github.com/YOUR_USERNAME/RustyClaw.git
+   cd RustyClaw
    ```
 3. Build the project:
    ```bash
@@ -73,7 +73,7 @@ cargo clippy
 ## Project Structure
 
 ```
-IronClaw/
+RustyClaw/
 ├── src/
 │   ├── main.rs          # Entry point
 │   ├── config.rs        # Configuration management
@@ -294,4 +294,4 @@ Contributors will be recognized in:
 - Release notes
 - Project documentation
 
-Thank you for contributing to IronClaw!
+Thank you for contributing to RustyClaw!

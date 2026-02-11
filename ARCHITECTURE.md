@@ -1,8 +1,8 @@
-# IronClaw Architecture
+# RustyClaw Architecture
 
 ## Overview
 
-IronClaw is designed as a modular, secure, and lightweight agentic tool with clear separation of concerns.
+RustyClaw is designed as a modular, secure, and lightweight agentic tool with clear separation of concerns.
 
 ## Core Components
 
@@ -10,7 +10,7 @@ IronClaw is designed as a modular, secure, and lightweight agentic tool with cle
 - OpenClaw-compatible configuration system
 - TOML-based configuration files
 - Default settings with override capability
-- Location: `~/.ironclaw/config.toml`
+- Location: `~/.rustyclaw/config.toml`
 
 ### 2. Skills System (`skills.rs`)
 - Dynamic skill loading from directory
@@ -98,7 +98,7 @@ Create a skill definition file in the skills directory:
 
 ### Customizing SOUL
 
-Edit `~/.ironclaw/SOUL.md` to define:
+Edit `~/.rustyclaw/SOUL.md` to define:
 - Core Identity
 - Principles
 - Capabilities
@@ -106,7 +106,7 @@ Edit `~/.ironclaw/SOUL.md` to define:
 
 ## OpenClaw Compatibility
 
-IronClaw maintains compatibility with OpenClaw through:
+RustyClaw maintains compatibility with OpenClaw through:
 
 1. **Configuration Structure**: Same directory layout
 2. **Skills Format**: Compatible skill definitions

@@ -1,8 +1,8 @@
-# Security Summary for IronClaw
+# Security Summary for RustyClaw
 
 ## Overview
 
-This document summarizes the security considerations and implementations in IronClaw.
+This document summarizes the security considerations and implementations in RustyClaw.
 
 ## Security Features Implemented
 
@@ -101,7 +101,7 @@ All dependencies are pinned to specific versions in Cargo.lock.
 
 ## Conclusion
 
-IronClaw implements a solid security foundation with:
+RustyClaw implements a solid security foundation with:
 - Secure secrets storage using system keyring
 - User-controlled access model
 - Type-safe Rust implementation

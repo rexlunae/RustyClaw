@@ -58,10 +58,10 @@ impl SoulManager {
 
     /// Create a default SOUL.md file
     fn create_default_soul(&self) -> Result<()> {
-        let default_content = r#"# SOUL - IronClaw Agent Personality
+        let default_content = r#"# SOUL - RustyClaw Agent Personality
 
 ## Core Identity
-I am IronClaw, a lightweight and secure agentic tool designed to assist with tasks while maintaining strong security boundaries.
+I am RustyClaw, a lightweight and secure agentic tool designed to assist with tasks while maintaining strong security boundaries.
 
 ## Principles
 - Security First: Always prioritize user security and privacy
@@ -103,7 +103,7 @@ mod tests {
 
     #[test]
     fn test_soul_manager_creation() {
-        let temp_path = std::env::temp_dir().join("ironclaw_test_soul.md");
+        let temp_path = std::env::temp_dir().join("rustyclaw_test_soul.md");
         let manager = SoulManager::new(temp_path);
         assert!(manager.get_content().is_none());
     }

@@ -1,4 +1,4 @@
-# IronClaw
+# RustyClaw
 
 A super-lightweight, super-capable agentic tool with improved security versus OpenClaw.
 
@@ -14,7 +14,7 @@ A super-lightweight, super-capable agentic tool with improved security versus Op
 
 ## Architecture
 
-IronClaw is designed with security and modularity in mind:
+RustyClaw is designed with security and modularity in mind:
 
 - **Configuration Management**: OpenClaw-compatible settings directory
 - **Skills System**: Load and manage skills dynamically
@@ -32,16 +32,16 @@ IronClaw is designed with security and modularity in mind:
 ### Building from Source
 
 ```bash
-git clone https://github.com/rexlunae/IronClaw.git
-cd IronClaw
+git clone https://github.com/rexlunae/RustyClaw.git
+cd RustyClaw
 cargo build --release
 ```
 
-The binary will be available at `target/release/ironclaw`.
+The binary will be available at `target/release/rustyclaw`.
 
 ## Usage
 
-### Running IronClaw
+### Running RustyClaw
 
 ```bash
 cargo run
@@ -50,7 +50,7 @@ cargo run
 Or if you built the release version:
 
 ```bash
-./target/release/ironclaw
+./target/release/rustyclaw
 ```
 
 ### TUI Interface
@@ -77,12 +77,12 @@ In the input field, you can use the following commands:
 
 ## Configuration
 
-IronClaw uses a configuration file located at `~/.ironclaw/config.toml`.
+RustyClaw uses a configuration file located at `~/.rustyclaw/config.toml`.
 
 ### Default Configuration
 
 ```toml
-settings_dir = "/home/user/.ironclaw"
+settings_dir = "/home/user/.rustyclaw"
 use_secrets = true
 
 [[messengers]]
@@ -92,15 +92,15 @@ enabled = false
 
 ### Configuration Options
 
-- `settings_dir`: Directory for IronClaw settings and data
-- `soul_path`: Path to SOUL.md file (optional, defaults to `~/.ironclaw/SOUL.md`)
-- `skills_dir`: Directory containing skills (optional, defaults to `~/.ironclaw/skills`)
+- `settings_dir`: Directory for RustyClaw settings and data
+- `soul_path`: Path to SOUL.md file (optional, defaults to `~/.rustyclaw/SOUL.md`)
+- `skills_dir`: Directory containing skills (optional, defaults to `~/.rustyclaw/skills`)
 - `use_secrets`: Whether to use the secrets storage system
 - `messengers`: Array of messenger configurations
 
 ## SOUL.md
 
-The SOUL.md file defines the agent's personality and behavior. IronClaw creates a default SOUL.md on first run if one doesn't exist. You can customize it to define:
+The SOUL.md file defines the agent's personality and behavior. RustyClaw creates a default SOUL.md on first run if one doesn't exist. You can customize it to define:
 
 - Core Identity
 - Principles
@@ -109,7 +109,7 @@ The SOUL.md file defines the agent's personality and behavior. IronClaw creates 
 
 ## Skills
 
-Skills are stored as JSON or YAML files in the skills directory (`~/.ironclaw/skills` by default).
+Skills are stored as JSON or YAML files in the skills directory (`~/.rustyclaw/skills` by default).
 
 ### Skill Format
 
@@ -126,7 +126,7 @@ Skills are compatible with OpenClaw's skill format.
 
 ## Secrets Management
 
-IronClaw provides secure secrets storage with user control:
+RustyClaw provides secure secrets storage with user control:
 
 1. **Agent Access Control**: Secrets are only accessible to the agent when explicitly enabled
 2. **System Keyring**: Uses the system's secure keyring for storage
@@ -162,7 +162,7 @@ cargo doc --open
 
 ## OpenClaw Compatibility
 
-IronClaw is designed to be compatible with OpenClaw:
+RustyClaw is designed to be compatible with OpenClaw:
 
 - Supports OpenClaw skills format
 - Compatible settings directory structure
