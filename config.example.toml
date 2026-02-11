@@ -1,0 +1,25 @@
+# IronClaw Configuration Example
+# Copy this to ~/.ironclaw/config.toml and customize
+
+# Directory for IronClaw settings and data
+settings_dir = "/home/user/.ironclaw"
+
+# Path to SOUL.md file (optional)
+# soul_path = "/home/user/.ironclaw/SOUL.md"
+
+# Directory containing skills (optional)
+# skills_dir = "/home/user/.ironclaw/skills"
+
+# Whether to use the secrets storage system
+use_secrets = true
+
+# Messenger configurations
+# [[messengers]]
+# name = "slack"
+# enabled = false
+# config_path = "/home/user/.ironclaw/messengers/slack.toml"
+
+# [[messengers]]
+# name = "discord"
+# enabled = false
+# config_path = "/home/user/.ironclaw/messengers/discord.toml"
