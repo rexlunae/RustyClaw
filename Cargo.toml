@@ -27,6 +27,9 @@ securestore = "0.100.0"
 # TOTP 2FA support
 totp-rs = { version = "5.7", features = ["gen_secret", "otpauth"] }
 
+# QR code generation for TOTP enrollment
+qrcode = { version = "0.14", default-features = false }
+
 # SSH key generation (Ed25519)
 ssh-key = { version = "0.6", features = ["ed25519", "getrandom", "std"] }
 

@@ -67,6 +67,34 @@ pub fn run_onboard_wizard(
     }
     println!();
 
+    // ── 0b. Name your agent ────────────────────────────────────────
+    println!("{}", t::heading("Name your agent:"));
+    println!();
+    println!("  Give your RustyClaw agent a name. This appears in the TUI");
+    println!("  title bar, authenticator app labels, and anywhere the");
+    println!("  agent identifies itself.");
+    println!();
+
+    let current_name = if config.agent_name.is_empty() || config.agent_name == "RustyClaw" {
+        None
+    } else {
+        Some(config.agent_name.clone())
+    };
+    let name_prompt = if let Some(ref current) = current_name {
+        format!("Agent name [{}]: ", current)
+    } else {
+        "Agent name [RustyClaw]: ".to_string()
+    };
+    let name_input = prompt_line(&mut reader, &format!("{} ", t::accent(&name_prompt)))?;
+    let name_input = name_input.trim().to_string();
+    if !name_input.is_empty() {
+        config.agent_name = name_input;
+    } else if current_name.is_none() {
+        config.agent_name = "RustyClaw".to_string();
+    }
+    println!("  {}", t::icon_ok(&format!("Agent name: {}", t::accent_bright(&config.agent_name))));
+    println!();
+
     // ── 1. Secrets vault setup ─────────────────────────────────────
     let vault_path = config.credentials_dir().join("secrets.json");
     let key_path = config.credentials_dir().join("secrets.key");
@@ -125,15 +153,28 @@ pub fn run_onboard_wizard(
         println!();
 
         // ── 1b. Optional TOTP 2FA ──────────────────────────────────
-        setup_totp_enrollment(&mut reader, config, secrets)?;
+        setup_totp_enrollment(&mut reader, config, secrets, &config.agent_name.clone())?;
 
         // ── 1c. Agent SSH key ──────────────────────────────────────
         setup_agent_ssh_key(&mut reader, secrets)?;
     } else {
         // ── Existing vault — unlock it ─────────────────────────────
-        if config.secrets_password_protected {
+        // Determine the real key source: if the vault exists but no key
+        // file is present, the vault *must* be password-protected even
+        // if config doesn't reflect it (e.g. a previous run crashed
+        // before saving the config).
+        let needs_password = config.secrets_password_protected
+            || (vault_path.exists() && !key_path.exists());
+
+        if needs_password {
+            if !config.secrets_password_protected {
+                println!("  {}", t::warn("Vault appears to be password-protected but config disagrees."));
+                println!("  {}", t::muted("(This can happen if a previous onboard run was interrupted.)"));
+                println!();
+            }
             let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("Enter vault password:")))?;
             secrets.set_password(pw.trim().to_string());
+            config.secrets_password_protected = true;
         }
 
         // Verify TOTP if enabled.
@@ -170,7 +211,11 @@ pub fn run_onboard_wizard(
                 loop {
                     let confirm = prompt_secret(&mut reader, &format!("{} ", t::accent("Confirm password:")))?;
                     if confirm.trim() == pw {
-                        secrets.set_password(pw.clone());
+                        // Re-encrypt the existing vault with the new password
+                        // instead of just setting it (which would lose access
+                        // to the vault encrypted under the old key source).
+                        secrets.change_password(pw.clone())
+                            .context("Failed to re-encrypt vault with new password")?;
                         config.secrets_password_protected = true;
                         println!("  {}", t::icon_ok("Vault password updated."));
                         break;
@@ -196,11 +241,11 @@ pub fn run_onboard_wizard(
                     println!("  {}", t::muted("Keeping 2FA enabled."));
                 }
             } else {
-                setup_totp_enrollment(&mut reader, config, secrets)?;
+                setup_totp_enrollment(&mut reader, config, secrets, &config.agent_name.clone())?;
             }
 
             // ── Agent SSH key ──────────────────────────────────────
-            setup_agent_ssh_key(&mut reader, secrets)?;
+            setup_agent_ssh_key(&mut reader, secrets)?
         } else {
             println!("  {}", t::muted("Keeping current vault settings."));
         }
@@ -609,6 +654,83 @@ fn perform_device_flow_auth(
     Ok(())
 }
 
+/// Render a QR code as compact Unicode art in the terminal.
+///
+/// Uses Unicode half-block characters (▀▄█ and space) so that each
+/// character cell encodes two vertical "modules", giving a clean,
+/// scannable result at roughly half the height of a naive render.
+fn print_qr_code(data: &str) {
+    use qrcode::QrCode;
+
+    let code = match QrCode::new(data) {
+        Ok(c) => c,
+        Err(_) => {
+            // Silently fall back — the URL is printed below anyway.
+            return;
+        }
+    };
+
+    let colors = code.to_colors();
+    let width = code.width();
+
+    // Quiet zone: 4 modules on each side (QR spec recommends 4).
+    let qz = 4;
+    let total_w = width + 2 * qz;
+
+    // Collect rows with quiet-zone padding (false = light module).
+    let mut rows: Vec<Vec<bool>> = Vec::new();
+    for _ in 0..qz {
+        rows.push(vec![false; total_w]);
+    }
+    for y in 0..width {
+        let mut row = vec![false; qz];
+        for x in 0..width {
+            row.push(colors[y * width + x] == qrcode::Color::Dark);
+        }
+        row.resize(total_w, false);
+        rows.push(row);
+    }
+    for _ in 0..qz {
+        rows.push(vec![false; total_w]);
+    }
+
+    // Render two rows at a time using Unicode half-block characters.
+    //
+    // We use an INVERTED scheme so it works on dark terminal backgrounds:
+    //   - Light module (false) → print a block character (appears as
+    //     the foreground colour = white)
+    //   - Dark  module (true)  → print a space (shows the background
+    //     colour = dark/black)
+    //
+    // This way the QR's dark modules are dark and the light modules
+    // (including the quiet zone) are bright — good contrast for scanners.
+    //
+    // Half-block ▀ means "top pixel on, bottom pixel off" (in the
+    // inverted world: top is light, bottom is dark).
+    let total_h = rows.len();
+    let indent = "  ";
+    for pair in (0..total_h).step_by(2) {
+        print!("{}", indent);
+        for x in 0..total_w {
+            let top_dark = rows[pair][x];
+            let bot_dark = if pair + 1 < total_h {
+                rows[pair + 1][x]
+            } else {
+                false
+            };
+            // Invert: light → filled, dark → empty
+            let ch = match (top_dark, bot_dark) {
+                (false, false) => '█', // both light → full block
+                (false, true)  => '▀', // top light, bottom dark → upper half
+                (true,  false) => '▄', // top dark, bottom light → lower half
+                (true,  true)  => ' ', // both dark → space
+            };
+            print!("{}", ch);
+        }
+        println!();
+    }
+}
+
 fn prompt_line(reader: &mut impl BufRead, prompt: &str) -> Result<String> {
     print!("{}", prompt);
     io::stdout().flush()?;
@@ -629,6 +751,7 @@ fn setup_totp_enrollment(
     reader: &mut impl BufRead,
     config: &mut Config,
     secrets: &mut SecretsManager,
+    agent_name: &str,
 ) -> Result<()> {
     println!("{}", t::bold("Two-factor authentication (optional):"));
     println!();
@@ -652,15 +775,17 @@ fn setup_totp_enrollment(
         secrets.delete_secret("__init")?;
 
         let account = whoami();
-        let otpauth_url = secrets.setup_totp(&account)?;
+        let otpauth_url = secrets.setup_totp_with_issuer(&account, agent_name)?;
 
         println!();
-        println!("  {}", t::heading("Scan this with your authenticator app:"));
+        println!("  {}", t::heading("Scan this QR code with your authenticator app:"));
+        println!();
+        print_qr_code(&otpauth_url);
+        println!();
+        println!("  {}", t::muted("If you can't scan, enter the setup key manually."));
+        println!("  {}", t::muted(&format!("The key is the {} parameter in the URL below:", t::bold("secret"))));
         println!();
         println!("  {}", t::accent_bright(&otpauth_url));
-        println!();
-        println!("  Or enter the setup key manually. The key is the");
-        println!("  {} parameter in the URL above.", t::bold("secret"));
         println!();
 
         // Verify the user can produce a valid code before committing.
@@ -737,9 +862,8 @@ fn setup_agent_ssh_key(
 
     if has_key {
         println!("{}", t::bold("Agent SSH key:"));
-        let pubkey_path = secrets.ssh_pubkey_path("rustyclaw_agent");
-        println!("  {} already generated.",
-            t::icon_ok(&format!("SSH key {}", t::info(&pubkey_path.display().to_string()))));
+        println!("  {}",
+            t::icon_ok("SSH key already generated (stored in encrypted vault)."));
         let regen = prompt_line(
             reader,
             &format!("{} ", t::accent("Regenerate agent SSH key? [y/N]:")),
@@ -778,9 +902,8 @@ fn setup_agent_ssh_key(
         println!("  {}", t::bold("Public key:"));
         println!("  {}", t::info(&pubkey));
         println!();
-        let pubkey_path = secrets.ssh_pubkey_path("rustyclaw_agent");
-        println!("  Written to: {}", t::info(&pubkey_path.display().to_string()));
-        println!("  Add it to your Git host or authorized_keys as needed.");
+        println!("  Stored in the encrypted vault.");
+        println!("  Add the public key above to your Git host or authorized_keys as needed.");
     } else {
         println!("  {}", t::muted("Skipping agent SSH key. You can generate one later."));
     }

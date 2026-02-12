@@ -17,8 +17,7 @@ pub enum SecretKind {
     HttpPasskey,
     /// Username + password pair.
     UsernamePassword,
-    /// SSH keypair (Ed25519).  The private key is stored in the vault;
-    /// the public key is also written to `<credentials_dir>/rustyclaw_agent.pub`.
+    /// SSH keypair (Ed25519).  Both keys are stored encrypted in the vault.
     SshKey,
     /// Generic single-value token (OAuth tokens, bot tokens, etc.).
     Token,
@@ -199,8 +198,6 @@ pub struct AccessContext {
 /// | `val:<name>:card_extra`| JSON map of additional payment card fields         |
 /// | `<bare key>`           | Legacy / raw secrets (API keys, TOTP, etc.)        |
 pub struct SecretsManager {
-    /// Root credentials directory (for writing SSH pubkey file, etc.)
-    credentials_dir: PathBuf,
     /// Path to the vault JSON file
     vault_path: PathBuf,
     /// Path to the key file (only used when no password is set)
@@ -228,7 +225,6 @@ impl SecretsManager {
     pub fn new(credentials_dir: impl Into<PathBuf>) -> Self {
         let dir: PathBuf = credentials_dir.into();
         Self {
-            credentials_dir: dir.clone(),
             vault_path: dir.join("secrets.json"),
             key_path: dir.join("secrets.key"),
             password: None,
@@ -242,7 +238,6 @@ impl SecretsManager {
     pub fn with_password(credentials_dir: impl Into<PathBuf>, password: String) -> Self {
         let dir: PathBuf = credentials_dir.into();
         Self {
-            credentials_dir: dir.clone(),
             vault_path: dir.join("secrets.json"),
             key_path: dir.join("secrets.key"),
             password: Some(password),
@@ -252,11 +247,72 @@ impl SecretsManager {
     }
 
     /// Set the password after construction (e.g. after prompting the user).
+    ///
+    /// **Note:** This only affects how the vault is opened on next access.
+    /// If the vault already exists on disk with a different key source, you
+    /// must call [`change_password`](Self::change_password) instead.
     pub fn set_password(&mut self, password: String) {
         self.password = Some(password);
         // Invalidate any previously loaded vault so it reloads with the
         // new key source.
         self.vault = None;
+    }
+
+    /// Re-encrypt an existing vault with a new password.
+    ///
+    /// Loads the vault with the current key source, reads every secret,
+    /// creates a brand-new vault encrypted with `new_password`, writes
+    /// back all the secrets, and saves.  On success the in-memory state
+    /// is updated to use the new password.
+    pub fn change_password(&mut self, new_password: String) -> Result<()> {
+        // 1. Make sure the vault is loaded with the *current* credentials.
+        let old_vault = self.ensure_vault()?;
+
+        // 2. Read out every key → value pair.
+        let keys: Vec<String> = old_vault.keys().map(|s| s.to_string()).collect();
+        let mut entries: Vec<(String, String)> = Vec::new();
+        for key in &keys {
+            match old_vault.get(key) {
+                Ok(value) => entries.push((key.clone(), value)),
+                // Skip entries we can't decrypt (shouldn't happen, but be safe).
+                Err(_) => {}
+            }
+        }
+
+        // 3. Drop the old vault and create a new one with the new password.
+        self.vault = None;
+
+        let new_vault = securestore::SecretsManager::new(
+            KeySource::Password(&new_password),
+        )
+        .context("Failed to create vault with new password")?;
+        new_vault
+            .save_as(&self.vault_path)
+            .context("Failed to save re-encrypted vault")?;
+
+        // 4. Reload so we can write to it.
+        let mut reloaded = securestore::SecretsManager::load(
+            &self.vault_path,
+            KeySource::Password(&new_password),
+        )
+        .context("Failed to reload vault with new password")?;
+
+        // 5. Write all secrets back.
+        for (key, value) in entries {
+            reloaded.set(&key, value);
+        }
+        reloaded.save().context("Failed to save re-keyed vault")?;
+
+        // 6. Update in-memory state.
+        self.password = Some(new_password);
+        self.vault = Some(reloaded);
+
+        // 7. Remove the old key file if it exists — no longer needed.
+        if self.key_path.exists() {
+            let _ = std::fs::remove_file(&self.key_path);
+        }
+
+        Ok(())
     }
 
     /// Ensure the vault is loaded (or created if it doesn't exist yet).
@@ -801,10 +857,6 @@ impl SecretsManager {
             let _ = self.delete_secret(key);
         }
 
-        // Also remove the pubkey file if it exists.
-        let pubkey_path = self.credentials_dir.join(format!("{}.pub", name));
-        let _ = std::fs::remove_file(pubkey_path);
-
         Ok(())
     }
 
@@ -871,9 +923,8 @@ impl SecretsManager {
 
     // ── SSH key generation ──────────────────────────────────────────
 
-    /// Generate a new Ed25519 SSH keypair, store it in the vault as
-    /// an `SshKey` credential, and write the public key to
-    /// `<credentials_dir>/<name>.pub`.
+    /// Generate a new Ed25519 SSH keypair and store it in the vault
+    /// as an `SshKey` credential.
     ///
     /// Returns the public key string (`ssh-ed25519 AAAA… <comment>`).
     pub fn generate_ssh_key(
@@ -924,17 +975,7 @@ impl SecretsManager {
         self.store_secret(&val_key, private_pem.to_string().as_str())?;
         self.store_secret(&pub_vault_key, &public_str)?;
 
-        // Write public key file.
-        let pubkey_path = self.credentials_dir.join(format!("{}.pub", name));
-        std::fs::write(&pubkey_path, &public_str)
-            .context("Failed to write SSH public key file")?;
-
         Ok(public_str)
-    }
-
-    /// Path to the SSH public key file for a given credential name.
-    pub fn ssh_pubkey_path(&self, name: &str) -> PathBuf {
-        self.credentials_dir.join(format!("{}.pub", name))
     }
 
     // ── Access policy enforcement ───────────────────────────────────
@@ -967,6 +1008,12 @@ impl SecretsManager {
     /// the `otpauth://` URI (suitable for QR codes / manual entry in an
     /// authenticator app).
     pub fn setup_totp(&mut self, account_name: &str) -> Result<String> {
+        self.setup_totp_with_issuer(account_name, "RustyClaw")
+    }
+
+    /// Like [`setup_totp`](Self::setup_totp) but with a custom issuer name
+    /// (shown as the app/service label in authenticator apps).
+    pub fn setup_totp_with_issuer(&mut self, account_name: &str, issuer: &str) -> Result<String> {
         let secret = TotpSecret::generate_secret();
         let secret_bytes = secret.to_bytes()
             .map_err(|e| anyhow::anyhow!("Failed to generate TOTP secret bytes: {:?}", e))?;
@@ -977,7 +1024,7 @@ impl SecretsManager {
             1,  // skew (allow ±1 step)
             30, // step (seconds)
             secret_bytes,
-            Some("RustyClaw".to_string()),
+            Some(issuer.to_string()),
             account_name.to_string(),
         )
         .map_err(|e| anyhow::anyhow!("Failed to create TOTP: {:?}", e))?;
@@ -1189,6 +1236,78 @@ mod tests {
     }
 
     #[test]
+    fn test_change_password() {
+        let dir = temp_dir();
+
+        // Create a key-file vault and store some secrets.
+        {
+            let mut m = SecretsManager::new(&dir);
+            m.store_secret("api_key", "sk-abc").unwrap();
+            m.store_secret("token", "tok-xyz").unwrap();
+        }
+        assert!(dir.join("secrets.json").exists());
+        assert!(dir.join("secrets.key").exists());
+
+        // Re-open with key-file and change to a password.
+        {
+            let mut m = SecretsManager::new(&dir);
+            m.change_password("newpass".to_string()).unwrap();
+        }
+
+        // Key file should be removed after password migration.
+        assert!(!dir.join("secrets.key").exists());
+
+        // Reload with the new password — secrets should still be there.
+        {
+            let mut m = SecretsManager::with_password(&dir, "newpass".to_string());
+            m.set_agent_access(true);
+            assert_eq!(m.get_secret("api_key", false).unwrap(), Some("sk-abc".to_string()));
+            assert_eq!(m.get_secret("token", false).unwrap(), Some("tok-xyz".to_string()));
+        }
+
+        // Old key file should no longer work (it's deleted).
+        // Wrong password should fail.
+        {
+            let mut m = SecretsManager::with_password(&dir, "wrong".to_string());
+            assert!(m.get_secret("api_key", true).is_err());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_change_password_between_passwords() {
+        let dir = temp_dir();
+
+        // Create a password-protected vault.
+        {
+            let mut m = SecretsManager::with_password(&dir, "old_pw".to_string());
+            m.store_secret("secret", "value123").unwrap();
+        }
+
+        // Change the password.
+        {
+            let mut m = SecretsManager::with_password(&dir, "old_pw".to_string());
+            m.change_password("new_pw".to_string()).unwrap();
+        }
+
+        // New password should work.
+        {
+            let mut m = SecretsManager::with_password(&dir, "new_pw".to_string());
+            m.set_agent_access(true);
+            assert_eq!(m.get_secret("secret", false).unwrap(), Some("value123".to_string()));
+        }
+
+        // Old password should fail.
+        {
+            let mut m = SecretsManager::with_password(&dir, "old_pw".to_string());
+            assert!(m.get_secret("secret", true).is_err());
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn test_totp_setup_and_verify() {
         let dir = temp_dir();
         let mut manager = SecretsManager::new(&dir);
@@ -1322,12 +1441,6 @@ mod tests {
         assert!(pubkey.starts_with("ssh-ed25519 "));
         assert!(pubkey.contains("rustyclaw@agent"));
 
-        // Public key file should exist on disk.
-        let pubkey_path = dir.join("rustyclaw_agent.pub");
-        assert!(pubkey_path.exists());
-        let on_disk = std::fs::read_to_string(&pubkey_path).unwrap();
-        assert_eq!(on_disk, pubkey);
-
         // Retrieve via typed API.
         let ctx = AccessContext { user_approved: true, ..Default::default() };
         let (meta, val) = m.get_credential("rustyclaw_agent", &ctx).unwrap().unwrap();
@@ -1340,9 +1453,8 @@ mod tests {
             _ => panic!("Expected SshKeyPair"),
         }
 
-        // Delete should clean up the pubkey file too.
+        // Delete should clean up vault entries.
         m.delete_credential("rustyclaw_agent").unwrap();
-        assert!(!pubkey_path.exists());
 
         let _ = std::fs::remove_dir_all(&dir);
     }

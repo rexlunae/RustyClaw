@@ -277,10 +277,10 @@ impl App {
 
         let soul_path = config.soul_path();
         let mut soul_manager = SoulManager::new(soul_path);
-        
+
         // Check if we need to show the hatching animation
         let needs_hatching = soul_manager.needs_hatching();
-        
+
         // Load or create SOUL
         let _ = soul_manager.load();
 
@@ -574,7 +574,33 @@ impl App {
                 return Ok(None);
             }
             Action::GatewayMessage(ref text) => {
-                self.state.messages.push(format!("◀ {}", text));
+                // Parse the gateway JSON envelope and extract the payload.
+                // The gateway wraps responses as {"type":"response","received":"…"}.
+                let payload = serde_json::from_str::<serde_json::Value>(text)
+                    .ok()
+                    .and_then(|v| {
+                        // Skip non-response frames (e.g. the initial "hello")
+                        if v.get("type").and_then(|t| t.as_str()) == Some("response") {
+                            v.get("received").and_then(|r| r.as_str()).map(String::from)
+                        } else {
+                            None
+                        }
+                    });
+
+                // Route gateway messages to hatching during the exchange
+                if self.showing_hatching {
+                    if let Some(content) = payload {
+                        if let Some(ref mut hatching) = self.hatching_page {
+                            let mut ps = self.state.pane_state();
+                            let _ = hatching.update(Action::HatchingResponse(content), &mut ps);
+                        }
+                    }
+                    return Ok(Some(Action::Update));
+                }
+
+                // Normal (non-hatching) messages pane display
+                let display = payload.as_deref().unwrap_or(text);
+                self.state.messages.push(format!("◀ {}", display));
                 // Auto-scroll
                 return Ok(Some(Action::Update));
             }
@@ -590,10 +616,13 @@ impl App {
                 if self.showing_hatching {
                     if let Some(ref mut hatching) = self.hatching_page {
                         let mut ps = self.state.pane_state();
-                        let _ = hatching.update(Action::Tick, &mut ps);
+                        if let Ok(Some(hatching_action)) = hatching.update(Action::Tick, &mut ps) {
+                            // Propagate actions from hatching (e.g. BeginHatchingExchange)
+                            return Ok(Some(hatching_action));
+                        }
                     }
                 }
-                
+
                 // Advance the inline loading line
                 if let Some(ref mut loading) = self.fetch_loading {
                     loading.tick += 1;
@@ -800,6 +829,27 @@ impl App {
                 self.showing_hatching = false;
                 self.hatching_page = None;
                 return Ok(None);
+            }
+            Action::BeginHatchingExchange => {
+                // Send the hatching prompt to the gateway to start the identity exchange
+                let prompt = Hatching::hatching_prompt();
+                self.send_to_gateway(prompt).await;
+                return Ok(Some(Action::Update));
+            }
+            Action::HatchingSendMessage(ref text) => {
+                // Forward user message to gateway during hatching exchange
+                self.send_to_gateway(text.clone()).await;
+                return Ok(Some(Action::Update));
+            }
+            Action::FinishHatching(ref soul_content) => {
+                // Save the generated identity as SOUL.md
+                let content = soul_content.clone();
+                if let Err(e) = self.state.soul_manager.set_content(content) {
+                    self.state.messages.push(format!("Failed to save SOUL.md: {}", e));
+                }
+                self.showing_hatching = false;
+                self.hatching_page = None;
+                return Ok(Some(Action::Update));
             }
             _ => {}
         }
@@ -1123,7 +1173,7 @@ impl App {
     fn draw(&mut self, tui: &mut Tui) -> Result<()> {
         tui.draw(|frame| {
             let area = frame.size();
-            
+
             let ps = PaneState {
                 config: &self.state.config,
                 secrets_manager: &mut self.state.secrets_manager,

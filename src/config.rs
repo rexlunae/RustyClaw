@@ -45,6 +45,10 @@ pub struct Config {
     /// Whether the agent is allowed to access secrets on behalf of the user.
     #[serde(default)]
     pub agent_access: bool,
+    /// User-chosen name for this agent instance (shown in TUI title,
+    /// authenticator app labels, etc.).  Defaults to "RustyClaw".
+    #[serde(default = "Config::default_agent_name")]
+    pub agent_name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,11 +74,16 @@ impl Default for Config {
             secrets_password_protected: false,
             totp_enabled: false,
             agent_access: false,
+            agent_name: Self::default_agent_name(),
         }
     }
 }
 
 impl Config {
+    fn default_agent_name() -> String {
+        "RustyClaw".to_string()
+    }
+
     // ── Derived path helpers (mirrors openclaw layout) ───────────
 
     /// Agent workspace directory — holds SOUL.md, skills/, etc.
