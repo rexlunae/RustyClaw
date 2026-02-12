@@ -58,6 +58,10 @@ scraper = "0.22"
 html2md = "0.2"
 urlencoding = "2.1"
 
+# Unix process management
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 # Terminal styling
 colored = "2.1"
 indicatif = "0.18"

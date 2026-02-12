@@ -5,11 +5,23 @@
 //! native schema (OpenAI function-calling, Anthropic tool-use, Google
 //! function declarations).
 
+use crate::process_manager::{ProcessManager, SessionStatus, SharedProcessManager};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
+
+// ── Global process manager ──────────────────────────────────────────────────
+
+/// Global process manager for background exec sessions.
+static PROCESS_MANAGER: OnceLock<SharedProcessManager> = OnceLock::new();
+
+/// Get the global process manager instance.
+pub fn process_manager() -> &'static SharedProcessManager {
+    PROCESS_MANAGER.get_or_init(|| Arc::new(Mutex::new(ProcessManager::new())))
+}
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -100,6 +112,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &EXECUTE_COMMAND,
         &WEB_FETCH,
         &WEB_SEARCH,
+        &PROCESS,
     ]
 }
 
@@ -196,6 +209,16 @@ pub static WEB_SEARCH: ToolDef = ToolDef {
                   Use for finding current information, research, and fact-checking.",
     parameters: vec![],
     execute: exec_web_search,
+};
+
+pub static PROCESS: ToolDef = ToolDef {
+    name: "process",
+    description: "Manage background exec sessions. Actions: list (show all sessions), \
+                  poll (get new output + status for a session), log (get output with offset/limit), \
+                  write (send data to stdin), kill (terminate a session), clear (remove completed sessions), \
+                  remove (remove a specific session).",
+    parameters: vec![],
+    execute: exec_process,
 };
 
 /// We need a runtime-constructed param list because `Vec` isn't const.
@@ -351,6 +374,20 @@ fn execute_command_params() -> Vec<ToolParam> {
             param_type: "integer".into(),
             required: false,
         },
+        ToolParam {
+            name: "background".into(),
+            description: "Run in background immediately. Returns a sessionId for use with process tool.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "yieldMs".into(),
+            description: "Milliseconds to wait before auto-backgrounding (default: 10000). \
+                          Set to 0 to disable auto-background."
+                .into(),
+            param_type: "integer".into(),
+            required: false,
+        },
     ]
 }
 
@@ -416,6 +453,41 @@ fn web_search_params() -> Vec<ToolParam> {
                           or date range 'YYYY-MM-DDtoYYYY-MM-DD'."
                 .into(),
             param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+fn process_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action to perform: 'list', 'poll', 'log', 'write', 'kill', 'clear', 'remove'.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "sessionId".into(),
+            description: "Session ID for poll/log/write/kill/remove actions.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "data".into(),
+            description: "Data to write to stdin (for 'write' action).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "offset".into(),
+            description: "Line offset for 'log' action (0-indexed). Omit to get last N lines.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "limit".into(),
+            description: "Maximum lines to return for 'log' action. Default: 50.".into(),
+            param_type: "integer".into(),
             required: false,
         },
     ]
@@ -869,34 +941,101 @@ fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String, St
         .get("timeout_secs")
         .and_then(|v| v.as_u64())
         .unwrap_or(30);
+    
+    // Background execution support
+    let background = args
+        .get("background")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let yield_ms = args
+        .get("yieldMs")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10000); // Default 10 seconds before auto-background
 
     let cwd = match working_dir {
         Some(p) => resolve_path(workspace_dir, p),
         None => workspace_dir.to_path_buf(),
     };
 
+    // If background requested immediately, spawn and return session ID
+    if background {
+        let manager = process_manager();
+        let mut mgr = manager
+            .lock()
+            .map_err(|_| "Failed to acquire process manager lock".to_string())?;
+        
+        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
+        
+        return Ok(json!({
+            "status": "running",
+            "sessionId": session_id,
+            "message": format!("Command backgrounded. Use process tool to poll session '{}'.", session_id)
+        }).to_string());
+    }
+
     let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(&cwd)
+        .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Failed to execute command: {}", e))?;
 
-    // Poll for completion with a timeout.
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    // Poll for completion with yield/timeout logic
+    let yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
+    let timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(_)) => break, // Process finished
             Ok(None) => {
-                if Instant::now() >= deadline {
+                let now = Instant::now();
+                
+                // Check if we should auto-background
+                if now >= yield_deadline && yield_ms > 0 {
+                    // Move to background - transfer child to process manager
+                    let manager = process_manager();
+                    let mut mgr = manager
+                        .lock()
+                        .map_err(|_| "Failed to acquire process manager lock".to_string())?;
+                    
+                    // Create a session from the existing child
+                    let remaining_timeout = timeout_deadline.saturating_duration_since(now);
+                    let mut session = crate::process_manager::ExecSession::new(
+                        command.to_string(),
+                        cwd.to_string_lossy().to_string(),
+                        Some(remaining_timeout),
+                        child,
+                    );
+                    
+                    // Try to read any output accumulated so far
+                    session.try_read_output();
+                    
+                    // Insert session into manager
+                    let session_id = mgr.insert(session);
+                    
+                    return Ok(json!({
+                        "status": "running",
+                        "sessionId": session_id,
+                        "message": format!(
+                            "Command still running after {}ms, backgrounded as session '{}'. \
+                             Use process tool to poll.",
+                            yield_ms, session_id
+                        )
+                    }).to_string());
+                }
+                
+                // Check timeout
+                if now >= timeout_deadline {
                     let _ = child.kill();
                     return Err(format!(
                         "Command timed out after {} seconds",
                         timeout_secs
                     ));
                 }
+                
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => return Err(format!("Error waiting for command: {}", e)),
@@ -1247,6 +1386,158 @@ fn exec_web_search(args: &Value, _workspace_dir: &Path) -> Result<String, String
     Ok(output)
 }
 
+/// Manage background exec sessions.
+fn exec_process(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    let session_id = args.get("sessionId").and_then(|v| v.as_str());
+
+    let manager = process_manager();
+    let mut mgr = manager
+        .lock()
+        .map_err(|_| "Failed to acquire process manager lock".to_string())?;
+
+    match action {
+        "list" => {
+            // Poll all sessions first to update status
+            mgr.poll_all();
+            
+            let sessions = mgr.list();
+            if sessions.is_empty() {
+                return Ok("No active sessions.".to_string());
+            }
+
+            let mut output = String::from("Background sessions:\n\n");
+            for session in sessions {
+                let status_str = match &session.status {
+                    SessionStatus::Running => "running".to_string(),
+                    SessionStatus::Exited(code) => format!("exited ({})", code),
+                    SessionStatus::Killed => "killed".to_string(),
+                    SessionStatus::TimedOut => "timed out".to_string(),
+                };
+                let elapsed = session.elapsed().as_secs();
+                output.push_str(&format!(
+                    "- {} [{}] ({}s)\n  {}\n",
+                    session.id, status_str, elapsed, session.command
+                ));
+            }
+            Ok(output)
+        }
+
+        "poll" => {
+            let id = session_id.ok_or("Missing sessionId for poll action")?;
+            
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
+
+            // Try to read new output and check exit status
+            session.try_read_output();
+            let exited = session.check_exit();
+
+            let new_output = session.poll_output();
+            let status_str = match &session.status {
+                SessionStatus::Running => "running".to_string(),
+                SessionStatus::Exited(code) => format!("exited ({})", code),
+                SessionStatus::Killed => "killed".to_string(),
+                SessionStatus::TimedOut => "timed out".to_string(),
+            };
+
+            let mut result = String::new();
+            if !new_output.is_empty() {
+                result.push_str(new_output);
+                if !new_output.ends_with('\n') {
+                    result.push('\n');
+                }
+                result.push('\n');
+            }
+            
+            if exited {
+                result.push_str(&format!("Process {}.", status_str));
+            } else {
+                result.push_str(&format!("Process still {}.", status_str));
+            }
+
+            Ok(result)
+        }
+
+        "log" => {
+            let id = session_id.ok_or("Missing sessionId for log action")?;
+            
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
+
+            // Update output first
+            session.try_read_output();
+
+            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .or(Some(50));
+
+            let output = session.log_output(offset, limit);
+            if output.is_empty() {
+                Ok("(no output)".to_string())
+            } else {
+                Ok(output)
+            }
+        }
+
+        "write" => {
+            let id = session_id.ok_or("Missing sessionId for write action")?;
+            let data = args
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing data for write action")?;
+
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
+
+            session.write_stdin(data)?;
+            Ok(format!("Wrote {} bytes to session {}", data.len(), id))
+        }
+
+        "kill" => {
+            let id = session_id.ok_or("Missing sessionId for kill action")?;
+
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
+
+            session.kill()?;
+            Ok(format!("Killed session {}", id))
+        }
+
+        "clear" => {
+            mgr.clear_completed();
+            Ok("Cleared completed sessions.".to_string())
+        }
+
+        "remove" => {
+            let id = session_id.ok_or("Missing sessionId for remove action")?;
+            
+            if let Some(mut session) = mgr.remove(id) {
+                // Kill if still running
+                if session.status == SessionStatus::Running {
+                    let _ = session.kill();
+                }
+                Ok(format!("Removed session {}", id))
+            } else {
+                Err(format!("No session found: {}", id))
+            }
+        }
+
+        _ => Err(format!("Unknown action: {}. Valid: list, poll, log, write, kill, clear, remove", action)),
+    }
+}
+
 // ── Provider-specific formatters ────────────────────────────────────────────
 
 /// Parameters for a tool, building a JSON Schema `properties` / `required`.
@@ -1283,6 +1574,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "execute_command" => execute_command_params(),
         "web_fetch" => web_fetch_params(),
         "web_search" => web_search_params(),
+        "process" => process_params(),
         _ => vec![],
     }
 }
@@ -1626,7 +1918,7 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -1635,7 +1927,7 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -1643,7 +1935,7 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert_eq!(tools.len(), 9);
+        assert_eq!(tools.len(), 10);
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -1717,5 +2009,51 @@ mod tests {
         assert!(params.iter().any(|p| p.name == "country" && !p.required));
         assert!(params.iter().any(|p| p.name == "search_lang" && !p.required));
         assert!(params.iter().any(|p| p.name == "freshness" && !p.required));
+    }
+
+    // ── process ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_process_missing_action() {
+        let args = json!({});
+        let result = exec_process(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_process_invalid_action() {
+        let args = json!({ "action": "invalid" });
+        let result = exec_process(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Unknown action"));
+    }
+
+    #[test]
+    fn test_process_list_empty() {
+        let args = json!({ "action": "list" });
+        let result = exec_process(&args, ws());
+        assert!(result.is_ok());
+        // May have sessions from other tests, so just check it doesn't error
+    }
+
+    #[test]
+    fn test_process_params_defined() {
+        let params = process_params();
+        assert_eq!(params.len(), 5);
+        assert!(params.iter().any(|p| p.name == "action" && p.required));
+        assert!(params.iter().any(|p| p.name == "sessionId" && !p.required));
+        assert!(params.iter().any(|p| p.name == "data" && !p.required));
+        assert!(params.iter().any(|p| p.name == "offset" && !p.required));
+        assert!(params.iter().any(|p| p.name == "limit" && !p.required));
+    }
+
+    #[test]
+    fn test_execute_command_params_with_background() {
+        let params = execute_command_params();
+        assert_eq!(params.len(), 5);
+        assert!(params.iter().any(|p| p.name == "command" && p.required));
+        assert!(params.iter().any(|p| p.name == "background" && !p.required));
+        assert!(params.iter().any(|p| p.name == "yieldMs" && !p.required));
     }
 }
