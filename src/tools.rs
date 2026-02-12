@@ -99,6 +99,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &FIND_FILES,
         &EXECUTE_COMMAND,
         &WEB_FETCH,
+        &WEB_SEARCH,
     ]
 }
 
@@ -186,6 +187,15 @@ pub static WEB_FETCH: ToolDef = ToolDef {
                   For JavaScript-heavy sites that require rendering, use a browser tool instead.",
     parameters: vec![],
     execute: exec_web_fetch,
+};
+
+pub static WEB_SEARCH: ToolDef = ToolDef {
+    name: "web_search",
+    description: "Search the web using Brave Search API. Returns titles, URLs, and snippets. \
+                  Requires BRAVE_API_KEY environment variable to be set. \
+                  Use for finding current information, research, and fact-checking.",
+    parameters: vec![],
+    execute: exec_web_search,
 };
 
 /// We need a runtime-constructed param list because `Vec` isn't const.
@@ -366,6 +376,46 @@ fn web_fetch_params() -> Vec<ToolParam> {
                           Default: 50000."
                 .into(),
             param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+fn web_search_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "query".into(),
+            description: "Search query string.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "count".into(),
+            description: "Number of results to return (1-10). Default: 5.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "country".into(),
+            description: "2-letter country code for region-specific results (e.g., 'DE', 'US'). \
+                          Default: 'US'."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "search_lang".into(),
+            description: "ISO language code for search results (e.g., 'de', 'en', 'fr').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "freshness".into(),
+            description: "Filter results by discovery time. Values: 'pd' (past 24h), \
+                          'pw' (past week), 'pm' (past month), 'py' (past year), \
+                          or date range 'YYYY-MM-DDtoYYYY-MM-DD'."
+                .into(),
+            param_type: "string".into(),
             required: false,
         },
     ]
@@ -1088,6 +1138,115 @@ fn html_to_text(html: &str) -> String {
     text
 }
 
+/// Search the web using Brave Search API.
+fn exec_web_search(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: query".to_string())?;
+
+    let count = args
+        .get("count")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5)
+        .min(10)
+        .max(1) as usize;
+
+    let country = args
+        .get("country")
+        .and_then(|v| v.as_str())
+        .unwrap_or("US");
+
+    let search_lang = args.get("search_lang").and_then(|v| v.as_str());
+    let freshness = args.get("freshness").and_then(|v| v.as_str());
+
+    // Get API key from environment
+    let api_key = std::env::var("BRAVE_API_KEY").map_err(|_| {
+        "BRAVE_API_KEY environment variable not set. \
+         Get a free API key at https://brave.com/search/api/"
+            .to_string()
+    })?;
+
+    // Build the request URL
+    let mut url = format!(
+        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+        urlencoding::encode(query),
+        count,
+    );
+
+    if country != "ALL" {
+        url.push_str(&format!("&country={}", country));
+    }
+
+    if let Some(lang) = search_lang {
+        url.push_str(&format!("&search_lang={}", lang));
+    }
+
+    if let Some(fresh) = freshness {
+        url.push_str(&format!("&freshness={}", fresh));
+    }
+
+    // Make the request
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(&url)
+        .header("Accept", "application/json")
+        .header("Accept-Encoding", "gzip")
+        .header("X-Subscription-Token", &api_key)
+        .send()
+        .map_err(|e| format!("Brave Search request failed: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response.text().unwrap_or_default();
+        return Err(format!("Brave Search API error {}: {}", status.as_u16(), body));
+    }
+
+    let data: Value = response
+        .json()
+        .map_err(|e| format!("Failed to parse Brave Search response: {}", e))?;
+
+    // Extract web results
+    let web_results = data
+        .get("web")
+        .and_then(|w| w.get("results"))
+        .and_then(|r| r.as_array());
+
+    let Some(results) = web_results else {
+        return Ok("No results found.".to_string());
+    };
+
+    if results.is_empty() {
+        return Ok("No results found.".to_string());
+    }
+
+    // Format results
+    let mut output = String::new();
+    output.push_str(&format!("Search results for: {}\n\n", query));
+
+    for (i, result) in results.iter().take(count).enumerate() {
+        let title = result.get("title").and_then(|t| t.as_str()).unwrap_or("(no title)");
+        let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
+        let description = result
+            .get("description")
+            .and_then(|d| d.as_str())
+            .unwrap_or("");
+
+        output.push_str(&format!("{}. {}\n", i + 1, title));
+        output.push_str(&format!("   {}\n", url));
+        if !description.is_empty() {
+            output.push_str(&format!("   {}\n", description));
+        }
+        output.push('\n');
+    }
+
+    Ok(output)
+}
+
 // ── Provider-specific formatters ────────────────────────────────────────────
 
 /// Parameters for a tool, building a JSON Schema `properties` / `required`.
@@ -1123,6 +1282,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "find_files" => find_files_params(),
         "execute_command" => execute_command_params(),
         "web_fetch" => web_fetch_params(),
+        "web_search" => web_search_params(),
         _ => vec![],
     }
 }
@@ -1466,7 +1626,7 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -1475,7 +1635,7 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -1483,7 +1643,7 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert_eq!(tools.len(), 8);
+        assert_eq!(tools.len(), 9);
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -1526,5 +1686,36 @@ mod tests {
         assert!(params.iter().any(|p| p.name == "url" && p.required));
         assert!(params.iter().any(|p| p.name == "extract_mode" && !p.required));
         assert!(params.iter().any(|p| p.name == "max_chars" && !p.required));
+    }
+
+    // ── web_search ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_web_search_missing_query() {
+        let args = json!({});
+        let result = exec_web_search(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_web_search_no_api_key() {
+        // Clear any existing key for the test
+        std::env::remove_var("BRAVE_API_KEY");
+        let args = json!({ "query": "test" });
+        let result = exec_web_search(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("BRAVE_API_KEY"));
+    }
+
+    #[test]
+    fn test_web_search_params_defined() {
+        let params = web_search_params();
+        assert_eq!(params.len(), 5);
+        assert!(params.iter().any(|p| p.name == "query" && p.required));
+        assert!(params.iter().any(|p| p.name == "count" && !p.required));
+        assert!(params.iter().any(|p| p.name == "country" && !p.required));
+        assert!(params.iter().any(|p| p.name == "search_lang" && !p.required));
+        assert!(params.iter().any(|p| p.name == "freshness" && !p.required));
     }
 }

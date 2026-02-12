@@ -56,6 +56,7 @@ walkdir = "2"
 # HTML parsing and text extraction
 scraper = "0.22"
 html2md = "0.2"
+urlencoding = "2.1"
 
 # Terminal styling
 colored = "2.1"
