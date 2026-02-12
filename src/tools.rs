@@ -98,6 +98,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SEARCH_FILES,
         &FIND_FILES,
         &EXECUTE_COMMAND,
+        &WEB_FETCH,
     ]
 }
 
@@ -176,6 +177,15 @@ pub static EXECUTE_COMMAND: ToolDef = ToolDef {
                   path to run in a different directory.",
     parameters: vec![],
     execute: exec_execute_command,
+};
+
+pub static WEB_FETCH: ToolDef = ToolDef {
+    name: "web_fetch",
+    description: "Fetch and extract readable content from a URL (HTML → markdown or plain text). \
+                  Use for reading web pages, documentation, articles, or any HTTP-accessible content. \
+                  For JavaScript-heavy sites that require rendering, use a browser tool instead.",
+    parameters: vec![],
+    execute: exec_web_fetch,
 };
 
 /// We need a runtime-constructed param list because `Vec` isn't const.
@@ -328,6 +338,33 @@ fn execute_command_params() -> Vec<ToolParam> {
         ToolParam {
             name: "timeout_secs".into(),
             description: "Maximum seconds before killing the command (default: 30).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+fn web_fetch_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "url".into(),
+            description: "HTTP or HTTPS URL to fetch.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "extract_mode".into(),
+            description: "Extraction mode: 'markdown' (default) or 'text'. \
+                          Markdown preserves links and structure; text is plain."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "max_chars".into(),
+            description: "Maximum characters to return (truncates if exceeded). \
+                          Default: 50000."
+                .into(),
             param_type: "integer".into(),
             required: false,
         },
@@ -853,6 +890,204 @@ fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String, St
     Ok(result)
 }
 
+/// Fetch a URL and extract readable content as markdown or plain text.
+///
+/// This is a synchronous wrapper around the async HTTP fetch. In a real
+/// async context you'd call the async version directly, but for the
+/// tool interface we block on a runtime.
+fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let url = args
+        .get("url")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: url".to_string())?;
+
+    let extract_mode = args
+        .get("extract_mode")
+        .and_then(|v| v.as_str())
+        .unwrap_or("markdown");
+
+    let max_chars = args
+        .get("max_chars")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(50_000) as usize;
+
+    // Validate URL
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        return Err("URL must start with http:// or https://".to_string());
+    }
+
+    // Use a blocking HTTP client since tools are sync
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(30))
+        .user_agent("RustyClaw/0.1 (web_fetch tool)")
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+    let response = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} — {}", status.as_u16(), status.canonical_reason().unwrap_or("Unknown")));
+    }
+
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+
+    let body = response
+        .text()
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+
+    // If it's not HTML, return as-is (might be JSON, plain text, etc.)
+    if !content_type.contains("html") {
+        let mut result = body;
+        if result.len() > max_chars {
+            result.truncate(max_chars);
+            result.push_str("\n\n[truncated]");
+        }
+        return Ok(result);
+    }
+
+    // Parse HTML and extract content
+    let document = scraper::Html::parse_document(&body);
+
+    // Try to find the main content area
+    let content = extract_readable_content(&document);
+
+    let result = match extract_mode {
+        "text" => {
+            // Plain text extraction
+            html_to_text(&content)
+        }
+        _ => {
+            // Markdown conversion (default)
+            html2md::parse_html(&content)
+        }
+    };
+
+    // Clean up the result
+    let mut result = result
+        .lines()
+        .map(|l| l.trim_end())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // Collapse multiple blank lines
+    while result.contains("\n\n\n") {
+        result = result.replace("\n\n\n", "\n\n");
+    }
+
+    // Truncate if needed
+    if result.len() > max_chars {
+        result.truncate(max_chars);
+        result.push_str("\n\n[truncated]");
+    }
+
+    if result.trim().is_empty() {
+        return Err("Page returned no extractable content".to_string());
+    }
+
+    Ok(result)
+}
+
+/// Extract the main readable content from an HTML document.
+///
+/// Tries common content selectors (article, main, etc.) and falls back
+/// to the body. Strips navigation, scripts, styles, and other noise.
+fn extract_readable_content(document: &scraper::Html) -> String {
+    use scraper::Selector;
+
+    // Selectors for main content areas (in priority order)
+    let content_selectors = [
+        "article",
+        "main",
+        "[role=\"main\"]",
+        ".post-content",
+        ".article-content",
+        ".entry-content",
+        ".content",
+        "#content",
+        ".post",
+        ".article",
+    ];
+
+    // Try each content selector
+    for selector_str in content_selectors {
+        if let Ok(selector) = Selector::parse(selector_str) {
+            if let Some(element) = document.select(&selector).next() {
+                return element.html();
+            }
+        }
+    }
+
+    // Fall back to body, stripping unwanted elements
+    if let Ok(body_selector) = Selector::parse("body") {
+        if let Some(body) = document.select(&body_selector).next() {
+            return body.html();
+        }
+    }
+
+    // Last resort: return the whole document
+    document.html()
+}
+
+/// Convert HTML to plain text, stripping all tags.
+fn html_to_text(html: &str) -> String {
+    use scraper::{Html, Selector};
+
+    let document = Html::parse_fragment(html);
+
+    // Remove script and style elements
+    let mut text = String::new();
+
+    // Walk the document and extract text nodes
+    fn extract_text(node: scraper::ElementRef, text: &mut String) {
+        for child in node.children() {
+            if let Some(element) = scraper::ElementRef::wrap(child) {
+                let tag = element.value().name();
+                // Skip script, style, nav, header, footer
+                if matches!(tag, "script" | "style" | "nav" | "header" | "footer" | "aside" | "noscript") {
+                    continue;
+                }
+                // Add newlines for block elements
+                if matches!(tag, "p" | "div" | "br" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6" | "li" | "tr") {
+                    text.push('\n');
+                }
+                extract_text(element, text);
+                if matches!(tag, "p" | "div" | "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+                    text.push('\n');
+                }
+            } else if let Some(text_node) = child.value().as_text() {
+                text.push_str(text_node.trim());
+                text.push(' ');
+            }
+        }
+    }
+
+    if let Ok(selector) = Selector::parse("body") {
+        if let Some(body) = document.select(&selector).next() {
+            extract_text(body, &mut text);
+        }
+    }
+
+    // If no body found, try the root
+    if text.is_empty() {
+        for element in document.root_element().children() {
+            if let Some(el) = scraper::ElementRef::wrap(element) {
+                extract_text(el, &mut text);
+            }
+        }
+    }
+
+    text
+}
+
 // ── Provider-specific formatters ────────────────────────────────────────────
 
 /// Parameters for a tool, building a JSON Schema `properties` / `required`.
@@ -887,6 +1122,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "search_files" => search_files_params(),
         "find_files" => find_files_params(),
         "execute_command" => execute_command_params(),
+        "web_fetch" => web_fetch_params(),
         _ => vec![],
     }
 }
@@ -1230,7 +1466,7 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -1239,7 +1475,7 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -1247,7 +1483,7 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert_eq!(tools.len(), 7);
+        assert_eq!(tools.len(), 8);
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -1263,5 +1499,32 @@ mod tests {
     fn test_resolve_path_relative() {
         let result = resolve_path(Path::new("/workspace"), "relative/path.txt");
         assert_eq!(result, PathBuf::from("/workspace/relative/path.txt"));
+    }
+
+    // ── web_fetch ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_web_fetch_missing_url() {
+        let args = json!({});
+        let result = exec_web_fetch(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_web_fetch_invalid_url() {
+        let args = json!({ "url": "not-a-url" });
+        let result = exec_web_fetch(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("http"));
+    }
+
+    #[test]
+    fn test_web_fetch_params_defined() {
+        let params = web_fetch_params();
+        assert_eq!(params.len(), 3);
+        assert!(params.iter().any(|p| p.name == "url" && p.required));
+        assert!(params.iter().any(|p| p.name == "extract_mode" && !p.required));
+        assert!(params.iter().any(|p| p.name == "max_chars" && !p.required));
     }
 }

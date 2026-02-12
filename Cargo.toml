@@ -43,7 +43,7 @@ async-trait = "0.1"
 clap = { version = "4.5", features = ["derive", "env"] }
 futures-util = "0.3"
 tokio-tungstenite = "0.25"
-reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream", "blocking"], default-features = false }
 url = "2.5"
 tui-input = "0.15"
 strum = { version = "0.26", features = ["derive"] }
@@ -52,6 +52,10 @@ syntect = { version = "5", default-features = false, features = ["default-syntax
 which = "7"
 glob = "0.3"
 walkdir = "2"
+
+# HTML parsing and text extraction
+scraper = "0.22"
+html2md = "0.2"
 
 # Terminal styling
 colored = "2.1"
