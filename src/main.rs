@@ -651,7 +651,8 @@ async fn main() -> Result<()> {
                     }
                 }
                 GatewayCommands::Run(args) => {
-                    use rustyclaw::gateway::{run_gateway, GatewayOptions};
+                    use rustyclaw::gateway::{run_gateway, GatewayOptions, ModelContext};
+                    use rustyclaw::secrets::SecretsManager;
                     use tokio_util::sync::CancellationToken;
 
                     let host = match args.bind {
@@ -664,8 +665,38 @@ async fn main() -> Result<()> {
                         &format!("RustyClaw gateway listening on {}", rustyclaw::theme::info(&format!("ws://{}", listen)))
                     ));
 
+                    // Resolve model context from config + secrets vault.
+                    let model_ctx = {
+                        let creds_dir = config.credentials_dir();
+                        let mut secrets = if config.secrets_password_protected {
+                            let password = rpassword::prompt_password(
+                                &format!("{} Vault password: ", rustyclaw::theme::info("🔑")),
+                            )
+                            .unwrap_or_default();
+                            SecretsManager::with_password(&creds_dir, password)
+                        } else {
+                            SecretsManager::new(&creds_dir)
+                        };
+                        match ModelContext::resolve(&config, &mut secrets) {
+                            Ok(ctx) => {
+                                println!(
+                                    "{} {} via {} ({})",
+                                    rustyclaw::theme::icon_ok("Model:"),
+                                    rustyclaw::theme::info(&ctx.model),
+                                    rustyclaw::theme::info(&ctx.provider),
+                                    rustyclaw::theme::muted(&ctx.base_url),
+                                );
+                                Some(ctx)
+                            }
+                            Err(err) => {
+                                eprintln!("⚠ Could not resolve model context: {}", err);
+                                None
+                            }
+                        }
+                    };
+
                     let cancel = CancellationToken::new();
-                    run_gateway(config, GatewayOptions { listen }, cancel).await?;
+                    run_gateway(config, GatewayOptions { listen }, model_ctx, cancel).await?;
                 }
             }
         }

@@ -3,7 +3,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use rustyclaw::args::CommonArgs;
 use rustyclaw::config::Config;
 use rustyclaw::daemon;
-use rustyclaw::gateway::{run_gateway, GatewayOptions};
+use rustyclaw::gateway::{run_gateway, GatewayOptions, ModelContext};
+use rustyclaw::secrets::SecretsManager;
 use rustyclaw::theme as t;
 use tokio_util::sync::CancellationToken;
 
@@ -131,6 +132,49 @@ async fn main() -> Result<()> {
 
     println!("{}", t::icon_ok(&format!("Gateway listening on {}", t::info(&format!("ws://{}", listen)))));
 
+    // ── Resolve model context from config + secrets vault ────────────────
+    let model_ctx = {
+        let creds_dir = config.credentials_dir();
+        let mut secrets = if config.secrets_password_protected {
+            // Password-protected vault — prompt when running in the foreground.
+            let password = rpassword::prompt_password(
+                &format!("{} Vault password: ", t::info("🔑")),
+            )
+            .unwrap_or_default();
+            SecretsManager::with_password(&creds_dir, password)
+        } else {
+            SecretsManager::new(&creds_dir)
+        };
+
+        match ModelContext::resolve(&config, &mut secrets) {
+            Ok(ctx) => {
+                println!(
+                    "{} {} via {} ({})",
+                    t::icon_ok("Model:"),
+                    t::info(&ctx.model),
+                    t::info(&ctx.provider),
+                    t::muted(&ctx.base_url),
+                );
+                if ctx.api_key.is_some() {
+                    println!("  {} API key loaded from vault", t::icon_ok(""));
+                }
+                Some(ctx)
+            }
+            Err(err) => {
+                eprintln!(
+                    "{} Could not resolve model context: {}",
+                    t::muted("⚠"),
+                    err,
+                );
+                eprintln!(
+                    "  {}",
+                    t::muted("The gateway will rely on clients sending full credentials."),
+                );
+                None
+            }
+        }
+    };
+
     // Write PID file so `rustyclaw gateway stop` can find us.
     let pid = std::process::id();
     daemon::write_pid(&config.settings_dir, pid)?;
@@ -162,7 +206,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    let result = run_gateway(config, GatewayOptions { listen }, cancel).await;
+    let result = run_gateway(config, GatewayOptions { listen }, model_ctx, cancel).await;
 
     // Clean up PID file on exit.
     daemon::remove_pid(&settings_dir);

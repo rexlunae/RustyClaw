@@ -1014,6 +1014,13 @@ impl App {
             .messages
             .push(format!("Starting gateway on {}…", url));
 
+        // Resolve model context from config + secrets before spawning.
+        let model_ctx = crate::gateway::ModelContext::resolve(
+            &self.state.config,
+            &mut self.state.secrets_manager,
+        )
+        .ok();
+
         // Spawn the gateway server as a background task.
         let cancel = CancellationToken::new();
         let cancel_child = cancel.clone();
@@ -1023,7 +1030,7 @@ impl App {
             let opts = GatewayOptions {
                 listen: listen_url,
             };
-            if let Err(err) = run_gateway(config_clone, opts, cancel_child).await {
+            if let Err(err) = run_gateway(config_clone, opts, model_ctx, cancel_child).await {
                 eprintln!("Gateway server error: {}", err);
             }
         });
@@ -1098,44 +1105,16 @@ impl App {
     /// Build a structured JSON chat request for the hatching exchange.
     ///
     /// The request includes the full conversation history (system prompt +
-    /// all user/assistant turns), the configured model/provider/base_url,
-    /// and the API key from the secrets vault so the gateway can call the
-    /// model provider.
+    /// all user/assistant turns).  The gateway owns the model configuration
+    /// and API credentials — resolved at startup from config + secrets vault
+    /// — so the client only needs to send the messages.
     fn build_hatching_chat_request(
         &mut self,
         messages: Vec<crate::gateway::ChatMessage>,
     ) -> String {
-
-        let (provider, model, base_url) = match self.state.config.model {
-            Some(ref m) => (
-                m.provider.clone(),
-                m.model.clone().unwrap_or_default(),
-                m.base_url.clone().unwrap_or_else(|| {
-                    crate::providers::base_url_for_provider(&m.provider)
-                        .unwrap_or("")
-                        .to_string()
-                }),
-            ),
-            None => (String::new(), String::new(), String::new()),
-        };
-
-        // Fetch the API key from the vault (if the provider needs one).
-        let api_key = crate::providers::secret_key_for_provider(&provider)
-            .and_then(|key_name| {
-                self.state
-                    .secrets_manager
-                    .get_secret(key_name, true)
-                    .ok()
-                    .flatten()
-            });
-
         serde_json::json!({
             "type": "chat",
             "messages": messages,
-            "model": model,
-            "provider": provider,
-            "base_url": base_url,
-            "api_key": api_key,
         })
         .to_string()
     }
