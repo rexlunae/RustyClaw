@@ -70,6 +70,14 @@ pub enum Action {
     ShowCredentialDialog { name: String, disabled: bool, policy: String },
     /// Open the 2FA (TOTP) setup / management dialog
     ShowTotpSetup,
+    /// Gateway sent an auth_challenge — prompt user for TOTP code
+    GatewayAuthChallenge,
+    /// User submitted a TOTP code for gateway authentication
+    GatewayAuthResponse(String),
+    /// Gateway vault is locked — prompt user for password
+    GatewayVaultLocked,
+    /// User submitted a password to unlock the gateway vault
+    GatewayUnlockVault(String),
     /// Close the hatching animation and transition to normal TUI
     CloseHatching,
     /// Begin the hatching exchange — send the identity prompt to the gateway

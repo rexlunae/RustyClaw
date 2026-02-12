@@ -7,9 +7,12 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::net::SocketAddr;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::net::TcpListener;
+use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tokio_util::sync::CancellationToken;
@@ -22,6 +25,100 @@ type WsWriter = SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
 pub struct GatewayOptions {
     pub listen: String,
 }
+
+// ── TOTP rate limiter ───────────────────────────────────────────────────────
+
+/// Maximum consecutive TOTP failures before lockout.
+const MAX_TOTP_FAILURES: u32 = 3;
+/// Duration of the lockout after exceeding the failure limit.
+const TOTP_LOCKOUT_SECS: u64 = 30;
+/// Window within which failures are counted (resets after this).
+const TOTP_FAILURE_WINDOW_SECS: u64 = 60;
+
+/// Per-IP TOTP failure tracking.
+#[derive(Debug, Clone)]
+struct TotpAttempt {
+    failures: u32,
+    first_failure: Instant,
+    lockout_until: Option<Instant>,
+}
+
+/// Thread-safe rate limiter shared across all connections.
+type RateLimiter = Arc<Mutex<HashMap<IpAddr, TotpAttempt>>>;
+
+fn new_rate_limiter() -> RateLimiter {
+    Arc::new(Mutex::new(HashMap::new()))
+}
+
+/// Check whether an IP is currently locked out. Returns the number of
+/// seconds remaining if locked, or `None` if the IP may attempt auth.
+async fn check_rate_limit(limiter: &RateLimiter, ip: IpAddr) -> Option<u64> {
+    let mut map = limiter.lock().await;
+    if let Some(attempt) = map.get_mut(&ip) {
+        // Expire old failure windows.
+        if attempt.first_failure.elapsed().as_secs() > TOTP_FAILURE_WINDOW_SECS {
+            *attempt = TotpAttempt {
+                failures: 0,
+                first_failure: Instant::now(),
+                lockout_until: None,
+            };
+            return None;
+        }
+        // Check active lockout.
+        if let Some(until) = attempt.lockout_until {
+            if Instant::now() < until {
+                let remaining = (until - Instant::now()).as_secs() + 1;
+                return Some(remaining);
+            }
+            // Lockout expired — reset.
+            *attempt = TotpAttempt {
+                failures: 0,
+                first_failure: Instant::now(),
+                lockout_until: None,
+            };
+        }
+    }
+    None
+}
+
+/// Record a failed TOTP attempt. Returns `true` if the IP is now locked out.
+async fn record_totp_failure(limiter: &RateLimiter, ip: IpAddr) -> bool {
+    let mut map = limiter.lock().await;
+    let attempt = map.entry(ip).or_insert_with(|| TotpAttempt {
+        failures: 0,
+        first_failure: Instant::now(),
+        lockout_until: None,
+    });
+
+    // Reset if the window has expired.
+    if attempt.first_failure.elapsed().as_secs() > TOTP_FAILURE_WINDOW_SECS {
+        attempt.failures = 0;
+        attempt.first_failure = Instant::now();
+        attempt.lockout_until = None;
+    }
+
+    attempt.failures += 1;
+    if attempt.failures >= MAX_TOTP_FAILURES {
+        attempt.lockout_until = Some(Instant::now() + std::time::Duration::from_secs(TOTP_LOCKOUT_SECS));
+        true
+    } else {
+        false
+    }
+}
+
+/// Clear failure tracking for an IP after a successful auth.
+async fn clear_rate_limit(limiter: &RateLimiter, ip: IpAddr) {
+    let mut map = limiter.lock().await;
+    map.remove(&ip);
+}
+
+// ── Vault state ─────────────────────────────────────────────────────────────
+
+/// Gateway-owned secrets vault, shared across connections.
+///
+/// The vault may start in a locked state (no password provided yet) and
+/// be unlocked later via a control message from an authenticated client.
+pub type SharedVault = Arc<Mutex<SecretsManager>>;
 
 // ── Model context (resolved once at startup) ────────────────────────────────
 
@@ -421,6 +518,12 @@ fn resolve_request(
 /// Accepts connections in a loop until the `cancel` token is triggered,
 /// at which point the server shuts down gracefully.
 ///
+/// The gateway owns the secrets vault (`vault`) — it uses the vault to
+/// verify TOTP codes during the WebSocket authentication handshake and
+/// to resolve model credentials.  The vault may be in a locked state
+/// (password not yet provided); authenticated clients can unlock it via
+/// a control message.
+///
 /// When `model_ctx` is provided the gateway owns the provider credentials
 /// and every chat request is resolved against that context.  If `None`,
 /// clients must send full `ChatRequest` payloads including provider info.
@@ -428,6 +531,7 @@ pub async fn run_gateway(
     config: Config,
     options: GatewayOptions,
     model_ctx: Option<ModelContext>,
+    vault: SharedVault,
     cancel: CancellationToken,
 ) -> Result<()> {
     let addr = resolve_listen_addr(&options.listen)?;
@@ -444,6 +548,7 @@ pub async fn run_gateway(
         .map(|oauth| Arc::new(CopilotSession::new(oauth)));
 
     let model_ctx = model_ctx.map(Arc::new);
+    let rate_limiter = new_rate_limiter();
 
     loop {
         tokio::select! {
@@ -455,9 +560,14 @@ pub async fn run_gateway(
                 let config_clone = config.clone();
                 let ctx_clone = model_ctx.clone();
                 let session_clone = copilot_session.clone();
+                let vault_clone = vault.clone();
+                let limiter_clone = rate_limiter.clone();
                 let child_cancel = cancel.child_token();
                 tokio::spawn(async move {
-                    if let Err(err) = handle_connection(stream, peer, config_clone, ctx_clone, session_clone, child_cancel).await {
+                    if let Err(err) = handle_connection(
+                        stream, peer, config_clone, ctx_clone,
+                        session_clone, vault_clone, limiter_clone, child_cancel,
+                    ).await {
                         eprintln!("Gateway connection error from {}: {}", peer, err);
                     }
                 });
@@ -489,22 +599,104 @@ fn resolve_listen_addr(listen: &str) -> Result<SocketAddr> {
 
 async fn handle_connection(
     stream: tokio::net::TcpStream,
-    _peer: SocketAddr,
+    peer: SocketAddr,
     config: Config,
     model_ctx: Option<Arc<ModelContext>>,
     copilot_session: Option<Arc<CopilotSession>>,
+    vault: SharedVault,
+    rate_limiter: RateLimiter,
     cancel: CancellationToken,
 ) -> Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(stream)
         .await
         .context("WebSocket handshake failed")?;
     let (mut writer, mut reader) = ws_stream.split();
+    let peer_ip = peer.ip();
+
+    // ── TOTP authentication challenge ───────────────────────────────
+    //
+    // If TOTP 2FA is enabled, we require the client to prove identity
+    // before granting access to the gateway's capabilities.
+    if config.totp_enabled {
+        // Check rate limit first.
+        if let Some(remaining) = check_rate_limit(&rate_limiter, peer_ip).await {
+            let frame = json!({
+                "type": "auth_locked",
+                "message": format!("Too many failed attempts. Try again in {}s.", remaining),
+                "retry_after": remaining,
+            });
+            writer.send(Message::Text(frame.to_string().into())).await?;
+            writer.send(Message::Close(None)).await?;
+            return Ok(());
+        }
+
+        // Send challenge.
+        let challenge = json!({ "type": "auth_challenge", "method": "totp" });
+        writer.send(Message::Text(challenge.to_string().into())).await
+            .context("Failed to send auth_challenge")?;
+
+        // Wait for auth_response (with a timeout).
+        let auth_result = tokio::time::timeout(
+            std::time::Duration::from_secs(120),
+            wait_for_auth_response(&mut reader),
+        )
+        .await;
+
+        match auth_result {
+            Ok(Ok(code)) => {
+                let valid = {
+                    let mut v = vault.lock().await;
+                    v.verify_totp(code.trim()).unwrap_or(false)
+                };
+                if valid {
+                    clear_rate_limit(&rate_limiter, peer_ip).await;
+                    let ok = json!({ "type": "auth_result", "ok": true });
+                    writer.send(Message::Text(ok.to_string().into())).await?;
+                } else {
+                    let locked_out = record_totp_failure(&rate_limiter, peer_ip).await;
+                    let msg = if locked_out {
+                        format!(
+                            "Invalid code. Too many failures — locked out for {}s.",
+                            TOTP_LOCKOUT_SECS,
+                        )
+                    } else {
+                        "Invalid 2FA code.".to_string()
+                    };
+                    let fail = json!({ "type": "auth_result", "ok": false, "message": msg });
+                    writer.send(Message::Text(fail.to_string().into())).await?;
+                    writer.send(Message::Close(None)).await?;
+                    return Ok(());
+                }
+            }
+            Ok(Err(e)) => {
+                eprintln!("Auth error from {}: {}", peer, e);
+                return Ok(());
+            }
+            Err(_) => {
+                let timeout = json!({
+                    "type": "auth_result",
+                    "ok": false,
+                    "message": "Authentication timed out.",
+                });
+                let _ = writer.send(Message::Text(timeout.to_string().into())).await;
+                let _ = writer.send(Message::Close(None)).await;
+                return Ok(());
+            }
+        }
+    }
+
+    // ── Check vault status ──────────────────────────────────────────
+    let vault_is_locked = {
+        let v = vault.lock().await;
+        v.is_locked()
+    };
 
     // ── Send hello ──────────────────────────────────────────────────
     let mut hello = json!({
         "type": "hello",
         "agent": "rustyclaw",
         "settings_dir": config.settings_dir,
+        "vault_locked": vault_is_locked,
     });
     if let Some(ref ctx) = model_ctx {
         hello["provider"] = serde_json::Value::String(ctx.provider.clone());
@@ -514,6 +706,16 @@ async fn handle_connection(
         .send(Message::Text(hello.to_string().into()))
         .await
         .context("Failed to send hello message")?;
+
+    if vault_is_locked {
+        writer
+            .send(Message::Text(
+                status_frame("vault_locked", "Secrets vault is locked — provide password to unlock")
+                    .into(),
+            ))
+            .await
+            .context("Failed to send vault_locked status")?;
+    }
 
     // ── Report model status to the freshly-connected client ────────
     let http = reqwest::Client::new();
@@ -647,6 +849,38 @@ async fn handle_connection(
                 };
                 match message {
                     Message::Text(text) => {
+                        // ── Handle unlock_vault control message ─────
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
+                            if val.get("type").and_then(|t| t.as_str()) == Some("unlock_vault") {
+                                if let Some(pw) = val.get("password").and_then(|p| p.as_str()) {
+                                    let mut v = vault.lock().await;
+                                    v.set_password(pw.to_string());
+                                    // Try to access the vault to verify the password works.
+                                    // get_secret returns Err if the vault cannot be decrypted.
+                                    match v.get_secret("__vault_check__", true) {
+                                        Ok(_) => {
+                                            let ok = json!({
+                                                "type": "vault_unlocked",
+                                                "ok": true,
+                                            });
+                                            let _ = writer.send(Message::Text(ok.to_string().into())).await;
+                                        }
+                                        Err(e) => {
+                                            // Revert to locked state.
+                                            v.clear_password();
+                                            let fail = json!({
+                                                "type": "vault_unlocked",
+                                                "ok": false,
+                                                "message": format!("Failed to unlock vault: {}", e),
+                                            });
+                                            let _ = writer.send(Message::Text(fail.to_string().into())).await;
+                                        }
+                                    }
+                                }
+                                continue;
+                            }
+                        }
+
                         if let Err(err) = dispatch_text_message(
                             &http,
                             text.as_str(),
@@ -691,6 +925,38 @@ async fn handle_connection(
     }
 
     Ok(())
+}
+
+/// Wait for an `auth_response` frame from the client.
+///
+/// Reads WebSocket messages until we get a JSON frame with
+/// `{"type": "auth_response", "code": "..."}` or the connection drops.
+async fn wait_for_auth_response(
+    reader: &mut futures_util::stream::SplitStream<WebSocketStream<tokio::net::TcpStream>>,
+) -> Result<String> {
+    while let Some(msg) = reader.next().await {
+        match msg {
+            Ok(Message::Text(text)) => {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
+                    if val.get("type").and_then(|t| t.as_str()) == Some("auth_response") {
+                        if let Some(code) = val.get("code").and_then(|c| c.as_str()) {
+                            return Ok(code.to_string());
+                        }
+                        anyhow::bail!("auth_response missing 'code' field");
+                    }
+                }
+                // Ignore non-auth frames during the handshake.
+            }
+            Ok(Message::Close(_)) => {
+                anyhow::bail!("Client disconnected during authentication");
+            }
+            Err(e) => {
+                anyhow::bail!("WebSocket error during authentication: {}", e);
+            }
+            _ => {} // Ignore ping/pong/binary during auth
+        }
+    }
+    anyhow::bail!("Connection closed before authentication completed")
 }
 
 /// Route an incoming text frame to the appropriate handler.

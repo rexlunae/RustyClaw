@@ -30,6 +30,10 @@ pub enum GatewayStatus {
     ModelError,
     /// Connection attempt failed
     Error,
+    /// Gateway vault is locked — password needed
+    VaultLocked,
+    /// Gateway requires TOTP authentication
+    AuthRequired,
 }
 
 impl GatewayStatus {
@@ -42,6 +46,8 @@ impl GatewayStatus {
             GatewayStatus::ModelReady => "model ready",
             GatewayStatus::ModelError => "model error",
             GatewayStatus::Error => "error",
+            GatewayStatus::VaultLocked => "vault locked 🔒",
+            GatewayStatus::AuthRequired => "auth required 🔑",
         }
     }
 }

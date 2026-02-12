@@ -394,6 +394,16 @@ impl FooterPane {
                 "no gateway ",
                 Style::default().fg(tp::MUTED),
             ),
+            GatewayStatus::VaultLocked => (
+                "🔒 ",
+                "vault locked ",
+                Style::default().fg(tp::WARN).add_modifier(Modifier::BOLD),
+            ),
+            GatewayStatus::AuthRequired => (
+                "🔑 ",
+                "auth required ",
+                Style::default().fg(tp::WARN).add_modifier(Modifier::BOLD),
+            ),
         };
 
         let status_width = (status_icon.len() + status_label.len()) as u16;

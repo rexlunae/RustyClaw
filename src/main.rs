@@ -513,8 +513,10 @@ async fn main() -> Result<()> {
                     use rustyclaw::daemon;
                     use rustyclaw::theme as t;
 
-                    // Extract just the API key for the configured provider.
-                    let model_api_key = extract_model_api_key(&config);
+                    // Under the new security model the gateway daemon owns
+                    // the secrets vault — we only forward the vault password
+                    // so it can open the vault and extract the API key itself.
+                    let vault_password = extract_vault_password(&config);
 
                     let sp = t::spinner("Starting gateway…");
 
@@ -525,7 +527,8 @@ async fn main() -> Result<()> {
                         port,
                         bind,
                         &[],
-                        model_api_key.as_deref(),
+                        None,
+                        vault_password.as_deref(),
                     ) {
                         Ok(pid) => {
                             t::spinner_ok(&sp, &format!(
@@ -570,8 +573,9 @@ async fn main() -> Result<()> {
                     use rustyclaw::daemon;
                     use rustyclaw::theme as t;
 
-                    // Extract just the API key for the configured provider.
-                    let model_api_key = extract_model_api_key(&config);
+                    // Under the new security model the gateway daemon owns
+                    // the secrets vault — we only forward the vault password.
+                    let vault_password = extract_vault_password(&config);
 
                     let sp = t::spinner("Restarting gateway…");
 
@@ -600,7 +604,8 @@ async fn main() -> Result<()> {
                         port,
                         bind,
                         &[],
-                        model_api_key.as_deref(),
+                        None,
+                        vault_password.as_deref(),
                     ) {
                         Ok(pid) => {
                             t::spinner_ok(&sp, &format!(
@@ -673,19 +678,25 @@ async fn main() -> Result<()> {
                         &format!("RustyClaw gateway listening on {}", rustyclaw::theme::info(&format!("ws://{}", listen)))
                     ));
 
-                    // Resolve model context from config + secrets vault.
+                    // Open the secrets vault — the gateway owns it.
+                    let creds_dir = config.credentials_dir();
+                    let vault = if config.secrets_password_protected {
+                        let password = rpassword::prompt_password(
+                            &format!("{} Vault password: ", rustyclaw::theme::info("🔑")),
+                        )
+                        .unwrap_or_default();
+                        SecretsManager::with_password(&creds_dir, password)
+                    } else {
+                        SecretsManager::new(&creds_dir)
+                    };
+
+                    let shared_vault: rustyclaw::gateway::SharedVault =
+                        std::sync::Arc::new(tokio::sync::Mutex::new(vault));
+
+                    // Resolve model context from the vault.
                     let model_ctx = {
-                        let creds_dir = config.credentials_dir();
-                        let mut secrets = if config.secrets_password_protected {
-                            let password = rpassword::prompt_password(
-                                &format!("{} Vault password: ", rustyclaw::theme::info("🔑")),
-                            )
-                            .unwrap_or_default();
-                            SecretsManager::with_password(&creds_dir, password)
-                        } else {
-                            SecretsManager::new(&creds_dir)
-                        };
-                        match ModelContext::resolve(&config, &mut secrets) {
+                        let mut v = shared_vault.blocking_lock();
+                        match ModelContext::resolve(&config, &mut v) {
                             Ok(ctx) => {
                                 println!(
                                     "{} {} via {} ({})",
@@ -704,7 +715,7 @@ async fn main() -> Result<()> {
                     };
 
                     let cancel = CancellationToken::new();
-                    run_gateway(config, GatewayOptions { listen }, model_ctx, cancel).await?;
+                    run_gateway(config, GatewayOptions { listen }, model_ctx, shared_vault, cancel).await?;
                 }
             }
         }
@@ -765,46 +776,29 @@ fn parse_gateway_defaults(config: &Config) -> (u16, &str) {
     (9001, "loopback")
 }
 
-/// Extract just the API key for the configured model provider.
+/// Extract the vault password for the gateway daemon.
 ///
-/// Opens the secrets vault (prompting for a password if needed), looks up
-/// the provider's secret key name, and returns the value.  The gateway
-/// daemon only needs this single credential — not the vault password.
-fn extract_model_api_key(config: &Config) -> Option<String> {
-    use rustyclaw::providers;
-
-    // Which provider is configured?
-    let provider_id = config.model.as_ref().map(|m| m.provider.as_str())?;
-
-    // Does it even need a key?
-    let key_name = providers::secret_key_for_provider(provider_id)?;
-
-    // Open the vault and fetch the key.
-    let mut secrets = match open_secrets(config) {
-        Ok(s) => s,
-        Err(err) => {
-            eprintln!("⚠ Could not open secrets vault: {}", err);
-            return None;
-        }
-    };
-
-    match secrets.get_secret(key_name, true) {
-        Ok(Some(value)) => Some(value),
-        Ok(None) => {
-            eprintln!(
-                "⚠ No {} found in vault for provider '{}'",
-                key_name, provider_id,
-            );
-            None
-        }
-        Err(err) => {
-            eprintln!("⚠ Failed to read {} from vault: {}", key_name, err);
-            None
-        }
+/// If the vault is password-protected, prompt the user for it.  The
+/// password will be passed to the daemon via an environment variable
+/// so it can open the secrets vault on startup.
+fn extract_vault_password(config: &Config) -> Option<String> {
+    if !config.secrets_password_protected {
+        return None;
+    }
+    match prompt_password(&format!(
+        "{} Vault password (for gateway): ",
+        rustyclaw::theme::info("🔑"),
+    )) {
+        Ok(pw) if !pw.is_empty() => Some(pw),
+        _ => None,
     }
 }
 
 /// Open the secrets vault, prompting for a password and TOTP if required.
+///
+/// NOTE: Under the new security model, TOTP is only verified by the
+/// gateway at WebSocket connect time.  The CLI `open_secrets` is only
+/// used during onboarding and ad-hoc CLI vault access.
 fn open_secrets(config: &Config) -> Result<SecretsManager> {
     let mut manager = if config.secrets_password_protected {
         let pw = prompt_password("Enter secrets vault password: ")?;

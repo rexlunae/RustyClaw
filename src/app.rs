@@ -227,6 +227,10 @@ pub struct App {
     credential_dialog: Option<CredentialDialogState>,
     /// 2FA (TOTP) setup dialog state
     totp_dialog: Option<TotpDialogState>,
+    /// Gateway auth prompt (TOTP code entry for connecting)
+    auth_prompt: Option<AuthPromptState>,
+    /// Gateway vault unlock prompt (password entry)
+    vault_unlock_prompt: Option<VaultUnlockPromptState>,
     /// Secret viewer dialog state
     secret_viewer: Option<SecretViewerState>,
     /// Policy-picker dialog state
@@ -250,6 +254,18 @@ struct ApiKeyDialogState {
     input: String,
     /// Which phase the dialog is in
     phase: ApiKeyDialogPhase,
+}
+
+/// State for the gateway TOTP authentication prompt dialog.
+struct AuthPromptState {
+    /// Current input buffer (the 6-digit TOTP code being typed)
+    input: String,
+}
+
+/// State for the gateway vault unlock prompt dialog.
+struct VaultUnlockPromptState {
+    /// Current input buffer (the vault password being typed)
+    input: String,
 }
 
 impl App {
@@ -337,6 +353,8 @@ impl App {
             provider_selector: None,
             credential_dialog: None,
             totp_dialog: None,
+            auth_prompt: None,
+            vault_unlock_prompt: None,
             secret_viewer: None,
             policy_picker: None,
             hatching_page,
@@ -468,6 +486,24 @@ impl App {
                         else if self.totp_dialog.is_some() {
                             if let Event::Key(key) = &event {
                                 let action = self.handle_totp_dialog_key(key.code);
+                                Some(action)
+                            } else {
+                                None
+                            }
+                        }
+                        // If the gateway auth prompt is open, intercept keys for it
+                        else if self.auth_prompt.is_some() {
+                            if let Event::Key(key) = &event {
+                                let action = self.handle_auth_prompt_key(key.code);
+                                Some(action)
+                            } else {
+                                None
+                            }
+                        }
+                        // If the vault unlock prompt is open, intercept keys for it
+                        else if self.vault_unlock_prompt.is_some() {
+                            if let Event::Key(key) = &event {
+                                let action = self.handle_vault_unlock_prompt_key(key.code);
                                 Some(action)
                             } else {
                                 None
@@ -664,9 +700,81 @@ impl App {
                         "no_model" => {
                             self.state.messages.push(DisplayMessage::warning(detail));
                         }
+                        "vault_locked" => {
+                            self.state.gateway_status = GatewayStatus::VaultLocked;
+                            self.state.messages.push(DisplayMessage::warning(
+                                "Gateway vault is locked — enter password to unlock.",
+                            ));
+                            return Ok(Some(Action::GatewayVaultLocked));
+                        }
                         _ => {
                             self.state.messages.push(DisplayMessage::system(format!("[{}] {}", status, detail)));
                         }
+                    }
+                    return Ok(Some(Action::Update));
+                }
+
+                // ── Handle auth challenge from gateway ───────────────
+                if frame_type == Some("auth_challenge") {
+                    self.state.gateway_status = GatewayStatus::AuthRequired;
+                    self.state.messages.push(DisplayMessage::warning(
+                        "Gateway requires 2FA authentication.",
+                    ));
+                    return Ok(Some(Action::GatewayAuthChallenge));
+                }
+
+                // ── Handle auth result from gateway ──────────────────
+                if frame_type == Some("auth_result") {
+                    let ok = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("ok").and_then(|o| o.as_bool()))
+                        .unwrap_or(false);
+                    if ok {
+                        self.state.messages.push(DisplayMessage::success(
+                            "Authenticated with gateway.",
+                        ));
+                        // The hello + status frames will follow from the
+                        // gateway, so keep the Connecting status.
+                        self.state.gateway_status = GatewayStatus::Connected;
+                    } else {
+                        let msg = parsed
+                            .as_ref()
+                            .and_then(|v| v.get("message").and_then(|m| m.as_str()))
+                            .unwrap_or("Authentication failed.");
+                        self.state.messages.push(DisplayMessage::error(msg));
+                        self.state.gateway_status = GatewayStatus::Error;
+                    }
+                    return Ok(Some(Action::Update));
+                }
+
+                // ── Handle auth lockout from gateway ─────────────────
+                if frame_type == Some("auth_locked") {
+                    let msg = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("message").and_then(|m| m.as_str()))
+                        .unwrap_or("Too many failed attempts.");
+                    self.state.messages.push(DisplayMessage::error(msg));
+                    self.state.gateway_status = GatewayStatus::Error;
+                    return Ok(Some(Action::Update));
+                }
+
+                // ── Handle vault unlock result ───────────────────────
+                if frame_type == Some("vault_unlocked") {
+                    let ok = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("ok").and_then(|o| o.as_bool()))
+                        .unwrap_or(false);
+                    if ok {
+                        self.state.messages.push(DisplayMessage::success(
+                            "Gateway vault unlocked.",
+                        ));
+                        self.state.gateway_status = GatewayStatus::Connected;
+                    } else {
+                        let msg = parsed
+                            .as_ref()
+                            .and_then(|v| v.get("message").and_then(|m| m.as_str()))
+                            .unwrap_or("Failed to unlock vault.");
+                        self.state.messages.push(DisplayMessage::error(msg));
                     }
                     return Ok(Some(Action::Update));
                 }
@@ -829,6 +937,44 @@ impl App {
                 // pane renderer handles multi-line content natively.
                 self.state.messages.push(DisplayMessage::assistant(display));
                 // Auto-scroll
+                return Ok(Some(Action::Update));
+            }
+            Action::GatewayAuthChallenge => {
+                // Open the TOTP code entry dialog.
+                self.auth_prompt = Some(AuthPromptState {
+                    input: String::new(),
+                });
+                return Ok(Some(Action::Update));
+            }
+            Action::GatewayAuthResponse(code) => {
+                // Send the TOTP code to the gateway as an auth_response frame.
+                let frame = serde_json::json!({
+                    "type": "auth_response",
+                    "code": code,
+                });
+                self.send_to_gateway(frame.to_string()).await;
+                self.state.messages.push(DisplayMessage::info(
+                    "Sent authentication code…",
+                ));
+                return Ok(Some(Action::Update));
+            }
+            Action::GatewayVaultLocked => {
+                // Open the vault password entry dialog.
+                self.vault_unlock_prompt = Some(VaultUnlockPromptState {
+                    input: String::new(),
+                });
+                return Ok(Some(Action::Update));
+            }
+            Action::GatewayUnlockVault(password) => {
+                // Send the password to the gateway as an unlock_vault frame.
+                let frame = serde_json::json!({
+                    "type": "unlock_vault",
+                    "password": password,
+                });
+                self.send_to_gateway(frame.to_string()).await;
+                self.state.messages.push(DisplayMessage::info(
+                    "Sent vault unlock request…",
+                ));
                 return Ok(Some(Action::Update));
             }
             Action::GatewayDisconnected(reason) => {
@@ -1289,6 +1435,7 @@ impl App {
                 }
 
                 let api_key = self.extract_model_api_key();
+                let vault_password = self.extract_vault_password();
 
                 self.state.messages.push(DisplayMessage::info(format!(
                     "Starting gateway daemon on {}…", url,
@@ -1299,6 +1446,7 @@ impl App {
                     bind,
                     &[],
                     api_key.as_deref(),
+                    vault_password.as_deref(),
                 ) {
                     Ok(pid) => {
                         self.state.messages.push(DisplayMessage::success(format!(
@@ -1494,6 +1642,18 @@ impl App {
         self.state.secrets_manager.get_secret(key_name, true).ok().flatten()
     }
 
+    /// Extract the vault password to pass to the gateway daemon.
+    ///
+    /// If the TUI's `SecretsManager` was constructed with a password
+    /// (during onboarding or CLI launch), return it so the daemon can
+    /// open the vault without prompting.
+    fn extract_vault_password(&self) -> Option<String> {
+        if !self.state.config.secrets_password_protected {
+            return None;
+        }
+        self.state.secrets_manager.password().map(|s| s.to_string())
+    }
+
     /// Parse port and bind mode from the config's gateway URL.
     fn gateway_defaults(config: &Config) -> (u16, &'static str) {
         if let Some(url) = &config.gateway_url {
@@ -1584,6 +1744,16 @@ impl App {
             // TOTP setup dialog overlay
             if let Some(ref dialog) = self.totp_dialog {
                 Self::draw_totp_dialog(frame, area, dialog);
+            }
+
+            // Gateway auth prompt overlay (TOTP code entry)
+            if let Some(ref prompt) = self.auth_prompt {
+                Self::draw_auth_prompt(frame, area, prompt);
+            }
+
+            // Vault unlock prompt overlay (password entry)
+            if let Some(ref prompt) = self.vault_unlock_prompt {
+                Self::draw_vault_unlock_prompt(frame, area, prompt);
             }
 
             // Secret viewer dialog overlay
@@ -3365,6 +3535,234 @@ impl App {
         let text = ratatui::text::Text::from(lines);
         let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
         frame.render_widget(paragraph, inner);
+    }
+
+    // ── Gateway auth prompt (TOTP code entry) ─────────────────
+
+    /// Handle key events when the gateway TOTP auth prompt is open.
+    fn handle_auth_prompt_key(&mut self, code: crossterm::event::KeyCode) -> Action {
+        use crossterm::event::KeyCode;
+
+        let Some(mut prompt) = self.auth_prompt.take() else {
+            return Action::Noop;
+        };
+
+        match code {
+            KeyCode::Esc => {
+                self.state
+                    .messages
+                    .push(DisplayMessage::info("Authentication cancelled."));
+                self.state.gateway_status = GatewayStatus::Error;
+                Action::Update
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && prompt.input.len() < 6 => {
+                prompt.input.push(c);
+                self.auth_prompt = Some(prompt);
+                Action::Noop
+            }
+            KeyCode::Backspace => {
+                prompt.input.pop();
+                self.auth_prompt = Some(prompt);
+                Action::Noop
+            }
+            KeyCode::Enter => {
+                if prompt.input.len() == 6 {
+                    let code_str = prompt.input.clone();
+                    // Dialog is consumed — send the code
+                    Action::GatewayAuthResponse(code_str)
+                } else {
+                    self.auth_prompt = Some(prompt);
+                    Action::Noop
+                }
+            }
+            _ => {
+                self.auth_prompt = Some(prompt);
+                Action::Noop
+            }
+        }
+    }
+
+    /// Draw a centered gateway TOTP auth prompt overlay.
+    fn draw_auth_prompt(
+        frame: &mut ratatui::Frame<'_>,
+        area: Rect,
+        prompt: &AuthPromptState,
+    ) {
+        use crate::theme::tui_palette as tp;
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+        let dialog_w = 46.min(area.width.saturating_sub(4));
+        let dialog_h = 7u16.min(area.height.saturating_sub(4)).max(5);
+        let x = area.x + (area.width.saturating_sub(dialog_w)) / 2;
+        let y = area.y + (area.height.saturating_sub(dialog_h)) / 2;
+        let dialog_area = Rect::new(x, y, dialog_w, dialog_h);
+
+        frame.render_widget(Clear, dialog_area);
+
+        let block = Block::default()
+            .title(Span::styled(" 🔑 Gateway Authentication ", tp::title_focused()))
+            .title_bottom(
+                Line::from(Span::styled(
+                    " Esc to cancel ",
+                    Style::default().fg(tp::MUTED),
+                ))
+                .right_aligned(),
+            )
+            .borders(Borders::ALL)
+            .border_style(tp::focused_border())
+            .border_type(ratatui::widgets::BorderType::Rounded);
+
+        let inner = block.inner(dialog_area);
+        frame.render_widget(block, dialog_area);
+
+        // Label
+        if inner.height >= 1 {
+            let label = Line::from(Span::styled(
+                " Enter your 6-digit TOTP code:",
+                Style::default().fg(tp::TEXT),
+            ));
+            frame.render_widget(
+                Paragraph::new(label),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+        }
+
+        // Input with dots for each digit and placeholders
+        if inner.height >= 3 {
+            let input_area = Rect::new(inner.x + 1, inner.y + 2, inner.width.saturating_sub(2), 1);
+            let mut spans = vec![Span::styled("❯ ", Style::default().fg(tp::ACCENT))];
+            for (i, ch) in prompt.input.chars().enumerate() {
+                if i > 0 {
+                    spans.push(Span::styled(" ", Style::default()));
+                }
+                spans.push(Span::styled(
+                    ch.to_string(),
+                    Style::default().fg(tp::ACCENT_BRIGHT).add_modifier(Modifier::BOLD),
+                ));
+            }
+            for i in prompt.input.len()..6 {
+                if i > 0 {
+                    spans.push(Span::styled(" ", Style::default()));
+                }
+                spans.push(Span::styled("·", Style::default().fg(tp::MUTED)));
+            }
+            let line = Line::from(spans);
+            frame.render_widget(Paragraph::new(line), input_area);
+
+            // Cursor
+            let cursor_x = input_area.x + 2 + (prompt.input.len() * 2) as u16;
+            frame.set_cursor_position((cursor_x, input_area.y));
+        }
+    }
+
+    // ── Gateway vault unlock prompt (password entry) ──────────
+
+    /// Handle key events when the vault unlock password prompt is open.
+    fn handle_vault_unlock_prompt_key(
+        &mut self,
+        code: crossterm::event::KeyCode,
+    ) -> Action {
+        use crossterm::event::KeyCode;
+
+        let Some(mut prompt) = self.vault_unlock_prompt.take() else {
+            return Action::Noop;
+        };
+
+        match code {
+            KeyCode::Esc => {
+                self.state
+                    .messages
+                    .push(DisplayMessage::info("Vault unlock cancelled."));
+                Action::Update
+            }
+            KeyCode::Enter => {
+                if prompt.input.is_empty() {
+                    self.vault_unlock_prompt = Some(prompt);
+                    Action::Noop
+                } else {
+                    let password = prompt.input.clone();
+                    // Dialog is consumed — send the password
+                    Action::GatewayUnlockVault(password)
+                }
+            }
+            KeyCode::Backspace => {
+                prompt.input.pop();
+                self.vault_unlock_prompt = Some(prompt);
+                Action::Noop
+            }
+            KeyCode::Char(c) => {
+                prompt.input.push(c);
+                self.vault_unlock_prompt = Some(prompt);
+                Action::Noop
+            }
+            _ => {
+                self.vault_unlock_prompt = Some(prompt);
+                Action::Noop
+            }
+        }
+    }
+
+    /// Draw a centered vault unlock password prompt overlay.
+    fn draw_vault_unlock_prompt(
+        frame: &mut ratatui::Frame<'_>,
+        area: Rect,
+        prompt: &VaultUnlockPromptState,
+    ) {
+        use crate::theme::tui_palette as tp;
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+
+        let dialog_w = 52.min(area.width.saturating_sub(4));
+        let dialog_h = 7u16.min(area.height.saturating_sub(4)).max(5);
+        let x = area.x + (area.width.saturating_sub(dialog_w)) / 2;
+        let y = area.y + (area.height.saturating_sub(dialog_h)) / 2;
+        let dialog_area = Rect::new(x, y, dialog_w, dialog_h);
+
+        frame.render_widget(Clear, dialog_area);
+
+        let block = Block::default()
+            .title(Span::styled(" 🔒 Unlock Gateway Vault ", tp::title_focused()))
+            .title_bottom(
+                Line::from(Span::styled(
+                    " Esc to cancel ",
+                    Style::default().fg(tp::MUTED),
+                ))
+                .right_aligned(),
+            )
+            .borders(Borders::ALL)
+            .border_style(tp::focused_border())
+            .border_type(ratatui::widgets::BorderType::Rounded);
+
+        let inner = block.inner(dialog_area);
+        frame.render_widget(block, dialog_area);
+
+        // Label
+        if inner.height >= 1 {
+            let label = Line::from(Span::styled(
+                " Enter vault password:",
+                Style::default().fg(tp::TEXT),
+            ));
+            frame.render_widget(
+                Paragraph::new(label),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+        }
+
+        // Masked input
+        if inner.height >= 3 {
+            let input_area = Rect::new(inner.x + 1, inner.y + 2, inner.width.saturating_sub(2), 1);
+            let masked: String = "•".repeat(prompt.input.len());
+            let line = Line::from(vec![
+                Span::styled("❯ ", Style::default().fg(tp::ACCENT)),
+                Span::styled(&masked, Style::default().fg(tp::TEXT)),
+            ]);
+            frame.render_widget(Paragraph::new(line), input_area);
+
+            // Cursor
+            frame.set_cursor_position((
+                input_area.x + 2 + masked.len() as u16,
+                input_area.y,
+            ));
+        }
     }
 
     // ── Clipboard helper ──────────────────────────────────────

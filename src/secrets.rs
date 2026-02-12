@@ -258,6 +258,50 @@ impl SecretsManager {
         self.vault = None;
     }
 
+    /// Remove the password and invalidate the loaded vault, returning the
+    /// manager to a locked state.
+    pub fn clear_password(&mut self) {
+        self.password = None;
+        self.vault = None;
+    }
+
+    /// Create a `SecretsManager` in a locked state.
+    ///
+    /// The vault file path is known but no password or key file has been
+    /// provided yet.  The vault cannot be accessed until
+    /// [`set_password`](Self::set_password) is called.
+    pub fn locked(credentials_dir: impl Into<PathBuf>) -> Self {
+        let dir: PathBuf = credentials_dir.into();
+        Self {
+            vault_path: dir.join("secrets.json"),
+            key_path: dir.join("secrets.key"),
+            password: None,
+            vault: None,
+            agent_access_enabled: false,
+        }
+    }
+
+    /// Check whether the vault is in a locked state (password-protected
+    /// vault with no password provided yet).
+    ///
+    /// Returns `true` if the vault file exists on disk, no key file is
+    /// present, and no password has been set — meaning the vault cannot
+    /// be decrypted without a password.
+    pub fn is_locked(&self) -> bool {
+        self.vault.is_none()
+            && self.password.is_none()
+            && !self.key_path.exists()
+            && self.vault_path.exists()
+    }
+
+    /// Return the current password, if one has been set.
+    ///
+    /// Used by the TUI to forward the vault password to the gateway
+    /// daemon so it can open the vault without prompting.
+    pub fn password(&self) -> Option<&str> {
+        self.password.as_deref()
+    }
+
     /// Re-encrypt an existing vault with a new password.
     ///
     /// Loads the vault with the current key source, reads every secret,

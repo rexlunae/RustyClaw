@@ -1,3 +1,5 @@
+use std::io::IsTerminal;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
 use rustyclaw::args::CommonArgs;
@@ -132,22 +134,65 @@ async fn main() -> Result<()> {
 
     println!("{}", t::icon_ok(&format!("Gateway listening on {}", t::info(&format!("ws://{}", listen)))));
 
+    // ── Open the secrets vault ───────────────────────────────────────────
+    //
+    // The gateway owns the secrets vault.  It uses the vault to:
+    //   1. Resolve model API keys (if not injected via env var)
+    //   2. Verify TOTP codes during client authentication
+    //
+    // When launched as a daemon, the parent may inject the vault password
+    // via RUSTYCLAW_VAULT_PASSWORD so the gateway can unlock non-
+    // interactively.  In foreground mode, we prompt on stdin.
+    //
+    // If no password is available for a password-protected vault, the
+    // gateway starts in a "vault locked" state — authenticated clients
+    // can unlock it later via a control message.
+    let vault = {
+        let creds_dir = config.credentials_dir();
+        let env_password = std::env::var("RUSTYCLAW_VAULT_PASSWORD").ok();
+        if env_password.is_some() {
+            // SAFETY: single-threaded at this point.
+            unsafe { std::env::remove_var("RUSTYCLAW_VAULT_PASSWORD"); }
+        }
+
+        if config.secrets_password_protected {
+            if let Some(pw) = env_password {
+                println!("  {} Vault password provided by launcher", t::icon_ok(""));
+                SecretsManager::with_password(&creds_dir, pw)
+            } else if std::io::stdin().is_terminal() {
+                // Interactive foreground mode — prompt for password.
+                let password = rpassword::prompt_password(
+                    &format!("{} Vault password: ", t::info("🔑")),
+                )
+                .unwrap_or_default();
+                SecretsManager::with_password(&creds_dir, password)
+            } else {
+                // Daemon mode with no password — start locked.
+                println!("  {} Vault locked (no password provided — clients can unlock via WebSocket)", t::muted("🔒"));
+                SecretsManager::locked(&creds_dir)
+            }
+        } else {
+            SecretsManager::new(&creds_dir)
+        }
+    };
+
+    let shared_vault: rustyclaw::gateway::SharedVault =
+        std::sync::Arc::new(tokio::sync::Mutex::new(vault));
+
     // ── Resolve model context ────────────────────────────────────────────
     //
     // When launched as a daemon, the CLI extracts just the provider's API
-    // key and passes it via RUSTYCLAW_MODEL_API_KEY so the gateway never
-    // needs access to the full secrets vault.
+    // key and passes it via RUSTYCLAW_MODEL_API_KEY so the gateway can
+    // avoid opening the vault just for the API key.
     //
-    // When running interactively (foreground), fall back to opening the
-    // vault directly — prompting for the password if needed.
+    // When running interactively (foreground) or when no env key is set,
+    // resolve from the vault (which we just opened above).
     let model_ctx = {
         let env_key = std::env::var("RUSTYCLAW_MODEL_API_KEY").ok();
 
         if let Some(ref key) = env_key {
             // Key was injected by the parent process — use it directly.
-            // Clear the env var so child processes don't inherit it.
-            // SAFETY: We are single-threaded at this point (before tokio
-            // spawns any tasks), so mutating the environment is safe.
+            // SAFETY: single-threaded at this point.
             unsafe { std::env::remove_var("RUSTYCLAW_MODEL_API_KEY"); }
 
             let api_key = if key.is_empty() { None } else { Some(key.clone()) };
@@ -171,19 +216,9 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            // Interactive (foreground) mode — open the vault directly.
-            let creds_dir = config.credentials_dir();
-            let mut secrets = if config.secrets_password_protected {
-                let password = rpassword::prompt_password(
-                    &format!("{} Vault password: ", t::info("🔑")),
-                )
-                .unwrap_or_default();
-                SecretsManager::with_password(&creds_dir, password)
-            } else {
-                SecretsManager::new(&creds_dir)
-            };
-
-            match ModelContext::resolve(&config, &mut secrets) {
+            // Resolve from the vault.
+            let mut v = shared_vault.blocking_lock();
+            match ModelContext::resolve(&config, &mut v) {
                 Ok(ctx) => {
                     println!(
                         "{} {} via {} ({})",
@@ -244,9 +279,7 @@ async fn main() -> Result<()> {
         });
     }
 
-    let result = run_gateway(config, GatewayOptions { listen }, model_ctx, cancel).await;
-
-    // Clean up PID file on exit.
+    let result = run_gateway(config, GatewayOptions { listen }, model_ctx, shared_vault, cancel).await;
     daemon::remove_pid(&settings_dir);
 
     result

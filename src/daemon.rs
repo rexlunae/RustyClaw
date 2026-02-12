@@ -102,6 +102,7 @@ pub fn start(
     bind: &str,
     extra_args: &[String],
     model_api_key: Option<&str>,
+    vault_password: Option<&str>,
 ) -> Result<u32> {
     // If already running, bail.
     if let DaemonStatus::Running { pid } = status(settings_dir) {
@@ -141,6 +142,11 @@ pub fn start(
     // never needs direct access to the secrets vault.
     if let Some(key) = model_api_key {
         cmd.env("RUSTYCLAW_MODEL_API_KEY", key);
+    }
+
+    // Pass the vault password so the gateway can unlock the secrets vault.
+    if let Some(pw) = vault_password {
+        cmd.env("RUSTYCLAW_VAULT_PASSWORD", pw);
     }
 
     for a in extra_args {
