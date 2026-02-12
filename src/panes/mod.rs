@@ -67,6 +67,10 @@ pub enum MessageRole {
     Error,
     /// Generic system status (📡)
     System,
+    /// The model is invoking a tool (🔧)
+    ToolCall,
+    /// Result of a tool invocation (📎)
+    ToolResult,
 }
 
 impl MessageRole {
@@ -80,6 +84,8 @@ impl MessageRole {
             Self::Warning => "⚠",
             Self::Error => "❌",
             Self::System => "📡",
+            Self::ToolCall => "🔧",
+            Self::ToolResult => "📎",
         }
     }
 }
@@ -116,6 +122,12 @@ impl DisplayMessage {
     }
     pub fn system(content: impl Into<String>) -> Self {
         Self::new(MessageRole::System, content)
+    }
+    pub fn tool_call(content: impl Into<String>) -> Self {
+        Self::new(MessageRole::ToolCall, content)
+    }
+    pub fn tool_result(content: impl Into<String>) -> Self {
+        Self::new(MessageRole::ToolResult, content)
     }
 }
 

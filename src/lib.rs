@@ -14,4 +14,5 @@ pub mod secrets;
 pub mod skills;
 pub mod soul;
 pub mod theme;
+pub mod tools;
 pub mod tui;

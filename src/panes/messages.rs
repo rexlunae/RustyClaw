@@ -1,4 +1,5 @@
 use std::sync::OnceLock;
+use std::sync::atomic::AtomicU16;
 
 use anyhow::Result;
 use ratatui::{
@@ -14,6 +15,10 @@ use crate::action::Action;
 use crate::panes::{DisplayMessage, MessageRole, Pane, PaneState};
 use crate::theme::tui_palette as tp;
 use crate::tui::Frame;
+
+// ── Global tab-width setting (read by build_lines) ──────────────────────
+
+static TAB_WIDTH: AtomicU16 = AtomicU16::new(5);
 
 // ── Lazy-loaded syntect state ───────────────────────────────────────────
 
@@ -55,6 +60,8 @@ impl MessagesPane {
             MessageRole::Warning => tp::WARN,
             MessageRole::Error => tp::ERROR,
             MessageRole::System => tp::MUTED,
+            MessageRole::ToolCall => tp::MUTED,
+            MessageRole::ToolResult => tp::TEXT_DIM,
         }
     }
 
@@ -63,6 +70,8 @@ impl MessagesPane {
         match role {
             MessageRole::User => Some(tp::BG_USER),
             MessageRole::Assistant => Some(tp::BG_ASSISTANT),
+            MessageRole::ToolCall => Some(tp::BG_CODE),
+            MessageRole::ToolResult => Some(tp::BG_CODE),
             _ => None,
         }
     }
@@ -275,6 +284,15 @@ impl MessagesPane {
     /// Multi-line content (e.g. assistant responses) is split on `\n`.
     /// Fenced code blocks (` ```lang … ``` `) get syntax highlighting.
     fn build_lines(msg: &DisplayMessage) -> Vec<Line<'static>> {
+        // Expand tab characters to spaces (default 5).
+        let tab_stop = TAB_WIDTH.load(std::sync::atomic::Ordering::Relaxed) as usize;
+        let content: std::borrow::Cow<'_, str> = if msg.content.contains('\t') {
+            std::borrow::Cow::Owned(msg.content.replace('\t', &" ".repeat(tab_stop)))
+        } else {
+            std::borrow::Cow::Borrowed(&msg.content)
+        };
+        let msg = &DisplayMessage { content: content.into_owned(), ..msg.clone() };
+
         let color = Self::role_color(&msg.role);
         let is_assistant = matches!(msg.role, MessageRole::Assistant);
 
@@ -492,6 +510,9 @@ impl Pane for MessagesPane {
         if width == 0 || area.height == 0 {
             return Ok(());
         }
+
+        // Sync the tab-width setting so build_lines can read it.
+        TAB_WIDTH.store(state.config.tab_width, std::sync::atomic::Ordering::Relaxed);
 
         // ── Build entries with pre-computed visual heights ───────────
 

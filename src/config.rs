@@ -53,6 +53,10 @@ pub struct Config {
     /// Set to 0 for compact output, 1 (default) for comfortable spacing.
     #[serde(default = "Config::default_message_spacing")]
     pub message_spacing: u16,
+    /// Number of spaces a tab character occupies in the TUI.
+    /// Defaults to 5.
+    #[serde(default = "Config::default_tab_width")]
+    pub tab_width: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -80,6 +84,7 @@ impl Default for Config {
             agent_access: false,
             agent_name: Self::default_agent_name(),
             message_spacing: Self::default_message_spacing(),
+            tab_width: Self::default_tab_width(),
         }
     }
 }
@@ -91,6 +96,10 @@ impl Config {
 
     fn default_message_spacing() -> u16 {
         1
+    }
+
+    fn default_tab_width() -> u16 {
+        5
     }
 
     // ── Derived path helpers (mirrors openclaw layout) ───────────

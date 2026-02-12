@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::providers;
 use crate::secrets::SecretsManager;
+use crate::tools;
 use anyhow::{Context, Result};
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
@@ -694,9 +695,10 @@ async fn handle_connection(
 
 /// Route an incoming text frame to the appropriate handler.
 ///
-/// This replaces the old `handle_text_message` by writing frames directly
-/// to the WebSocket writer — enabling streaming chunks to reach the client
-/// as they arrive from the model provider.
+/// Implements an agentic tool loop: the model is called, and if it
+/// requests tool calls, the gateway executes them locally and feeds
+/// the results back into the conversation, repeating until the model
+/// produces a final text response (or a safety limit is hit).
 async fn dispatch_text_message(
     http: &reqwest::Client,
     text: &str,
@@ -769,44 +771,110 @@ async fn dispatch_text_message(
         }
     }
 
-    // Dispatch to streaming or non-streaming provider caller.
-    let result = if resolved.provider == "anthropic" {
-        stream_anthropic(http, &resolved, writer).await
-    } else if resolved.provider == "google" {
-        // Google Gemini: non-streaming fallback (send a single response).
-        match call_google(http, &resolved).await {
-            Ok(reply) => {
+    // ── Agentic tool loop ───────────────────────────────────────────
+    const MAX_TOOL_ROUNDS: usize = 25;
+
+    for _round in 0..MAX_TOOL_ROUNDS {
+        let result = if resolved.provider == "anthropic" {
+            call_anthropic_with_tools(http, &resolved).await
+        } else if resolved.provider == "google" {
+            call_google_with_tools(http, &resolved).await
+        } else {
+            call_openai_with_tools(http, &resolved).await
+        };
+
+        let model_resp = match result {
+            Ok(r) => r,
+            Err(err) => {
                 let frame = json!({
-                    "type": "response",
-                    "ok": true,
-                    "received": reply,
+                    "type": "error",
+                    "ok": false,
+                    "message": err.to_string(),
                 });
                 writer
                     .send(Message::Text(frame.to_string().into()))
                     .await
-                    .context("Failed to send response frame")?;
-                Ok(())
+                    .context("Failed to send error frame")?;
+                return Ok(());
             }
-            Err(err) => Err(err),
-        }
-    } else {
-        // OpenAI-compatible (openai, xai, openrouter, ollama, github-copilot,
-        // copilot-proxy, custom, …)
-        stream_openai_compatible(http, &resolved, writer).await
-    };
+        };
 
-    if let Err(err) = result {
-        let frame = json!({
-            "type": "error",
-            "ok": false,
-            "message": err.to_string(),
-        });
-        writer
-            .send(Message::Text(frame.to_string().into()))
-            .await
-            .context("Failed to send error frame")?;
+        // Stream any text content to the client.
+        if !model_resp.text.is_empty() {
+            send_chunk(writer, &model_resp.text).await?;
+        }
+
+        if model_resp.tool_calls.is_empty() {
+            // No tool calls — the model is done.
+            send_response_done(writer).await?;
+            return Ok(());
+        }
+
+        // ── Execute each requested tool ─────────────────────────────
+        let mut tool_results: Vec<ToolCallResult> = Vec::new();
+
+        for tc in &model_resp.tool_calls {
+            // Notify the client about the tool call.
+            let call_frame = json!({
+                "type": "tool_call",
+                "id": tc.id,
+                "name": tc.name,
+                "arguments": tc.arguments,
+            });
+            writer
+                .send(Message::Text(call_frame.to_string().into()))
+                .await
+                .context("Failed to send tool_call frame")?;
+
+            // Execute the tool.
+            let (output, is_error) = match tools::execute_tool(&tc.name, &tc.arguments) {
+                Ok(text) => (text, false),
+                Err(err) => (err, true),
+            };
+
+            // Notify the client about the result.
+            let result_frame = json!({
+                "type": "tool_result",
+                "id": tc.id,
+                "name": tc.name,
+                "result": output,
+                "is_error": is_error,
+            });
+            writer
+                .send(Message::Text(result_frame.to_string().into()))
+                .await
+                .context("Failed to send tool_result frame")?;
+
+            tool_results.push(ToolCallResult {
+                id: tc.id.clone(),
+                name: tc.name.clone(),
+                output,
+                is_error,
+            });
+        }
+
+        // ── Append assistant + tool-result messages to conversation ──
+        // The model's response (possibly with text + tool calls) becomes
+        // an assistant message, and each tool result becomes a tool message.
+        append_tool_round(
+            &resolved.provider,
+            &mut resolved.messages,
+            &model_resp,
+            &tool_results,
+        );
     }
 
+    // If we exhausted all rounds, send what we have and stop.
+    let frame = json!({
+        "type": "error",
+        "ok": false,
+        "message": "Tool loop limit reached — stopping.",
+    });
+    writer
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .context("Failed to send error frame")?;
+    send_response_done(writer).await?;
     Ok(())
 }
 
@@ -830,13 +898,148 @@ async fn send_response_done(writer: &mut WsWriter) -> Result<()> {
         .context("Failed to send response_done frame")
 }
 
+// ── Model response types (shared across providers) ──────────────────────────
+
+/// A parsed tool call from the model.
+#[derive(Debug, Clone)]
+struct ParsedToolCall {
+    id: String,
+    name: String,
+    arguments: serde_json::Value,
+}
+
+/// The result of executing a tool locally.
+#[derive(Debug, Clone)]
+struct ToolCallResult {
+    id: String,
+    name: String,
+    output: String,
+    is_error: bool,
+}
+
+/// A complete model response: optional text + optional tool calls.
+#[derive(Debug, Default)]
+struct ModelResponse {
+    text: String,
+    tool_calls: Vec<ParsedToolCall>,
+}
+
+/// Append the model's assistant turn and tool results to the conversation
+/// so the next round has full context.
+fn append_tool_round(
+    provider: &str,
+    messages: &mut Vec<ChatMessage>,
+    model_resp: &ModelResponse,
+    results: &[ToolCallResult],
+) {
+    if provider == "anthropic" {
+        // Anthropic: assistant message has content blocks (text + tool_use),
+        // then one "user" message with tool_result blocks.
+        let mut content_blocks = Vec::new();
+        if !model_resp.text.is_empty() {
+            content_blocks.push(json!({ "type": "text", "text": model_resp.text }));
+        }
+        for tc in &model_resp.tool_calls {
+            content_blocks.push(json!({
+                "type": "tool_use",
+                "id": tc.id,
+                "name": tc.name,
+                "input": tc.arguments,
+            }));
+        }
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: serde_json::to_string(&content_blocks).unwrap_or_default(),
+        });
+
+        let mut result_blocks = Vec::new();
+        for r in results {
+            result_blocks.push(json!({
+                "type": "tool_result",
+                "tool_use_id": r.id,
+                "content": r.output,
+                "is_error": r.is_error,
+            }));
+        }
+        messages.push(ChatMessage {
+            role: "user".into(),
+            content: serde_json::to_string(&result_blocks).unwrap_or_default(),
+        });
+    } else if provider == "google" {
+        // Google: model turn with function calls, then user turn with function responses.
+        let mut parts = Vec::new();
+        if !model_resp.text.is_empty() {
+            parts.push(json!({ "text": model_resp.text }));
+        }
+        for tc in &model_resp.tool_calls {
+            parts.push(json!({
+                "functionCall": { "name": tc.name, "args": tc.arguments }
+            }));
+        }
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: serde_json::to_string(&parts).unwrap_or_default(),
+        });
+
+        let mut resp_parts = Vec::new();
+        for r in results {
+            resp_parts.push(json!({
+                "functionResponse": {
+                    "name": r.name,
+                    "response": { "content": r.output, "is_error": r.is_error }
+                }
+            }));
+        }
+        messages.push(ChatMessage {
+            role: "user".into(),
+            content: serde_json::to_string(&resp_parts).unwrap_or_default(),
+        });
+    } else {
+        // OpenAI-compatible: assistant message with tool_calls array,
+        // then one "tool" message per result.
+        let tc_array: Vec<serde_json::Value> = model_resp
+            .tool_calls
+            .iter()
+            .map(|tc| {
+                json!({
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {
+                        "name": tc.name,
+                        "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
+                    }
+                })
+            })
+            .collect();
+
+        // The assistant message carries both text and tool_calls.
+        let assistant_json = json!({
+            "role": "assistant",
+            "content": if model_resp.text.is_empty() { serde_json::Value::Null } else { json!(model_resp.text) },
+            "tool_calls": tc_array,
+        });
+        messages.push(ChatMessage {
+            role: "assistant".into(),
+            content: serde_json::to_string(&assistant_json).unwrap_or_default(),
+        });
+
+        for r in results {
+            messages.push(ChatMessage {
+                role: "tool".into(),
+                content: json!({
+                    "role": "tool",
+                    "tool_call_id": r.id,
+                    "content": r.output,
+                })
+                .to_string(),
+            });
+        }
+    }
+}
+
 // ── Provider-specific callers ───────────────────────────────────────────────
 
 /// Attach GitHub-Copilot-required IDE headers to a request builder.
-///
-/// The Copilot API rejects requests that lack `Editor-Version`,
-/// `Editor-Plugin-Version`, `Copilot-Integration-Id`, and `openai-intent`.
-/// This is a no-op for non-Copilot providers.
 fn apply_copilot_headers(
     builder: reqwest::RequestBuilder,
     provider: &str,
@@ -852,22 +1055,43 @@ fn apply_copilot_headers(
         .header("openai-intent", "conversation-panel")
 }
 
-/// Call an OpenAI-compatible `/chat/completions` endpoint with streaming.
-///
-/// Sends `stream: true`, parses the SSE response, and forwards each
-/// content delta as a `chunk` WebSocket frame.  Sends `response_done`
-/// when the stream completes.
-async fn stream_openai_compatible(
+// ── OpenAI-compatible ───────────────────────────────────────────────────────
+
+/// Call an OpenAI-compatible `/chat/completions` endpoint (non-streaming)
+/// with tool definitions.  Returns structured text + tool calls.
+async fn call_openai_with_tools(
     http: &reqwest::Client,
     req: &ProviderRequest,
-    writer: &mut WsWriter,
-) -> Result<()> {
+) -> Result<ModelResponse> {
     let url = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
-    let body = json!({
+
+    // Build the messages array.  Most messages are simple role+content,
+    // but tool-loop continuation messages have structured JSON content
+    // that must be sent as raw objects rather than string-escaped.
+    let messages: Vec<serde_json::Value> = req
+        .messages
+        .iter()
+        .map(|m| {
+            // Try to parse content as JSON first (for assistant messages
+            // with tool_calls and tool-result messages).
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.content) {
+                if parsed.is_object() && parsed.get("role").is_some() {
+                    return parsed;
+                }
+            }
+            json!({ "role": m.role, "content": m.content })
+        })
+        .collect();
+
+    let tool_defs = tools::tools_openai();
+
+    let mut body = json!({
         "model": req.model,
-        "messages": req.messages,
-        "stream": true,
+        "messages": messages,
     });
+    if !tool_defs.is_empty() {
+        body["tools"] = json!(tool_defs);
+    }
 
     let mut builder = http.post(&url).json(&body);
     if let Some(ref key) = req.api_key {
@@ -886,68 +1110,48 @@ async fn stream_openai_compatible(
         anyhow::bail!("Provider returned {} — {}", status, text);
     }
 
-    // We need a shared mutable reference to writer inside the closure.
-    // Use a Cell-like pattern via a mutable reference captured once.
-    let writer_ref: &mut WsWriter = writer;
+    let data: serde_json::Value = resp
+        .json()
+        .await
+        .context("Invalid JSON from provider")?;
 
-    // We can't capture `writer_ref` in an async closure directly because
-    // `process_sse_stream` takes an `FnMut`.  Instead, process the stream
-    // inline.
-    {
-        use futures_util::TryStreamExt;
-        let mut stream = resp.bytes_stream();
-        let mut buffer = String::new();
+    let choice = &data["choices"][0];
+    let message = &choice["message"];
 
-        while let Some(chunk) = stream.try_next().await.context("SSE stream read error")? {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+    let mut result = ModelResponse::default();
 
-            while let Some(pos) = buffer.find("\n\n") {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
+    // Extract text content.
+    if let Some(text) = message["content"].as_str() {
+        result.text = text.to_string();
+    }
 
-                for line in event_block.lines() {
-                    if let Some(data) = line
-                        .strip_prefix("data: ")
-                        .or_else(|| line.strip_prefix("data:"))
-                    {
-                        let data = data.trim();
-                        if data == "[DONE]" {
-                            send_response_done(writer_ref).await?;
-                            return Ok(());
-                        }
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
-                            if let Some(content) =
-                                json["choices"][0]["delta"]["content"].as_str()
-                            {
-                                if !content.is_empty() {
-                                    send_chunk(writer_ref, content).await?;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+    // Extract tool calls.
+    if let Some(tc_array) = message["tool_calls"].as_array() {
+        for tc in tc_array {
+            let id = tc["id"].as_str().unwrap_or("").to_string();
+            let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+            let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
+            let arguments = serde_json::from_str(args_str).unwrap_or(json!({}));
+            result.tool_calls.push(ParsedToolCall {
+                id,
+                name,
+                arguments,
+            });
         }
     }
 
-    // If we reach here without seeing [DONE], the stream ended — still
-    // send done so the client can finalise.
-    send_response_done(writer_ref).await?;
-    Ok(())
+    Ok(result)
 }
 
-/// Call the Anthropic Messages API (`/v1/messages`) with streaming.
-///
-/// Sends `stream: true`, parses SSE events, and forwards
-/// `content_block_delta` text deltas as `chunk` WebSocket frames.
-async fn stream_anthropic(
+// ── Anthropic ───────────────────────────────────────────────────────────────
+
+/// Call the Anthropic Messages API with tool definitions (non-streaming).
+async fn call_anthropic_with_tools(
     http: &reqwest::Client,
     req: &ProviderRequest,
-    writer: &mut WsWriter,
-) -> Result<()> {
+) -> Result<ModelResponse> {
     let url = format!("{}/v1/messages", req.base_url.trim_end_matches('/'));
 
-    // Anthropic separates the system prompt from user/assistant messages.
     let system = req
         .messages
         .iter()
@@ -956,21 +1160,35 @@ async fn stream_anthropic(
         .collect::<Vec<_>>()
         .join("\n\n");
 
+    // Build messages.  Tool-loop continuation messages have structured
+    // JSON content (content blocks) that must be sent as arrays.
     let messages: Vec<serde_json::Value> = req
         .messages
         .iter()
         .filter(|m| m.role != "system")
-        .map(|m| json!({"role": m.role, "content": m.content}))
+        .map(|m| {
+            // Try to parse content as a JSON array (content blocks).
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.content) {
+                if parsed.is_array() {
+                    return json!({ "role": m.role, "content": parsed });
+                }
+            }
+            json!({ "role": m.role, "content": m.content })
+        })
         .collect();
+
+    let tool_defs = tools::tools_anthropic();
 
     let mut body = json!({
         "model": req.model,
         "max_tokens": 4096,
         "messages": messages,
-        "stream": true,
     });
     if !system.is_empty() {
         body["system"] = serde_json::Value::String(system);
+    }
+    if !tool_defs.is_empty() {
+        body["tools"] = json!(tool_defs);
     }
 
     let api_key = req.api_key.as_deref().unwrap_or("");
@@ -989,68 +1207,46 @@ async fn stream_anthropic(
         anyhow::bail!("Anthropic returned {} — {}", status, text);
     }
 
-    {
-        use futures_util::TryStreamExt;
-        let mut stream = resp.bytes_stream();
-        let mut buffer = String::new();
+    let data: serde_json::Value = resp.json().await.context("Invalid JSON from Anthropic")?;
 
-        while let Some(chunk) = stream.try_next().await.context("SSE stream read error")? {
-            buffer.push_str(&String::from_utf8_lossy(&chunk));
+    let mut result = ModelResponse::default();
 
-            while let Some(pos) = buffer.find("\n\n") {
-                let event_block = buffer[..pos].to_string();
-                buffer = buffer[pos + 2..].to_string();
-
-                // Anthropic SSE has `event:` and `data:` lines.
-                let mut event_type = "";
-                let mut data_str = String::new();
-
-                for line in event_block.lines() {
-                    if let Some(et) = line.strip_prefix("event: ").or_else(|| line.strip_prefix("event:")) {
-                        event_type = et.trim();
-                    } else if let Some(d) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
-                        data_str = d.trim().to_string();
+    if let Some(content) = data["content"].as_array() {
+        for block in content {
+            match block["type"].as_str() {
+                Some("text") => {
+                    if let Some(text) = block["text"].as_str() {
+                        if !result.text.is_empty() {
+                            result.text.push('\n');
+                        }
+                        result.text.push_str(text);
                     }
                 }
-
-                match event_type {
-                    "content_block_delta" => {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data_str) {
-                            if let Some(text) = json["delta"]["text"].as_str() {
-                                if !text.is_empty() {
-                                    send_chunk(writer, text).await?;
-                                }
-                            }
-                        }
-                    }
-                    "message_stop" => {
-                        send_response_done(writer).await?;
-                        return Ok(());
-                    }
-                    "error" => {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data_str) {
-                            let msg = json["error"]["message"]
-                                .as_str()
-                                .unwrap_or("Unknown Anthropic streaming error");
-                            anyhow::bail!("Anthropic stream error: {}", msg);
-                        }
-                    }
-                    _ => {
-                        // ping, message_start, content_block_start, etc. — ignore
-                    }
+                Some("tool_use") => {
+                    let id = block["id"].as_str().unwrap_or("").to_string();
+                    let name = block["name"].as_str().unwrap_or("").to_string();
+                    let arguments = block["input"].clone();
+                    result.tool_calls.push(ParsedToolCall {
+                        id,
+                        name,
+                        arguments,
+                    });
                 }
+                _ => {}
             }
         }
     }
 
-    // If we reach here the stream ended without message_stop — send done
-    // so the client can finalise.
-    send_response_done(writer).await?;
-    Ok(())
+    Ok(result)
 }
 
-/// Call the Google Gemini `generateContent` endpoint.
-async fn call_google(http: &reqwest::Client, req: &ProviderRequest) -> Result<String> {
+// ── Google Gemini ───────────────────────────────────────────────────────────
+
+/// Call Google Gemini with function declarations (non-streaming).
+async fn call_google_with_tools(
+    http: &reqwest::Client,
+    req: &ProviderRequest,
+) -> Result<ModelResponse> {
     let api_key = req.api_key.as_deref().unwrap_or("");
     let url = format!(
         "{}/models/{}:generateContent?key={}",
@@ -1059,7 +1255,6 @@ async fn call_google(http: &reqwest::Client, req: &ProviderRequest) -> Result<St
         api_key,
     );
 
-    // Gemini uses a different message format: system_instruction + contents.
     let system = req
         .messages
         .iter()
@@ -1068,19 +1263,31 @@ async fn call_google(http: &reqwest::Client, req: &ProviderRequest) -> Result<St
         .collect::<Vec<_>>()
         .join("\n\n");
 
+    // Build contents.  Tool-loop continuation messages may have
+    // structured JSON parts that need to be sent as arrays.
     let contents: Vec<serde_json::Value> = req
         .messages
         .iter()
         .filter(|m| m.role != "system")
         .map(|m| {
             let role = if m.role == "assistant" { "model" } else { "user" };
-            json!({"role": role, "parts": [{"text": m.content}]})
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.content) {
+                if parsed.is_array() {
+                    return json!({ "role": role, "parts": parsed });
+                }
+            }
+            json!({ "role": role, "parts": [{ "text": m.content }] })
         })
         .collect();
 
+    let tool_defs = tools::tools_google();
+
     let mut body = json!({ "contents": contents });
     if !system.is_empty() {
-        body["system_instruction"] = json!({"parts": [{"text": system}]});
+        body["system_instruction"] = json!({ "parts": [{ "text": system }] });
+    }
+    if !tool_defs.is_empty() {
+        body["tools"] = json!([{ "function_declarations": tool_defs }]);
     }
 
     let resp = http
@@ -1098,8 +1305,27 @@ async fn call_google(http: &reqwest::Client, req: &ProviderRequest) -> Result<St
 
     let data: serde_json::Value = resp.json().await.context("Invalid JSON from Google")?;
 
-    data["candidates"][0]["content"]["parts"][0]["text"]
-        .as_str()
-        .map(String::from)
-        .context("No text content in Google response")
+    let mut result = ModelResponse::default();
+
+    if let Some(parts) = data["candidates"][0]["content"]["parts"].as_array() {
+        for (i, part) in parts.iter().enumerate() {
+            if let Some(text) = part["text"].as_str() {
+                if !result.text.is_empty() {
+                    result.text.push('\n');
+                }
+                result.text.push_str(text);
+            }
+            if let Some(fc) = part.get("functionCall") {
+                let name = fc["name"].as_str().unwrap_or("").to_string();
+                let arguments = fc["args"].clone();
+                result.tool_calls.push(ParsedToolCall {
+                    id: format!("google_call_{}", i),
+                    name,
+                    arguments,
+                });
+            }
+        }
+    }
+
+    Ok(result)
 }

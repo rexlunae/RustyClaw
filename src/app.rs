@@ -671,6 +671,49 @@ impl App {
                     return Ok(Some(Action::Update));
                 }
 
+                // ── Handle tool-call frames ──────────────────────────
+                if frame_type == Some("tool_call") {
+                    let name = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("name").and_then(|n| n.as_str()))
+                        .unwrap_or("unknown");
+                    let arguments = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("arguments").and_then(|a| a.as_str()))
+                        .unwrap_or("{}");
+                    self.state.messages.push(DisplayMessage::tool_call(
+                        format!("{name}({arguments})"),
+                    ));
+                    return Ok(Some(Action::Update));
+                }
+
+                // ── Handle tool-result frames ────────────────────────
+                if frame_type == Some("tool_result") {
+                    let name = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("name").and_then(|n| n.as_str()))
+                        .unwrap_or("unknown");
+                    let result = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("result").and_then(|r| r.as_str()))
+                        .unwrap_or("");
+                    let is_error = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("is_error").and_then(|e| e.as_bool()))
+                        .unwrap_or(false);
+                    let prefix = if is_error { "⚠ " } else { "" };
+                    // Truncate long results for the TUI display.
+                    let display_result = if result.len() > 2000 {
+                        format!("{}{}…({} bytes)", prefix, &result[..2000], result.len())
+                    } else {
+                        format!("{prefix}{result}")
+                    };
+                    self.state.messages.push(DisplayMessage::tool_result(
+                        format!("{name}: {display_result}"),
+                    ));
+                    return Ok(Some(Action::Update));
+                }
+
                 // ── Handle streaming chunk frames ────────────────────
                 if frame_type == Some("chunk") {
                     let delta = parsed
