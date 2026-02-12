@@ -693,19 +693,7 @@ impl App {
 
                         // During hatching, just accumulate — don't push to messages.
                         if !self.showing_hatching {
-                            // Split completed lines into separate messages so
-                            // each line renders on its own row in the pane.
-                            while let Some(nl_pos) = buf.find('\n') {
-                                let line = buf[..nl_pos].to_string();
-                                if let Some(last) = self.state.messages.last_mut() {
-                                    last.content = line;
-                                }
-                                *buf = buf[nl_pos + 1..].to_string();
-                                // Start a new in-progress row for the next line.
-                                self.state.messages.push(DisplayMessage::assistant(""));
-                            }
-
-                            // Update the current (unterminated) line.
+                            // Update the last assistant message with accumulated text.
                             if let Some(last) = self.state.messages.last_mut() {
                                 last.content = buf.clone();
                             }
@@ -736,22 +724,11 @@ impl App {
                             return Ok(Some(Action::Update));
                         }
 
-                        // If the last message is an empty trailing line, remove it.
-                        if let Some(last) = self.state.messages.last() {
-                            if last.content.is_empty()
-                                && matches!(last.role, crate::panes::MessageRole::Assistant)
-                            {
-                                self.state.messages.pop();
-                            }
-                        }
-                        // Ensure any remaining buffer text is flushed.
-                        if !buf.is_empty() {
-                            if let Some(last) = self.state.messages.last_mut() {
-                                if matches!(last.role, crate::panes::MessageRole::Assistant) {
-                                    last.content = buf;
-                                } else {
-                                    self.state.messages.push(DisplayMessage::assistant(buf));
-                                }
+                        // Trim trailing whitespace from the final message.
+                        let trimmed = buf.trim_end().to_string();
+                        if let Some(last) = self.state.messages.last_mut() {
+                            if matches!(last.role, crate::panes::MessageRole::Assistant) {
+                                last.content = trimmed;
                             }
                         }
                     }
@@ -805,15 +782,9 @@ impl App {
                 self.chat_loading_tick = None;
                 self.state.loading_line = None;
 
-                // Split multi-line responses into separate messages
-                let lines: Vec<&str> = display.lines().collect();
-                if lines.len() <= 1 {
-                    self.state.messages.push(DisplayMessage::assistant(display));
-                } else {
-                    for line in &lines {
-                        self.state.messages.push(DisplayMessage::assistant(*line));
-                    }
-                }
+                // Keep the full response as a single message — the messages
+                // pane renderer handles multi-line content natively.
+                self.state.messages.push(DisplayMessage::assistant(display));
                 // Auto-scroll
                 return Ok(Some(Action::Update));
             }

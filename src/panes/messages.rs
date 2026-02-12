@@ -1,14 +1,34 @@
+use std::sync::OnceLock;
+
 use anyhow::Result;
 use ratatui::{
     layout::{Constraint, Rect},
     prelude::*,
     widgets::{Paragraph, Wrap},
 };
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{self, ThemeSet};
+use syntect::parsing::SyntaxSet;
 
 use crate::action::Action;
 use crate::panes::{DisplayMessage, MessageRole, Pane, PaneState};
 use crate::theme::tui_palette as tp;
 use crate::tui::Frame;
+
+// ── Lazy-loaded syntect state ───────────────────────────────────────────
+
+fn syntax_set() -> &'static SyntaxSet {
+    static SS: OnceLock<SyntaxSet> = OnceLock::new();
+    SS.get_or_init(SyntaxSet::load_defaults_newlines)
+}
+
+fn highlight_theme() -> &'static highlighting::Theme {
+    static TH: OnceLock<highlighting::Theme> = OnceLock::new();
+    TH.get_or_init(|| {
+        let ts = ThemeSet::load_defaults();
+        ts.themes["base16-ocean.dark"].clone()
+    })
+}
 
 pub struct MessagesPane {
     focused: bool,
@@ -205,50 +225,159 @@ impl MessagesPane {
         spans
     }
 
-    // ── Layout helpers ──────────────────────────────────────────────────
+    // ── Syntax highlighting ─────────────────────────────────────────────
 
-    /// Build a styled [`Line`] for a single message.  Word-wrapping is
-    /// handled by the `Paragraph` widget at render time.
-    fn build_line(msg: &DisplayMessage) -> Line<'static> {
-        let color = Self::role_color(&msg.role);
-        let mut spans: Vec<Span<'static>> = Vec::new();
+    /// Convert a syntect `highlighting::Style` to a ratatui `Style`.
+    fn syntect_to_ratatui(ss: highlighting::Style) -> Style {
+        let fg = Color::Rgb(ss.foreground.r, ss.foreground.g, ss.foreground.b);
+        Style::default().fg(fg).bg(tp::BG_CODE)
+    }
 
-        // Left padding
-        spans.push(Span::raw(" "));
+    /// Syntax-highlight a block of code lines using syntect.
+    fn highlight_code_block(lines: &[&str], lang: &str) -> Vec<Line<'static>> {
+        let ss = syntax_set();
+        let theme = highlight_theme();
 
-        // Icon for non-chat roles only (user/assistant use bg colours)
-        if Self::should_show_icon(&msg.role) {
-            let icon = msg.role.icon();
-            spans.push(Span::styled(
-                format!("{icon} "),
-                Style::default().fg(color),
-            ));
+        let syntax = ss
+            .find_syntax_by_token(lang)
+            .unwrap_or_else(|| ss.find_syntax_plain_text());
+
+        let mut h = HighlightLines::new(syntax, theme);
+        let mut result = Vec::new();
+
+        for source_line in lines {
+            // syntect expects the newline; add it back for parsing
+            let input = format!("{source_line}\n");
+            let ranges = h
+                .highlight_line(&input, ss)
+                .unwrap_or_default();
+
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            // Left gutter
+            spans.push(Span::styled("  ", Style::default().bg(tp::BG_CODE)));
+            for (style, text) in ranges {
+                // Strip the trailing newline we added
+                let t = text.trim_end_matches('\n').to_string();
+                if !t.is_empty() {
+                    spans.push(Span::styled(t, Self::syntect_to_ratatui(style)));
+                }
+            }
+            result.push(Line::from(spans));
         }
 
-        // Content — parse markdown for assistant, plain for everything else
-        if matches!(msg.role, MessageRole::Assistant) {
-            spans.extend(Self::parse_inline_markdown(&msg.content, color));
-        } else {
+        result
+    }
+
+    // ── Layout helpers ──────────────────────────────────────────────────
+
+    /// Build styled [`Line`]s for a single message.
+    ///
+    /// Multi-line content (e.g. assistant responses) is split on `\n`.
+    /// Fenced code blocks (` ```lang … ``` `) get syntax highlighting.
+    fn build_lines(msg: &DisplayMessage) -> Vec<Line<'static>> {
+        let color = Self::role_color(&msg.role);
+        let is_assistant = matches!(msg.role, MessageRole::Assistant);
+
+        if !is_assistant {
+            // Non-assistant messages stay single-line.
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            spans.push(Span::raw(" "));
+            if Self::should_show_icon(&msg.role) {
+                let icon = msg.role.icon();
+                spans.push(Span::styled(
+                    format!("{icon} "),
+                    Style::default().fg(color),
+                ));
+            }
             spans.push(Span::styled(
                 msg.content.clone(),
                 Style::default().fg(color),
             ));
+            return vec![Line::from(spans)];
         }
 
-        Line::from(spans)
+        // ── Assistant: handle multi-line with code fences ────────────
+
+        let raw_lines: Vec<&str> = msg.content.split('\n').collect();
+        let mut result: Vec<Line<'static>> = Vec::new();
+        let mut i = 0;
+
+        while i < raw_lines.len() {
+            let line = raw_lines[i];
+
+            // Detect opening code fence: ```lang
+            if line.trim_start().starts_with("```") {
+                let trimmed = line.trim_start();
+                let lang = trimmed[3..].trim().to_string();
+
+                // Fence header line (dimmed)
+                let fence_label = if lang.is_empty() {
+                    " ─── code ───".to_string()
+                } else {
+                    format!(" ─── {} ───", lang)
+                };
+                result.push(Line::from(Span::styled(
+                    fence_label,
+                    Style::default().fg(tp::MUTED).bg(tp::BG_CODE),
+                )));
+
+                // Collect code body
+                i += 1;
+                let mut code_lines: Vec<&str> = Vec::new();
+                while i < raw_lines.len() {
+                    if raw_lines[i].trim_start().starts_with("```") {
+                        break;
+                    }
+                    code_lines.push(raw_lines[i]);
+                    i += 1;
+                }
+
+                // Highlight the code body
+                let lang_ref = if lang.is_empty() { "txt" } else { &lang };
+                result.extend(Self::highlight_code_block(&code_lines, lang_ref));
+
+                // Closing fence line
+                result.push(Line::from(Span::styled(
+                    " ───────────",
+                    Style::default().fg(tp::MUTED).bg(tp::BG_CODE),
+                )));
+
+                // Skip closing ``` line
+                if i < raw_lines.len() {
+                    i += 1;
+                }
+                continue;
+            }
+
+            // Normal markdown line
+            let mut spans = Vec::new();
+            spans.push(Span::raw(" "));
+            spans.extend(Self::parse_inline_markdown(line, color));
+            result.push(Line::from(spans));
+            i += 1;
+        }
+
+        result
     }
 
-    /// Count how many visual (wrapped) rows a `Line` occupies at `width`.
-    fn visual_line_count(line: &Line<'_>, width: u16) -> u16 {
+    /// Count how many visual (wrapped) rows a set of `Line`s occupies at `width`.
+    fn visual_lines_count(lines: &[Line<'_>], width: u16) -> usize {
         if width == 0 {
-            return 1;
+            return lines.len().max(1);
         }
         let w = width as usize;
-        let text_width: usize = line.width();
-        if text_width == 0 {
-            return 1;
-        }
-        ((text_width + w - 1) / w) as u16
+        lines
+            .iter()
+            .map(|line| {
+                let text_width = line.width();
+                if text_width == 0 {
+                    1
+                } else {
+                    (text_width + w - 1) / w
+                }
+            })
+            .sum::<usize>()
+            .max(1)
     }
 
     /// Resolve the logical message index that the current visual scroll
@@ -264,8 +393,8 @@ impl MessagesPane {
             if i > 0 {
                 accum += spacing as usize;
             }
-            let line = Self::build_line(msg);
-            let h = Self::visual_line_count(&line, width) as usize;
+            let lines = Self::build_lines(msg);
+            let h = Self::visual_lines_count(&lines, width);
             if accum + h > visual_row {
                 return i;
             }
@@ -315,17 +444,12 @@ impl Pane for MessagesPane {
             }
             Action::CopyMessage => {
                 // Map current scroll position back to a message index.
-                // We don't know the real render width here, so we use a
-                // conservative estimate; the actual clamping happens in draw.
                 let spacing = state.config.message_spacing;
                 let msg_count = state.messages.len();
                 let total: usize = state
                     .messages
                     .iter()
-                    .map(|m| {
-                        let l = Self::build_line(m);
-                        Self::visual_line_count(&l, 200) as usize
-                    })
+                    .map(|m| Self::visual_lines_count(&Self::build_lines(m), 200))
                     .sum::<usize>()
                     + if msg_count > 1 {
                         (msg_count - 1) * spacing as usize
@@ -372,8 +496,10 @@ impl Pane for MessagesPane {
         // ── Build entries with pre-computed visual heights ───────────
 
         struct Entry<'a> {
-            line: Line<'a>,
+            /// All rendered lines for this entry (may be many for multi-line messages).
+            text: Text<'a>,
             bg: Option<Color>,
+            /// Total visual rows after wrapping.
             height: u16,
         }
 
@@ -384,15 +510,15 @@ impl Pane for MessagesPane {
             // Insert blank spacing line(s) between messages
             if i > 0 && spacing > 0 {
                 entries.push(Entry {
-                    line: Line::from(""),
+                    text: Text::from(""),
                     bg: None,
                     height: spacing,
                 });
             }
-            let line = Self::build_line(msg);
-            let h = Self::visual_line_count(&line, width);
+            let lines = Self::build_lines(msg);
+            let h = Self::visual_lines_count(&lines, width) as u16;
             entries.push(Entry {
-                line,
+                text: Text::from(lines),
                 bg: Self::role_bg(&msg.role),
                 height: h,
             });
@@ -404,9 +530,9 @@ impl Pane for MessagesPane {
                 format!(" {}", loading),
                 Style::default().fg(tp::ACCENT_BRIGHT),
             ));
-            let h = Self::visual_line_count(&line, width);
+            let h = Self::visual_lines_count(&[line.clone()], width) as u16;
             entries.push(Entry {
-                line,
+                text: Text::from(line),
                 bg: None,
                 height: h,
             });
@@ -416,10 +542,6 @@ impl Pane for MessagesPane {
         let viewport = area.height as usize;
 
         // ── Resolve scroll position ─────────────────────────────────
-        // `scroll_offset` is "lines from the bottom":
-        //   usize::MAX or 0 → pinned to the newest content
-        //   >0 → scrolled up by that many visual lines
-
         let max_scroll = total_visual.saturating_sub(viewport);
 
         let from_bottom = if self.scroll_offset == usize::MAX {
@@ -427,12 +549,10 @@ impl Pane for MessagesPane {
         } else {
             self.scroll_offset.min(max_scroll)
         };
-        // Persist the clamped value so Up/Down work correctly.
         if self.scroll_offset != usize::MAX {
             self.scroll_offset = from_bottom;
         }
 
-        // `scroll_top` = number of visual lines to skip from the top.
         let scroll_top = max_scroll - from_bottom;
 
         // ── Determine which entries are visible ─────────────────────
@@ -482,7 +602,7 @@ impl Pane for MessagesPane {
             }
 
             // Render the wrapped text
-            let mut para = Paragraph::new(entry.line.clone())
+            let mut para = Paragraph::new(entry.text.clone())
                 .wrap(Wrap { trim: false })
                 .scroll((skip, 0));
 
@@ -499,4 +619,3 @@ impl Pane for MessagesPane {
         Ok(())
     }
 }
-

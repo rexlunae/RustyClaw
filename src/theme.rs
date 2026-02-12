@@ -321,6 +321,7 @@ pub mod tui_palette {
     // Subtle background tints for message bubbles
     pub const BG_USER: Color = Color::Rgb(0x2A, 0x24, 0x20);       // warm dark for user input
     pub const BG_ASSISTANT: Color = Color::Rgb(0x1A, 0x1E, 0x22);  // cool dark for bot output
+    pub const BG_CODE: Color = Color::Rgb(0x22, 0x28, 0x30);       // slightly blue-tinted for code blocks
 
     // ── Pre-built styles ────────────────────────────────────
 
