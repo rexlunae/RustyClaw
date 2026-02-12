@@ -132,45 +132,83 @@ async fn main() -> Result<()> {
 
     println!("{}", t::icon_ok(&format!("Gateway listening on {}", t::info(&format!("ws://{}", listen)))));
 
-    // ── Resolve model context from config + secrets vault ────────────────
+    // ── Resolve model context ────────────────────────────────────────────
+    //
+    // When launched as a daemon, the CLI extracts just the provider's API
+    // key and passes it via RUSTYCLAW_MODEL_API_KEY so the gateway never
+    // needs access to the full secrets vault.
+    //
+    // When running interactively (foreground), fall back to opening the
+    // vault directly — prompting for the password if needed.
     let model_ctx = {
-        let creds_dir = config.credentials_dir();
-        let mut secrets = if config.secrets_password_protected {
-            // Password-protected vault — prompt when running in the foreground.
-            let password = rpassword::prompt_password(
-                &format!("{} Vault password: ", t::info("🔑")),
-            )
-            .unwrap_or_default();
-            SecretsManager::with_password(&creds_dir, password)
-        } else {
-            SecretsManager::new(&creds_dir)
-        };
+        let env_key = std::env::var("RUSTYCLAW_MODEL_API_KEY").ok();
 
-        match ModelContext::resolve(&config, &mut secrets) {
-            Ok(ctx) => {
-                println!(
-                    "{} {} via {} ({})",
-                    t::icon_ok("Model:"),
-                    t::info(&ctx.model),
-                    t::info(&ctx.provider),
-                    t::muted(&ctx.base_url),
-                );
-                if ctx.api_key.is_some() {
-                    println!("  {} API key loaded from vault", t::icon_ok(""));
+        if let Some(ref key) = env_key {
+            // Key was injected by the parent process — use it directly.
+            // Clear the env var so child processes don't inherit it.
+            // SAFETY: We are single-threaded at this point (before tokio
+            // spawns any tasks), so mutating the environment is safe.
+            unsafe { std::env::remove_var("RUSTYCLAW_MODEL_API_KEY"); }
+
+            let api_key = if key.is_empty() { None } else { Some(key.clone()) };
+            match ModelContext::from_config(&config, api_key) {
+                Ok(ctx) => {
+                    println!(
+                        "{} {} via {} ({})",
+                        t::icon_ok("Model:"),
+                        t::info(&ctx.model),
+                        t::info(&ctx.provider),
+                        t::muted(&ctx.base_url),
+                    );
+                    if ctx.api_key.is_some() {
+                        println!("  {} API key provided by launcher", t::icon_ok(""));
+                    }
+                    Some(ctx)
                 }
-                Some(ctx)
+                Err(err) => {
+                    eprintln!("{} Could not resolve model context: {}", t::muted("⚠"), err);
+                    None
+                }
             }
-            Err(err) => {
-                eprintln!(
-                    "{} Could not resolve model context: {}",
-                    t::muted("⚠"),
-                    err,
-                );
-                eprintln!(
-                    "  {}",
-                    t::muted("The gateway will rely on clients sending full credentials."),
-                );
-                None
+        } else {
+            // Interactive (foreground) mode — open the vault directly.
+            let creds_dir = config.credentials_dir();
+            let mut secrets = if config.secrets_password_protected {
+                let password = rpassword::prompt_password(
+                    &format!("{} Vault password: ", t::info("🔑")),
+                )
+                .unwrap_or_default();
+                SecretsManager::with_password(&creds_dir, password)
+            } else {
+                SecretsManager::new(&creds_dir)
+            };
+
+            match ModelContext::resolve(&config, &mut secrets) {
+                Ok(ctx) => {
+                    println!(
+                        "{} {} via {} ({})",
+                        t::icon_ok("Model:"),
+                        t::info(&ctx.model),
+                        t::info(&ctx.provider),
+                        t::muted(&ctx.base_url),
+                    );
+                    if ctx.api_key.is_some() {
+                        println!("  {} API key loaded from vault", t::icon_ok(""));
+                    }
+                    Some(ctx)
+                }
+                Err(err) => {
+                    eprintln!(
+                        "{} Could not resolve model context: {}",
+                        t::muted("⚠"),
+                        err,
+                    );
+                    eprintln!(
+                        "  {}",
+                        t::muted("The gateway will rely on clients sending full credentials."),
+                    );
+                    None
+                }
             }
         }
     };

@@ -7,12 +7,11 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tokio_util::sync::CancellationToken;
 
 use crate::action::Action;
 use crate::commands::{handle_command, CommandAction, CommandContext};
 use crate::config::Config;
-use crate::gateway::{run_gateway, GatewayOptions};
+use crate::daemon;
 use crate::pages::hatching::Hatching;
 use crate::pages::home::Home;
 use crate::pages::Page;
@@ -200,10 +199,6 @@ pub struct App {
     #[allow(dead_code)]
     action_tx: mpsc::UnboundedSender<Action>,
     action_rx: mpsc::UnboundedReceiver<Action>,
-    /// Handle for the in-process gateway server task (if running)
-    gateway_task: Option<JoinHandle<()>>,
-    /// Token used to cancel the gateway server task
-    gateway_cancel: Option<CancellationToken>,
     /// Write half of the WebSocket client connection to the gateway
     ws_sink: Option<WsSink>,
     /// Handle for the background WebSocket reader task
@@ -320,8 +315,6 @@ impl App {
             should_suspend: false,
             action_tx,
             action_rx,
-            gateway_task: None,
-            gateway_cancel: None,
             ws_sink: None,
             reader_task: None,
             show_skills_dialog: false,
@@ -575,18 +568,63 @@ impl App {
                 return Ok(None);
             }
             Action::GatewayMessage(text) => {
-                // Parse the gateway JSON envelope and extract the payload.
-                // The gateway wraps responses as {"type":"response","received":"…"}.
-                let payload = serde_json::from_str::<serde_json::Value>(text)
-                    .ok()
-                    .and_then(|v| {
-                        // Skip non-response frames (e.g. the initial "hello")
-                        if v.get("type").and_then(|t| t.as_str()) == Some("response") {
-                            v.get("received").and_then(|r| r.as_str()).map(String::from)
-                        } else {
-                            None
+                // Parse the gateway JSON envelope.
+                let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
+                let frame_type = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("type").and_then(|t| t.as_str()));
+
+                // ── Handle status frames from the gateway ────────────
+                if frame_type == Some("status") {
+                    let status = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("status").and_then(|s| s.as_str()))
+                        .unwrap_or("");
+                    let detail = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("detail").and_then(|d| d.as_str()))
+                        .unwrap_or("");
+
+                    match status {
+                        "model_configured" => {
+                            self.state.messages.push(format!("🔧 Model: {}", detail));
                         }
-                    });
+                        "credentials_loaded" => {
+                            self.state.messages.push(format!("🔑 {}", detail));
+                        }
+                        "credentials_missing" => {
+                            self.state.gateway_status = GatewayStatus::ModelError;
+                            self.state.messages.push(format!("⚠ {}", detail));
+                        }
+                        "model_connecting" => {
+                            self.state.messages.push(format!("⏳ {}", detail));
+                        }
+                        "model_ready" => {
+                            self.state.gateway_status = GatewayStatus::ModelReady;
+                            self.state.messages.push(format!("✅ {}", detail));
+                        }
+                        "model_error" => {
+                            self.state.gateway_status = GatewayStatus::ModelError;
+                            self.state.messages.push(format!("❌ {}", detail));
+                        }
+                        "no_model" => {
+                            self.state.messages.push(format!("⚠ {}", detail));
+                        }
+                        _ => {
+                            self.state.messages.push(format!("📡 [{}] {}", status, detail));
+                        }
+                    }
+                    return Ok(Some(Action::Update));
+                }
+
+                // ── Extract chat response payload ────────────────────
+                let payload = parsed.as_ref().and_then(|v| {
+                    if v.get("type").and_then(|t| t.as_str()) == Some("response") {
+                        v.get("received").and_then(|r| r.as_str()).map(String::from)
+                    } else {
+                        None
+                    }
+                });
 
                 // Route gateway messages to hatching during the exchange
                 if self.showing_hatching {
@@ -962,6 +1000,8 @@ impl App {
                     } else {
                         self.state.messages.push(format!("Model set to {}.", model));
                     }
+                    // Restart the gateway so it picks up the new model.
+                    return Ok(Some(Action::RestartGateway));
                 }
                 CommandAction::ShowSkills => {
                     return Ok(Some(Action::ShowSkills));
@@ -978,10 +1018,19 @@ impl App {
 
             Ok(Some(Action::TimedStatusLine(text, 3)))
         } else {
-            // It's a plain prompt
+            // It's a plain prompt — wrap it in a chat request envelope so
+            // the gateway recognises it as a model call rather than echoing
+            // the raw text back.
             self.state.messages.push(format!("▶ {}", text));
-            if self.state.gateway_status == GatewayStatus::Connected && self.ws_sink.is_some() {
-                return Ok(Some(Action::SendToGateway(text)));
+            if matches!(self.state.gateway_status, GatewayStatus::Connected | GatewayStatus::ModelReady)
+                && self.ws_sink.is_some()
+            {
+                let chat_json = serde_json::json!({
+                    "type": "chat",
+                    "messages": [{"role": "user", "content": text}],
+                })
+                .to_string();
+                return Ok(Some(Action::SendToGateway(chat_json)));
             }
             self.state
                 .messages
@@ -990,55 +1039,74 @@ impl App {
         }
     }
 
-    /// Start the gateway server in-process, then connect to it as a client.
+    /// Ensure the gateway daemon is running, then connect to it.
+    ///
+    /// If a daemon is already running, we just connect.  Otherwise we
+    /// launch one via `daemon::start()`, passing the API key from the
+    /// secrets vault so the daemon never needs vault access.
     async fn start_gateway(&mut self) {
-        const DEFAULT_GATEWAY_URL: &str = "ws://127.0.0.1:9001";
-
+        let (port, bind) = Self::gateway_defaults(&self.state.config);
         let url = self
             .state
             .config
             .gateway_url
             .clone()
-            .unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string());
+            .unwrap_or_else(|| format!("ws://127.0.0.1:{}", port));
 
-        // If already running, report and return.
-        if self.gateway_task.is_some() {
+        // If we already have an open WebSocket, nothing to do.
+        if self.ws_sink.is_some() {
             self.state
                 .messages
-                .push("Gateway is already running.".to_string());
+                .push("Already connected to gateway.".to_string());
             return;
         }
 
         self.state.gateway_status = GatewayStatus::Connecting;
-        self.state
-            .messages
-            .push(format!("Starting gateway on {}…", url));
 
-        // Resolve model context from config + secrets before spawning.
-        let model_ctx = crate::gateway::ModelContext::resolve(
-            &self.state.config,
-            &mut self.state.secrets_manager,
-        )
-        .ok();
-
-        // Spawn the gateway server as a background task.
-        let cancel = CancellationToken::new();
-        let cancel_child = cancel.clone();
-        let config_clone = self.state.config.clone();
-        let listen_url = url.clone();
-        let handle = tokio::spawn(async move {
-            let opts = GatewayOptions {
-                listen: listen_url,
-            };
-            if let Err(err) = run_gateway(config_clone, opts, model_ctx, cancel_child).await {
-                eprintln!("Gateway server error: {}", err);
+        // Start the daemon if it isn't running yet.
+        match daemon::status(&self.state.config.settings_dir) {
+            daemon::DaemonStatus::Running { pid } => {
+                self.state.messages.push(format!(
+                    "Gateway daemon already running (PID {}).", pid,
+                ));
             }
-        });
-        self.gateway_task = Some(handle);
-        self.gateway_cancel = Some(cancel);
+            _ => {
+                // Save config first so the daemon reads current values.
+                if let Err(e) = self.state.config.save(None) {
+                    self.state.messages.push(format!(
+                        "Warning: could not save config: {}", e,
+                    ));
+                }
 
-        // Give the server a moment to bind.
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                let api_key = self.extract_model_api_key();
+
+                self.state.messages.push(format!(
+                    "Starting gateway daemon on {}…", url,
+                ));
+                match daemon::start(
+                    &self.state.config.settings_dir,
+                    port,
+                    bind,
+                    &[],
+                    api_key.as_deref(),
+                ) {
+                    Ok(pid) => {
+                        self.state.messages.push(format!(
+                            "Gateway daemon started (PID {}).", pid,
+                        ));
+                    }
+                    Err(e) => {
+                        self.state.gateway_status = GatewayStatus::Error;
+                        self.state.messages.push(format!(
+                            "Failed to start gateway: {}", e,
+                        ));
+                        return;
+                    }
+                }
+                // Give the daemon a moment to bind.
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            }
+        }
 
         // Connect as a WebSocket client.
         self.connect_to_gateway(&url).await;
@@ -1137,9 +1205,9 @@ impl App {
         }
     }
 
-    /// Stop the gateway: close the client connection and cancel the server task.
+    /// Stop the gateway: disconnect the client and stop the daemon.
     async fn stop_gateway(&mut self) {
-        let was_running = self.gateway_task.is_some() || self.ws_sink.is_some();
+        let had_connection = self.ws_sink.is_some();
 
         // Abort the reader task first so it doesn't fire a disconnect action.
         if let Some(handle) = self.reader_task.take() {
@@ -1152,24 +1220,34 @@ impl App {
             let _ = sink.close().await;
         }
 
-        // Cancel the server task.
-        if let Some(cancel) = self.gateway_cancel.take() {
-            cancel.cancel();
-        }
-        if let Some(handle) = self.gateway_task.take() {
-            // Give it a moment to wind down; don't block forever.
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(2),
-                handle,
-            )
-            .await;
-        }
+        // Stop the daemon process.
+        let daemon_stopped = match daemon::stop(&self.state.config.settings_dir) {
+            Ok(daemon::StopResult::Stopped { pid }) => {
+                self.state.messages.push(format!(
+                    "Gateway daemon stopped (was PID {}).", pid,
+                ));
+                true
+            }
+            Ok(daemon::StopResult::WasStale { pid }) => {
+                self.state.messages.push(format!(
+                    "Cleaned up stale PID file (PID {}).", pid,
+                ));
+                false
+            }
+            Ok(daemon::StopResult::WasNotRunning) => false,
+            Err(e) => {
+                self.state.messages.push(format!(
+                    "Warning: could not stop daemon: {}", e,
+                ));
+                false
+            }
+        };
 
-        if was_running {
+        if had_connection || daemon_stopped {
             self.state.gateway_status = GatewayStatus::Disconnected;
-            self.state
-                .messages
-                .push("Gateway stopped.".to_string());
+            if !daemon_stopped {
+                self.state.messages.push("Disconnected from gateway.".to_string());
+            }
         } else {
             self.state
                 .messages
@@ -1177,22 +1255,43 @@ impl App {
         }
     }
 
-    /// Restart: stop, let the TUI render the disconnect, then reconnect.
+    /// Restart: stop the daemon, start a fresh one, reconnect.
     ///
-    /// We stop synchronously so the status flips to Disconnected immediately,
-    /// then schedule ReconnectGateway via the action channel after a short
-    /// delay so the event loop renders at least one frame showing the
-    /// intermediate state before the connection attempt begins.
+    /// Saves the current config first so the new daemon picks up any
+    /// changes (e.g. `/model` or `/provider`).
     async fn restart_gateway(&mut self) {
         self.stop_gateway().await;
 
-        // Schedule the reconnect after a brief pause so the render loop can
-        // show the Disconnected status before we start connecting again.
+        // Brief pause so the OS releases the port and the TUI can
+        // render the Disconnected status.
         let tx = self.action_tx.clone();
         tokio::spawn(async move {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
             let _ = tx.send(Action::ReconnectGateway);
         });
+    }
+
+    /// Extract the API key for the currently configured model provider
+    /// from the secrets vault.  Returns `None` if no key is needed or
+    /// the vault lookup fails.
+    fn extract_model_api_key(&mut self) -> Option<String> {
+        let provider_id = self.state.config.model.as_ref()
+            .map(|m| m.provider.as_str())?;
+        let key_name = providers::secret_key_for_provider(provider_id)?;
+        self.state.secrets_manager.get_secret(key_name, true).ok().flatten()
+    }
+
+    /// Parse port and bind mode from the config's gateway URL.
+    fn gateway_defaults(config: &Config) -> (u16, &'static str) {
+        if let Some(url) = &config.gateway_url {
+            if let Ok(parsed) = url::Url::parse(url) {
+                let port = parsed.port().unwrap_or(9001);
+                let host = parsed.host_str().unwrap_or("127.0.0.1");
+                let bind = if host == "0.0.0.0" { "lan" } else { "loopback" };
+                return (port, bind);
+            }
+        }
+        (9001, "loopback")
     }
 
     fn draw(&mut self, tui: &mut Tui) -> Result<()> {
@@ -1790,7 +1889,8 @@ impl App {
                         ));
                     }
                 }
-                return Action::Update;
+                // Restart the gateway so it picks up the new model.
+                return Action::RestartGateway;
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if sel.selected > 0 {

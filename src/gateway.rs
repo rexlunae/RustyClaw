@@ -71,6 +71,162 @@ impl ModelContext {
             api_key,
         })
     }
+
+    /// Build a model context from configuration and a pre-resolved API key.
+    ///
+    /// Use this when the caller has already extracted the key (e.g. the CLI
+    /// passes just the provider key to the daemon via an environment
+    /// variable, so the gateway never needs vault access).
+    pub fn from_config(config: &Config, api_key: Option<String>) -> Result<Self> {
+        let mp = config
+            .model
+            .as_ref()
+            .context("No [model] section in config — run `rustyclaw onboard` or add one to config.toml")?;
+
+        let provider = mp.provider.clone();
+        let model = mp.model.clone().unwrap_or_default();
+        let base_url = mp.base_url.clone().unwrap_or_else(|| {
+            providers::base_url_for_provider(&provider)
+                .unwrap_or("")
+                .to_string()
+        });
+
+        if api_key.is_none() && providers::secret_key_for_provider(&provider).is_some() {
+            eprintln!(
+                "⚠ No API key provided for provider '{}' — model calls will likely fail",
+                provider,
+            );
+        }
+
+        Ok(Self {
+            provider,
+            model,
+            base_url,
+            api_key,
+        })
+    }
+}
+
+// ── Status reporting ─────────────────────────────────────────────────────────
+
+/// Build a JSON status frame to push to connected clients.
+///
+/// Status frames use `{ "type": "status", "status": "…", "detail": "…" }`.
+/// The TUI uses these to update the gateway badge and display progress.
+fn status_frame(status: &str, detail: &str) -> String {
+    json!({
+        "type": "status",
+        "status": status,
+        "detail": detail,
+    })
+    .to_string()
+}
+
+/// Result of a model connection probe.
+pub enum ProbeResult {
+    /// Provider responded successfully — everything works.
+    Ready,
+    /// Authenticated and reachable, but the specific model or request format
+    /// wasn't accepted (e.g. 400 "model not supported").  Chat may still
+    /// work with the real request format.
+    Connected { warning: String },
+    /// Hard failure — authentication rejected (401/403).
+    AuthError { detail: String },
+    /// Hard failure — network error or unexpected server error.
+    Unreachable { detail: String },
+}
+
+/// Validate the model connection by probing the provider.
+///
+/// The probe strategy differs by provider:
+/// - **OpenAI-compatible**: `GET /models` — an auth-only check that does
+///   not send a chat request, avoiding model-format mismatches.
+/// - **Anthropic**: `POST /v1/messages` with `max_tokens: 1`.
+/// - **Google Gemini**: `GET /models/{model}` metadata endpoint.
+///
+/// Returns a [`ProbeResult`] that lets the caller distinguish between
+/// "fully ready", "connected with a warning", and "hard failure".
+pub async fn validate_model_connection(
+    http: &reqwest::Client,
+    ctx: &ModelContext,
+) -> ProbeResult {
+    let result: Result<reqwest::Response> = if ctx.provider == "anthropic" {
+        // Anthropic has no /models list endpoint — use a minimal chat.
+        let url = format!("{}/v1/messages", ctx.base_url.trim_end_matches('/'));
+        let body = json!({
+            "model": ctx.model,
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "Hi"}],
+        });
+        http.post(&url)
+            .header("x-api-key", ctx.api_key.as_deref().unwrap_or(""))
+            .header("anthropic-version", "2023-06-01")
+            .json(&body)
+            .send()
+            .await
+            .context("Probe request to Anthropic failed")
+    } else if ctx.provider == "google" {
+        // Google: check the model metadata endpoint (no chat needed).
+        let key = ctx.api_key.as_deref().unwrap_or("");
+        let url = format!(
+            "{}/models/{}?key={}",
+            ctx.base_url.trim_end_matches('/'),
+            ctx.model,
+            key,
+        );
+        http.get(&url)
+            .send()
+            .await
+            .context("Probe request to Google failed")
+    } else {
+        // OpenAI-compatible: GET /models — lightweight auth check.
+        let url = format!("{}/models", ctx.base_url.trim_end_matches('/'));
+        let mut builder = http.get(&url);
+        if let Some(ref key) = ctx.api_key {
+            builder = builder.bearer_auth(key);
+        }
+        builder
+            .send()
+            .await
+            .context("Probe request to provider failed")
+    };
+
+    match result {
+        Ok(resp) if resp.status().is_success() => ProbeResult::Ready,
+        Ok(resp) => {
+            let status = resp.status();
+            let code = status.as_u16();
+            let body = resp.text().await.unwrap_or_default();
+
+            // Try to extract a human-readable error message from JSON.
+            let detail = serde_json::from_str::<serde_json::Value>(&body)
+                .ok()
+                .and_then(|v| {
+                    v.get("error")
+                        .and_then(|e| e.get("message").or(Some(e)))
+                        .and_then(|m| m.as_str().map(String::from))
+                })
+                .unwrap_or(body);
+
+            match code {
+                401 | 403 => ProbeResult::AuthError {
+                    detail: format!("{} — {}", status, detail),
+                },
+                // 400, 404, 422 etc — the server answered, auth is fine,
+                // but something about the request/model wasn't accepted.
+                // Chat may still work with the full request format.
+                400..=499 => ProbeResult::Connected {
+                    warning: format!("{} — {}", status, detail),
+                },
+                _ => ProbeResult::Unreachable {
+                    detail: format!("{} — {}", status, detail),
+                },
+            }
+        }
+        Err(err) => ProbeResult::Unreachable {
+            detail: err.to_string(),
+        },
+    }
 }
 
 // ── Chat protocol types ─────────────────────────────────────────────────────
@@ -227,6 +383,7 @@ async fn handle_connection(
         .context("WebSocket handshake failed")?;
     let (mut writer, mut reader) = ws_stream.split();
 
+    // ── Send hello ──────────────────────────────────────────────────
     let mut hello = json!({
         "type": "hello",
         "agent": "rustyclaw",
@@ -241,7 +398,120 @@ async fn handle_connection(
         .await
         .context("Failed to send hello message")?;
 
+    // ── Report model status to the freshly-connected client ────────
     let http = reqwest::Client::new();
+
+    match model_ctx {
+        Some(ref ctx) => {
+            let display = providers::display_name_for_provider(&ctx.provider);
+
+            // 1. Model configured
+            let detail = format!("{} / {}", display, ctx.model);
+            writer
+                .send(Message::Text(
+                    status_frame("model_configured", &detail).into(),
+                ))
+                .await
+                .context("Failed to send model_configured status")?;
+
+            // 2. Credentials
+            if ctx.api_key.is_some() {
+                writer
+                    .send(Message::Text(
+                        status_frame("credentials_loaded", &format!("{} API key loaded", display))
+                            .into(),
+                    ))
+                    .await
+                    .context("Failed to send credentials_loaded status")?;
+            } else if providers::secret_key_for_provider(&ctx.provider).is_some() {
+                writer
+                    .send(Message::Text(
+                        status_frame(
+                            "credentials_missing",
+                            &format!("No API key for {} — model calls will fail", display),
+                        )
+                        .into(),
+                    ))
+                    .await
+                    .context("Failed to send credentials_missing status")?;
+            }
+
+            // 3. Validate the connection with a lightweight probe
+            writer
+                .send(Message::Text(
+                    status_frame("model_connecting", &format!("Probing {} …", ctx.base_url))
+                        .into(),
+                ))
+                .await
+                .context("Failed to send model_connecting status")?;
+
+            match validate_model_connection(&http, ctx).await {
+                ProbeResult::Ready => {
+                    writer
+                        .send(Message::Text(
+                            status_frame(
+                                "model_ready",
+                                &format!("{} / {} ready", display, ctx.model),
+                            )
+                            .into(),
+                        ))
+                        .await
+                        .context("Failed to send model_ready status")?;
+                }
+                ProbeResult::Connected { warning } => {
+                    // Auth is fine, provider is reachable — the specific
+                    // probe request wasn't accepted, but chat will likely
+                    // work with the real request format.
+                    writer
+                        .send(Message::Text(
+                            status_frame(
+                                "model_ready",
+                                &format!("{} / {} connected (probe: {})", display, ctx.model, warning),
+                            )
+                            .into(),
+                        ))
+                        .await
+                        .context("Failed to send model_ready status")?;
+                }
+                ProbeResult::AuthError { detail } => {
+                    writer
+                        .send(Message::Text(
+                            status_frame(
+                                "model_error",
+                                &format!("{} auth failed: {}", display, detail),
+                            )
+                            .into(),
+                        ))
+                        .await
+                        .context("Failed to send model_error status")?;
+                }
+                ProbeResult::Unreachable { detail } => {
+                    writer
+                        .send(Message::Text(
+                            status_frame(
+                                "model_error",
+                                &format!("{} probe failed: {}", display, detail),
+                            )
+                            .into(),
+                        ))
+                        .await
+                        .context("Failed to send model_error status")?;
+                }
+            }
+        }
+        None => {
+            writer
+                .send(Message::Text(
+                    status_frame(
+                        "no_model",
+                        "No model configured — clients must send full credentials",
+                    )
+                    .into(),
+                ))
+                .await
+                .context("Failed to send no_model status")?;
+        }
+    }
 
     loop {
         tokio::select! {
@@ -297,19 +567,27 @@ async fn handle_text_message(
     model_ctx: Option<&ModelContext>,
 ) -> String {
     // Try to parse as a structured JSON request.
-    if let Ok(req) = serde_json::from_str::<ChatRequest>(text) {
-        if req.msg_type == "chat" {
-            return handle_chat_request(http, req, model_ctx).await;
+    let req = match serde_json::from_str::<ChatRequest>(text) {
+        Ok(r) if r.msg_type == "chat" => r,
+        Ok(r) => {
+            return json!({
+                "type": "error",
+                "ok": false,
+                "message": format!("Unknown message type: {:?}", r.msg_type),
+            })
+            .to_string();
         }
-    }
+        Err(err) => {
+            return json!({
+                "type": "error",
+                "ok": false,
+                "message": format!("Invalid JSON: {}", err),
+            })
+            .to_string();
+        }
+    };
 
-    // Fall back to echo for unrecognised messages.
-    json!({
-        "type": "response",
-        "ok": true,
-        "received": text,
-    })
-    .to_string()
+    handle_chat_request(http, req, model_ctx).await
 }
 
 /// Call the model provider and return the assistant's reply.

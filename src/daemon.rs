@@ -101,6 +101,7 @@ pub fn start(
     port: u16,
     bind: &str,
     extra_args: &[String],
+    model_api_key: Option<&str>,
 ) -> Result<u32> {
     // If already running, bail.
     if let DaemonStatus::Running { pid } = status(settings_dir) {
@@ -135,6 +136,12 @@ pub fn start(
         .arg(settings_dir)
         .stdout(log_file)
         .stderr(log_stderr);
+
+    // Pass the model API key via an environment variable so the gateway
+    // never needs direct access to the secrets vault.
+    if let Some(key) = model_api_key {
+        cmd.env("RUSTYCLAW_MODEL_API_KEY", key);
+    }
 
     for a in extra_args {
         cmd.arg(a);

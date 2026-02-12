@@ -24,6 +24,10 @@ pub enum GatewayStatus {
     Connecting,
     /// Successfully connected to the gateway
     Connected,
+    /// Gateway has validated the model connection and is ready for chat
+    ModelReady,
+    /// Gateway reported a model/credential error
+    ModelError,
     /// Connection attempt failed
     Error,
 }
@@ -35,6 +39,8 @@ impl GatewayStatus {
             GatewayStatus::Disconnected => "disconnected",
             GatewayStatus::Connecting => "connecting…",
             GatewayStatus::Connected => "connected",
+            GatewayStatus::ModelReady => "model ready",
+            GatewayStatus::ModelError => "model error",
             GatewayStatus::Error => "error",
         }
     }

@@ -364,6 +364,11 @@ impl FooterPane {
                 "connected ",
                 Style::default().fg(tp::SUCCESS),
             ),
+            GatewayStatus::ModelReady => (
+                "● ",
+                "model ready ",
+                Style::default().fg(tp::SUCCESS).add_modifier(Modifier::BOLD),
+            ),
             GatewayStatus::Connecting => (
                 "◌ ",
                 "connecting… ",
@@ -373,6 +378,11 @@ impl FooterPane {
                 "○ ",
                 "disconnected ",
                 Style::default().fg(tp::ERROR),
+            ),
+            GatewayStatus::ModelError => (
+                "✖ ",
+                "model error ",
+                Style::default().fg(tp::ERROR).add_modifier(Modifier::BOLD),
             ),
             GatewayStatus::Error => (
                 "✖ ",

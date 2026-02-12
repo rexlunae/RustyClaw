@@ -513,6 +513,9 @@ async fn main() -> Result<()> {
                     use rustyclaw::daemon;
                     use rustyclaw::theme as t;
 
+                    // Extract just the API key for the configured provider.
+                    let model_api_key = extract_model_api_key(&config);
+
                     let sp = t::spinner("Starting gateway…");
 
                     let (port, bind) = parse_gateway_defaults(&config);
@@ -522,6 +525,7 @@ async fn main() -> Result<()> {
                         port,
                         bind,
                         &[],
+                        model_api_key.as_deref(),
                     ) {
                         Ok(pid) => {
                             t::spinner_ok(&sp, &format!(
@@ -566,6 +570,9 @@ async fn main() -> Result<()> {
                     use rustyclaw::daemon;
                     use rustyclaw::theme as t;
 
+                    // Extract just the API key for the configured provider.
+                    let model_api_key = extract_model_api_key(&config);
+
                     let sp = t::spinner("Restarting gateway…");
 
                     // Stop first (ignore "not running" errors).
@@ -593,6 +600,7 @@ async fn main() -> Result<()> {
                         port,
                         bind,
                         &[],
+                        model_api_key.as_deref(),
                     ) {
                         Ok(pid) => {
                             t::spinner_ok(&sp, &format!(
@@ -755,6 +763,45 @@ fn parse_gateway_defaults(config: &Config) -> (u16, &str) {
         }
     }
     (9001, "loopback")
+}
+
+/// Extract just the API key for the configured model provider.
+///
+/// Opens the secrets vault (prompting for a password if needed), looks up
+/// the provider's secret key name, and returns the value.  The gateway
+/// daemon only needs this single credential — not the vault password.
+fn extract_model_api_key(config: &Config) -> Option<String> {
+    use rustyclaw::providers;
+
+    // Which provider is configured?
+    let provider_id = config.model.as_ref().map(|m| m.provider.as_str())?;
+
+    // Does it even need a key?
+    let key_name = providers::secret_key_for_provider(provider_id)?;
+
+    // Open the vault and fetch the key.
+    let mut secrets = match open_secrets(config) {
+        Ok(s) => s,
+        Err(err) => {
+            eprintln!("⚠ Could not open secrets vault: {}", err);
+            return None;
+        }
+    };
+
+    match secrets.get_secret(key_name, true) {
+        Ok(Some(value)) => Some(value),
+        Ok(None) => {
+            eprintln!(
+                "⚠ No {} found in vault for provider '{}'",
+                key_name, provider_id,
+            );
+            None
+        }
+        Err(err) => {
+            eprintln!("⚠ Failed to read {} from vault: {}", key_name, err);
+            None
+        }
+    }
 }
 
 /// Open the secrets vault, prompting for a password and TOTP if required.
