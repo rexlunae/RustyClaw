@@ -108,6 +108,14 @@ impl SoulManager {
         Ok(())
     }
 
+    /// Check if this SOUL needs hatching (doesn't exist or is still default content)
+    pub fn needs_hatching(&self) -> bool {
+        !self.soul_path.exists() || 
+        std::fs::read_to_string(&self.soul_path)
+            .map(|c| c == DEFAULT_SOUL_CONTENT)
+            .unwrap_or(true)
+    }
+
     /// Get the path to the SOUL file
     pub fn get_path(&self) -> &Path {
         &self.soul_path

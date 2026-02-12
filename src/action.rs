@@ -66,5 +66,7 @@ pub enum Action {
     ShowCredentialDialog { name: String, disabled: bool, policy: String },
     /// Open the 2FA (TOTP) setup / management dialog
     ShowTotpSetup,
+    /// Close the hatching animation and transition to normal TUI
+    CloseHatching,
     Noop,
 }

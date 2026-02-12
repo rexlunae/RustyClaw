@@ -1,3 +1,4 @@
+pub mod hatching;
 pub mod home;
 
 use anyhow::Result;

@@ -13,6 +13,7 @@ use crate::action::Action;
 use crate::commands::{handle_command, CommandAction, CommandContext};
 use crate::config::Config;
 use crate::gateway::{run_gateway, GatewayOptions};
+use crate::pages::hatching::Hatching;
 use crate::pages::home::Home;
 use crate::pages::Page;
 use crate::panes::footer::FooterPane;
@@ -227,6 +228,10 @@ pub struct App {
     secret_viewer: Option<SecretViewerState>,
     /// Policy-picker dialog state
     policy_picker: Option<PolicyPickerState>,
+    /// Hatching page (shown on first run)
+    hatching_page: Option<Box<dyn Page>>,
+    /// Whether we're currently showing the hatching animation
+    showing_hatching: bool,
 }
 
 /// State for the API-key input dialog overlay.
@@ -271,13 +276,25 @@ impl App {
         let _ = skill_manager.load_skills();
 
         let soul_path = config.soul_path();
-        let mut soul_manager = SoulManager::new(soul_path);
+        let mut soul_manager = SoulManager::new(soul_path.clone());
+        
+        // Check if we need to show the hatching animation
+        let needs_hatching = soul_manager.needs_hatching();
+        
+        // Load or create SOUL
         let _ = soul_manager.load();
 
         // Build pages
         let mut home = Home::new()?;
         home.register_action_handler(action_tx.clone())?;
         let pages: Vec<Box<dyn Page>> = vec![Box::new(home)];
+
+        // Create hatching page if needed
+        let (hatching_page, showing_hatching) = if needs_hatching {
+            (Some(Box::new(Hatching::new()?) as Box<dyn Page>), true)
+        } else {
+            (None, false)
+        };
 
         let gateway_status = GatewayStatus::Disconnected;
 
@@ -316,6 +333,8 @@ impl App {
             totp_dialog: None,
             secret_viewer: None,
             policy_picker: None,
+            hatching_page,
+            showing_hatching,
         })
     }
 
@@ -328,6 +347,10 @@ impl App {
             let ps = self.state.pane_state();
             for page in &mut self.pages {
                 page.init(&ps)?;
+            }
+            // Init hatching page if present
+            if let Some(ref mut hatching) = self.hatching_page {
+                hatching.init(&ps)?;
             }
         }
         self.pages[self.active_page].focus()?;
@@ -345,8 +368,21 @@ impl App {
                     Event::Resize(w, h) => Some(Action::Resize(*w, *h)),
                     Event::Quit => Some(Action::Quit),
                     _ => {
+                        // If showing hatching animation, intercept all events for it
+                        if self.showing_hatching {
+                            if let Some(ref mut hatching) = self.hatching_page {
+                                let mut ps = self.state.pane_state();
+                                match hatching.handle_events(event.clone(), &mut ps)? {
+                                    Some(EventResponse::Stop(a)) => Some(a),
+                                    Some(EventResponse::Continue(_)) => None,
+                                    None => None,
+                                }
+                            } else {
+                                None
+                            }
+                        }
                         // While loading, Esc cancels the active async operation
-                        if self.fetch_loading.is_some() || self.device_flow_loading.is_some() {
+                        else if self.fetch_loading.is_some() || self.device_flow_loading.is_some() {
                             if let Event::Key(key) = &event {
                                 if key.code == crossterm::event::KeyCode::Esc {
                                     if self.device_flow_loading.is_some() {
@@ -366,9 +402,10 @@ impl App {
                                     continue;
                                 }
                             }
+                            None
                         }
                         // If the API key dialog is open, intercept keys for it
-                        if self.api_key_dialog.is_some() {
+                        else if self.api_key_dialog.is_some() {
                             if let Event::Key(key) = &event {
                                 let action = self.handle_api_key_dialog_key(key.code);
                                 Some(action)
@@ -549,6 +586,14 @@ impl App {
                 return Ok(Some(Action::Update));
             }
             Action::Tick => {
+                // Advance hatching animation if active
+                if self.showing_hatching {
+                    if let Some(ref mut hatching) = self.hatching_page {
+                        let mut ps = self.state.pane_state();
+                        let _ = hatching.update(Action::Tick, &mut ps);
+                    }
+                }
+                
                 // Advance the inline loading line
                 if let Some(ref mut loading) = self.fetch_loading {
                     loading.tick += 1;
@@ -749,6 +794,11 @@ impl App {
                         }
                     }
                 }
+                return Ok(None);
+            }
+            Action::CloseHatching => {
+                self.showing_hatching = false;
+                self.hatching_page = None;
                 return Ok(None);
             }
             _ => {}
@@ -1073,17 +1123,7 @@ impl App {
     fn draw(&mut self, tui: &mut Tui) -> Result<()> {
         tui.draw(|frame| {
             let area = frame.size();
-
-            // Layout: header (3 rows), body (fill), footer (2 rows: status + input)
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints(vec![
-                    Constraint::Length(3),
-                    Constraint::Min(1),
-                    Constraint::Length(2),
-                ])
-                .split(area);
-
+            
             let ps = PaneState {
                 config: &self.state.config,
                 secrets_manager: &mut self.state.secrets_manager,
@@ -1094,6 +1134,24 @@ impl App {
                 gateway_status: self.state.gateway_status,
                 loading_line: self.state.loading_line.clone(),
             };
+
+            // If showing hatching, render it fullscreen and skip everything else
+            if self.showing_hatching {
+                if let Some(ref mut hatching) = self.hatching_page {
+                    let _ = hatching.draw(frame, area, &ps);
+                }
+                return;
+            }
+
+            // Layout: header (3 rows), body (fill), footer (2 rows: status + input)
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(vec![
+                    Constraint::Length(3),
+                    Constraint::Min(1),
+                    Constraint::Length(2),
+                ])
+                .split(area);
 
             let _ = self.header.draw(frame, chunks[0], &ps);
             let _ = self.pages[self.active_page].draw(frame, chunks[1], &ps);
