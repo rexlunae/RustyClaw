@@ -219,6 +219,8 @@ pub struct App {
     device_flow_loading: Option<FetchModelsLoading>,
     /// Tick counter for spinner while waiting for model response
     chat_loading_tick: Option<usize>,
+    /// Accumulates streaming chunks from the gateway before finalising
+    streaming_response: Option<String>,
     /// Provider-selector dialog state
     provider_selector: Option<ProviderSelectorState>,
     /// Credential-management dialog state
@@ -331,6 +333,7 @@ impl App {
             fetch_loading: None,
             device_flow_loading: None,
             chat_loading_tick: None,
+            streaming_response: None,
             provider_selector: None,
             credential_dialog: None,
             totp_dialog: None,
@@ -668,6 +671,93 @@ impl App {
                     return Ok(Some(Action::Update));
                 }
 
+                // ── Handle streaming chunk frames ────────────────────
+                if frame_type == Some("chunk") {
+                    let delta = parsed
+                        .as_ref()
+                        .and_then(|v| v.get("delta").and_then(|d| d.as_str()))
+                        .unwrap_or("");
+
+                    if self.streaming_response.is_none() {
+                        // First chunk — clear the loading spinner and start accumulating.
+                        self.state.loading_line = None;
+                        self.streaming_response = Some(String::new());
+                        // Only push a placeholder message if NOT in hatching mode.
+                        if !self.showing_hatching {
+                            self.state.messages.push(DisplayMessage::assistant(""));
+                        }
+                    }
+
+                    if let Some(ref mut buf) = self.streaming_response {
+                        buf.push_str(delta);
+
+                        // During hatching, just accumulate — don't push to messages.
+                        if !self.showing_hatching {
+                            // Split completed lines into separate messages so
+                            // each line renders on its own row in the pane.
+                            while let Some(nl_pos) = buf.find('\n') {
+                                let line = buf[..nl_pos].to_string();
+                                if let Some(last) = self.state.messages.last_mut() {
+                                    last.content = line;
+                                }
+                                *buf = buf[nl_pos + 1..].to_string();
+                                // Start a new in-progress row for the next line.
+                                self.state.messages.push(DisplayMessage::assistant(""));
+                            }
+
+                            // Update the current (unterminated) line.
+                            if let Some(last) = self.state.messages.last_mut() {
+                                last.content = buf.clone();
+                            }
+                        }
+                    }
+
+                    return Ok(Some(Action::Update));
+                }
+
+                // ── Handle streaming-done sentinel ───────────────────
+                if frame_type == Some("response_done") {
+                    self.chat_loading_tick = None;
+                    self.state.loading_line = None;
+
+                    if let Some(buf) = self.streaming_response.take() {
+                        // During hatching, deliver the full accumulated text
+                        // to the hatching page instead of the messages pane.
+                        if self.showing_hatching {
+                            if !buf.is_empty() {
+                                if let Some(ref mut hatching) = self.hatching_page {
+                                    let mut ps = self.state.pane_state();
+                                    let _ = hatching.update(
+                                        Action::HatchingResponse(buf),
+                                        &mut ps,
+                                    );
+                                }
+                            }
+                            return Ok(Some(Action::Update));
+                        }
+
+                        // If the last message is an empty trailing line, remove it.
+                        if let Some(last) = self.state.messages.last() {
+                            if last.content.is_empty()
+                                && matches!(last.role, crate::panes::MessageRole::Assistant)
+                            {
+                                self.state.messages.pop();
+                            }
+                        }
+                        // Ensure any remaining buffer text is flushed.
+                        if !buf.is_empty() {
+                            if let Some(last) = self.state.messages.last_mut() {
+                                if matches!(last.role, crate::panes::MessageRole::Assistant) {
+                                    last.content = buf;
+                                } else {
+                                    self.state.messages.push(DisplayMessage::assistant(buf));
+                                }
+                            }
+                        }
+                    }
+                    return Ok(Some(Action::Update));
+                }
+
                 // ── Extract chat response payload ────────────────────
                 let payload = parsed.as_ref().and_then(|v| {
                     if v.get("type").and_then(|t| t.as_str()) == Some("response") {
@@ -691,6 +781,7 @@ impl App {
                 if is_error_frame {
                     self.chat_loading_tick = None;
                     self.state.loading_line = None;
+                    self.streaming_response = None;
                     let msg = error_message.unwrap_or_else(|| "Unknown gateway error".to_string());
                     self.state.messages.push(DisplayMessage::error(msg));
                     return Ok(Some(Action::Update));
@@ -730,6 +821,7 @@ impl App {
                 self.state.gateway_status = GatewayStatus::Disconnected;
                 self.chat_loading_tick = None;
                 self.state.loading_line = None;
+                self.streaming_response = None;
                 self.state.messages.push(DisplayMessage::warning(format!("Gateway disconnected: {}", reason)));
                 self.ws_sink = None;
                 self.reader_task = None;
@@ -761,6 +853,12 @@ impl App {
                     self.state.loading_line = Some(format!(
                         "  {} Waiting for {} authorization…",
                         spinner, loading.display,
+                    ));
+                } else if let Some(ref mut tick) = self.chat_loading_tick {
+                    *tick += 1;
+                    let spinner = SPINNER_FRAMES[*tick % SPINNER_FRAMES.len()];
+                    self.state.loading_line = Some(format!(
+                        "  {} Waiting for model response\u{2026}", spinner,
                     ));
                 }
                 // Fall through so panes also get Tick
@@ -1293,6 +1391,7 @@ impl App {
                 Err(err) => {
                     self.chat_loading_tick = None;
                     self.state.loading_line = None;
+                    self.streaming_response = None;
                     self.state.messages.push(DisplayMessage::error(format!("Send failed: {}", err)));
                     self.state.gateway_status = GatewayStatus::Error;
                     self.ws_sink = None;

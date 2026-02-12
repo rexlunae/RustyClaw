@@ -13,6 +13,9 @@ settings_dir = "/home/user/.rustyclaw"
 # Whether to use the secrets storage system
 use_secrets = true
 
+# Blank lines between messages in the TUI (0 = compact, 1 = comfortable)
+# message_spacing = 1
+
 # Messenger configurations
 # [[messengers]]
 # name = "slack"

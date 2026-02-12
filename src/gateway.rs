@@ -2,6 +2,7 @@ use crate::config::Config;
 use crate::providers;
 use crate::secrets::SecretsManager;
 use anyhow::{Context, Result};
+use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -9,8 +10,12 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
 use tokio_util::sync::CancellationToken;
 use url::Url;
+
+/// Type alias for the server-side WebSocket write half.
+type WsWriter = SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
 
 #[derive(Debug, Clone)]
 pub struct GatewayOptions {
@@ -641,11 +646,24 @@ async fn handle_connection(
                 };
                 match message {
                     Message::Text(text) => {
-                        let response = handle_text_message(&http, text.as_str(), model_ctx.as_deref(), copilot_session.as_deref()).await;
-                        writer
-                            .send(Message::Text(response.into()))
-                            .await
-                            .context("Failed to send response")?;
+                        if let Err(err) = dispatch_text_message(
+                            &http,
+                            text.as_str(),
+                            model_ctx.as_deref(),
+                            copilot_session.as_deref(),
+                            &mut writer,
+                        )
+                        .await
+                        {
+                            let frame = json!({
+                                "type": "error",
+                                "ok": false,
+                                "message": err.to_string(),
+                            });
+                            let _ = writer
+                                .send(Message::Text(frame.to_string().into()))
+                                .await;
+                        }
                     }
                     Message::Binary(_) => {
                         let response = json!({
@@ -675,52 +693,55 @@ async fn handle_connection(
 }
 
 /// Route an incoming text frame to the appropriate handler.
-async fn handle_text_message(
+///
+/// This replaces the old `handle_text_message` by writing frames directly
+/// to the WebSocket writer — enabling streaming chunks to reach the client
+/// as they arrive from the model provider.
+async fn dispatch_text_message(
     http: &reqwest::Client,
     text: &str,
     model_ctx: Option<&ModelContext>,
     copilot_session: Option<&CopilotSession>,
-) -> String {
+    writer: &mut WsWriter,
+) -> Result<()> {
     // Try to parse as a structured JSON request.
     let req = match serde_json::from_str::<ChatRequest>(text) {
         Ok(r) if r.msg_type == "chat" => r,
         Ok(r) => {
-            return json!({
+            let frame = json!({
                 "type": "error",
                 "ok": false,
                 "message": format!("Unknown message type: {:?}", r.msg_type),
-            })
-            .to_string();
+            });
+            writer
+                .send(Message::Text(frame.to_string().into()))
+                .await
+                .context("Failed to send error frame")?;
+            return Ok(());
         }
         Err(err) => {
-            return json!({
+            let frame = json!({
                 "type": "error",
                 "ok": false,
                 "message": format!("Invalid JSON: {}", err),
-            })
-            .to_string();
+            });
+            writer
+                .send(Message::Text(frame.to_string().into()))
+                .await
+                .context("Failed to send error frame")?;
+            return Ok(());
         }
     };
 
-    handle_chat_request(http, req, model_ctx, copilot_session).await
-}
-
-/// Call the model provider and return the assistant's reply.
-async fn handle_chat_request(
-    http: &reqwest::Client,
-    req: ChatRequest,
-    model_ctx: Option<&ModelContext>,
-    copilot_session: Option<&CopilotSession>,
-) -> String {
     let mut resolved = match resolve_request(req, model_ctx) {
         Ok(r) => r,
         Err(msg) => {
-            return json!({
-                "type": "error",
-                "ok": false,
-                "message": msg,
-            })
-            .to_string()
+            let frame = json!({ "type": "error", "ok": false, "message": msg });
+            writer
+                .send(Message::Text(frame.to_string().into()))
+                .await
+                .context("Failed to send error frame")?;
+            return Ok(());
         }
     };
 
@@ -735,39 +756,78 @@ async fn handle_chat_request(
     {
         Ok(token) => resolved.api_key = token,
         Err(err) => {
-            return json!({
+            let frame = json!({
                 "type": "error",
                 "ok": false,
                 "message": format!("Token exchange failed: {}", err),
-            })
-            .to_string()
+            });
+            writer
+                .send(Message::Text(frame.to_string().into()))
+                .await
+                .context("Failed to send error frame")?;
+            return Ok(());
         }
     }
 
+    // Dispatch to streaming or non-streaming provider caller.
     let result = if resolved.provider == "anthropic" {
-        call_anthropic(http, &resolved).await
+        stream_anthropic(http, &resolved, writer).await
     } else if resolved.provider == "google" {
-        call_google(http, &resolved).await
+        // Google Gemini: non-streaming fallback (send a single response).
+        match call_google(http, &resolved).await {
+            Ok(reply) => {
+                let frame = json!({
+                    "type": "response",
+                    "ok": true,
+                    "received": reply,
+                });
+                writer
+                    .send(Message::Text(frame.to_string().into()))
+                    .await
+                    .context("Failed to send response frame")?;
+                Ok(())
+            }
+            Err(err) => Err(err),
+        }
     } else {
         // OpenAI-compatible (openai, xai, openrouter, ollama, github-copilot,
         // copilot-proxy, custom, …)
-        call_openai_compatible(http, &resolved).await
+        stream_openai_compatible(http, &resolved, writer).await
     };
 
-    match result {
-        Ok(reply) => json!({
-            "type": "response",
-            "ok": true,
-            "received": reply,
-        })
-        .to_string(),
-        Err(err) => json!({
+    if let Err(err) = result {
+        let frame = json!({
             "type": "error",
             "ok": false,
             "message": err.to_string(),
-        })
-        .to_string(),
+        });
+        writer
+            .send(Message::Text(frame.to_string().into()))
+            .await
+            .context("Failed to send error frame")?;
     }
+
+    Ok(())
+}
+
+// ── Streaming helpers ───────────────────────────────────────────────────────
+
+/// Send a single `{"type": "chunk", "delta": "..."}` frame.
+async fn send_chunk(writer: &mut WsWriter, delta: &str) -> Result<()> {
+    let frame = json!({ "type": "chunk", "delta": delta });
+    writer
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .context("Failed to send chunk frame")
+}
+
+/// Send the `{"type": "response_done"}` sentinel frame.
+async fn send_response_done(writer: &mut WsWriter) -> Result<()> {
+    let frame = json!({ "type": "response_done", "ok": true });
+    writer
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .context("Failed to send response_done frame")
 }
 
 // ── Provider-specific callers ───────────────────────────────────────────────
@@ -792,12 +852,21 @@ fn apply_copilot_headers(
         .header("openai-intent", "conversation-panel")
 }
 
-/// Call an OpenAI-compatible `/chat/completions` endpoint.
-async fn call_openai_compatible(http: &reqwest::Client, req: &ProviderRequest) -> Result<String> {
+/// Call an OpenAI-compatible `/chat/completions` endpoint with streaming.
+///
+/// Sends `stream: true`, parses the SSE response, and forwards each
+/// content delta as a `chunk` WebSocket frame.  Sends `response_done`
+/// when the stream completes.
+async fn stream_openai_compatible(
+    http: &reqwest::Client,
+    req: &ProviderRequest,
+    writer: &mut WsWriter,
+) -> Result<()> {
     let url = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
     let body = json!({
         "model": req.model,
         "messages": req.messages,
+        "stream": true,
     });
 
     let mut builder = http.post(&url).json(&body);
@@ -817,16 +886,65 @@ async fn call_openai_compatible(http: &reqwest::Client, req: &ProviderRequest) -
         anyhow::bail!("Provider returned {} — {}", status, text);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Invalid JSON from provider")?;
+    // We need a shared mutable reference to writer inside the closure.
+    // Use a Cell-like pattern via a mutable reference captured once.
+    let writer_ref: &mut WsWriter = writer;
 
-    data["choices"][0]["message"]["content"]
-        .as_str()
-        .map(String::from)
-        .context("No content in provider response")
+    // We can't capture `writer_ref` in an async closure directly because
+    // `process_sse_stream` takes an `FnMut`.  Instead, process the stream
+    // inline.
+    {
+        use futures_util::TryStreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
+
+        while let Some(chunk) = stream.try_next().await.context("SSE stream read error")? {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                for line in event_block.lines() {
+                    if let Some(data) = line
+                        .strip_prefix("data: ")
+                        .or_else(|| line.strip_prefix("data:"))
+                    {
+                        let data = data.trim();
+                        if data == "[DONE]" {
+                            send_response_done(writer_ref).await?;
+                            return Ok(());
+                        }
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(content) =
+                                json["choices"][0]["delta"]["content"].as_str()
+                            {
+                                if !content.is_empty() {
+                                    send_chunk(writer_ref, content).await?;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // If we reach here without seeing [DONE], the stream ended — still
+    // send done so the client can finalise.
+    send_response_done(writer_ref).await?;
+    Ok(())
 }
 
-/// Call the Anthropic Messages API (`/v1/messages`).
-async fn call_anthropic(http: &reqwest::Client, req: &ProviderRequest) -> Result<String> {
+/// Call the Anthropic Messages API (`/v1/messages`) with streaming.
+///
+/// Sends `stream: true`, parses SSE events, and forwards
+/// `content_block_delta` text deltas as `chunk` WebSocket frames.
+async fn stream_anthropic(
+    http: &reqwest::Client,
+    req: &ProviderRequest,
+    writer: &mut WsWriter,
+) -> Result<()> {
     let url = format!("{}/v1/messages", req.base_url.trim_end_matches('/'));
 
     // Anthropic separates the system prompt from user/assistant messages.
@@ -849,6 +967,7 @@ async fn call_anthropic(http: &reqwest::Client, req: &ProviderRequest) -> Result
         "model": req.model,
         "max_tokens": 4096,
         "messages": messages,
+        "stream": true,
     });
     if !system.is_empty() {
         body["system"] = serde_json::Value::String(system);
@@ -870,13 +989,64 @@ async fn call_anthropic(http: &reqwest::Client, req: &ProviderRequest) -> Result
         anyhow::bail!("Anthropic returned {} — {}", status, text);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Invalid JSON from Anthropic")?;
+    {
+        use futures_util::TryStreamExt;
+        let mut stream = resp.bytes_stream();
+        let mut buffer = String::new();
 
-    // Anthropic response: {"content":[{"type":"text","text":"..."}], ...}
-    data["content"][0]["text"]
-        .as_str()
-        .map(String::from)
-        .context("No text content in Anthropic response")
+        while let Some(chunk) = stream.try_next().await.context("SSE stream read error")? {
+            buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+            while let Some(pos) = buffer.find("\n\n") {
+                let event_block = buffer[..pos].to_string();
+                buffer = buffer[pos + 2..].to_string();
+
+                // Anthropic SSE has `event:` and `data:` lines.
+                let mut event_type = "";
+                let mut data_str = String::new();
+
+                for line in event_block.lines() {
+                    if let Some(et) = line.strip_prefix("event: ").or_else(|| line.strip_prefix("event:")) {
+                        event_type = et.trim();
+                    } else if let Some(d) = line.strip_prefix("data: ").or_else(|| line.strip_prefix("data:")) {
+                        data_str = d.trim().to_string();
+                    }
+                }
+
+                match event_type {
+                    "content_block_delta" => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                            if let Some(text) = json["delta"]["text"].as_str() {
+                                if !text.is_empty() {
+                                    send_chunk(writer, text).await?;
+                                }
+                            }
+                        }
+                    }
+                    "message_stop" => {
+                        send_response_done(writer).await?;
+                        return Ok(());
+                    }
+                    "error" => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&data_str) {
+                            let msg = json["error"]["message"]
+                                .as_str()
+                                .unwrap_or("Unknown Anthropic streaming error");
+                            anyhow::bail!("Anthropic stream error: {}", msg);
+                        }
+                    }
+                    _ => {
+                        // ping, message_start, content_block_start, etc. — ignore
+                    }
+                }
+            }
+        }
+    }
+
+    // If we reach here the stream ended without message_stop — send done
+    // so the client can finalise.
+    send_response_done(writer).await?;
+    Ok(())
 }
 
 /// Call the Google Gemini `generateContent` endpoint.

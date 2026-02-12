@@ -49,6 +49,10 @@ pub struct Config {
     /// authenticator app labels, etc.).  Defaults to "RustyClaw".
     #[serde(default = "Config::default_agent_name")]
     pub agent_name: String,
+    /// Number of blank lines inserted between messages in the TUI.
+    /// Set to 0 for compact output, 1 (default) for comfortable spacing.
+    #[serde(default = "Config::default_message_spacing")]
+    pub message_spacing: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -75,6 +79,7 @@ impl Default for Config {
             totp_enabled: false,
             agent_access: false,
             agent_name: Self::default_agent_name(),
+            message_spacing: Self::default_message_spacing(),
         }
     }
 }
@@ -82,6 +87,10 @@ impl Default for Config {
 impl Config {
     fn default_agent_name() -> String {
         "RustyClaw".to_string()
+    }
+
+    fn default_message_spacing() -> u16 {
+        1
     }
 
     // ── Derived path helpers (mirrors openclaw layout) ───────────

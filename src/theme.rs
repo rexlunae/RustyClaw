@@ -318,6 +318,10 @@ pub mod tui_palette {
     pub const TEXT: Color = Color::Rgb(0xE8, 0xE0, 0xD8);      // warm off-white text
     pub const TEXT_DIM: Color = Color::Rgb(0x9E, 0x94, 0x8C);   // subdued text
 
+    // Subtle background tints for message bubbles
+    pub const BG_USER: Color = Color::Rgb(0x2A, 0x24, 0x20);       // warm dark for user input
+    pub const BG_ASSISTANT: Color = Color::Rgb(0x1A, 0x1E, 0x22);  // cool dark for bot output
+
     // ── Pre-built styles ────────────────────────────────────
 
     /// Border style for focused pane.

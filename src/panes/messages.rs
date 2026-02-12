@@ -2,46 +2,30 @@ use anyhow::Result;
 use ratatui::{
     layout::{Constraint, Rect},
     prelude::*,
-    widgets::{Block, BorderType, Borders, List, ListItem, ListState},
+    widgets::{Paragraph, Wrap},
 };
 
 use crate::action::Action;
-use crate::panes::{MessageRole, Pane, PaneState};
+use crate::panes::{DisplayMessage, MessageRole, Pane, PaneState};
 use crate::theme::tui_palette as tp;
 use crate::tui::Frame;
 
 pub struct MessagesPane {
     focused: bool,
-    focused_border_style: Style,
+    /// Vertical scroll offset in visual (wrapped) lines from the bottom.
+    /// `usize::MAX` = pinned to the newest content (auto-scroll).
     scroll_offset: usize,
 }
 
 impl MessagesPane {
-    pub fn new(focused: bool, focused_border_style: Style) -> Self {
+    pub fn new(focused: bool, _focused_border_style: Style) -> Self {
         Self {
             focused,
-            focused_border_style,
-            scroll_offset: 0,
+            scroll_offset: usize::MAX,
         }
     }
 
-    fn border_style(&self) -> Style {
-        if self.focused {
-            self.focused_border_style
-        } else {
-            tp::unfocused_border()
-        }
-    }
-
-    fn border_type(&self) -> BorderType {
-        if self.focused {
-            BorderType::Thick
-        } else {
-            BorderType::Plain
-        }
-    }
-
-    /// Map a [`MessageRole`] to its display colour.
+    /// Map a [`MessageRole`] to its foreground colour.
     fn role_color(role: &MessageRole) -> Color {
         match role {
             MessageRole::User => tp::ACCENT_BRIGHT,
@@ -52,6 +36,22 @@ impl MessagesPane {
             MessageRole::Error => tp::ERROR,
             MessageRole::System => tp::MUTED,
         }
+    }
+
+    /// Map a [`MessageRole`] to an optional subtle background colour.
+    fn role_bg(role: &MessageRole) -> Option<Color> {
+        match role {
+            MessageRole::User => Some(tp::BG_USER),
+            MessageRole::Assistant => Some(tp::BG_ASSISTANT),
+            _ => None,
+        }
+    }
+
+    /// Whether this role should show a leading icon.
+    ///
+    /// User and Assistant rely on background colour instead of an icon.
+    fn should_show_icon(role: &MessageRole) -> bool {
+        !matches!(role, MessageRole::User | MessageRole::Assistant)
     }
 
     /// Copy text to the system clipboard using platform-native tools.
@@ -107,13 +107,17 @@ impl MessagesPane {
         } else if text.starts_with("## ") {
             spans.push(Span::styled(
                 "▎ ",
-                Style::default().fg(tp::ACCENT_BRIGHT).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(tp::ACCENT_BRIGHT)
+                    .add_modifier(Modifier::BOLD),
             ));
             &text[3..]
         } else if text.starts_with("# ") {
             spans.push(Span::styled(
                 "▎ ",
-                Style::default().fg(tp::ACCENT).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(tp::ACCENT)
+                    .add_modifier(Modifier::BOLD),
             ));
             &text[2..]
         } else {
@@ -128,7 +132,9 @@ impl MessagesPane {
         let base = Style::default().fg(base_color);
         let bold = base.add_modifier(Modifier::BOLD);
         let italic = base.add_modifier(Modifier::ITALIC);
-        let code = Style::default().fg(tp::ACCENT_BRIGHT).bg(tp::SURFACE_BRIGHT);
+        let code = Style::default()
+            .fg(tp::ACCENT_BRIGHT)
+            .bg(tp::SURFACE_BRIGHT);
 
         while i < len {
             // Backtick code
@@ -198,6 +204,75 @@ impl MessagesPane {
 
         spans
     }
+
+    // ── Layout helpers ──────────────────────────────────────────────────
+
+    /// Build a styled [`Line`] for a single message.  Word-wrapping is
+    /// handled by the `Paragraph` widget at render time.
+    fn build_line(msg: &DisplayMessage) -> Line<'static> {
+        let color = Self::role_color(&msg.role);
+        let mut spans: Vec<Span<'static>> = Vec::new();
+
+        // Left padding
+        spans.push(Span::raw(" "));
+
+        // Icon for non-chat roles only (user/assistant use bg colours)
+        if Self::should_show_icon(&msg.role) {
+            let icon = msg.role.icon();
+            spans.push(Span::styled(
+                format!("{icon} "),
+                Style::default().fg(color),
+            ));
+        }
+
+        // Content — parse markdown for assistant, plain for everything else
+        if matches!(msg.role, MessageRole::Assistant) {
+            spans.extend(Self::parse_inline_markdown(&msg.content, color));
+        } else {
+            spans.push(Span::styled(
+                msg.content.clone(),
+                Style::default().fg(color),
+            ));
+        }
+
+        Line::from(spans)
+    }
+
+    /// Count how many visual (wrapped) rows a `Line` occupies at `width`.
+    fn visual_line_count(line: &Line<'_>, width: u16) -> u16 {
+        if width == 0 {
+            return 1;
+        }
+        let w = width as usize;
+        let text_width: usize = line.width();
+        if text_width == 0 {
+            return 1;
+        }
+        ((text_width + w - 1) / w) as u16
+    }
+
+    /// Resolve the logical message index that the current visual scroll
+    /// row falls within (used for the copy command).
+    fn message_index_at_visual_row(
+        visual_row: usize,
+        messages: &[DisplayMessage],
+        width: u16,
+        spacing: u16,
+    ) -> usize {
+        let mut accum = 0usize;
+        for (i, msg) in messages.iter().enumerate() {
+            if i > 0 {
+                accum += spacing as usize;
+            }
+            let line = Self::build_line(msg);
+            let h = Self::visual_line_count(&line, width) as usize;
+            if accum + h > visual_row {
+                return i;
+            }
+            accum += h;
+        }
+        messages.len().saturating_sub(1)
+    }
 }
 
 impl Pane for MessagesPane {
@@ -216,33 +291,57 @@ impl Pane for MessagesPane {
                 self.focused = false;
             }
             Action::Down => {
-                // Total items = messages + optional loading line
-                let total = state.messages.len()
-                    + if state.loading_line.is_some() { 1 } else { 0 };
-                if self.scroll_offset + 1 < total {
-                    self.scroll_offset += 1;
+                if self.scroll_offset == usize::MAX {
+                    // Already at bottom — nowhere to go.
+                } else {
+                    self.scroll_offset = self.scroll_offset.saturating_sub(1);
                 }
             }
             Action::Up => {
-                self.scroll_offset = self.scroll_offset.saturating_sub(1);
+                if self.scroll_offset == usize::MAX {
+                    self.scroll_offset = 0;
+                }
+                self.scroll_offset = self.scroll_offset.saturating_add(1);
             }
             Action::Update => {
-                // Auto-scroll to bottom on new messages (and loading line)
-                let total = state.messages.len()
-                    + if state.loading_line.is_some() { 1 } else { 0 };
-                if total > 0 {
-                    self.scroll_offset = total.saturating_sub(1);
-                }
+                // Auto-scroll to bottom on new content
+                self.scroll_offset = usize::MAX;
             }
             Action::Tick => {
-                // Keep the loading line pinned to the bottom while active
-                if state.loading_line.is_some() {
-                    let total = state.messages.len() + 1;
-                    self.scroll_offset = total.saturating_sub(1);
+                // Keep pinned to bottom while loading
+                if state.loading_line.is_some() && self.scroll_offset == usize::MAX {
+                    // Already pinned — nothing to do.
                 }
             }
             Action::CopyMessage => {
-                if let Some(msg) = state.messages.get(self.scroll_offset) {
+                // Map current scroll position back to a message index.
+                // We don't know the real render width here, so we use a
+                // conservative estimate; the actual clamping happens in draw.
+                let spacing = state.config.message_spacing;
+                let msg_count = state.messages.len();
+                let total: usize = state
+                    .messages
+                    .iter()
+                    .map(|m| {
+                        let l = Self::build_line(m);
+                        Self::visual_line_count(&l, 200) as usize
+                    })
+                    .sum::<usize>()
+                    + if msg_count > 1 {
+                        (msg_count - 1) * spacing as usize
+                    } else {
+                        0
+                    };
+                let scroll_top = total.saturating_sub(
+                    if self.scroll_offset == usize::MAX {
+                        0
+                    } else {
+                        self.scroll_offset
+                    },
+                );
+                let idx =
+                    Self::message_index_at_visual_row(scroll_top, state.messages, 200, spacing);
+                if let Some(msg) = state.messages.get(idx) {
                     match Self::copy_to_clipboard(&msg.content) {
                         Ok(()) => {
                             return Ok(Some(Action::TimedStatusLine(
@@ -265,73 +364,139 @@ impl Pane for MessagesPane {
     }
 
     fn draw(&mut self, frame: &mut Frame<'_>, area: Rect, state: &PaneState<'_>) -> Result<()> {
-        let mut items: Vec<ListItem> = state
-            .messages
-            .iter()
-            .map(|msg| {
-                let color = Self::role_color(&msg.role);
-                let icon = msg.role.icon();
-
-                let mut spans = vec![
-                    Span::styled(format!("{icon} "), Style::default().fg(color)),
-                ];
-
-                // For assistant messages, render inline markdown
-                if matches!(msg.role, MessageRole::Assistant) {
-                    spans.extend(Self::parse_inline_markdown(&msg.content, color));
-                } else {
-                    spans.push(Span::styled(&msg.content, Style::default().fg(color)));
-                }
-
-                ListItem::new(Line::from(spans))
-            })
-            .collect();
-
-        // Append the animated loading line at the bottom when active
-        if let Some(ref line) = state.loading_line {
-            items.push(
-                ListItem::new(line.as_str())
-                    .style(Style::default().fg(tp::ACCENT_BRIGHT)),
-            );
+        let width = area.width;
+        if width == 0 || area.height == 0 {
+            return Ok(());
         }
 
-        let total = items.len();
+        // ── Build entries with pre-computed visual heights ───────────
 
-        let list = List::new(items)
-            .block(Block::default().borders(Borders::ALL))
-            .highlight_symbol(symbols::scrollbar::HORIZONTAL.end)
-            .highlight_spacing(ratatui::widgets::HighlightSpacing::Always)
-            .highlight_style(tp::selected());
+        struct Entry<'a> {
+            line: Line<'a>,
+            bg: Option<Color>,
+            height: u16,
+        }
 
-        let mut list_state = ListState::default().with_selected(Some(self.scroll_offset));
-        frame.render_stateful_widget(list, area, &mut list_state);
+        let spacing = state.config.message_spacing;
 
-        let title_style = if self.focused {
-            tp::title_focused()
+        let mut entries: Vec<Entry<'_>> = Vec::new();
+        for (i, msg) in state.messages.iter().enumerate() {
+            // Insert blank spacing line(s) between messages
+            if i > 0 && spacing > 0 {
+                entries.push(Entry {
+                    line: Line::from(""),
+                    bg: None,
+                    height: spacing,
+                });
+            }
+            let line = Self::build_line(msg);
+            let h = Self::visual_line_count(&line, width);
+            entries.push(Entry {
+                line,
+                bg: Self::role_bg(&msg.role),
+                height: h,
+            });
+        }
+
+        // Append loading line if active
+        if let Some(ref loading) = state.loading_line {
+            let line = Line::from(Span::styled(
+                format!(" {}", loading),
+                Style::default().fg(tp::ACCENT_BRIGHT),
+            ));
+            let h = Self::visual_line_count(&line, width);
+            entries.push(Entry {
+                line,
+                bg: None,
+                height: h,
+            });
+        }
+
+        let total_visual: usize = entries.iter().map(|e| e.height as usize).sum();
+        let viewport = area.height as usize;
+
+        // ── Resolve scroll position ─────────────────────────────────
+        // `scroll_offset` is "lines from the bottom":
+        //   usize::MAX or 0 → pinned to the newest content
+        //   >0 → scrolled up by that many visual lines
+
+        let max_scroll = total_visual.saturating_sub(viewport);
+
+        let from_bottom = if self.scroll_offset == usize::MAX {
+            0
         } else {
-            tp::title_unfocused()
+            self.scroll_offset.min(max_scroll)
         };
+        // Persist the clamped value so Up/Down work correctly.
+        if self.scroll_offset != usize::MAX {
+            self.scroll_offset = from_bottom;
+        }
 
-        frame.render_widget(
-            Block::default()
-                .title(Span::styled(" Messages ", title_style))
-                .borders(Borders::ALL)
-                .border_style(self.border_style())
-                .border_type(self.border_type())
-                .title_bottom(
-                    Line::from(Span::styled(
-                        format!(
-                            " {} of {} ",
-                            self.scroll_offset.saturating_add(1),
-                            total
-                        ),
-                        Style::default().fg(tp::MUTED),
-                    ))
-                    .right_aligned(),
-                ),
-            area,
-        );
+        // `scroll_top` = number of visual lines to skip from the top.
+        let scroll_top = max_scroll - from_bottom;
+
+        // ── Determine which entries are visible ─────────────────────
+
+        let mut skipped: usize = 0;
+        let mut render_start: usize = 0;
+        let mut first_skip_rows: u16 = 0;
+
+        for (i, entry) in entries.iter().enumerate() {
+            let h = entry.height as usize;
+            if skipped + h <= scroll_top {
+                skipped += h;
+                render_start = i + 1;
+            } else {
+                first_skip_rows = (scroll_top - skipped) as u16;
+                render_start = i;
+                break;
+            }
+        }
+
+        // ── Render visible entries ──────────────────────────────────
+
+        let mut y = area.y;
+        let mut remaining = area.height;
+
+        for (idx, entry) in entries.iter().enumerate() {
+            if idx < render_start || remaining == 0 {
+                continue;
+            }
+
+            let skip = if idx == render_start {
+                first_skip_rows
+            } else {
+                0
+            };
+
+            let visible_h = (entry.height - skip).min(remaining);
+
+            // Paint the background across the full width
+            if let Some(bg) = entry.bg {
+                for row in y..y + visible_h {
+                    frame.render_widget(
+                        Paragraph::new("").style(Style::default().bg(bg)),
+                        Rect::new(area.x, row, area.width, 1),
+                    );
+                }
+            }
+
+            // Render the wrapped text
+            let mut para = Paragraph::new(entry.line.clone())
+                .wrap(Wrap { trim: false })
+                .scroll((skip, 0));
+
+            if let Some(bg) = entry.bg {
+                para = para.style(Style::default().bg(bg));
+            }
+
+            frame.render_widget(para, Rect::new(area.x, y, area.width, visible_h));
+
+            y += visible_h;
+            remaining -= visible_h;
+        }
 
         Ok(())
     }
 }
+
