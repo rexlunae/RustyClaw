@@ -1,67 +1,87 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
-  <!-- RustyClaw Logo: Lobster claw with Rust gear aesthetic -->
+  <!-- RustyClaw Logo: Half gear, half lobster claw in a circle -->
   
   <defs>
     <linearGradient id="rustGrad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" style="stop-color:#B7410E"/>
       <stop offset="100%" style="stop-color:#8B3103"/>
     </linearGradient>
+    <!-- Clip to left half -->
+    <clipPath id="leftHalf">
+      <rect x="0" y="0" width="64" height="128"/>
+    </clipPath>
+    <!-- Clip to right half -->
+    <clipPath id="rightHalf">
+      <rect x="64" y="0" width="64" height="128"/>
+    </clipPath>
   </defs>
   
-  <!-- Gear ring (behind claw) -->
-  <circle cx="64" cy="90" r="20" fill="none" stroke="#4A4A4A" stroke-width="4"/>
-  
-  <!-- Gear teeth -->
-  <g fill="#4A4A4A">
-    <rect x="61" y="66" width="6" height="8" rx="1"/>
-    <rect x="61" y="106" width="6" height="8" rx="1"/>
-    <rect x="40" y="87" width="8" height="6" rx="1"/>
-    <rect x="80" y="87" width="8" height="6" rx="1"/>
-    <rect x="45" y="72" width="6" height="6" rx="1" transform="rotate(-45 48 75)"/>
-    <rect x="77" y="72" width="6" height="6" rx="1" transform="rotate(45 80 75)"/>
-    <rect x="45" y="100" width="6" height="6" rx="1" transform="rotate(45 48 103)"/>
-    <rect x="77" y="100" width="6" height="6" rx="1" transform="rotate(-45 80 103)"/>
+  <!-- LEFT HALF: Rust Gear -->
+  <g clip-path="url(#leftHalf)">
+    <!-- Gear body -->
+    <circle cx="64" cy="64" r="32" fill="#4A4A4A"/>
+    
+    <!-- Gear teeth (left side only visible) -->
+    <rect x="60" y="24" width="8" height="12" rx="2" fill="#4A4A4A"/>
+    <rect x="60" y="92" width="8" height="12" rx="2" fill="#4A4A4A"/>
+    <rect x="24" y="60" width="12" height="8" rx="2" fill="#4A4A4A"/>
+    <rect x="30" y="38" width="10" height="8" rx="2" fill="#4A4A4A" transform="rotate(-45 35 42)"/>
+    <rect x="30" y="82" width="10" height="8" rx="2" fill="#4A4A4A" transform="rotate(45 35 86)"/>
+    
+    <!-- Inner circle (gear hole) -->
+    <circle cx="64" cy="64" r="16" fill="#2A2A2A"/>
   </g>
   
-  <!-- LOBSTER CLAW -->
+  <!-- RIGHT HALF: Lobster Claw -->
+  <g clip-path="url(#rightHalf)">
+    <!-- Claw base (fills the right semicircle) -->
+    <circle cx="64" cy="64" r="32" fill="url(#rustGrad)"/>
+    
+    <!-- Inner circle to match gear -->
+    <circle cx="64" cy="64" r="16" fill="#2A2A2A"/>
+  </g>
   
-  <!-- Main claw body (the big crusher part) -->
-  <path d="M36 70
-           C30 60, 28 45, 34 32
-           C38 24, 46 20, 54 22
-           C62 24, 68 32, 68 42
-           L68 58
-           C68 65, 62 70, 54 72
+  <!-- Claw pincers extending from right side -->
+  <!-- Upper pincer -->
+  <path d="M88 48
+           C96 40, 108 36, 116 32
+           C120 30, 122 32, 120 36
+           C116 42, 106 48, 96 54
+           C92 56, 88 54, 88 48
            Z" 
         fill="url(#rustGrad)" 
         stroke="#5C2600" 
-        stroke-width="2"/>
-  
-  <!-- Upper pincer (movable finger) -->
-  <path d="M54 72
-           C62 70, 72 62, 82 48
-           C88 40, 94 34, 96 28
-           C98 24, 96 20, 92 22
-           C86 24, 78 34, 72 44
-           C66 54, 64 62, 68 58"
+        stroke-width="1.5"/>
+
+  <!-- Lower pincer (bigger, crusher) -->
+  <path d="M88 80
+           C96 88, 108 92, 116 96
+           C120 98, 122 96, 120 92
+           C116 86, 106 80, 96 74
+           C92 72, 88 74, 88 80
+           Z" 
         fill="url(#rustGrad)" 
         stroke="#5C2600" 
-        stroke-width="2"/>
+        stroke-width="1.5"/>
   
-  <!-- Claw teeth/ridges on big part -->
-  <path d="M42 36 L46 38 M40 44 L44 46 M40 52 L44 54" 
+  <!-- Claw ridges/texture -->
+  <path d="M72 50 L78 48 M72 56 L80 54" 
         stroke="#5C2600" 
-        stroke-width="2"
+        stroke-width="1.5"
+        stroke-linecap="round"/>
+  <path d="M72 78 L78 80 M72 72 L80 74" 
+        stroke="#5C2600" 
+        stroke-width="1.5"
         stroke-linecap="round"/>
   
-  <!-- Joint/knuckle detail -->
-  <ellipse cx="60" cy="72" rx="8" ry="5" fill="#8B3103" stroke="#5C2600" stroke-width="1"/>
+  <!-- Center dividing line (subtle) -->
+  <line x1="64" y1="32" x2="64" y2="96" stroke="#2A2A2A" stroke-width="1"/>
   
-  <!-- Highlight -->
-  <path d="M40 40 C42 35, 48 32, 52 34" 
+  <!-- Highlight on claw side -->
+  <path d="M72 44 C76 42, 82 44, 84 48" 
         stroke="#D4652F" 
         stroke-width="2" 
         stroke-linecap="round"
         fill="none"
-        opacity="0.6"/>
+        opacity="0.5"/>
 </svg>
