@@ -5,6 +5,7 @@ pub mod commands;
 pub mod config;
 pub mod daemon;
 pub mod gateway;
+pub mod memory;
 pub mod messenger;
 pub mod onboard;
 pub mod pages;

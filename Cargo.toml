@@ -67,3 +67,6 @@ colored = "2.1"
 indicatif = "0.18"
 unicode-width = "0.2"
 rpassword = "7"
+
+[dev-dependencies]
+tempfile = "3"

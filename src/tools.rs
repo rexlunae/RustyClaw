@@ -113,6 +113,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &WEB_FETCH,
         &WEB_SEARCH,
         &PROCESS,
+        &MEMORY_SEARCH,
+        &MEMORY_GET,
     ]
 }
 
@@ -219,6 +221,24 @@ pub static PROCESS: ToolDef = ToolDef {
                   remove (remove a specific session).",
     parameters: vec![],
     execute: exec_process,
+};
+
+pub static MEMORY_SEARCH: ToolDef = ToolDef {
+    name: "memory_search",
+    description: "Semantically search MEMORY.md and memory/*.md files for relevant information. \
+                  Use before answering questions about prior work, decisions, dates, people, \
+                  preferences, or todos. Returns matching snippets with file path and line numbers.",
+    parameters: vec![],
+    execute: exec_memory_search,
+};
+
+pub static MEMORY_GET: ToolDef = ToolDef {
+    name: "memory_get",
+    description: "Read content from a memory file (MEMORY.md or memory/*.md). \
+                  Use after memory_search to get full context around a snippet. \
+                  Supports optional line range for large files.",
+    parameters: vec![],
+    execute: exec_memory_get,
 };
 
 /// We need a runtime-constructed param list because `Vec` isn't const.
@@ -487,6 +507,52 @@ fn process_params() -> Vec<ToolParam> {
         ToolParam {
             name: "limit".into(),
             description: "Maximum lines to return for 'log' action. Default: 50.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+fn memory_search_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "query".into(),
+            description: "Search query for finding relevant memory content.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "maxResults".into(),
+            description: "Maximum number of results to return. Default: 5.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "minScore".into(),
+            description: "Minimum relevance score threshold (0.0-1.0). Default: 0.1.".into(),
+            param_type: "number".into(),
+            required: false,
+        },
+    ]
+}
+
+fn memory_get_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "path".into(),
+            description: "Path to the memory file (MEMORY.md or memory/*.md).".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "from".into(),
+            description: "Starting line number (1-indexed). Default: 1.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "lines".into(),
+            description: "Number of lines to read. Default: entire file.".into(),
             param_type: "integer".into(),
             required: false,
         },
@@ -1538,6 +1604,91 @@ fn exec_process(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     }
 }
 
+/// Search memory files for relevant content.
+fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: query".to_string())?;
+
+    let max_results = args
+        .get("maxResults")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5) as usize;
+
+    let min_score = args
+        .get("minScore")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.1);
+
+    // Build index and search
+    let index = crate::memory::MemoryIndex::index_workspace(workspace_dir)?;
+    let results = index.search(query, max_results);
+
+    if results.is_empty() {
+        return Ok("No matching memories found.".to_string());
+    }
+
+    // Filter by minimum score and format results
+    let mut output = String::new();
+    output.push_str(&format!("Memory search results for: {}\n\n", query));
+
+    let mut count = 0;
+    for result in results {
+        if result.score < min_score {
+            continue;
+        }
+        count += 1;
+
+        // Truncate snippet to ~700 chars
+        let snippet = if result.chunk.text.len() > 700 {
+            format!("{}...", &result.chunk.text[..700])
+        } else {
+            result.chunk.text.clone()
+        };
+
+        output.push_str(&format!(
+            "{}. **{}** (lines {}-{}, score: {:.2})\n",
+            count,
+            result.chunk.path,
+            result.chunk.start_line,
+            result.chunk.end_line,
+            result.score
+        ));
+        output.push_str(&format!("{}\n\n", snippet));
+        output.push_str(&format!(
+            "Source: {}#L{}-L{}\n\n",
+            result.chunk.path, result.chunk.start_line, result.chunk.end_line
+        ));
+    }
+
+    if count == 0 {
+        return Ok("No matching memories found above the minimum score threshold.".to_string());
+    }
+
+    Ok(output)
+}
+
+/// Read content from a memory file.
+fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+    let path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: path".to_string())?;
+
+    let from_line = args
+        .get("from")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    let num_lines = args
+        .get("lines")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+
+    crate::memory::read_memory_file(workspace_dir, path, from_line, num_lines)
+}
+
 // ── Provider-specific formatters ────────────────────────────────────────────
 
 /// Parameters for a tool, building a JSON Schema `properties` / `required`.
@@ -1575,6 +1726,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "web_fetch" => web_fetch_params(),
         "web_search" => web_search_params(),
         "process" => process_params(),
+        "memory_search" => memory_search_params(),
+        "memory_get" => memory_get_params(),
         _ => vec![],
     }
 }
@@ -1918,7 +2071,7 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 12);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -1927,7 +2080,7 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 12);
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -1935,7 +2088,7 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert_eq!(tools.len(), 10);
+        assert_eq!(tools.len(), 12);
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -2055,5 +2208,51 @@ mod tests {
         assert!(params.iter().any(|p| p.name == "command" && p.required));
         assert!(params.iter().any(|p| p.name == "background" && !p.required));
         assert!(params.iter().any(|p| p.name == "yieldMs" && !p.required));
+    }
+
+    // ── memory_search ───────────────────────────────────────────────
+
+    #[test]
+    fn test_memory_search_params_defined() {
+        let params = memory_search_params();
+        assert_eq!(params.len(), 3);
+        assert!(params.iter().any(|p| p.name == "query" && p.required));
+        assert!(params.iter().any(|p| p.name == "maxResults" && !p.required));
+        assert!(params.iter().any(|p| p.name == "minScore" && !p.required));
+    }
+
+    #[test]
+    fn test_memory_search_missing_query() {
+        let args = json!({});
+        let result = exec_memory_search(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    // ── memory_get ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_memory_get_params_defined() {
+        let params = memory_get_params();
+        assert_eq!(params.len(), 3);
+        assert!(params.iter().any(|p| p.name == "path" && p.required));
+        assert!(params.iter().any(|p| p.name == "from" && !p.required));
+        assert!(params.iter().any(|p| p.name == "lines" && !p.required));
+    }
+
+    #[test]
+    fn test_memory_get_missing_path() {
+        let args = json!({});
+        let result = exec_memory_get(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_memory_get_invalid_path() {
+        let args = json!({ "path": "../etc/passwd" });
+        let result = exec_memory_get(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("not a valid memory file"));
     }
 }
