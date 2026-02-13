@@ -391,7 +391,7 @@ impl MessagesPane {
                 if text_width == 0 {
                     1
                 } else {
-                    (text_width + w - 1) / w
+                    text_width.div_ceil(w)
                 }
             })
             .sum::<usize>()

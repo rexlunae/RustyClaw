@@ -402,11 +402,7 @@ impl Hatching {
         // Auto-scroll: calculate how many lines fit and set scroll
         let visible_height = msg_inner.height as usize;
         let total_lines = lines.len();
-        let scroll_offset = if total_lines > visible_height {
-            total_lines - visible_height
-        } else {
-            0
-        };
+        let scroll_offset = total_lines.saturating_sub(visible_height);
 
         let messages_paragraph = Paragraph::new(lines)
             .wrap(Wrap { trim: true })

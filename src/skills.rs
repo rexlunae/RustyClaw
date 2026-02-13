@@ -12,8 +12,10 @@ pub const DEFAULT_REGISTRY_URL: &str = "https://clawhub.ai";
 
 /// Where a skill was installed from.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default)]
 pub enum SkillSource {
     /// Locally authored (found on disk, not from a registry).
+    #[default]
     Local,
     /// Installed from a ClawHub registry.
     Registry {
@@ -24,11 +26,6 @@ pub enum SkillSource {
     },
 }
 
-impl Default for SkillSource {
-    fn default() -> Self {
-        Self::Local
-    }
-}
 
 /// Represents a skill that can be loaded and executed
 #[derive(Debug, Clone, Serialize, Deserialize)]

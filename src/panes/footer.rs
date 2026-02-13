@@ -21,6 +21,7 @@ struct TimedStatusLine {
 /// - Plain text is submitted as a prompt.
 /// - Text beginning with `/` is treated as a command.
 /// - While typing a `/` command a tab-completion dropdown appears above.
+#[derive(Default)]
 pub struct FooterPane {
     input: Input,
     timed_status: Option<TimedStatusLine>,
@@ -34,19 +35,6 @@ pub struct FooterPane {
     show_completions: bool,
 }
 
-impl Default for FooterPane {
-    fn default() -> Self {
-        Self {
-            input: Input::default(),
-            timed_status: None,
-            command_history: Vec::new(),
-            history_index: None,
-            completions: Vec::new(),
-            completion_index: None,
-            show_completions: false,
-        }
-    }
-}
 
 impl FooterPane {
     pub fn new() -> Self {
@@ -56,8 +44,8 @@ impl FooterPane {
     /// Recalculate the completions list from the current input value.
     fn update_completions(&mut self) {
         let val = self.input.value();
-        if val.starts_with('/') {
-            let partial = &val[1..]; // text after '/'
+        if let Some(partial) = val.strip_prefix('/') {
+            // text after '/'
             let names = command_names();
             self.completions = names
                 .iter()
@@ -132,7 +120,7 @@ impl Pane for FooterPane {
                         if !value.is_empty() {
                             return Ok(Some(EventResponse::Stop(Action::InputSubmit(value))));
                         }
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                     KeyCode::Esc => {
                         self.input.reset();
@@ -141,7 +129,7 @@ impl Pane for FooterPane {
                         self.completion_index = None;
                         self.history_index = None;
                         state.input_mode = InputMode::Normal;
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                     KeyCode::Tab => {
                         if self.show_completions && !self.completions.is_empty() {
@@ -157,7 +145,7 @@ impl Pane for FooterPane {
                             // Open completions
                             self.update_completions();
                         }
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                     KeyCode::BackTab => {
                         if self.show_completions && !self.completions.is_empty() {
@@ -168,7 +156,7 @@ impl Pane for FooterPane {
                             self.apply_completion();
                             self.update_completions();
                         }
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                     KeyCode::Up => {
                         if self.show_completions && !self.completions.is_empty() {
@@ -189,7 +177,7 @@ impl Pane for FooterPane {
                             self.input = Input::new(val);
                             self.update_completions();
                         }
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                     KeyCode::Down => {
                         if self.show_completions && !self.completions.is_empty() {
@@ -212,12 +200,12 @@ impl Pane for FooterPane {
                             }
                             self.update_completions();
                         }
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                     _ => {
                         self.input.handle_event(&CrosstermEvent::Key(key));
                         self.update_completions();
-                        return Ok(Some(EventResponse::Stop(Action::Noop)));
+                        Ok(Some(EventResponse::Stop(Action::Noop)))
                     }
                 }
             }
@@ -236,7 +224,7 @@ impl Pane for FooterPane {
                     }
                 }
                 // Don't consume other keys in Normal mode — let pages handle them
-                return Ok(None);
+                Ok(None)
             }
         }
     }

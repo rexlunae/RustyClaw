@@ -682,7 +682,7 @@ async fn main() -> Result<()> {
                     let creds_dir = config.credentials_dir();
                     let vault = if config.secrets_password_protected {
                         let password = rpassword::prompt_password(
-                            &format!("{} Vault password: ", rustyclaw::theme::info("🔑")),
+                            format!("{} Vault password: ", rustyclaw::theme::info("🔑")),
                         )
                         .unwrap_or_default();
                         SecretsManager::with_password(&creds_dir, password)

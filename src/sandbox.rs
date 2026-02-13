@@ -183,6 +183,7 @@ impl SandboxPolicy {
 
 /// Sandbox mode for command execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum SandboxMode {
     /// No sandboxing
     None,
@@ -195,14 +196,10 @@ pub enum SandboxMode {
     /// macOS sandbox-exec (macOS)
     MacOSSandbox,
     /// Auto-detect best available
+    #[default]
     Auto,
 }
 
-impl Default for SandboxMode {
-    fn default() -> Self {
-        Self::Auto
-    }
-}
 
 impl std::str::FromStr for SandboxMode {
     type Err = String;

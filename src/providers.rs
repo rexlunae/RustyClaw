@@ -231,9 +231,7 @@ pub async fn fetch_models(
 
     // Anthropic has no public models endpoint
     if provider_id == "anthropic" {
-        return Err(format!(
-            "Anthropic does not provide a models API. Set a model manually with /model <name>.",
-        ));
+        return Err("Anthropic does not provide a models API. Set a model manually with /model <name>.".to_string());
     }
 
     let result = match provider_id {

@@ -162,7 +162,7 @@ async fn main() -> Result<()> {
             } else if std::io::stdin().is_terminal() {
                 // Interactive foreground mode — prompt for password.
                 let password = rpassword::prompt_password(
-                    &format!("{} Vault password: ", t::info("🔑")),
+                    format!("{} Vault password: ", t::info("🔑")),
                 )
                 .unwrap_or_default();
                 SecretsManager::with_password(&creds_dir, password)

@@ -4,7 +4,7 @@
 //! written to, and killed by the agent.
 
 use std::collections::HashMap;
-use std::io::{BufReader, Read, Write};
+use std::io::{Read, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -19,14 +19,14 @@ fn generate_session_id() -> SessionId {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis();
-    
+
     // Simple adjective-noun pattern for readability
     let adjectives = ["warm", "cool", "swift", "calm", "bold", "keen", "bright", "quick"];
     let nouns = ["rook", "hawk", "wolf", "bear", "fox", "owl", "lynx", "crow"];
-    
+
     let adj_idx = (timestamp % adjectives.len() as u128) as usize;
     let noun_idx = ((timestamp / 8) % nouns.len() as u128) as usize;
-    
+
     format!("{}-{}", adjectives[adj_idx], nouns[noun_idx])
 }
 
@@ -130,7 +130,7 @@ impl ExecSession {
     pub fn log_output(&self, offset: Option<usize>, limit: Option<usize>) -> String {
         let lines: Vec<&str> = self.combined_output.lines().collect();
         let total = lines.len();
-        
+
         // If offset is None, grab the last `limit` lines
         let (start, end) = match (offset, limit) {
             (None, Some(lim)) => {
@@ -148,7 +148,7 @@ impl ExecSession {
             }
             (None, None) => (0, total),
         };
-        
+
         lines[start..end].join("\n")
     }
 
@@ -205,10 +205,10 @@ impl ExecSession {
                 } else {
                     SessionStatus::Killed
                 };
-                
+
                 // Read any remaining output
                 self.try_read_output();
-                
+
                 true
             }
             Ok(None) => {
@@ -260,7 +260,7 @@ impl ExecSession {
         child
             .kill()
             .map_err(|e| format!("Failed to kill process: {}", e))?;
-        
+
         self.status = SessionStatus::Killed;
         Ok(())
     }
@@ -273,21 +273,21 @@ fn read_nonblocking<R: Read + std::os::unix::io::AsRawFd>(
     buf: &mut [u8],
 ) -> std::io::Result<usize> {
     let fd = reader.as_raw_fd();
-    
+
     // Set non-blocking
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
         libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
     }
-    
+
     let result = reader.read(buf);
-    
+
     // Restore blocking mode
     unsafe {
         let flags = libc::fcntl(fd, libc::F_GETFL);
         libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
     }
-    
+
     match result {
         Ok(n) => Ok(n),
         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(0),
@@ -340,10 +340,10 @@ impl ProcessManager {
             timeout,
             child,
         );
-        
+
         let id = session.id.clone();
         self.sessions.insert(id.clone(), session);
-        
+
         Ok(id)
     }
 

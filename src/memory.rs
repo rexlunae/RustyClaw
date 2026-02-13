@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// A chunk of text from a memory file with metadata.
 #[derive(Debug, Clone)]
@@ -172,7 +172,7 @@ impl MemoryIndex {
             for term in unique_terms {
                 self.term_index
                     .entry(term.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(idx);
                 
                 *self.doc_freq.entry(term.clone()).or_insert(0) += 1;
@@ -191,7 +191,7 @@ impl MemoryIndex {
         // Score each chunk
         let mut scores: Vec<(usize, f64)> = Vec::new();
         
-        for (idx, chunk) in self.chunks.iter().enumerate() {
+        for (idx, _chunk) in self.chunks.iter().enumerate() {
             let score = self.bm25_score(idx, &query_terms);
             if score > 0.0 {
                 scores.push((idx, score));

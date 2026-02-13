@@ -128,12 +128,11 @@ fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
         }
 
         // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
-        if line.starts_with("@@ ") {
+        if let Some(header) = line.strip_prefix("@@ ") {
             let Some(ref file_path) = current_file else {
                 return Err("Hunk without file header".to_string());
             };
 
-            let header = &line[3..];
             let end = header.find(" @@").unwrap_or(header.len());
             let range_part = &header[..end];
 

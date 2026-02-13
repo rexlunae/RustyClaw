@@ -69,11 +69,13 @@ impl SecretKind {
 /// Controls *when* the agent is allowed to read a credential.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum AccessPolicy {
     /// The agent may read this secret at any time without prompting.
     Always,
     /// The agent may read this secret only with explicit per-use user
     /// approval (e.g. a "yes/no" confirmation in the TUI).
+    #[default]
     WithApproval,
     /// The agent must re-authenticate (vault password and/or TOTP)
     /// before each access.
@@ -84,11 +86,6 @@ pub enum AccessPolicy {
     SkillOnly(Vec<String>),
 }
 
-impl Default for AccessPolicy {
-    fn default() -> Self {
-        Self::WithApproval
-    }
-}
 
 impl std::fmt::Display for AccessPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -768,7 +765,7 @@ impl SecretsManager {
                     crate::providers::AuthMethod::DeviceFlow => SecretKind::Token,
                     _ => SecretKind::ApiKey,
                 };
-                return (format!("{}", p.display), kind);
+                return (p.display.to_string(), kind);
             }
         }
         // Fallback: humanise the key name.

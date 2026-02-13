@@ -274,7 +274,7 @@ pub fn run_onboard_wizard(
             AuthMethod::ApiKey => {
                 // Standard API key authentication
                 let existing = secrets.get_secret(secret_key, true)?;
-                if let Some(_) = &existing {
+                if existing.is_some() {
                     let reuse = prompt_line(
                         &mut reader,
                         &format!("{} ", t::accent(&format!("An API key for {} is already stored. Keep it? [Y/n]:", provider.display))),
@@ -305,7 +305,7 @@ pub fn run_onboard_wizard(
                 // OAuth device flow authentication
                 if let Some(device_config) = provider.device_flow {
                     let existing = secrets.get_secret(secret_key, true)?;
-                    if let Some(_) = &existing {
+                    if existing.is_some() {
                         let reuse = prompt_line(
                             &mut reader,
                             &format!("{} ", t::accent(&format!("An access token for {} is already stored. Keep it? [Y/n]:", provider.display))),
