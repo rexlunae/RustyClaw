@@ -89,9 +89,10 @@ pub struct Config {
 }
 
 /// Configuration for a messenger backend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MessengerConfig {
     /// Display name for this messenger instance.
+    #[serde(default)]
     pub name: String,
     /// Messenger type: telegram, discord, signal, matrix, webhook.
     #[serde(default)]

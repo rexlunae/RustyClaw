@@ -84,6 +84,7 @@ pub async fn create_messenger_manager(config: &Config) -> Result<MessengerManage
 
 /// Create a single messenger from config.
 async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>> {
+    let name = config.name.clone();
     let mut messenger: Box<dyn Messenger> = match config.messenger_type.as_str() {
         "telegram" => {
             let token = config
@@ -91,7 +92,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
                 .context("Telegram requires 'token' or TELEGRAM_BOT_TOKEN env var")?;
-            Box::new(TelegramMessenger::new(&token))
+            Box::new(TelegramMessenger::new(name, token))
         }
         "discord" => {
             let token = config
@@ -99,7 +100,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok())
                 .context("Discord requires 'token' or DISCORD_BOT_TOKEN env var")?;
-            Box::new(DiscordMessenger::new(&token))
+            Box::new(DiscordMessenger::new(name, token))
         }
         "webhook" => {
             let url = config
@@ -107,7 +108,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .or_else(|| std::env::var("WEBHOOK_URL").ok())
                 .context("Webhook requires 'webhook_url' or WEBHOOK_URL env var")?;
-            Box::new(WebhookMessenger::new(&url))
+            Box::new(WebhookMessenger::new(name, url))
         }
         #[cfg(feature = "matrix")]
         "matrix" => {
@@ -286,7 +287,7 @@ async fn process_incoming_message(
         messages.insert(0, ChatMessage::text("system", &system_prompt));
     } else {
         // Update system prompt
-        messages[0].content = Some(system_prompt.clone());
+        messages[0].content = system_prompt.clone();
     }
 
     // Media cache directory
@@ -299,9 +300,8 @@ async fn process_incoming_message(
         Vec::new()
     };
 
-    let has_images = !images.is_empty();
-    if has_images {
-        eprintln!("[messenger] Processing {} image(s)", images.len());
+    if !images.is_empty() {
+        eprintln!("[messenger] Processing {} image(s) (vision not yet supported in messenger handler)", images.len());
     }
 
     // Build media refs for history storage
@@ -310,53 +310,13 @@ async fn process_incoming_message(
     // Add user message to history (with media refs, not raw data)
     messages.push(ChatMessage::user_with_media(&msg.content, media_refs.clone()));
 
-    // Convert to provider format
-    let provider_messages: Vec<Value> = messages
-        .iter()
-        .enumerate()
-        .map(|(i, m)| {
-            // For the last message (current user message), include images
-            if i == messages.len() - 1 && m.role == "user" && has_images {
-                build_multimodal_user_message(
-                    m.content.as_deref().unwrap_or(""),
-                    &images,
-                    &model_ctx.provider,
-                )
-            } else {
-                let mut obj = json!({
-                    "role": m.role,
-                });
-                if let Some(content) = &m.content {
-                    obj["content"] = json!(content);
-                }
-                if let Some(tool_calls) = &m.tool_calls {
-                    obj["tool_calls"] = tool_calls.clone();
-                }
-                if let Some(tool_call_id) = &m.tool_call_id {
-                    obj["tool_call_id"] = json!(tool_call_id);
-                }
-                obj
-            }
-        })
-        .collect();
-
-    // Get tools
-    let all_tools = tools::all_tools();
-    let tool_defs: Vec<Value> = all_tools
-        .iter()
-        .map(|t| tools::to_openai_function(t))
-        .collect();
-
-    // Build request
+    // Build request - ProviderRequest expects Vec<ChatMessage>
     let mut resolved = ProviderRequest {
         provider: model_ctx.provider.clone(),
         model: model_ctx.model.clone(),
+        base_url: model_ctx.base_url.clone(),
         api_key: model_ctx.api_key.clone(),
-        messages: provider_messages,
-        tools: Some(tool_defs),
-        max_tokens: model_ctx.max_tokens,
-        temperature: model_ctx.temperature,
-        thinking: None,
+        messages: messages.clone(),
     };
 
     // Run the agentic tool loop
@@ -530,6 +490,7 @@ fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Me
 #[derive(Debug, Clone)]
 struct ImageData {
     data: Vec<u8>,
+    #[allow(dead_code)]
     mime_type: String,
     media_ref: MediaRef,
 }
@@ -760,6 +721,7 @@ async fn process_attachments(
 ///   ]
 /// }
 /// ```
+#[allow(dead_code)]
 fn build_multimodal_user_message(text: &str, images: &[ImageData], provider: &str) -> Value {
     use base64::{engine::general_purpose::STANDARD, Engine};
 

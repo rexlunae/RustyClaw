@@ -86,7 +86,7 @@ fn format_size(bytes: usize) -> String {
 pub struct ChatMessage {
     pub role: String,
     #[serde(default)]
-    pub content: Option<String>,
+    pub content: String,
     /// Tool calls requested by the assistant.
     #[serde(default)]
     pub tool_calls: Option<serde_json::Value>,
@@ -103,7 +103,7 @@ impl ChatMessage {
     pub fn text(role: &str, content: &str) -> Self {
         Self {
             role: role.to_string(),
-            content: Some(content.to_string()),
+            content: content.to_string(),
             tool_calls: None,
             tool_call_id: None,
             media: None,
@@ -114,7 +114,7 @@ impl ChatMessage {
     pub fn user_with_media(content: &str, media: Vec<MediaRef>) -> Self {
         Self {
             role: "user".to_string(),
-            content: Some(content.to_string()),
+            content: content.to_string(),
             tool_calls: None,
             tool_call_id: None,
             media: if media.is_empty() { None } else { Some(media) },
@@ -125,8 +125,8 @@ impl ChatMessage {
     pub fn display_content(&self) -> String {
         let mut parts = Vec::new();
         
-        if let Some(content) = &self.content {
-            parts.push(content.clone());
+        if !self.content.is_empty() {
+            parts.push(self.content.clone());
         }
         
         if let Some(media) = &self.media {

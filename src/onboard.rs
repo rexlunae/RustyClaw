@@ -524,8 +524,9 @@ pub fn run_onboard_wizard(
 
                     configured_messengers.push(MessengerConfig {
                         name: def.id.to_string(),
+                        messenger_type: def.id.to_string(),
                         enabled: true,
-                        config_path: None,
+                        ..Default::default()
                     });
                 }
 
