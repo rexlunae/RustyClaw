@@ -83,6 +83,15 @@ pub async fn run_gateway(
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());
 
+    // Initialize sandbox for command execution
+    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
+    tools::init_sandbox(
+        sandbox_mode,
+        config.workspace_dir(),
+        config.credentials_dir(),
+        config.sandbox.deny_paths.clone(),
+    );
+
     let addr = helpers::resolve_listen_addr(&options.listen)?;
     let listener = TcpListener::bind(addr)
         .await

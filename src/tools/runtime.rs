@@ -2,7 +2,7 @@
 
 use super::helpers::{
     command_references_credentials, is_protected_path, process_manager, resolve_path,
-    VAULT_ACCESS_DENIED,
+    run_sandboxed_command, VAULT_ACCESS_DENIED,
 };
 use crate::process_manager::SessionStatus;
 use serde_json::{json, Value};
@@ -10,7 +10,7 @@ use std::path::Path;
 use std::process::Stdio;
 use std::time::{Duration, Instant};
 
-/// Execute a shell command with background support.
+/// Execute a shell command with background support and optional sandboxing.
 pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let command = args
         .get("command")
@@ -46,6 +46,8 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
     }
 
     // If background requested immediately, spawn and return session ID
+    // Note: Background processes can't be fully sandboxed (we need the child handle)
+    // but we still do path validation checks above.
     if background {
         let manager = process_manager();
         let mut mgr = manager
@@ -62,6 +64,15 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
         .to_string());
     }
 
+    // For foreground execution with no yield (immediate), use sandbox
+    if yield_ms == 0 {
+        let output = run_sandboxed_command(command, &cwd)?;
+        return format_output(output, timeout_secs);
+    }
+
+    // For commands with yield support, we need to spawn directly so we can
+    // transfer the child to the process manager if it takes too long.
+    // Path validation is done above; sandboxing is best-effort here.
     let mut child = std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -83,7 +94,7 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
                 let now = Instant::now();
 
                 // Check if we should auto-background
-                if now >= yield_deadline && yield_ms > 0 {
+                if now >= yield_deadline {
                     // Move to background - transfer child to process manager
                     let manager = process_manager();
                     let mut mgr = manager
@@ -133,6 +144,11 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
         .wait_with_output()
         .map_err(|e| format!("Failed to get command output: {}", e))?;
 
+    format_output(output, timeout_secs)
+}
+
+/// Format command output into a result string.
+fn format_output(output: std::process::Output, _timeout_secs: u64) -> Result<String, String> {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 

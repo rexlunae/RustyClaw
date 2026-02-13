@@ -1,8 +1,57 @@
 //! Helper functions and global state for the tools system.
 
 use crate::process_manager::{ProcessManager, SharedProcessManager};
+use crate::sandbox::{Sandbox, SandboxMode, SandboxPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+
+// ── Global process manager ──────────────────────────────────────────────────
+
+/// Global process manager for background exec sessions.
+static PROCESS_MANAGER: OnceLock<SharedProcessManager> = OnceLock::new();
+
+/// Get the global process manager instance.
+pub fn process_manager() -> &'static SharedProcessManager {
+    PROCESS_MANAGER.get_or_init(|| Arc::new(Mutex::new(ProcessManager::new())))
+}
+
+// ── Global sandbox configuration ────────────────────────────────────────────
+
+/// Global sandbox instance, initialized once at gateway startup.
+static SANDBOX: OnceLock<Sandbox> = OnceLock::new();
+
+/// Called once from the gateway to initialize the sandbox.
+pub fn init_sandbox(mode: SandboxMode, workspace: PathBuf, credentials_dir: PathBuf, deny_paths: Vec<PathBuf>) {
+    let mut policy = SandboxPolicy::protect_credentials(&credentials_dir, &workspace);
+    for path in deny_paths {
+        policy = policy.deny_read(path.clone()).deny_write(path);
+    }
+    let sandbox = Sandbox::with_mode(mode, policy);
+    let _ = SANDBOX.set(sandbox);
+}
+
+/// Get the global sandbox instance, if initialized.
+pub fn sandbox() -> Option<&'static Sandbox> {
+    SANDBOX.get()
+}
+
+/// Run a command through the sandbox (or unsandboxed if not initialized).
+pub fn run_sandboxed_command(command: &str, cwd: &Path) -> Result<std::process::Output, String> {
+    if let Some(sb) = SANDBOX.get() {
+        // Update policy workspace to the actual cwd for this command
+        let mut policy = sb.policy.clone();
+        policy.workspace = cwd.to_path_buf();
+        crate::sandbox::run_sandboxed(command, &policy, sb.mode)
+    } else {
+        // No sandbox configured, run directly
+        std::process::Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(cwd)
+            .output()
+            .map_err(|e| format!("Command failed: {}", e))
+    }
+}
 
 // ── Global process manager ──────────────────────────────────────────────────
 

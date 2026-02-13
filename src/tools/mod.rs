@@ -23,6 +23,7 @@ mod params;
 pub use helpers::{
     process_manager, set_credentials_dir, is_protected_path,
     expand_tilde, VAULT_ACCESS_DENIED, command_references_credentials,
+    init_sandbox, sandbox, run_sandboxed_command,
 };
 
 // File operations
