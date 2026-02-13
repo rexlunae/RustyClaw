@@ -1,297 +1,95 @@
 # Contributing to RustyClaw
 
-Thank you for your interest in contributing to RustyClaw! This document provides guidelines and information for contributors.
+Thanks for your interest in contributing to RustyClaw! 🦀🦞
+
+## Getting Started
+
+1. Fork the repository
+2. Clone your fork: `git clone https://github.com/YOUR_USERNAME/RustyClaw.git`
+3. Create a branch: `git checkout -b my-feature`
+4. Make your changes
+5. Run tests: `cargo test`
+6. Commit: `git commit -m "feat: add cool feature"`
+7. Push: `git push origin my-feature`
+8. Open a Pull Request
 
 ## Development Setup
 
 ### Prerequisites
 
-- Rust 1.70 or later
-- Git
-- A text editor or IDE (VS Code, RustRover, etc.)
+- Rust 1.85+ (edition 2024)
+- Cargo
 
-### Setup Steps
-
-1. Fork the repository
-2. Clone your fork:
-   ```bash
-   git clone https://github.com/YOUR_USERNAME/RustyClaw.git
-   cd RustyClaw
-   ```
-3. Build the project:
-   ```bash
-   cargo build
-   ```
-4. Run tests:
-   ```bash
-   cargo test
-   ```
-
-## Development Workflow
-
-### Running in Development Mode
+### Build
 
 ```bash
-cargo run
+cargo build
 ```
 
-### Building for Release
+### Test
 
 ```bash
-cargo build --release
-```
-
-### Running Tests
-
-```bash
-# Run all tests
+# All tests
 cargo test
 
-# Run tests with output
+# Specific test file
+cargo test --test tool_execution
+
+# With output
 cargo test -- --nocapture
-
-# Run specific test
-cargo test test_name
 ```
 
-### Code Formatting
-
-```bash
-# Check formatting
-cargo fmt -- --check
-
-# Apply formatting
-cargo fmt
-```
-
-### Linting
+### Lint
 
 ```bash
 cargo clippy
+cargo fmt --check
 ```
-
-## Project Structure
-
-```
-RustyClaw/
-├── src/
-│   ├── main.rs          # Entry point
-│   ├── config.rs        # Configuration management
-│   ├── secrets.rs       # Secrets storage
-│   ├── skills.rs        # Skills system
-│   ├── soul.rs          # SOUL management
-│   ├── messenger.rs     # Messenger abstraction
-│   └── tui.rs           # Terminal UI
-├── Cargo.toml           # Dependencies and metadata
-├── README.md            # User documentation
-├── ARCHITECTURE.md      # Architecture overview
-└── CONTRIBUTING.md      # This file
-```
-
-## Adding Features
-
-### Adding a New Command
-
-1. Add command parsing in `tui.rs` `handle_input()` method
-2. Implement the command logic
-3. Add help text
-4. Add tests
-
-Example:
-```rust
-match parts[0] {
-    "mycommand" => {
-        // Implementation
-        self.messages.push("Command executed".to_string());
-    }
-    // ... other commands
-}
-```
-
-### Adding a New View
-
-1. Add new view variant to `View` enum
-2. Implement `render_myview` method
-3. Add keyboard shortcut in `run_app()`
-4. Update help text
-
-### Implementing a New Messenger
-
-1. Create a new struct implementing the `Messenger` trait:
-```rust
-pub struct MyMessenger {
-    name: String,
-    connected: bool,
-    // ... other fields
-}
-
-#[async_trait]
-impl Messenger for MyMessenger {
-    // Implement required methods
-}
-```
-
-2. Add configuration support in `config.rs`
-3. Add tests
-4. Update documentation
-
-## Testing Guidelines
-
-### Unit Tests
-
-Place tests in the same file as the code:
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_my_feature() {
-        // Test implementation
-    }
-}
-```
-
-### Integration Tests
-
-Create files in `tests/` directory for integration tests.
-
-### Test Coverage
-
-Aim for:
-- All public functions tested
-- Edge cases covered
-- Error conditions tested
 
 ## Code Style
 
-### Rust Guidelines
+- Follow Rust conventions (rustfmt enforced)
+- Use `///` doc comments for public items
+- Add tests for new functionality
+- Keep functions focused and small
 
-- Follow [Rust API Guidelines](https://rust-lang.github.io/api-guidelines/)
-- Use `rustfmt` for formatting
-- Use `clippy` for linting
-- Write idiomatic Rust code
+## Commit Messages
 
-### Documentation
+We use [Conventional Commits](https://www.conventionalcommits.org/):
 
-- Add doc comments to public items:
-```rust
-/// Description of the function
-///
-/// # Arguments
-///
-/// * `arg` - Description of argument
-///
-/// # Returns
-///
-/// Description of return value
-pub fn my_function(arg: Type) -> ReturnType {
-    // Implementation
-}
-```
+- `feat:` New features
+- `fix:` Bug fixes
+- `docs:` Documentation only
+- `test:` Adding/updating tests
+- `refactor:` Code changes that don't add features or fix bugs
+- `chore:` Maintenance tasks
 
-### Error Handling
+## Adding Tools
 
-- Use `anyhow::Result` for error propagation
-- Use `thiserror` for custom error types
-- Provide context with `.context()`
+1. Add tool definition to `all_tools()` in `src/tools.rs`
+2. Create `*_params()` function for parameters
+3. Create `exec_*()` function for execution
+4. Add to `resolve_params()` match
+5. Add integration tests in `tests/tool_execution.rs`
+6. Update documentation
 
-## Commit Guidelines
+## Adding Tests
 
-### Commit Message Format
+- Unit tests go in the module (`#[cfg(test)] mod tests`)
+- Integration tests go in `tests/`
+- Golden files in `tests/golden/` (update with `UPDATE_GOLDEN=1 cargo test`)
 
-```
-<type>: <description>
+## Security
 
-[optional body]
+- Never log secrets
+- Use the sandbox for command execution
+- Report security issues privately (see [SECURITY.md](docs/SECURITY.md))
 
-[optional footer]
-```
+## Questions?
 
-Types:
-- `feat`: New feature
-- `fix`: Bug fix
-- `docs`: Documentation changes
-- `style`: Code style changes
-- `refactor`: Code refactoring
-- `test`: Adding tests
-- `chore`: Maintenance tasks
-
-Example:
-```
-feat: Add skill filtering by category
-
-Implemented filtering functionality to allow users to view skills
-by category in the TUI interface.
-```
-
-## Pull Request Process
-
-1. Create a feature branch:
-   ```bash
-   git checkout -b feature/my-feature
-   ```
-
-2. Make your changes
-   - Write code
-   - Add tests
-   - Update documentation
-
-3. Commit your changes:
-   ```bash
-   git add .
-   git commit -m "feat: Add my feature"
-   ```
-
-4. Push to your fork:
-   ```bash
-   git push origin feature/my-feature
-   ```
-
-5. Create a Pull Request
-   - Provide clear description
-   - Reference related issues
-   - Ensure CI passes
-
-## Security Considerations
-
-When contributing, please:
-
-- Never commit secrets or credentials
-- Follow security best practices
-- Report security issues privately
-- Consider privacy implications
-- Test security-related changes thoroughly
-
-### Reporting Security Issues
-
-Please report security vulnerabilities to the maintainers privately before public disclosure.
-
-## Questions and Support
-
-- Open an issue for bugs or feature requests
-- Use discussions for questions
-- Join our community chat (if available)
-
-## Code Review Process
-
-All contributions go through code review:
-
-1. Maintainers review the code
-2. Feedback is provided
-3. Changes are requested if needed
-4. Once approved, code is merged
+- Open a [Discussion](https://github.com/rexlunae/RustyClaw/discussions)
+- Join the [Discord](https://discord.com/invite/clawd)
 
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
-
-## Recognition
-
-Contributors will be recognized in:
-- README.md contributors section
-- Release notes
-- Project documentation
-
-Thank you for contributing to RustyClaw!
