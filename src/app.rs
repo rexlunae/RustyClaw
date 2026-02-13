@@ -1325,6 +1325,31 @@ impl App {
                 CommandAction::ShowProviderSelector => {
                     return Ok(Some(Action::ShowProviderSelector));
                 }
+                CommandAction::Download(ref media_id, ref dest_path) => {
+                    // Find the media in conversation history
+                    let media_ref = self.find_media_ref(media_id);
+                    match media_ref {
+                        Some(m) => {
+                            match self.download_media(&m, dest_path.as_deref()) {
+                                Ok(path) => {
+                                    self.state.messages.push(DisplayMessage::info(
+                                        format!("Downloaded to: {}", path)
+                                    ));
+                                }
+                                Err(e) => {
+                                    self.state.messages.push(DisplayMessage::error(
+                                        format!("Download failed: {}", e)
+                                    ));
+                                }
+                            }
+                        }
+                        None => {
+                            self.state.messages.push(DisplayMessage::error(
+                                format!("Media not found: {}", media_id)
+                            ));
+                        }
+                    }
+                }
                 CommandAction::None => {
                     for msg in response.messages {
                         self.state.messages.push(DisplayMessage::info(msg));
@@ -1965,6 +1990,71 @@ impl App {
         }
         let path = Self::history_path(&self.state.config);
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Find a MediaRef in conversation history by ID.
+    fn find_media_ref(&self, media_id: &str) -> Option<crate::gateway::MediaRef> {
+        for msg in &self.state.conversation_history {
+            if let Some(media) = &msg.media {
+                for m in media {
+                    if m.id == media_id {
+                        return Some(m.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Download media to a file.
+    fn download_media(
+        &self,
+        media_ref: &crate::gateway::MediaRef,
+        dest_path: Option<&str>,
+    ) -> Result<String, String> {
+        // Determine destination path
+        let dest = if let Some(path) = dest_path {
+            let path = shellexpand::tilde(path);
+            std::path::PathBuf::from(path.as_ref())
+        } else {
+            // Default to Downloads or current directory
+            let downloads = dirs::download_dir()
+                .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+            let filename = media_ref.filename.as_deref().unwrap_or(&media_ref.id);
+            downloads.join(filename)
+        };
+
+        // Try local cache first
+        if let Some(local_path) = &media_ref.local_path {
+            let src = std::path::Path::new(local_path);
+            if src.exists() {
+                std::fs::copy(src, &dest)
+                    .map_err(|e| format!("Failed to copy: {}", e))?;
+                return Ok(dest.to_string_lossy().to_string());
+            }
+        }
+
+        // Try downloading from URL
+        if let Some(url) = &media_ref.url {
+            // Use blocking reqwest for simplicity in sync context
+            let response = reqwest::blocking::get(url)
+                .map_err(|e| format!("Failed to download: {}", e))?;
+            
+            let bytes = response.bytes()
+                .map_err(|e| format!("Failed to read response: {}", e))?;
+            
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Failed to create directory: {}", e))?;
+            }
+            
+            std::fs::write(&dest, &bytes)
+                .map_err(|e| format!("Failed to write file: {}", e))?;
+            
+            return Ok(dest.to_string_lossy().to_string());
+        }
+
+        Err("No local cache or URL available".to_string())
     }
 
     /// Build a structured JSON chat request for the hatching exchange.

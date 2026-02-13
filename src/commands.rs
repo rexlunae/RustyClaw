@@ -26,6 +26,8 @@ pub enum CommandAction {
     ShowSecrets,
     /// Show the provider selector dialog
     ShowProviderSelector,
+    /// Download media by ID (id, optional destination path)
+    Download(String, Option<String>),
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +48,7 @@ pub fn command_names() -> Vec<String> {
     let mut names: Vec<String> = vec![
         "help".into(),
         "clear".into(),
+        "download".into(),
         "enable-access".into(),
         "disable-access".into(),
         "onboard".into(),
@@ -101,6 +104,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "Available commands:".to_string(),
                 "  /help                    - Show this help".to_string(),
                 "  /clear                   - Clear messages and conversation memory".to_string(),
+                "  /download <id> [path]    - Download media attachment to file".to_string(),
                 "  /enable-access           - Enable agent access to secrets".to_string(),
                 "  /disable-access          - Disable agent access to secrets".to_string(),
                 "  /onboard                 - Run setup wizard (use CLI: rustyclaw onboard)".to_string(),
@@ -120,6 +124,25 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
         "clear" => CommandResponse {
             messages: vec!["Messages and conversation memory cleared.".to_string()],
             action: CommandAction::ClearMessages,
+        },
+        "download" => {
+            if parts.len() < 2 {
+                CommandResponse {
+                    messages: vec![
+                        "Usage: /download <media_id> [destination_path]".to_string(),
+                        "Example: /download media_0001".to_string(),
+                        "Example: /download media_0001 ~/Downloads/image.jpg".to_string(),
+                    ],
+                    action: CommandAction::None,
+                }
+            } else {
+                let media_id = parts[1].to_string();
+                let dest_path = parts.get(2).map(|s| s.to_string());
+                CommandResponse {
+                    messages: vec![format!("Downloading {}...", media_id)],
+                    action: CommandAction::Download(media_id, dest_path),
+                }
+            }
         },
         "enable-access" => {
             context.secrets_manager.set_agent_access(true);

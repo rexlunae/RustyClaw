@@ -60,6 +60,7 @@ ssh-key = { version = "0.6", features = ["ed25519", "getrandom", "std"] }
 
 # File system and path handling
 dirs = "6.0"
+shellexpand = "3.1"
 
 # Async runtime (for messenger support)
 tokio = { version = "1.35", features = ["full"] }
