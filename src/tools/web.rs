@@ -47,7 +47,7 @@ pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, Str
     let is_secure = parsed_url.scheme() == "https";
 
     // Build HTTP client
-    let mut client_builder = reqwest::blocking::Client::builder()
+    let client_builder = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("RustyClaw/0.1 (web_fetch tool)")
         // Don't follow redirects automatically so we can handle Set-Cookie
@@ -161,7 +161,7 @@ pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, Str
 /// Get the Cookie header for a request, if cookies are available.
 fn get_cookie_header(domain: &str, path: &str, is_secure: bool) -> Option<String> {
     let vault_ref = vault()?;
-    let mut vault_guard = vault_ref.lock().ok()?;
+    let mut vault_guard = vault_ref.blocking_lock();
 
     // Use agent_access setting — no explicit user approval for cookie reads
     // during web_fetch (the user approved by setting use_cookies=true)
@@ -174,10 +174,9 @@ fn get_cookie_header(domain: &str, path: &str, is_secure: bool) -> Option<String
 /// Store Set-Cookie headers from a response.
 fn store_response_cookies(domain: &str, headers: &[String]) {
     if let Some(vault_ref) = vault() {
-        if let Ok(mut vault_guard) = vault_ref.lock() {
-            // Best effort — don't fail the request if cookie storage fails
-            let _ = vault_guard.store_cookies_from_response(domain, headers, true);
-        }
+        let mut vault_guard = vault_ref.blocking_lock();
+        // Best effort — don't fail the request if cookie storage fails
+        let _ = vault_guard.store_cookies_from_response(domain, headers, true);
     }
 }
 
