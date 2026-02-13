@@ -104,10 +104,10 @@ pub fn append_tool_round(
                 "input": tc.arguments,
             }));
         }
-        messages.push(ChatMessage {
-            role: "assistant".into(),
-            content: serde_json::to_string(&content_blocks).unwrap_or_default(),
-        });
+        messages.push(ChatMessage::text(
+            "assistant",
+            &serde_json::to_string(&content_blocks).unwrap_or_default(),
+        ));
 
         let mut result_blocks = Vec::new();
         for r in results {
@@ -118,10 +118,10 @@ pub fn append_tool_round(
                 "is_error": r.is_error,
             }));
         }
-        messages.push(ChatMessage {
-            role: "user".into(),
-            content: serde_json::to_string(&result_blocks).unwrap_or_default(),
-        });
+        messages.push(ChatMessage::text(
+            "user",
+            &serde_json::to_string(&result_blocks).unwrap_or_default(),
+        ));
     } else if provider == "google" {
         // Google: model turn with function calls, then user turn with function responses.
         let mut parts = Vec::new();
@@ -133,10 +133,10 @@ pub fn append_tool_round(
                 "functionCall": { "name": tc.name, "args": tc.arguments }
             }));
         }
-        messages.push(ChatMessage {
-            role: "assistant".into(),
-            content: serde_json::to_string(&parts).unwrap_or_default(),
-        });
+        messages.push(ChatMessage::text(
+            "assistant",
+            &serde_json::to_string(&parts).unwrap_or_default(),
+        ));
 
         let mut resp_parts = Vec::new();
         for r in results {
@@ -147,10 +147,10 @@ pub fn append_tool_round(
                 }
             }));
         }
-        messages.push(ChatMessage {
-            role: "user".into(),
-            content: serde_json::to_string(&resp_parts).unwrap_or_default(),
-        });
+        messages.push(ChatMessage::text(
+            "user",
+            &serde_json::to_string(&resp_parts).unwrap_or_default(),
+        ));
     } else {
         // OpenAI-compatible: assistant message with tool_calls array,
         // then one "tool" message per result.
@@ -175,21 +175,21 @@ pub fn append_tool_round(
             "content": if model_resp.text.is_empty() { serde_json::Value::Null } else { json!(model_resp.text) },
             "tool_calls": tc_array,
         });
-        messages.push(ChatMessage {
-            role: "assistant".into(),
-            content: serde_json::to_string(&assistant_json).unwrap_or_default(),
-        });
+        messages.push(ChatMessage::text(
+            "assistant",
+            &serde_json::to_string(&assistant_json).unwrap_or_default(),
+        ));
 
         for r in results {
-            messages.push(ChatMessage {
-                role: "tool".into(),
-                content: json!({
+            messages.push(ChatMessage::text(
+                "tool",
+                &json!({
                     "role": "tool",
                     "tool_call_id": r.id,
                     "content": r.output,
                 })
                 .to_string(),
-            });
+            ));
         }
     }
 }
@@ -265,10 +265,7 @@ pub async fn compact_conversation(
 
     // Call the model to produce the summary (simple request, no tools).
     let summary_req = ProviderRequest {
-        messages: vec![ChatMessage {
-            role: "user".into(),
-            content: summary_text,
-        }],
+        messages: vec![ChatMessage::text("user", &summary_text)],
         model: resolved.model.clone(),
         provider: resolved.provider.clone(),
         base_url: resolved.base_url.clone(),
@@ -294,13 +291,13 @@ pub async fn compact_conversation(
     if has_system {
         new_messages.push(msgs[0].clone());
     }
-    new_messages.push(ChatMessage {
-        role: "assistant".into(),
-        content: format!(
+    new_messages.push(ChatMessage::text(
+        "assistant",
+        &format!(
             "[Conversation summary — older messages were compacted to save context]\n\n{}",
             summary,
         ),
-    });
+    ));
     new_messages.extend_from_slice(&msgs[keep_from..]);
 
     let old_count = msgs.len();

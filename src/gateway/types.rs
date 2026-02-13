@@ -10,11 +10,133 @@ pub struct GatewayOptions {
 
 // ── Chat protocol types ─────────────────────────────────────────────────────
 
-/// A single message in a chat conversation.
+/// Reference to a media attachment in a message.
+/// 
+/// Media is not stored inline in conversation history. Instead, we store
+/// a reference with metadata. The actual data can be:
+/// - Downloaded from the original URL (may expire)
+/// - Retrieved from the local cache path
+/// - Requested via the gateway's media endpoint
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaRef {
+    /// Unique ID for referencing this media (e.g., "img_001")
+    pub id: String,
+    /// MIME type (e.g., "image/jpeg")
+    pub mime_type: String,
+    /// Original filename if known
+    #[serde(default)]
+    pub filename: Option<String>,
+    /// File size in bytes
+    #[serde(default)]
+    pub size: Option<usize>,
+    /// Original URL (may be temporary/expiring)
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Local cached path (filled after download)
+    #[serde(default)]
+    pub local_path: Option<String>,
+}
+
+impl MediaRef {
+    /// Generate a new media ID.
+    pub fn new_id() -> String {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        format!("media_{:04}", COUNTER.fetch_add(1, Ordering::Relaxed))
+    }
+
+    /// Create a new MediaRef with auto-generated ID.
+    pub fn new(mime_type: String) -> Self {
+        Self {
+            id: Self::new_id(),
+            mime_type,
+            filename: None,
+            size: None,
+            url: None,
+            local_path: None,
+        }
+    }
+
+    /// Display placeholder for TUI/text rendering.
+    pub fn placeholder(&self) -> String {
+        let size_str = self.size
+            .map(|s| format_size(s))
+            .unwrap_or_else(|| "?".to_string());
+        
+        let name = self.filename.as_deref()
+            .unwrap_or(&self.id);
+        
+        format!("📎 [{}] ({}) - /download {}", name, size_str, self.id)
+    }
+}
+
+/// Format a byte size for display.
+fn format_size(bytes: usize) -> String {
+    if bytes < 1024 {
+        format!("{} B", bytes)
+    } else if bytes < 1024 * 1024 {
+        format!("{:.1} KB", bytes as f64 / 1024.0)
+    } else {
+        format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
+    }
+}
+
+/// A single message in a chat conversation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
-    pub content: String,
+    #[serde(default)]
+    pub content: Option<String>,
+    /// Tool calls requested by the assistant.
+    #[serde(default)]
+    pub tool_calls: Option<serde_json::Value>,
+    /// Tool call ID this message is responding to.
+    #[serde(default)]
+    pub tool_call_id: Option<String>,
+    /// Media attachments (images, files, etc.)
+    #[serde(default)]
+    pub media: Option<Vec<MediaRef>>,
+}
+
+impl ChatMessage {
+    /// Create a simple text message.
+    pub fn text(role: &str, content: &str) -> Self {
+        Self {
+            role: role.to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            media: None,
+        }
+    }
+
+    /// Create a user message with media.
+    pub fn user_with_media(content: &str, media: Vec<MediaRef>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: Some(content.to_string()),
+            tool_calls: None,
+            tool_call_id: None,
+            media: if media.is_empty() { None } else { Some(media) },
+        }
+    }
+
+    /// Get display text including media placeholders.
+    pub fn display_content(&self) -> String {
+        let mut parts = Vec::new();
+        
+        if let Some(content) = &self.content {
+            parts.push(content.clone());
+        }
+        
+        if let Some(media) = &self.media {
+            for m in media {
+                parts.push(m.placeholder());
+            }
+        }
+        
+        parts.join("\n")
+    }
 }
 
 /// An incoming chat request from the TUI.

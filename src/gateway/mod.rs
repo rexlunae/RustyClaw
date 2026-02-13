@@ -15,8 +15,8 @@ mod types;
 
 // Re-export public types
 pub use types::{
-    ChatMessage, ChatRequest, CopilotSession, GatewayOptions, ModelContext, ModelResponse,
-    ParsedToolCall, ProbeResult, ProviderRequest, ToolCallResult,
+    ChatMessage, ChatRequest, CopilotSession, GatewayOptions, MediaRef, ModelContext,
+    ModelResponse, ParsedToolCall, ProbeResult, ProviderRequest, ToolCallResult,
 };
 
 // Re-export messenger handler types

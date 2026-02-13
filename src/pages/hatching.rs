@@ -94,10 +94,7 @@ impl Hatching {
     /// Build the chat messages for a single prompt to the model.
     pub fn chat_messages(&self) -> Vec<crate::gateway::ChatMessage> {
         use crate::gateway::ChatMessage;
-        vec![ChatMessage {
-            role: "system".to_string(),
-            content: self.system_prompt.clone(),
-        }]
+        vec![ChatMessage::text("system", &self.system_prompt)]
     }
 
     /// Advance the egg animation

@@ -1093,10 +1093,7 @@ impl App {
                 // Record the assistant turn in conversation history
                 // and persist to disk so future sessions remember.
                 if !trimmed.is_empty() {
-                    self.state.conversation_history.push(ChatMessage {
-                        role: "assistant".to_string(),
-                        content: trimmed,
-                    });
+                    self.state.conversation_history.push(ChatMessage::text("assistant", &trimmed));
                     self.save_history();
                 }
             }
@@ -1347,10 +1344,7 @@ impl App {
             ) && self.ws_sink.is_some()
             {
                 // Append the new user turn to the running conversation history.
-                self.state.conversation_history.push(ChatMessage {
-                    role: "user".to_string(),
-                    content: text,
-                });
+                self.state.conversation_history.push(ChatMessage::text("user", &text));
                 self.save_history();
 
                 let chat_json = serde_json::json!({
@@ -1913,10 +1907,7 @@ impl App {
         if content.is_empty() {
             None
         } else {
-            Some(ChatMessage {
-                role: "system".to_string(),
-                content,
-            })
+            Some(ChatMessage::text("system", &content))
         }
     }
 

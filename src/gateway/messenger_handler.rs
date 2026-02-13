@@ -21,7 +21,7 @@ use tokio_util::sync::CancellationToken;
 use super::providers;
 use super::secrets_handler;
 use super::skills_handler;
-use super::{ChatMessage, ModelContext, ProviderRequest, SharedSkillManager, SharedVault, ToolCallResult};
+use super::{ChatMessage, MediaRef, ModelContext, ProviderRequest, SharedSkillManager, SharedVault, ToolCallResult};
 
 #[cfg(feature = "matrix")]
 use crate::messengers::MatrixMessenger;
@@ -283,23 +283,18 @@ async fn process_incoming_message(
 
     // Add system message if not present
     if messages.is_empty() || messages[0].role != "system" {
-        messages.insert(
-            0,
-            ChatMessage {
-                role: "system".to_string(),
-                content: Some(system_prompt.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-            },
-        );
+        messages.insert(0, ChatMessage::text("system", &system_prompt));
     } else {
         // Update system prompt
         messages[0].content = Some(system_prompt.clone());
     }
 
+    // Media cache directory
+    let cache_dir = config.credentials_dir().join("media_cache");
+
     // Process any image attachments
     let images = if let Some(attachments) = &msg.media {
-        process_attachments(http, attachments).await
+        process_attachments(http, attachments, &cache_dir).await
     } else {
         Vec::new()
     };
@@ -309,16 +304,14 @@ async fn process_incoming_message(
         eprintln!("[messenger] Processing {} image(s)", images.len());
     }
 
-    // Add user message to history (text only for storage)
-    messages.push(ChatMessage {
-        role: "user".to_string(),
-        content: Some(msg.content.clone()),
-        tool_calls: None,
-        tool_call_id: None,
-    });
+    // Build media refs for history storage
+    let media_refs: Vec<MediaRef> = images.iter().map(|img| img.media_ref.clone()).collect();
+
+    // Add user message to history (with media refs, not raw data)
+    messages.push(ChatMessage::user_with_media(&msg.content, media_refs.clone()));
 
     // Convert to provider format
-    let mut provider_messages: Vec<Value> = messages
+    let provider_messages: Vec<Value> = messages
         .iter()
         .enumerate()
         .map(|(i, m)| {
@@ -451,22 +444,12 @@ async fn process_incoming_message(
         let mut store = conversations.lock().await;
         let history = store.entry(conv_key).or_insert_with(Vec::new);
 
-        // Add user message
-        history.push(ChatMessage {
-            role: "user".to_string(),
-            content: Some(msg.content.clone()),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        // Add user message (with media refs)
+        history.push(ChatMessage::user_with_media(&msg.content, media_refs.clone()));
 
         // Add assistant response
         if !final_response.is_empty() {
-            history.push(ChatMessage {
-                role: "assistant".to_string(),
-                content: Some(final_response.clone()),
-                tool_calls: None,
-                tool_call_id: None,
-            });
+            history.push(ChatMessage::text("assistant", &final_response));
         }
 
         // Trim history if too long (keep system message)
@@ -548,10 +531,17 @@ fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Me
 struct ImageData {
     data: Vec<u8>,
     mime_type: String,
+    media_ref: MediaRef,
 }
 
 /// Download an image from a URL.
-async fn download_image(http: &reqwest::Client, url: &str) -> Result<ImageData> {
+/// Download an image from a URL and cache locally.
+async fn download_image(
+    http: &reqwest::Client,
+    url: &str,
+    filename: Option<&str>,
+    cache_dir: &std::path::Path,
+) -> Result<ImageData> {
     let response = http
         .get(url)
         .send()
@@ -586,14 +576,31 @@ async fn download_image(http: &reqwest::Client, url: &str) -> Result<ImageData> 
         anyhow::bail!("Image too large: {} bytes (max {})", bytes.len(), MAX_IMAGE_SIZE);
     }
 
+    // Build media ref
+    let mut media_ref = MediaRef::new(content_type.clone());
+    media_ref.filename = filename.map(String::from);
+    media_ref.size = Some(bytes.len());
+    media_ref.url = Some(url.to_string());
+
+    // Cache to disk
+    let ext = mime_to_extension(&content_type);
+    let cache_path = cache_dir.join(format!("{}.{}", media_ref.id, ext));
+    
+    if let Err(e) = tokio::fs::write(&cache_path, &bytes).await {
+        eprintln!("[messenger] Failed to cache image: {}", e);
+    } else {
+        media_ref.local_path = Some(cache_path.to_string_lossy().to_string());
+    }
+
     Ok(ImageData {
         data: bytes.to_vec(),
         mime_type: content_type,
+        media_ref,
     })
 }
 
 /// Load an image from a local file path.
-async fn load_image_from_path(path: &str) -> Result<ImageData> {
+async fn load_image_from_path(path: &str, cache_dir: &std::path::Path) -> Result<ImageData> {
     use tokio::fs;
     
     let data = fs::read(path).await.context("Failed to read image file")?;
@@ -605,7 +612,40 @@ async fn load_image_from_path(path: &str) -> Result<ImageData> {
     // Detect MIME type from extension or magic bytes
     let mime_type = detect_image_mime_type(path, &data)?;
 
-    Ok(ImageData { data, mime_type })
+    // Build media ref
+    let mut media_ref = MediaRef::new(mime_type.clone());
+    media_ref.filename = std::path::Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(String::from);
+    media_ref.size = Some(data.len());
+
+    // Copy to cache dir
+    let ext = mime_to_extension(&mime_type);
+    let cache_path = cache_dir.join(format!("{}.{}", media_ref.id, ext));
+    
+    if let Err(e) = tokio::fs::write(&cache_path, &data).await {
+        eprintln!("[messenger] Failed to cache image: {}", e);
+    } else {
+        media_ref.local_path = Some(cache_path.to_string_lossy().to_string());
+    }
+
+    Ok(ImageData {
+        data,
+        mime_type,
+        media_ref,
+    })
+}
+
+/// Get file extension for MIME type.
+fn mime_to_extension(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/gif" => "gif",
+        "image/webp" => "webp",
+        _ => "bin",
+    }
 }
 
 /// Detect image MIME type from path extension or magic bytes.
@@ -663,7 +703,13 @@ fn detect_from_magic_bytes(data: &[u8]) -> Result<String> {
 async fn process_attachments(
     http: &reqwest::Client,
     attachments: &[MediaAttachment],
+    cache_dir: &std::path::Path,
 ) -> Vec<ImageData> {
+    // Ensure cache directory exists
+    if let Err(e) = tokio::fs::create_dir_all(cache_dir).await {
+        eprintln!("[messenger] Failed to create cache dir: {}", e);
+    }
+
     let mut images = Vec::new();
 
     for attachment in attachments {
@@ -676,9 +722,9 @@ async fn process_attachments(
 
         // Try URL first, then path
         let result = if let Some(url) = &attachment.url {
-            download_image(http, url).await
+            download_image(http, url, attachment.filename.as_deref(), cache_dir).await
         } else if let Some(path) = &attachment.path {
-            load_image_from_path(path).await
+            load_image_from_path(path, cache_dir).await
         } else {
             continue;
         };
@@ -686,9 +732,10 @@ async fn process_attachments(
         match result {
             Ok(img) => {
                 eprintln!(
-                    "[messenger] Downloaded image: {} ({} bytes)",
+                    "[messenger] Downloaded image: {} ({} bytes) -> {}",
                     attachment.filename.as_deref().unwrap_or("unknown"),
-                    img.data.len()
+                    img.data.len(),
+                    img.media_ref.id
                 );
                 images.push(img);
             }
