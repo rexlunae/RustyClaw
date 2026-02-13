@@ -139,22 +139,25 @@ Supports WebSocket connections, heartbeats, and multi-session management.
 Configuration lives at `~/.rustyclaw/config.toml`:
 
 ```toml
-# AI Provider
+settings_dir = "/Users/myuser/.rustyclaw"
+messengers = []
+use_secrets = true
+secrets_password_protected = true
+totp_enabled = true
+agent_access = false
+agent_name = "A Rusty Little Crab"
+message_spacing = 1
+tab_width = 5
+
 [model]
-provider = "anthropic"
-model = "claude-sonnet-4-20250514"
-
-# Gateway settings
-[gateway]
-bind = "127.0.0.1:18789"
-token = "your-secret-token"
-
-# Security settings
-agent_access = false  # Disable agent access to secrets
+provider = "openrouter"
+model = "gpt-4.1"
+base_url = "https://openrouter.ai/api/v1"
 
 [sandbox]
-mode = "auto"  # auto, bwrap, landlock, macos, path, none
+mode = ""
 deny_paths = []
+allow_paths = []
 ```
 
 ## Documentation
@@ -197,7 +200,6 @@ MIT License — See [LICENSE](LICENSE) for details.
 
 - [OpenClaw](https://github.com/openclaw/openclaw) — The original project and inspiration
 - The Rust community for excellent crates
-- Everyone who has contributed feedback and ideas
 
 ---
 
