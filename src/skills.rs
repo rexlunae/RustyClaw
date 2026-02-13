@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 // ── ClawHub constants ───────────────────────────────────────────────────────
 
 /// Default ClawHub registry URL.
-pub const DEFAULT_REGISTRY_URL: &str = "https://clawhub.com";
+pub const DEFAULT_REGISTRY_URL: &str = "https://clawhub.ai";
 
 // ── Skill types ─────────────────────────────────────────────────────────────
 
@@ -737,8 +737,11 @@ impl SkillManager {
             );
         }
 
-        let ver = version.unwrap_or("latest");
-        let url = format!("{}/skills/{}/{}", self.registry_url, name, ver);
+        // ClawHub download API: /api/v1/download?slug=<name>&version=<version>
+        let mut url = format!("{}/api/v1/download?slug={}", self.registry_url, urlencoding::encode(name));
+        if let Some(v) = version {
+            url.push_str(&format!("&version={}", urlencoding::encode(v)));
+        }
 
         let client = reqwest::blocking::Client::new();
         let mut req = client.get(&url);
@@ -759,44 +762,59 @@ impl SkillManager {
             );
         }
 
-        let pkg: RegistryPackageResponse = resp.json().context("Failed to parse package response")?;
-
+        // Response is a zip file
+        let zip_bytes = resp.bytes().context("Failed to read zip data")?;
+        
         let skills_dir = self
             .skills_dirs
             .first()
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("No skills directory configured"))?;
 
-        let skill_dir = skills_dir.join(&pkg.name);
+        let skill_dir = skills_dir.join(name);
         std::fs::create_dir_all(&skill_dir)?;
 
-        // Write the SKILL.md content.
-        let skill_md_path = skill_dir.join("SKILL.md");
-        if let Some(ref content) = pkg.skill_md {
-            std::fs::write(&skill_md_path, content)?;
-        } else if let Some(ref archive) = pkg.archive_b64 {
-            // Decode base64 archive and extract.  For now we just store
-            // it as-is and create a placeholder SKILL.md.
-            let decoded = base64_decode(archive)?;
-            let archive_path = skill_dir.join("package.tar");
-            std::fs::write(&archive_path, &decoded)?;
-            // Create a minimal SKILL.md from the package metadata.
-            let md_content = format!(
-                "---\nname: {}\ndescription: {}\n---\n\n# {}\n\nInstalled from ClawHub (v{}).\n",
-                pkg.name, pkg.name, pkg.name, pkg.version,
-            );
-            std::fs::write(&skill_md_path, md_content)?;
-        } else {
-            anyhow::bail!("Registry package for '{}' contains no skill content", name);
+        // Extract zip to skill directory
+        let cursor = std::io::Cursor::new(zip_bytes);
+        let mut archive = zip::ZipArchive::new(cursor).context("Invalid zip archive")?;
+        
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i)?;
+            let outpath = skill_dir.join(file.name());
+            
+            if file.name().ends_with('/') {
+                std::fs::create_dir_all(&outpath)?;
+            } else {
+                if let Some(parent) = outpath.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                let mut outfile = std::fs::File::create(&outpath)?;
+                std::io::copy(&mut file, &mut outfile)?;
+            }
         }
 
+        // Write .clawhub metadata
+        let clawhub_dir = skill_dir.join(".clawhub");
+        std::fs::create_dir_all(&clawhub_dir)?;
+        let meta = serde_json::json!({
+            "version": 1,
+            "registry": self.registry_url,
+            "slug": name,
+            "installedVersion": version.unwrap_or("latest"),
+            "installedAt": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        });
+        std::fs::write(clawhub_dir.join("install.json"), serde_json::to_string_pretty(&meta)?)?;
+
         // Load the newly-installed skill.
+        let skill_md_path = skill_dir.join("SKILL.md");
         let mut skill = self.load_skill_md(&skill_md_path)?;
         skill.source = SkillSource::Registry {
             registry_url: self.registry_url.clone(),
-            version: pkg.version.clone(),
+            version: version.unwrap_or("latest").to_string(),
         };
-        skill.linked_secrets = pkg.required_secrets.clone();
 
         // Add or replace in the in-memory list.
         if let Some(idx) = self.skills.iter().position(|s| s.name == skill.name) {
