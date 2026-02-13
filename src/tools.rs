@@ -174,6 +174,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &TTS,
         &IMAGE,
         &NODES,
+        &BROWSER,
+        &CANVAS,
     ]
 }
 
@@ -435,6 +437,25 @@ pub static NODES: ToolDef = ToolDef {
                   screen_record (screen capture), location_get (GPS), run/invoke (remote commands).",
     parameters: vec![],
     execute: exec_nodes,
+};
+
+pub static BROWSER: ToolDef = ToolDef {
+    name: "browser",
+    description: "Control web browser for automation. Actions: status, start, stop, \
+                  profiles, tabs, open, focus, close, snapshot, screenshot, navigate, \
+                  console, pdf, act (click/type/press/hover/drag). Use snapshot to get \
+                  page accessibility tree for element targeting.",
+    parameters: vec![],
+    execute: exec_browser,
+};
+
+pub static CANVAS: ToolDef = ToolDef {
+    name: "canvas",
+    description: "Control node canvases for UI presentation. Actions: present (show content), \
+                  hide, navigate, eval (run JavaScript), snapshot (capture rendered UI), \
+                  a2ui_push/a2ui_reset (accessibility-to-UI).",
+    parameters: vec![],
+    execute: exec_canvas,
 };
 
 /// We need a runtime-constructed param list because `Vec` isn't const.
@@ -958,6 +979,94 @@ fn nodes_params() -> Vec<ToolParam> {
             name: "facing".into(),
             description: "Camera facing: 'front', 'back', or 'both'.".into(),
             param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+fn browser_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action: 'status', 'start', 'stop', 'profiles', 'tabs', 'open', 'focus', 'close', 'snapshot', 'screenshot', 'navigate', 'console', 'pdf', 'act'.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "profile".into(),
+            description: "Browser profile: 'openclaw' (managed) or 'chrome' (extension relay).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "targetUrl".into(),
+            description: "URL for 'open' or 'navigate' actions.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "targetId".into(),
+            description: "Tab ID for targeting specific tab.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "ref".into(),
+            description: "Element reference from snapshot for actions.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "request".into(),
+            description: "Action request object with kind (click/type/press/hover/drag), ref, text, etc.".into(),
+            param_type: "object".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "fullPage".into(),
+            description: "Capture full page for screenshot. Default: false.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
+}
+
+fn canvas_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action: 'present', 'hide', 'navigate', 'eval', 'snapshot', 'a2ui_push', 'a2ui_reset'.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "node".into(),
+            description: "Target node for canvas operations.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "url".into(),
+            description: "URL to present or navigate to.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "javaScript".into(),
+            description: "JavaScript code for 'eval' action.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "width".into(),
+            description: "Canvas width in pixels.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "height".into(),
+            description: "Canvas height in pixels.".into(),
+            param_type: "integer".into(),
             required: false,
         },
     ]
@@ -3338,6 +3447,201 @@ fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     }
 }
 
+/// Browser automation control.
+fn exec_browser(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    let profile = args.get("profile").and_then(|v| v.as_str()).unwrap_or("openclaw");
+
+    match action {
+        "status" => {
+            Ok(format!(
+                "Browser status:\n- Profile: {}\n- Status: Not running\n\nNote: Browser control requires Playwright/CDP integration.",
+                profile
+            ))
+        }
+
+        "start" => {
+            Ok(format!(
+                "Would start browser with profile: {}\n\nNote: Requires Playwright/CDP integration.",
+                profile
+            ))
+        }
+
+        "stop" => {
+            Ok(format!(
+                "Would stop browser profile: {}\n\nNote: Requires Playwright/CDP integration.",
+                profile
+            ))
+        }
+
+        "profiles" => {
+            Ok("Available browser profiles:\n- openclaw (managed, isolated)\n- chrome (extension relay)\n\nNote: Requires browser integration.".to_string())
+        }
+
+        "tabs" => {
+            Ok(format!(
+                "Would list tabs for profile: {}\n\nNote: Requires browser integration.",
+                profile
+            ))
+        }
+
+        "open" => {
+            let url = args
+                .get("targetUrl")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'targetUrl' for open action")?;
+            Ok(format!(
+                "Would open URL: {}\n- Profile: {}\n\nNote: Requires browser integration.",
+                url, profile
+            ))
+        }
+
+        "focus" | "close" => {
+            let tab_id = args
+                .get("targetId")
+                .and_then(|v| v.as_str())
+                .ok_or(format!("Missing 'targetId' for {} action", action))?;
+            Ok(format!(
+                "Would {} tab: {}\n\nNote: Requires browser integration.",
+                action, tab_id
+            ))
+        }
+
+        "snapshot" => {
+            Ok(format!(
+                "Would capture accessibility snapshot for profile: {}\n\nReturns ARIA tree with element refs for targeting.\nNote: Requires browser integration.",
+                profile
+            ))
+        }
+
+        "screenshot" => {
+            let full_page = args.get("fullPage").and_then(|v| v.as_bool()).unwrap_or(false);
+            Ok(format!(
+                "Would capture screenshot:\n- Profile: {}\n- Full page: {}\n\nNote: Requires browser integration.",
+                profile, full_page
+            ))
+        }
+
+        "navigate" => {
+            let url = args
+                .get("targetUrl")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'targetUrl' for navigate action")?;
+            Ok(format!(
+                "Would navigate to: {}\n\nNote: Requires browser integration.",
+                url
+            ))
+        }
+
+        "console" => {
+            Ok("Would fetch browser console logs.\n\nNote: Requires browser integration.".to_string())
+        }
+
+        "pdf" => {
+            Ok("Would generate PDF from current page.\n\nNote: Requires browser integration.".to_string())
+        }
+
+        "act" => {
+            let request = args.get("request");
+            if let Some(req) = request {
+                let kind = req.get("kind").and_then(|v| v.as_str()).unwrap_or("unknown");
+                let element_ref = req.get("ref").and_then(|v| v.as_str()).unwrap_or("none");
+                Ok(format!(
+                    "Would perform action:\n- Kind: {}\n- Element ref: {}\n\nNote: Requires browser integration.",
+                    kind, element_ref
+                ))
+            } else {
+                Err("Missing 'request' object for act action".to_string())
+            }
+        }
+
+        _ => Err(format!(
+            "Unknown action: {}. Valid: status, start, stop, profiles, tabs, open, focus, close, snapshot, screenshot, navigate, console, pdf, act",
+            action
+        )),
+    }
+}
+
+/// Canvas control for UI presentation.
+fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    let node = args.get("node").and_then(|v| v.as_str());
+
+    match action {
+        "present" => {
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'url' for present action")?;
+            let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(800);
+            let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(600);
+            
+            Ok(format!(
+                "Would present canvas:\n- URL: {}\n- Size: {}x{}\n- Node: {}\n\nNote: Requires canvas integration.",
+                url, width, height, node.unwrap_or("default")
+            ))
+        }
+
+        "hide" => {
+            Ok(format!(
+                "Would hide canvas on node: {}\n\nNote: Requires canvas integration.",
+                node.unwrap_or("default")
+            ))
+        }
+
+        "navigate" => {
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'url' for navigate action")?;
+            Ok(format!(
+                "Would navigate canvas to: {}\n\nNote: Requires canvas integration.",
+                url
+            ))
+        }
+
+        "eval" => {
+            let js = args
+                .get("javaScript")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'javaScript' for eval action")?;
+            Ok(format!(
+                "Would evaluate JavaScript ({} chars):\n{}\n\nNote: Requires canvas integration.",
+                js.len(),
+                if js.len() > 100 { &js[..100] } else { js }
+            ))
+        }
+
+        "snapshot" => {
+            Ok(format!(
+                "Would capture canvas snapshot on node: {}\n\nNote: Requires canvas integration.",
+                node.unwrap_or("default")
+            ))
+        }
+
+        "a2ui_push" => {
+            Ok("Would push A2UI (accessibility-to-UI) update.\n\nNote: Requires canvas integration.".to_string())
+        }
+
+        "a2ui_reset" => {
+            Ok("Would reset A2UI state.\n\nNote: Requires canvas integration.".to_string())
+        }
+
+        _ => Err(format!(
+            "Unknown action: {}. Valid: present, hide, navigate, eval, snapshot, a2ui_push, a2ui_reset",
+            action
+        )),
+    }
+}
+
 // ── Provider-specific formatters ────────────────────────────────────────────
 
 /// Parameters for a tool, building a JSON Schema `properties` / `required`.
@@ -3399,6 +3703,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "tts" => tts_params(),
         "image" => image_params(),
         "nodes" => nodes_params(),
+        "browser" => browser_params(),
+        "canvas" => canvas_params(),
         _ => vec![],
     }
 }
@@ -3748,7 +4054,7 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 30);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -3757,7 +4063,7 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 30);
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -3765,7 +4071,7 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert_eq!(tools.len(), 28);
+        assert_eq!(tools.len(), 30);
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -4244,5 +4550,55 @@ mod tests {
         let result = exec_nodes(&args, ws());
         assert!(result.is_ok());
         assert!(result.unwrap().contains("Node status"));
+    }
+
+    // ── browser ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_browser_params_defined() {
+        let params = browser_params();
+        assert_eq!(params.len(), 7);
+        assert!(params.iter().any(|p| p.name == "action" && p.required));
+    }
+
+    #[test]
+    fn test_browser_missing_action() {
+        let args = json!({});
+        let result = exec_browser(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_browser_status() {
+        let args = json!({ "action": "status" });
+        let result = exec_browser(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("Browser status"));
+    }
+
+    // ── canvas ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_canvas_params_defined() {
+        let params = canvas_params();
+        assert_eq!(params.len(), 6);
+        assert!(params.iter().any(|p| p.name == "action" && p.required));
+    }
+
+    #[test]
+    fn test_canvas_missing_action() {
+        let args = json!({});
+        let result = exec_canvas(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_canvas_snapshot() {
+        let args = json!({ "action": "snapshot" });
+        let result = exec_canvas(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("canvas snapshot"));
     }
 }
