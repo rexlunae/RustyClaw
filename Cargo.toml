@@ -27,7 +27,9 @@ maintenance = { status = "actively-developed" }
 default = []
 matrix = ["dep:matrix-sdk"]
 signal = ["dep:presage", "dep:presage-store-sqlite"]
+browser = ["dep:chromiumoxide"]
 all-messengers = ["matrix", "signal"]
+full = ["matrix", "signal", "browser"]
 
 [dependencies]
 # TUI dependencies
@@ -99,6 +101,9 @@ matrix-sdk = { version = "0.10", default-features = false, features = ["e2e-encr
 # Signal messenger support (optional)
 presage = { git = "https://github.com/whisperfish/presage", optional = true }
 presage-store-sqlite = { git = "https://github.com/whisperfish/presage", optional = true }
+
+# Browser automation (optional)
+chromiumoxide = { version = "0.8", default-features = false, features = ["tokio-runtime"], optional = true }
 
 # Unix process management
 [target.'cfg(unix)'.dependencies]

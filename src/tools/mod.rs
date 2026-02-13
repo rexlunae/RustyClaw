@@ -15,6 +15,7 @@ mod sessions_tools;
 mod patch;
 mod gateway_tools;
 mod devices;
+mod browser;
 mod skills_tools;
 mod secrets_tools;
 mod params;
@@ -52,7 +53,10 @@ use patch::exec_apply_patch;
 use gateway_tools::{exec_gateway, exec_message, exec_tts, exec_image};
 
 // Device operations
-use devices::{exec_nodes, exec_browser, exec_canvas};
+use devices::{exec_nodes, exec_canvas};
+
+// Browser automation (separate module with feature-gated implementation)
+use browser::exec_browser;
 
 // Skill operations
 use skills_tools::{exec_skill_list, exec_skill_search, exec_skill_install, exec_skill_info, exec_skill_enable, exec_skill_link_secret};
