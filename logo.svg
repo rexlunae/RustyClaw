@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- RustyClaw Logo: A crab claw with Rust's gear aesthetic -->
+  
+  <!-- Rust orange/brown color palette -->
+  <defs>
+    <linearGradient id="rustGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#B7410E"/>
+      <stop offset="100%" style="stop-color:#8B3103"/>
+    </linearGradient>
+  </defs>
+  
+  <!-- Gear base (Rust logo reference) -->
+  <circle cx="64" cy="68" r="28" fill="none" stroke="#4A4A4A" stroke-width="6"/>
+  
+  <!-- Gear teeth -->
+  <g fill="#4A4A4A">
+    <rect x="60" y="32" width="8" height="12" rx="2"/>
+    <rect x="60" y="96" width="8" height="12" rx="2"/>
+    <rect x="28" y="64" width="12" height="8" rx="2"/>
+    <rect x="88" y="64" width="12" height="8" rx="2"/>
+    <rect x="36" y="44" width="10" height="8" rx="2" transform="rotate(-45 41 48)"/>
+    <rect x="82" y="44" width="10" height="8" rx="2" transform="rotate(45 87 48)"/>
+    <rect x="36" y="84" width="10" height="8" rx="2" transform="rotate(45 41 88)"/>
+    <rect x="82" y="84" width="10" height="8" rx="2" transform="rotate(-45 87 88)"/>
+  </g>
+  
+  <!-- Claw - left pincer -->
+  <path d="M44 58 
+           Q32 48, 28 32
+           Q26 24, 32 22
+           Q38 20, 42 28
+           Q48 40, 52 52
+           Z" 
+        fill="url(#rustGrad)" 
+        stroke="#5C2600" 
+        stroke-width="2"/>
+  
+  <!-- Claw - right pincer -->
+  <path d="M84 58
+           Q96 48, 100 32
+           Q102 24, 96 22
+           Q90 20, 86 28
+           Q80 40, 76 52
+           Z" 
+        fill="url(#rustGrad)" 
+        stroke="#5C2600" 
+        stroke-width="2"/>
+  
+  <!-- Claw base/joint -->
+  <ellipse cx="64" cy="68" rx="22" ry="18" fill="url(#rustGrad)" stroke="#5C2600" stroke-width="2"/>
+  
+  <!-- Inner gear hole (Rust R reference) -->
+  <circle cx="64" cy="68" r="8" fill="#2A2A2A"/>
+  
+  <!-- Highlight on claw -->
+  <ellipse cx="60" cy="64" rx="6" ry="4" fill="#D4652F" opacity="0.5"/>
+</svg>
