@@ -536,6 +536,16 @@ fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
         }
     }
 
+    // Filter out incomplete tool calls (missing id or name)
+    let tool_calls: Vec<serde_json::Value> = tool_calls
+        .into_iter()
+        .filter(|tc| {
+            let id = tc["id"].as_str().unwrap_or("");
+            let name = tc["function"]["name"].as_str().unwrap_or("");
+            !id.is_empty() && !name.is_empty()
+        })
+        .collect();
+
     let mut message = json!({
         "role": "assistant",
         "content": if content.trim().is_empty() { serde_json::Value::Null } else { json!(content) }
@@ -694,6 +704,16 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
         }
     }
 
+    // Filter out incomplete tool calls (missing id or name)
+    let tool_calls: Vec<serde_json::Value> = tool_calls
+        .into_iter()
+        .filter(|tc| {
+            let id = tc["id"].as_str().unwrap_or("");
+            let name = tc["function"]["name"].as_str().unwrap_or("");
+            !id.is_empty() && !name.is_empty()
+        })
+        .collect();
+
     // Build a standard OpenAI-style response object
     let mut message = json!({
         "role": "assistant",
@@ -812,11 +832,17 @@ pub async fn call_openai_with_tools(
         }
     }
 
-    // Extract tool calls.
+    // Extract tool calls (skip incomplete ones with empty id or name).
     if let Some(tc_array) = message["tool_calls"].as_array() {
         for tc in tc_array {
             let id = tc["id"].as_str().unwrap_or("").to_string();
             let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
+            
+            // Skip tool calls with missing id or name
+            if id.is_empty() || name.is_empty() {
+                continue;
+            }
+            
             let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
             let arguments = serde_json::from_str(args_str).unwrap_or(json!({}));
             result.tool_calls.push(ParsedToolCall {

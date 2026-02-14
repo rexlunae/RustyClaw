@@ -1,6 +1,6 @@
 [package]
 name = "rustyclaw"
-version = "0.1.25"
+version = "0.1.26"
 edition = "2024"
 authors = ["Erica Stith <erica@example.com>"]
 description = "A lightweight, secure agentic AI assistant runtime with OpenClaw compatibility"
