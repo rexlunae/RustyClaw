@@ -233,52 +233,80 @@ async fn handle_connection(
         writer.send(Message::Text(challenge.to_string().into())).await
             .context("Failed to send auth_challenge")?;
 
-        // Wait for auth_response (with a timeout).
-        let auth_result = tokio::time::timeout(
-            std::time::Duration::from_secs(120),
-            auth::wait_for_auth_response(&mut reader),
-        )
-        .await;
+        // Allow up to 3 attempts before closing the connection.
+        const MAX_TOTP_ATTEMPTS: u8 = 3;
+        let mut attempts = 0u8;
 
-        match auth_result {
-            Ok(Ok(code)) => {
-                let valid = {
-                    let mut v = vault.lock().await;
-                    v.verify_totp(code.trim()).unwrap_or(false)
-                };
-                if valid {
-                    auth::clear_rate_limit(&rate_limiter, peer_ip).await;
-                    let ok = json!({ "type": "auth_result", "ok": true });
-                    writer.send(Message::Text(ok.to_string().into())).await?;
-                } else {
-                    let locked_out = auth::record_totp_failure(&rate_limiter, peer_ip).await;
-                    let msg = if locked_out {
-                        format!(
-                            "Invalid code. Too many failures — locked out for {}s.",
-                            TOTP_LOCKOUT_SECS,
-                        )
-                    } else {
-                        "Invalid 2FA code.".to_string()
+        loop {
+            // Wait for auth_response (with a timeout).
+            let auth_result = tokio::time::timeout(
+                std::time::Duration::from_secs(120),
+                auth::wait_for_auth_response(&mut reader),
+            )
+            .await;
+
+            match auth_result {
+                Ok(Ok(code)) => {
+                    let valid = {
+                        let mut v = vault.lock().await;
+                        v.verify_totp(code.trim()).unwrap_or(false)
                     };
-                    let fail = json!({ "type": "auth_result", "ok": false, "message": msg });
-                    writer.send(Message::Text(fail.to_string().into())).await?;
-                    writer.send(Message::Close(None)).await?;
+                    if valid {
+                        auth::clear_rate_limit(&rate_limiter, peer_ip).await;
+                        let ok = json!({ "type": "auth_result", "ok": true });
+                        writer.send(Message::Text(ok.to_string().into())).await?;
+                        break; // Authentication successful, continue to main loop
+                    } else {
+                        attempts += 1;
+                        let locked_out = auth::record_totp_failure(&rate_limiter, peer_ip).await;
+
+                        if locked_out {
+                            let msg = format!(
+                                "Invalid code. Too many failures — locked out for {}s.",
+                                TOTP_LOCKOUT_SECS,
+                            );
+                            let fail = json!({ "type": "auth_result", "ok": false, "message": msg });
+                            writer.send(Message::Text(fail.to_string().into())).await?;
+                            writer.send(Message::Close(None)).await?;
+                            return Ok(());
+                        } else if attempts >= MAX_TOTP_ATTEMPTS {
+                            let msg = "Invalid code. Maximum attempts exceeded.";
+                            let fail = json!({ "type": "auth_result", "ok": false, "message": msg });
+                            writer.send(Message::Text(fail.to_string().into())).await?;
+                            writer.send(Message::Close(None)).await?;
+                            return Ok(());
+                        } else {
+                            let remaining = MAX_TOTP_ATTEMPTS - attempts;
+                            let msg = format!(
+                                "Invalid 2FA code. {} attempt{} remaining.",
+                                remaining,
+                                if remaining == 1 { "" } else { "s" }
+                            );
+                            let retry = json!({
+                                "type": "auth_result",
+                                "ok": false,
+                                "retry": true,
+                                "message": msg,
+                            });
+                            writer.send(Message::Text(retry.to_string().into())).await?;
+                            // Continue loop to allow retry
+                        }
+                    }
+                }
+                Ok(Err(e)) => {
+                    eprintln!("Auth error from {}: {}", peer, e);
                     return Ok(());
                 }
-            }
-            Ok(Err(e)) => {
-                eprintln!("Auth error from {}: {}", peer, e);
-                return Ok(());
-            }
-            Err(_) => {
-                let timeout = json!({
-                    "type": "auth_result",
-                    "ok": false,
-                    "message": "Authentication timed out.",
-                });
-                let _ = writer.send(Message::Text(timeout.to_string().into())).await;
-                let _ = writer.send(Message::Close(None)).await;
-                return Ok(());
+                Err(_) => {
+                    let timeout = json!({
+                        "type": "auth_result",
+                        "ok": false,
+                        "message": "Authentication timed out.",
+                    });
+                    let _ = writer.send(Message::Text(timeout.to_string().into())).await;
+                    let _ = writer.send(Message::Close(None)).await;
+                    return Ok(());
+                }
             }
         }
     }

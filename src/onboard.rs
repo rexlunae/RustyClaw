@@ -258,6 +258,10 @@ pub fn run_onboard_wizard(
         Some(idx) => &PROVIDERS[idx],
         None => {
             println!("  {}", t::warn("Cancelled."));
+            // Save any config changes made during vault setup before returning.
+            config.ensure_dirs().context("Failed to create directory structure")?;
+            config.save(None)?;
+            println!("  {}", t::muted("Partial config saved."));
             return Ok(false);
         }
     };

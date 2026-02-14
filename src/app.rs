@@ -927,6 +927,11 @@ impl App {
                 .as_ref()
                 .and_then(|v| v.get("ok").and_then(|o| o.as_bool()))
                 .unwrap_or(false);
+            let retry = parsed
+                .as_ref()
+                .and_then(|v| v.get("retry").and_then(|r| r.as_bool()))
+                .unwrap_or(false);
+
             if ok {
                 self.state
                     .messages
@@ -934,6 +939,15 @@ impl App {
                 // The hello + status frames will follow from the
                 // gateway, so keep the Connecting status.
                 self.state.gateway_status = GatewayStatus::Connected;
+            } else if retry {
+                // Wrong code but gateway allows retry — show message and re-prompt
+                let msg = parsed
+                    .as_ref()
+                    .and_then(|v| v.get("message").and_then(|m| m.as_str()))
+                    .unwrap_or("Invalid code. Try again.");
+                self.state.messages.push(DisplayMessage::warning(msg));
+                // Re-trigger the auth challenge to show the TOTP prompt again
+                return Ok(Some(Action::GatewayAuthChallenge));
             } else {
                 let msg = parsed
                     .as_ref()
