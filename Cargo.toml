@@ -122,7 +122,6 @@ libc = "0.2"
 colored = "3.1"
 indicatif = "0.18"
 unicode-width = "0.2"
-tui-markdown = "0.3"
 rpassword = "7"
 
 # Patches for crypto compatibility
