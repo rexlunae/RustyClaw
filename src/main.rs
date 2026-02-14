@@ -1434,10 +1434,45 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                 ];
 
                 for (file, secret_name) in &secret_map {
-                    // GitHub Copilot tokens can't be imported - they're session tokens
-                    // that require OAuth re-authentication
+                    // GitHub Copilot: try to import the session token directly
                     if *file == "github-copilot.token.json" {
-                        println!("  {} {} (requires re-authentication)", "⊘".yellow(), secret_name);
+                        let src = source_credentials.join(file);
+                        if src.exists() {
+                            if let Ok(content) = fs::read_to_string(&src) {
+                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                    let token = json.get("token").and_then(|v| v.as_str());
+                                    let expires_at = json.get("expiresAt").and_then(|v| v.as_i64());
+
+                                    if let (Some(token), Some(expires_at)) = (token, expires_at) {
+                                        // expiresAt is in milliseconds, convert to seconds
+                                        let expires_at_secs = expires_at / 1000;
+                                        let now = std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .unwrap_or_default()
+                                            .as_secs() as i64;
+
+                                        if expires_at_secs > now + 300 {
+                                            // Token still valid for at least 5 minutes
+                                            // Store as JSON with token and expiration
+                                            let session_data = serde_json::json!({
+                                                "session_token": token,
+                                                "expires_at": expires_at_secs,
+                                            });
+                                            if !args.dry_run {
+                                                secrets.store_secret("GITHUB_COPILOT_SESSION", &session_data.to_string())?;
+                                            }
+                                            let hours_left = (expires_at_secs - now) / 3600;
+                                            println!("  {} {} (session token, ~{}h remaining)", "✓".green(), secret_name, hours_left);
+                                            imported_count += 1;
+                                            continue;
+                                        } else {
+                                            println!("  {} {} (session expired, needs re-auth)", "⊘".yellow(), secret_name);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Fall through to re-auth prompt below
                         skipped_count += 1;
                         continue;
                     }

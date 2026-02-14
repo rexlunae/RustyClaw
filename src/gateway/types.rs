@@ -274,8 +274,12 @@ impl ModelContext {
 /// exchanging the long-lived OAuth device-flow token.  Session tokens
 /// expire after ~30 minutes.  This struct caches the active session and
 /// transparently refreshes it when needed.
+///
+/// Can also be initialized with an imported session token (no OAuth token).
+/// In that case, it will use the session token until it expires, then fail.
 pub struct CopilotSession {
-    oauth_token: String,
+    /// OAuth token for refreshing (None if using imported session only)
+    oauth_token: Option<String>,
     inner: tokio::sync::Mutex<Option<CopilotSessionEntry>>,
 }
 
@@ -288,8 +292,19 @@ impl CopilotSession {
     /// Create a new session manager wrapping the given OAuth token.
     pub fn new(oauth_token: String) -> Self {
         Self {
-            oauth_token,
+            oauth_token: Some(oauth_token),
             inner: tokio::sync::Mutex::new(None),
+        }
+    }
+
+    /// Create a session manager with an imported session token (no refresh capability).
+    pub fn from_session_token(session_token: String, expires_at: i64) -> Self {
+        Self {
+            oauth_token: None,
+            inner: tokio::sync::Mutex::new(Some(CopilotSessionEntry {
+                token: session_token,
+                expires_at,
+            })),
         }
     }
 
@@ -312,8 +327,18 @@ impl CopilotSession {
             }
         }
 
+        // Need to refresh - check if we have an OAuth token
+        let oauth_token = match &self.oauth_token {
+            Some(t) => t,
+            None => {
+                anyhow::bail!(
+                    "Copilot session token has expired. Please re-authenticate with: rustyclaw onboard"
+                );
+            }
+        };
+
         // Exchange the OAuth token for a fresh session token.
-        let session = providers::exchange_copilot_session(http, &self.oauth_token)
+        let session = providers::exchange_copilot_session(http, oauth_token)
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 

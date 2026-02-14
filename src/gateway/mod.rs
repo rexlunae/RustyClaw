@@ -107,13 +107,52 @@ pub async fn run_gateway(
         .await
         .with_context(|| format!("Failed to bind gateway to {}", addr))?;
 
-    // If the provider uses Copilot session tokens, wrap the OAuth token in
-    // a CopilotSession so all connections share the same cached session.
-    let copilot_session: Option<Arc<CopilotSession>> = model_ctx
+    // If the provider uses Copilot session tokens, check for:
+    // 1. Imported session token (GITHUB_COPILOT_SESSION) - use until expiry
+    // 2. OAuth token (GITHUB_COPILOT_TOKEN) - can refresh sessions
+    let copilot_session: Option<Arc<CopilotSession>> = if model_ctx
         .as_ref()
-        .filter(|ctx| crate_providers::needs_copilot_session(&ctx.provider))
-        .and_then(|ctx| ctx.api_key.clone())
-        .map(|oauth| Arc::new(CopilotSession::new(oauth)));
+        .map(|ctx| crate_providers::needs_copilot_session(&ctx.provider))
+        .unwrap_or(false)
+    {
+        // First check for imported session token
+        let mut vault_guard = vault.lock().await;
+        let session_from_import = vault_guard
+            .get_secret("GITHUB_COPILOT_SESSION", true)
+            .ok()
+            .flatten()
+            .and_then(|json_str| {
+                serde_json::from_str::<serde_json::Value>(&json_str).ok()
+            })
+            .and_then(|json| {
+                let token = json.get("session_token")?.as_str()?.to_string();
+                let expires_at = json.get("expires_at")?.as_i64()?;
+                
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs() as i64;
+                
+                if expires_at > now + 60 {
+                    Some(CopilotSession::from_session_token(token, expires_at))
+                } else {
+                    None
+                }
+            });
+        drop(vault_guard);
+
+        if let Some(session) = session_from_import {
+            Some(Arc::new(session))
+        } else {
+            // Fall back to OAuth token
+            model_ctx
+                .as_ref()
+                .and_then(|ctx| ctx.api_key.clone())
+                .map(|oauth| Arc::new(CopilotSession::new(oauth)))
+        }
+    } else {
+        None
+    };
 
     let model_ctx = model_ctx.map(Arc::new);
     let rate_limiter = auth::new_rate_limiter();
