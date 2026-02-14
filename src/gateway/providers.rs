@@ -449,6 +449,105 @@ pub async fn validate_model_connection(
 
 // ── Provider-specific callers ───────────────────────────────────────────────
 
+/// Parse SSE text that was already fully received (not streaming).
+/// This handles cases where the response was buffered as text but contains SSE format.
+fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
+    let mut content = String::new();
+    let mut tool_calls: Vec<serde_json::Value> = Vec::new();
+    let mut finish_reason: Option<String> = None;
+    let mut usage: Option<serde_json::Value> = None;
+    let mut model = String::new();
+
+    for line in text.lines() {
+        if let Some(data) = line.strip_prefix("data: ") {
+            if data.trim() == "[DONE]" {
+                break;
+            }
+
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(data) {
+                // Extract model name
+                if let Some(m) = json.get("model").and_then(|v| v.as_str()) {
+                    model = m.to_string();
+                }
+
+                // Extract usage if present
+                if let Some(u) = json.get("usage") {
+                    if !u.is_null() {
+                        usage = Some(u.clone());
+                    }
+                }
+
+                // Process choices
+                if let Some(choices) = json.get("choices").and_then(|v| v.as_array()) {
+                    for choice in choices {
+                        if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                            finish_reason = Some(fr.to_string());
+                        }
+
+                        if let Some(delta) = choice.get("delta") {
+                            if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
+                                content.push_str(c);
+                            }
+
+                            if let Some(tc_array) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                                for tc in tc_array {
+                                    let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                    while tool_calls.len() <= index {
+                                        tool_calls.push(json!({
+                                            "id": "",
+                                            "type": "function",
+                                            "function": { "name": "", "arguments": "" }
+                                        }));
+                                    }
+                                    if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                                        tool_calls[index]["id"] = json!(id);
+                                    }
+                                    if let Some(func) = tc.get("function") {
+                                        if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                                            tool_calls[index]["function"]["name"] = json!(name);
+                                        }
+                                        if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                            let existing = tool_calls[index]["function"]["arguments"]
+                                                .as_str()
+                                                .unwrap_or("");
+                                            tool_calls[index]["function"]["arguments"] =
+                                                json!(format!("{}{}", existing, args));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let mut message = json!({
+        "role": "assistant",
+        "content": if content.is_empty() { serde_json::Value::Null } else { json!(content) }
+    });
+
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = json!(tool_calls);
+    }
+
+    let mut response = json!({
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "message": message,
+            "finish_reason": finish_reason.unwrap_or_else(|| "stop".to_string())
+        }]
+    });
+
+    if let Some(u) = usage {
+        response["usage"] = u;
+    }
+
+    Ok(response)
+}
+
 /// Consume an SSE (Server-Sent Events) stream and reassemble it into
 /// an OpenAI-compatible JSON response structure.
 ///
@@ -499,9 +598,13 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                         // Process choices
                         if let Some(choices) = json.get("choices").and_then(|v| v.as_array()) {
                             for choice in choices {
-                                // Check finish_reason
+                                // Check finish_reason — terminal reasons should exit the loop
                                 if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
                                     finish_reason = Some(fr.to_string());
+                                    // "stop" or "tool_calls" means the model is done
+                                    if fr == "stop" || fr == "tool_calls" || fr == "length" || fr == "end_turn" {
+                                        break 'outer;
+                                    }
                                 }
 
                                 // Extract delta content
@@ -641,14 +744,19 @@ pub async fn call_openai_with_tools(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
+    // Detect SSE by content-type (may include charset, e.g., "text/event-stream; charset=utf-8")
     let data: serde_json::Value = if content_type.contains("text/event-stream") {
         // Server is streaming — parse SSE events.
         consume_sse_stream(resp).await?
     } else {
-        // Normal JSON response.
-        resp.json()
-            .await
-            .context("Invalid JSON from provider")?
+        // Normal JSON response — but check if it actually looks like SSE
+        let text = resp.text().await.context("Failed to read response body")?;
+        if text.trim_start().starts_with("data:") {
+            // Looks like SSE despite content-type — parse it
+            consume_sse_text(&text)?
+        } else {
+            serde_json::from_str(&text).context("Invalid JSON from provider")?
+        }
     };
 
     let choice = &data["choices"][0];
