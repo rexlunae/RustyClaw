@@ -6,6 +6,7 @@ use rustyclaw::args::CommonArgs;
 use rustyclaw::commands::{handle_command, CommandAction, CommandContext};
 use rustyclaw::config::Config;
 use rustyclaw::onboard::run_onboard_wizard;
+use rustyclaw::providers;
 use rustyclaw::secrets::SecretsManager;
 use rustyclaw::skills::SkillManager;
 use tokio_tungstenite::tungstenite::Message;
@@ -1433,6 +1434,14 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                 ];
 
                 for (file, secret_name) in &secret_map {
+                    // GitHub Copilot tokens can't be imported - they're session tokens
+                    // that require OAuth re-authentication
+                    if *file == "github-copilot.token.json" {
+                        println!("  {} {} (requires re-authentication)", "⊘".yellow(), secret_name);
+                        skipped_count += 1;
+                        continue;
+                    }
+
                     let src = source_credentials.join(file);
                     if src.exists() {
                         if let Ok(content) = fs::read_to_string(&src) {
@@ -1459,6 +1468,92 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                             }
                         }
                     }
+                }
+
+                // Prompt for GitHub Copilot re-authentication
+                println!();
+                println!("{}", "GitHub Copilot Authentication".cyan().bold());
+                println!("  OpenClaw stores session tokens that can't be migrated.");
+                println!("  You'll need to re-authenticate with GitHub.");
+                println!();
+                print!("{} ", "Authenticate with GitHub Copilot now? [Y/n]:".cyan());
+                std::io::stdout().flush()?;
+                let mut response = String::new();
+                reader.read_line(&mut response)?;
+
+                if !response.trim().eq_ignore_ascii_case("n") {
+                    // Re-use the device flow auth
+                    use providers::GITHUB_COPILOT_DEVICE_FLOW;
+                    let device_config = &GITHUB_COPILOT_DEVICE_FLOW;
+
+                    println!();
+                    println!("{}", "Starting GitHub device flow...".cyan());
+
+                    let handle = tokio::runtime::Handle::current();
+                    match tokio::task::block_in_place(|| {
+                        handle.block_on(providers::start_device_flow(device_config))
+                    }) {
+                        Ok(auth_response) => {
+                            println!();
+                            println!("  {}", "Please complete the following steps:".bold());
+                            println!();
+                            println!("  1. Visit: {}", auth_response.verification_uri.cyan());
+                            println!("  2. Enter code: {}", auth_response.user_code.cyan().bold());
+                            println!();
+
+                            print!("{} ", "Press Enter after completing authorization (or type 'cancel'):".cyan());
+                            std::io::stdout().flush()?;
+                            let mut response = String::new();
+                            reader.read_line(&mut response)?;
+
+                            if !response.trim().eq_ignore_ascii_case("cancel") && !response.trim().eq_ignore_ascii_case("c") {
+                                println!("  {}", "Waiting for authorization...".dimmed());
+
+                                let interval = std::time::Duration::from_secs(auth_response.interval);
+                                let max_attempts = (auth_response.expires_in / auth_response.interval).max(10);
+
+                                let mut token: Option<String> = None;
+                                for _attempt in 0..max_attempts {
+                                    match tokio::task::block_in_place(|| {
+                                        handle.block_on(providers::poll_device_token(device_config, &auth_response.device_code))
+                                    }) {
+                                        Ok(Some(access_token)) => {
+                                            token = Some(access_token);
+                                            break;
+                                        }
+                                        Ok(None) => {
+                                            print!(".");
+                                            std::io::stdout().flush()?;
+                                            std::thread::sleep(interval);
+                                        }
+                                        Err(e) => {
+                                            println!();
+                                            println!("  {}", format!("⚠ Authentication failed: {}", e).yellow());
+                                            break;
+                                        }
+                                    }
+                                }
+                                println!();
+
+                                if let Some(access_token) = token {
+                                    if !args.dry_run {
+                                        secrets.store_secret("GITHUB_COPILOT_TOKEN", &access_token)?;
+                                    }
+                                    println!("  {}", "✓ GitHub Copilot authenticated!".green());
+                                    imported_count += 1;
+                                } else {
+                                    println!("  {}", "⚠ Authentication timed out.".yellow());
+                                }
+                            } else {
+                                println!("  {}", "Skipping GitHub Copilot.".dimmed());
+                            }
+                        }
+                        Err(e) => {
+                            println!("  {}", format!("⚠ Failed to start device flow: {}", e).yellow());
+                        }
+                    }
+                } else {
+                    println!("  {}", "Skipping GitHub Copilot.".dimmed());
                 }
             } else {
                 println!("  {}", "Skipping credentials.".dimmed());
