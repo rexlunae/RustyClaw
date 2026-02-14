@@ -312,6 +312,21 @@ impl App {
                                 None
                             }
                         }
+                        // While streaming, Esc cancels the tool loop
+                        else if self.streaming_response.is_some() {
+                            if let Event::Key(key) = &event {
+                                if key.code == crossterm::event::KeyCode::Esc {
+                                    // Send cancel message to gateway
+                                    let cancel_msg = serde_json::json!({ "type": "cancel" });
+                                    self.send_to_gateway(cancel_msg.to_string()).await;
+                                    self.state.messages.push(DisplayMessage::info(
+                                        "Cancelling tool loop…",
+                                    ));
+                                    continue;
+                                }
+                            }
+                            None
+                        }
                         // While loading, Esc cancels the active async operation
                         else if self.fetch_loading.is_some() || self.device_flow_loading.is_some() {
                             if let Event::Key(key) = &event {

@@ -34,12 +34,16 @@ use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tokio_util::sync::CancellationToken;
+
+/// Shared flag for cancelling the tool loop from another task.
+pub type ToolCancelFlag = Arc<AtomicBool>;
 
 /// Type alias for the server-side WebSocket write half.
 type WsWriter = SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
@@ -518,20 +522,66 @@ async fn handle_connection(
         }
     }
 
+    // ── Spawn reader task with cancel flag ─────────────────────────
+    //
+    // The reader runs in a separate task so it can receive cancel messages
+    // even while dispatch_text_message is running. Messages are forwarded
+    // through a channel; cancel requests set a shared flag.
+    let tool_cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+    let (msg_tx, mut msg_rx) = tokio::sync::mpsc::channel::<Message>(32);
+
+    let reader_cancel = cancel.clone();
+    let reader_tool_cancel = tool_cancel.clone();
+    let reader_handle = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = reader_cancel.cancelled() => break,
+                msg = reader.next() => {
+                    match msg {
+                        Some(Ok(Message::Text(ref text))) => {
+                            // Check for cancel message
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
+                                if val.get("type").and_then(|t| t.as_str()) == Some("cancel") {
+                                    reader_tool_cancel.store(true, Ordering::Relaxed);
+                                    // Don't forward cancel messages, just set the flag
+                                    continue;
+                                }
+                            }
+                            // Forward other messages
+                            if msg_tx.send(Message::Text(text.clone())).await.is_err() {
+                                break; // Channel closed
+                            }
+                        }
+                        Some(Ok(msg)) => {
+                            if msg_tx.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Some(Err(_)) => break,
+                        None => break,
+                    }
+                }
+            }
+        }
+    });
+
+    // Main message handling loop — receives from channel
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 let _ = writer.send(Message::Close(None)).await;
                 break;
             }
-            msg = reader.next() => {
+            msg = msg_rx.recv() => {
                 let message = match msg {
-                    Some(Ok(m)) => m,
-                    Some(Err(e)) => return Err(e.into()),
-                    None => break,
+                    Some(m) => m,
+                    None => break, // Channel closed (reader exited)
                 };
                 match message {
                     Message::Text(text) => {
+                        // Reset cancel flag for new request
+                        tool_cancel.store(false, Ordering::Relaxed);
+
                         // ── Handle unlock_vault control message ─────
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
                             if val.get("type").and_then(|t| t.as_str()) == Some("unlock_vault") {
@@ -574,6 +624,7 @@ async fn handle_connection(
                             &workspace_dir,
                             &vault,
                             &skill_mgr,
+                            &tool_cancel,
                         )
                         .await
                         {
@@ -611,6 +662,9 @@ async fn handle_connection(
         }
     }
 
+    // Clean up reader task
+    reader_handle.abort();
+
     Ok(())
 }
 
@@ -620,6 +674,9 @@ async fn handle_connection(
 /// requests tool calls, the gateway executes them locally and feeds
 /// the results back into the conversation, repeating until the model
 /// produces a final text response (or a safety limit is hit).
+///
+/// The `tool_cancel` flag can be set by another task to interrupt the
+/// tool loop gracefully.
 async fn dispatch_text_message(
     http: &reqwest::Client,
     text: &str,
@@ -629,6 +686,7 @@ async fn dispatch_text_message(
     workspace_dir: &std::path::Path,
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
+    tool_cancel: &ToolCancelFlag,
 ) -> Result<()> {
     // Try to parse as a structured JSON request.
     let req = match serde_json::from_str::<ChatRequest>(text) {
@@ -677,13 +735,27 @@ async fn dispatch_text_message(
 
     // ── Agentic tool loop ───────────────────────────────────────────
     // No hard limit — the model will stop when it's done. The user can
-    // cancel by closing the connection or pressing Ctrl+C in the TUI.
+    // cancel by sending a {"type": "cancel"} message (e.g., pressing Esc).
     // We use a very high limit as a safety net against infinite loops.
     const MAX_TOOL_ROUNDS: usize = 500;
 
     let context_limit = helpers::context_window_for_model(&resolved.model);
 
     for _round in 0..MAX_TOOL_ROUNDS {
+        // ── Check for cancellation ──────────────────────────────────
+        if tool_cancel.load(Ordering::Relaxed) {
+            let frame = json!({
+                "type": "info",
+                "message": "Tool loop cancelled by user.",
+            });
+            writer
+                .send(Message::Text(frame.to_string().into()))
+                .await
+                .context("Failed to send cancel info")?;
+            providers::send_response_done(writer).await?;
+            return Ok(());
+        }
+
         // Refresh the bearer token before each model call.
         // For Copilot providers, this ensures the session token is still valid.
         match auth::resolve_bearer_token(
