@@ -857,7 +857,19 @@ impl App {
 
     /// Handle gateway messages received from the WebSocket.
     fn handle_gateway_message(&mut self, text: &str) -> Result<Option<Action>> {
+        // Debug: log incoming frames
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/rustyclaw_sse_debug.log")
+        {
+            use std::io::Write;
+            let frame_preview: String = text.chars().take(100).collect();
+            let _ = writeln!(f, "[TUI] Received frame: {}...", frame_preview);
+        }
+
         // Parse the gateway JSON envelope.
+        let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
         let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
         let frame_type = parsed
             .as_ref()
