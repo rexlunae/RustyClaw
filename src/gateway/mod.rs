@@ -671,29 +671,9 @@ async fn dispatch_text_message(
         }
     };
 
-    // For Copilot providers, swap the raw OAuth token for a session token.
-    match auth::resolve_bearer_token(
-        http,
-        &resolved.provider,
-        resolved.api_key.as_deref(),
-        copilot_session,
-    )
-    .await
-    {
-        Ok(token) => resolved.api_key = token,
-        Err(err) => {
-            let frame = json!({
-                "type": "error",
-                "ok": false,
-                "message": format!("Token exchange failed: {}", err),
-            });
-            writer
-                .send(Message::Text(frame.to_string().into()))
-                .await
-                .context("Failed to send error frame")?;
-            return Ok(());
-        }
-    }
+    // Store the original API key for non-Copilot providers.
+    // For Copilot, we'll refresh the session token on each loop iteration.
+    let original_api_key = resolved.api_key.clone();
 
     // ── Agentic tool loop ───────────────────────────────────────────
     const MAX_TOOL_ROUNDS: usize = 25;
@@ -701,6 +681,31 @@ async fn dispatch_text_message(
     let context_limit = helpers::context_window_for_model(&resolved.model);
 
     for _round in 0..MAX_TOOL_ROUNDS {
+        // Refresh the bearer token before each model call.
+        // For Copilot providers, this ensures the session token is still valid.
+        match auth::resolve_bearer_token(
+            http,
+            &resolved.provider,
+            original_api_key.as_deref(),
+            copilot_session,
+        )
+        .await
+        {
+            Ok(token) => resolved.api_key = token,
+            Err(err) => {
+                let frame = json!({
+                    "type": "error",
+                    "ok": false,
+                    "message": format!("Token refresh failed: {}", err),
+                });
+                writer
+                    .send(Message::Text(frame.to_string().into()))
+                    .await
+                    .context("Failed to send error frame")?;
+                return Ok(());
+            }
+        }
+
         // ── Auto-compact if context is getting large ────────────────
         let estimated = helpers::estimate_tokens(&resolved.messages);
         let threshold = (context_limit as f64 * COMPACTION_THRESHOLD) as usize;
