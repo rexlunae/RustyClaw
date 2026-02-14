@@ -803,6 +803,7 @@ pub async fn call_openai_with_tools(
     {
         use std::io::Write;
         let _ = writeln!(f, "=== GOT RESPONSE: {} ===", resp.status());
+        let _ = writeln!(f, "Content-Type: {:?}", resp.headers().get(reqwest::header::CONTENT_TYPE));
     }
 
     if !resp.status().is_success() {
@@ -820,13 +821,43 @@ pub async fn call_openai_with_tools(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
 
+    // Debug: log content type detection
+    if let Ok(mut f) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/rustyclaw_sse_debug.log")
+    {
+        use std::io::Write;
+        let _ = writeln!(f, "Content-Type str: '{}', is_sse: {}", content_type, content_type.contains("text/event-stream"));
+    }
+
     // Detect SSE by content-type (may include charset, e.g., "text/event-stream; charset=utf-8")
     let data: serde_json::Value = if content_type.contains("text/event-stream") {
+        // Debug: entering SSE path
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/rustyclaw_sse_debug.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(f, ">>> Entering consume_sse_stream");
+        }
         // Server is streaming — parse SSE events.
         consume_sse_stream(resp).await?
     } else {
         // Normal JSON response — but check if it actually looks like SSE
         let text = resp.text().await.context("Failed to read response body")?;
+        
+        // Debug: log text path
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open("/tmp/rustyclaw_sse_debug.log")
+        {
+            use std::io::Write;
+            let _ = writeln!(f, ">>> Text path, starts_with_data: {}, len: {}", text.trim_start().starts_with("data:"), text.len());
+        }
+        
         if text.trim_start().starts_with("data:") {
             // Looks like SSE despite content-type — parse it
             consume_sse_text(&text)?
