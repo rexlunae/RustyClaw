@@ -1218,6 +1218,27 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                     imported_count += memory_count;
                 }
             }
+
+            // Extract agent name from IDENTITY.md if present
+            let identity_path = source_workspace.join("IDENTITY.md");
+            if identity_path.exists() {
+                if let Ok(content) = fs::read_to_string(&identity_path) {
+                    // Look for "- **Name:** <name>" pattern
+                    for line in content.lines() {
+                        let line = line.trim();
+                        if line.starts_with("- **Name:**") || line.starts_with("**Name:**") {
+                            if let Some(name) = line.split(":**").nth(1) {
+                                let name = name.trim();
+                                if !name.is_empty() {
+                                    config.agent_name = name.to_string();
+                                    println!("  {} Agent name: {}", "✓".green(), name.cyan());
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
         } else {
             println!("  {}", "Skipping workspace files.".dimmed());
         }
