@@ -1219,7 +1219,8 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                 }
             }
 
-            // Extract agent name from IDENTITY.md if present
+            // Extract agent name from IDENTITY.md as default, then prompt
+            let mut default_name = String::new();
             let identity_path = source_workspace.join("IDENTITY.md");
             if identity_path.exists() {
                 if let Ok(content) = fs::read_to_string(&identity_path) {
@@ -1230,14 +1231,35 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                             if let Some(name) = line.split(":**").nth(1) {
                                 let name = name.trim();
                                 if !name.is_empty() {
-                                    config.agent_name = name.to_string();
-                                    println!("  {} Agent name: {}", "✓".green(), name.cyan());
+                                    default_name = name.to_string();
                                 }
                             }
                             break;
                         }
                     }
                 }
+            }
+
+            // Prompt for agent name with default from IDENTITY.md
+            println!();
+            if default_name.is_empty() {
+                print!("{} ", "Agent name:".cyan());
+            } else {
+                print!("{} ", format!("Agent name [{}]:", default_name).cyan());
+            }
+            std::io::stdout().flush()?;
+            let mut name_input = String::new();
+            reader.read_line(&mut name_input)?;
+            let name_input = name_input.trim();
+
+            if name_input.is_empty() && !default_name.is_empty() {
+                config.agent_name = default_name.clone();
+                println!("  {} Agent name: {}", "✓".green(), default_name.cyan());
+            } else if !name_input.is_empty() {
+                config.agent_name = name_input.to_string();
+                println!("  {} Agent name: {}", "✓".green(), name_input.cyan());
+            } else {
+                println!("  {}", "Using default agent name.".dimmed());
             }
         } else {
             println!("  {}", "Skipping workspace files.".dimmed());
