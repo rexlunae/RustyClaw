@@ -638,7 +638,7 @@ fn node_screen_snap(node: &str, _facing: &str) -> Result<String, String> {
             };
 
             let mut args = vec![
-                "/v:".to_string() + &host,
+                format!("/v:{}", host),
                 format!("/port:{}", port),
                 "/cert:ignore".to_string(),
                 // Connect briefly and capture

@@ -216,7 +216,7 @@ pub fn draw_totp_dialog(frame: &mut ratatui::Frame<'_>, area: Rect, dlg: &TotpDi
 
     let (title, lines, hint): (&str, Vec<Line>, &str) = match &dlg.phase {
         TotpDialogPhase::ShowUri { uri, input } => {
-            let masked: String = "*".repeat(input.len()) + &"_".repeat(6 - input.len());
+            let masked: String = format!("{}{}", "*".repeat(input.len()), "_".repeat(6 - input.len()));
             (
                 " Set up 2FA ",
                 vec![
@@ -243,7 +243,7 @@ pub fn draw_totp_dialog(frame: &mut ratatui::Frame<'_>, area: Rect, dlg: &TotpDi
             )
         }
         TotpDialogPhase::Failed { input, .. } => {
-            let masked: String = "*".repeat(input.len()) + &"_".repeat(6 - input.len());
+            let masked: String = format!("{}{}", "*".repeat(input.len()), "_".repeat(6 - input.len()));
             (
                 " 2FA Verification ",
                 vec![
