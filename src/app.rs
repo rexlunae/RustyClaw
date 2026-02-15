@@ -1146,13 +1146,19 @@ impl App {
 
             if let Some(ref mut buf) = self.streaming_response {
                 buf.push_str(delta);
+                debug_log(&format!("Buffer now {} chars", buf.len()));
 
                 // During hatching, just accumulate — don't push to messages.
                 if !self.showing_hatching {
                     // Update the last assistant message with accumulated text.
                     if let Some(last) = self.state.messages.last_mut() {
                         last.content = buf.clone();
+                        debug_log(&format!("Updated last message to {} chars", last.content.len()));
+                    } else {
+                        debug_log("WARNING: No last message to update!");
                     }
+                } else {
+                    debug_log("Hatching mode - not updating messages");
                 }
             }
 
