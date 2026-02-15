@@ -646,9 +646,13 @@ impl App {
                 // Send the password to the gateway as an unlock_vault frame.
                 let frame = serde_json::json!({
                     "type": "unlock_vault",
-                    "password": password,
+                    "password": password.clone(),
                 });
                 self.send_to_gateway(frame.to_string()).await;
+                // Also unlock the local SecretsManager so the TUI can
+                // list, store, and read secrets without going through
+                // the gateway.
+                self.state.secrets_manager.set_password(password.clone());
                 self.state
                     .messages
                     .push(DisplayMessage::info("Sent vault unlock request…"));
