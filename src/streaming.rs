@@ -14,6 +14,12 @@ use tokio::sync::mpsc;
 pub enum StreamChunk {
     /// Text content delta
     Text(String),
+    /// Extended thinking started (Anthropic)
+    ThinkingStart,
+    /// Extended thinking content delta (Anthropic)
+    ThinkingDelta(String),
+    /// Extended thinking finished, includes summary if provided
+    ThinkingEnd { summary: Option<String> },
     /// Tool call started
     ToolCallStart {
         index: usize,
@@ -37,6 +43,8 @@ pub struct StreamRequest {
     pub model: String,
     pub messages: Vec<StreamMessage>,
     pub tools: Vec<serde_json::Value>,
+    /// Budget tokens for extended thinking (Anthropic only)
+    pub thinking_budget: Option<u32>,
 }
 
 #[derive(Debug, Clone)]
@@ -173,6 +181,10 @@ pub async fn call_openai_streaming(
 }
 
 /// Call Anthropic endpoint with streaming.
+///
+/// Supports extended thinking via the `thinking_budget` field in the request.
+/// When thinking is enabled, sends `ThinkingStart`, `ThinkingDelta`, and
+/// `ThinkingEnd` chunks so the TUI can display a thinking indicator.
 pub async fn call_anthropic_streaming(
     http: &reqwest::Client,
     req: &StreamRequest,
@@ -202,9 +214,17 @@ pub async fn call_anthropic_streaming(
         })
         .collect();
 
+    // Determine max_tokens based on whether thinking is enabled
+    // Extended thinking requires higher max_tokens to accommodate thinking + response
+    let max_tokens = if req.thinking_budget.is_some() {
+        16384 // Allow room for thinking + response
+    } else {
+        4096
+    };
+
     let mut body = json!({
         "model": req.model,
-        "max_tokens": 4096,
+        "max_tokens": max_tokens,
         "messages": messages,
         "stream": true,
     });
@@ -214,6 +234,14 @@ pub async fn call_anthropic_streaming(
     }
     if !req.tools.is_empty() {
         body["tools"] = json!(req.tools);
+    }
+
+    // Add thinking configuration if budget is specified
+    if let Some(budget) = req.thinking_budget {
+        body["thinking"] = json!({
+            "type": "enabled",
+            "budget_tokens": budget
+        });
     }
 
     let api_key = req.api_key.as_deref().unwrap_or("");
@@ -237,6 +265,8 @@ pub async fn call_anthropic_streaming(
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
     let mut current_tool_index = 0;
+    let mut in_thinking_block = false;
+    let mut thinking_content = String::new();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.context("Stream read error")?;
@@ -265,21 +295,40 @@ pub async fn call_anthropic_streaming(
                 match event_type.as_str() {
                     "content_block_start" => {
                         if let Some(block) = json.get("content_block") {
-                            if block["type"].as_str() == Some("tool_use") {
-                                let id = block["id"].as_str().unwrap_or("").to_string();
-                                let name = block["name"].as_str().unwrap_or("").to_string();
-                                current_tool_index = json["index"].as_u64().unwrap_or(0) as usize;
-                                let _ = tx.send(StreamChunk::ToolCallStart {
-                                    index: current_tool_index,
-                                    id,
-                                    name,
-                                }).await;
+                            match block["type"].as_str() {
+                                Some("thinking") => {
+                                    // Extended thinking block started
+                                    in_thinking_block = true;
+                                    thinking_content.clear();
+                                    let _ = tx.send(StreamChunk::ThinkingStart).await;
+                                }
+                                Some("tool_use") => {
+                                    let id = block["id"].as_str().unwrap_or("").to_string();
+                                    let name = block["name"].as_str().unwrap_or("").to_string();
+                                    current_tool_index = json["index"].as_u64().unwrap_or(0) as usize;
+                                    let _ = tx.send(StreamChunk::ToolCallStart {
+                                        index: current_tool_index,
+                                        id,
+                                        name,
+                                    }).await;
+                                }
+                                Some("text") => {
+                                    // Regular text block - nothing special to do on start
+                                }
+                                _ => {}
                             }
                         }
                     }
                     "content_block_delta" => {
                         if let Some(delta) = json.get("delta") {
                             match delta["type"].as_str() {
+                                Some("thinking_delta") => {
+                                    // Extended thinking content streaming
+                                    if let Some(thinking) = delta["thinking"].as_str() {
+                                        thinking_content.push_str(thinking);
+                                        let _ = tx.send(StreamChunk::ThinkingDelta(thinking.to_string())).await;
+                                    }
+                                }
                                 Some("text_delta") => {
                                     if let Some(text) = delta["text"].as_str() {
                                         let _ = tx.send(StreamChunk::Text(text.to_string())).await;
@@ -295,6 +344,27 @@ pub async fn call_anthropic_streaming(
                                 }
                                 _ => {}
                             }
+                        }
+                    }
+                    "content_block_stop" => {
+                        // A content block finished
+                        if in_thinking_block {
+                            in_thinking_block = false;
+                            // Generate a brief summary from the thinking content
+                            // (first ~100 chars or first sentence, whichever is shorter)
+                            let summary = if thinking_content.len() > 100 {
+                                let truncated = &thinking_content[..100];
+                                if let Some(period_pos) = truncated.find(". ") {
+                                    Some(truncated[..=period_pos].to_string())
+                                } else {
+                                    Some(format!("{}...", truncated))
+                                }
+                            } else if !thinking_content.is_empty() {
+                                Some(thinking_content.clone())
+                            } else {
+                                None
+                            };
+                            let _ = tx.send(StreamChunk::ThinkingEnd { summary }).await;
                         }
                     }
                     "message_stop" => {
@@ -331,6 +401,23 @@ mod tests {
     }
 
     #[test]
+    fn test_thinking_chunk_serialization() {
+        let start = StreamChunk::ThinkingStart;
+        let json = serde_json::to_string(&start).unwrap();
+        assert!(json.contains("ThinkingStart"));
+
+        let delta = StreamChunk::ThinkingDelta("analyzing...".to_string());
+        let json = serde_json::to_string(&delta).unwrap();
+        assert!(json.contains("ThinkingDelta"));
+        assert!(json.contains("analyzing"));
+
+        let end = StreamChunk::ThinkingEnd { summary: Some("Done thinking".to_string()) };
+        let json = serde_json::to_string(&end).unwrap();
+        assert!(json.contains("ThinkingEnd"));
+        assert!(json.contains("Done thinking"));
+    }
+
+    #[test]
     fn test_stream_request_creation() {
         let req = StreamRequest {
             provider: "openai".to_string(),
@@ -342,7 +429,25 @@ mod tests {
                 content: "Hello".to_string(),
             }],
             tools: vec![],
+            thinking_budget: None,
         };
         assert_eq!(req.model, "gpt-4");
+    }
+
+    #[test]
+    fn test_stream_request_with_thinking() {
+        let req = StreamRequest {
+            provider: "anthropic".to_string(),
+            base_url: "https://api.anthropic.com".to_string(),
+            api_key: Some("test-key".to_string()),
+            model: "claude-sonnet-4-20250514".to_string(),
+            messages: vec![StreamMessage {
+                role: "user".to_string(),
+                content: "Think about this deeply".to_string(),
+            }],
+            tools: vec![],
+            thinking_budget: Some(10000),
+        };
+        assert_eq!(req.thinking_budget, Some(10000));
     }
 }
