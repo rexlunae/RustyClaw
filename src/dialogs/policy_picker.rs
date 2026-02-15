@@ -199,6 +199,123 @@ pub fn handle_policy_picker_key(
     }
 }
 
+
+/// Handle key events for the policy picker (gateway-backed).
+/// Returns Actions that trigger gateway sends instead of calling SecretsManager directly.
+pub fn handle_policy_picker_key_gateway(
+    picker: PolicyPickerState,
+    code: crossterm::event::KeyCode,
+    messages: &mut Vec<DisplayMessage>,
+) -> (Option<PolicyPickerState>, Action) {
+    use crossterm::event::KeyCode;
+
+    let mut picker = picker;
+
+    match picker.phase {
+        PolicyPickerPhase::Selecting => {
+            let options = [
+                PolicyPickerOption::Open,
+                PolicyPickerOption::Ask,
+                PolicyPickerOption::Auth,
+                PolicyPickerOption::Skill,
+            ];
+
+            match code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    (None, Action::Noop)
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    let cur = options.iter().position(|o| *o == picker.selected).unwrap_or(0);
+                    let next = if cur == 0 { options.len() - 1 } else { cur - 1 };
+                    picker.selected = options[next];
+                    (Some(picker), Action::Noop)
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    let cur = options.iter().position(|o| *o == picker.selected).unwrap_or(0);
+                    let next = (cur + 1) % options.len();
+                    picker.selected = options[next];
+                    (Some(picker), Action::Noop)
+                }
+                KeyCode::Enter => match picker.selected {
+                    PolicyPickerOption::Open => {
+                        let frame = serde_json::json!({
+                            "type": "secrets_set_policy",
+                            "name": picker.cred_name,
+                            "policy": "always",
+                        });
+                        messages.push(DisplayMessage::info(format!(
+                            "Setting policy for '{}' to OPEN…", picker.cred_name,
+                        )));
+                        (None, Action::SendToGateway(frame.to_string()))
+                    }
+                    PolicyPickerOption::Ask => {
+                        let frame = serde_json::json!({
+                            "type": "secrets_set_policy",
+                            "name": picker.cred_name,
+                            "policy": "ask",
+                        });
+                        messages.push(DisplayMessage::info(format!(
+                            "Setting policy for '{}' to ASK…", picker.cred_name,
+                        )));
+                        (None, Action::SendToGateway(frame.to_string()))
+                    }
+                    PolicyPickerOption::Auth => {
+                        let frame = serde_json::json!({
+                            "type": "secrets_set_policy",
+                            "name": picker.cred_name,
+                            "policy": "auth",
+                        });
+                        messages.push(DisplayMessage::info(format!(
+                            "Setting policy for '{}' to AUTH…", picker.cred_name,
+                        )));
+                        (None, Action::SendToGateway(frame.to_string()))
+                    }
+                    PolicyPickerOption::Skill => {
+                        picker.phase = PolicyPickerPhase::EditingSkills {
+                            input: String::new(),
+                        };
+                        (Some(picker), Action::Noop)
+                    }
+                },
+                _ => (Some(picker), Action::Noop),
+            }
+        }
+        PolicyPickerPhase::EditingSkills { ref mut input } => match code {
+            crossterm::event::KeyCode::Esc => {
+                picker.phase = PolicyPickerPhase::Selecting;
+                (Some(picker), Action::Noop)
+            }
+            crossterm::event::KeyCode::Char(c) => {
+                input.push(c);
+                (Some(picker), Action::Noop)
+            }
+            crossterm::event::KeyCode::Backspace => {
+                input.pop();
+                (Some(picker), Action::Noop)
+            }
+            crossterm::event::KeyCode::Enter => {
+                let skills: Vec<String> = input
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
+                let frame = serde_json::json!({
+                    "type": "secrets_set_policy",
+                    "name": picker.cred_name,
+                    "policy": "skill_only",
+                    "skills": skills,
+                });
+                messages.push(DisplayMessage::info(format!(
+                    "Setting policy for '{}' to SKILL…", picker.cred_name,
+                )));
+                (None, Action::SendToGateway(frame.to_string()))
+            }
+            _ => (Some(picker), Action::Noop),
+        },
+    }
+}
+
 /// Draw a centered policy-picker dialog overlay.
 pub fn draw_policy_picker(frame: &mut ratatui::Frame<'_>, area: Rect, picker: &PolicyPickerState) {
     let dialog_w = 52.min(area.width.saturating_sub(4));

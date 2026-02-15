@@ -136,6 +136,74 @@ pub fn handle_totp_dialog_key(
     }
 }
 
+
+/// Handle key events for the TOTP dialog (gateway-backed).
+/// Returns Actions that trigger gateway sends instead of calling SecretsManager directly.
+pub fn handle_totp_dialog_key_gateway(
+    dlg: TotpDialogState,
+    code: crossterm::event::KeyCode,
+    messages: &mut Vec<DisplayMessage>,
+) -> (Option<TotpDialogState>, Action) {
+    use crossterm::event::KeyCode;
+
+    let mut dlg = dlg;
+
+    match dlg.phase {
+        TotpDialogPhase::ShowUri {
+            uri: _,
+            ref mut input,
+        }
+        | TotpDialogPhase::Failed {
+            uri: _,
+            ref mut input,
+        } => match code {
+            KeyCode::Esc => {
+                // Cancel — remove the TOTP secret via gateway
+                let frame = serde_json::json!({"type": "secrets_remove_totp"});
+                (None, Action::SendToGateway(frame.to_string()))
+            }
+            KeyCode::Char(c) if c.is_ascii_digit() && input.len() < 6 => {
+                input.push(c);
+                (Some(dlg), Action::Noop)
+            }
+            KeyCode::Backspace => {
+                input.pop();
+                (Some(dlg), Action::Noop)
+            }
+            KeyCode::Enter => {
+                if input.len() == 6 {
+                    // Send verification to gateway
+                    let frame = serde_json::json!({
+                        "type": "secrets_verify_totp",
+                        "code": input,
+                    });
+                    // Keep the dialog open — result will be handled by app.rs
+                    (Some(dlg), Action::SendToGateway(frame.to_string()))
+                } else {
+                    (Some(dlg), Action::Noop)
+                }
+            }
+            _ => (Some(dlg), Action::Noop),
+        },
+        TotpDialogPhase::AlreadyConfigured => match code {
+            KeyCode::Esc | KeyCode::Char('n') | KeyCode::Char('N') => {
+                (None, Action::Noop)
+            }
+            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                // Remove 2FA via gateway
+                let frame = serde_json::json!({"type": "secrets_remove_totp"});
+                messages.push(DisplayMessage::info("Removing 2FA…"));
+                (None, Action::SendToGateway(frame.to_string()))
+            }
+            _ => (Some(dlg), Action::Noop),
+        },
+        TotpDialogPhase::Verified => {
+            // Any key closes
+            (None, Action::Noop)
+        }
+    }
+}
+
 /// Draw a centered TOTP setup dialog overlay.
 pub fn draw_totp_dialog(frame: &mut ratatui::Frame<'_>, area: Rect, dlg: &TotpDialogState) {
     let dialog_w = 56.min(area.width.saturating_sub(4));

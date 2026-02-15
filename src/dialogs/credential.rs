@@ -216,6 +216,109 @@ pub fn handle_credential_dialog_key(
     }
 }
 
+
+/// Handle key events when the credential dialog is open (gateway-backed).
+/// Instead of calling SecretsManager directly, returns Actions that the app
+/// dispatches as gateway sends.
+pub fn handle_credential_dialog_key_gateway(
+    dlg: CredentialDialogState,
+    code: crossterm::event::KeyCode,
+    _messages: &mut Vec<DisplayMessage>,
+) -> (
+    Option<CredentialDialogState>,
+    Option<PolicyPickerState>,
+    Action,
+) {
+    use crossterm::event::KeyCode;
+
+    let mut dlg = dlg;
+
+    let options = [
+        CredDialogOption::ViewSecret,
+        CredDialogOption::CopySecret,
+        CredDialogOption::ChangePolicy,
+        CredDialogOption::ToggleDisable,
+        CredDialogOption::Delete,
+        CredDialogOption::SetupTotp,
+        CredDialogOption::Cancel,
+    ];
+
+    match code {
+        KeyCode::Esc | KeyCode::Char('q') => {
+            (None, None, Action::Noop)
+        }
+        KeyCode::Up | KeyCode::Char('k') => {
+            let cur = options.iter().position(|o| *o == dlg.selected).unwrap_or(0);
+            let next = if cur == 0 { options.len() - 1 } else { cur - 1 };
+            dlg.selected = options[next];
+            (Some(dlg), None, Action::Noop)
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            let cur = options.iter().position(|o| *o == dlg.selected).unwrap_or(0);
+            let next = (cur + 1) % options.len();
+            dlg.selected = options[next];
+            (Some(dlg), None, Action::Noop)
+        }
+        KeyCode::Enter => {
+            match dlg.selected {
+                CredDialogOption::ViewSecret => {
+                    // Request peek from gateway
+                    let frame = serde_json::json!({
+                        "type": "secrets_peek",
+                        "name": dlg.name,
+                    });
+                    (None, None, Action::SendToGateway(frame.to_string()))
+                }
+                CredDialogOption::CopySecret => {
+                    // Request peek from gateway, then copy
+                    // For now, just send a peek request — the app.rs handler
+                    // will open the secret viewer which has a copy function.
+                    let frame = serde_json::json!({
+                        "type": "secrets_peek",
+                        "name": dlg.name,
+                    });
+                    (None, None, Action::SendToGateway(frame.to_string()))
+                }
+                CredDialogOption::ChangePolicy => {
+                    let selected = match &dlg.current_policy {
+                        AccessPolicy::Always => PolicyPickerOption::Open,
+                        AccessPolicy::WithApproval => PolicyPickerOption::Ask,
+                        AccessPolicy::WithAuth => PolicyPickerOption::Auth,
+                        AccessPolicy::SkillOnly(_) => PolicyPickerOption::Skill,
+                    };
+                    let picker = PolicyPickerState {
+                        cred_name: dlg.name.clone(),
+                        selected,
+                        phase: PolicyPickerPhase::Selecting,
+                    };
+                    (None, Some(picker), Action::Noop)
+                }
+                CredDialogOption::ToggleDisable => {
+                    let new_state = !dlg.disabled;
+                    let frame = serde_json::json!({
+                        "type": "secrets_set_disabled",
+                        "name": dlg.name,
+                        "disabled": new_state,
+                    });
+                    (None, None, Action::SendToGateway(frame.to_string()))
+                }
+                CredDialogOption::Delete => {
+                    let frame = serde_json::json!({
+                        "type": "secrets_delete_credential",
+                        "name": dlg.name,
+                    });
+                    (None, None, Action::SendToGateway(frame.to_string()))
+                }
+                CredDialogOption::SetupTotp => (None, None, Action::ShowTotpSetup),
+                CredDialogOption::Cancel => {
+                    (None, None, Action::Update)
+                }
+            }
+        }
+        _ => (Some(dlg), None, Action::Noop),
+    }
+}
+
 /// Draw a centered credential-management dialog overlay.
 pub fn draw_credential_dialog(
     frame: &mut ratatui::Frame<'_>,

@@ -136,26 +136,34 @@ pub struct App {
     showing_hatching: bool,
     /// Password to forward to gateway after connecting (from --password flag)
     deferred_vault_password: Option<String>,
+    /// Cached secrets list from gateway (refreshed on connect/after writes)
+    cached_secrets: Vec<serde_json::Value>,
+    /// Whether we have a pending secrets_get for a specific key
+    pending_secret_key: Option<String>,
 }
 
 impl App {
     pub fn new(config: Config) -> Result<Self> {
-        let secrets_manager = SecretsManager::new(config.credentials_dir());
+        // The TUI uses the gateway for all vault operations.  The local
+        // SecretsManager is kept only for backward-compatible read access
+        // during startup (e.g. commands that need it).  For secrets pane
+        // display we use cached_secrets populated from the gateway.
+        let secrets_manager = SecretsManager::locked(config.credentials_dir());
         Self::build(config, secrets_manager)
     }
 
     /// Create the app with a password-protected secrets vault.
+    /// Kept for backward compatibility but the TUI now relies on the
+    /// gateway for vault operations.  The password is stored as a
+    /// deferred vault password to forward after connecting.
     pub fn with_password(config: Config, password: String) -> Result<Self> {
-        let secrets_manager = SecretsManager::with_password(config.credentials_dir(), password);
-        Self::build(config, secrets_manager)
+        let creds_dir = config.credentials_dir();
+        let mut app = Self::build(config, SecretsManager::locked(creds_dir))?;
+        app.deferred_vault_password = Some(password);
+        Ok(app)
     }
 
     /// Create the app with the local vault in a locked state.
-    ///
-    /// Used when the vault is password-protected but no password was
-    /// given on the CLI.  The local SecretsManager will not attempt
-    /// to decrypt the vault, avoiding repeated (expensive) failures
-    /// on every render frame.
     pub fn new_locked(config: Config) -> Result<Self> {
         let secrets_manager = SecretsManager::locked(config.credentials_dir());
         Self::build(config, secrets_manager)
@@ -299,6 +307,8 @@ impl App {
             hatching_page,
             showing_hatching,
             deferred_vault_password: None,
+            cached_secrets: Vec::new(),
+            pending_secret_key: None,
         })
     }
 
@@ -491,8 +501,7 @@ impl App {
                                     }
                                     crossterm::event::KeyCode::Char('j')
                                     | crossterm::event::KeyCode::Down => {
-                                        let creds = self.state.secrets_manager.list_all_entries();
-                                        let max = creds.len().saturating_sub(1);
+                                        let max = self.cached_secrets.len().saturating_sub(1);
                                         if self.secrets_scroll < max {
                                             self.secrets_scroll += 1;
                                         }
@@ -504,14 +513,18 @@ impl App {
                                         Some(Action::Noop)
                                     }
                                     crossterm::event::KeyCode::Enter => {
-                                        let creds = self.state.secrets_manager.list_all_entries();
-                                        if let Some((name, entry)) = creds.get(self.secrets_scroll)
-                                        {
+                                        if let Some(entry) = self.cached_secrets.get(self.secrets_scroll) {
+                                            let name = entry.get("name").and_then(|n| n.as_str()).unwrap_or("").to_string();
+                                            let disabled = entry.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false);
+                                            let policy = entry.get("policy")
+                                                .and_then(|p| serde_json::from_value::<crate::secrets::AccessPolicy>(p.clone()).ok())
+                                                .map(|p| p.badge().to_string())
+                                                .unwrap_or_default();
                                             self.show_secrets_dialog = false;
                                             Some(Action::ShowCredentialDialog {
-                                                name: name.clone(),
-                                                disabled: entry.disabled,
-                                                policy: entry.policy.badge().to_string(),
+                                                name,
+                                                disabled,
+                                                policy,
                                             })
                                         } else {
                                             Some(Action::Noop)
@@ -614,7 +627,7 @@ impl App {
                 return Ok(None);
             }
             Action::GatewayMessage(text) => {
-                return self.handle_gateway_message(text);
+                return self.handle_gateway_message(text).await;
             }
             Action::GatewayAuthChallenge => {
                 // Open the TOTP code entry dialog.
@@ -727,13 +740,20 @@ impl App {
                 return Ok(None);
             }
             Action::ConfirmStoreSecret { provider, key } => {
-                let action = dialogs::handle_confirm_store_secret(
-                    provider,
-                    key,
-                    &mut self.state.secrets_manager,
-                    &mut self.state.messages,
-                );
-                return Ok(action);
+                // Store via gateway instead of local vault
+                let secret_key = providers::secret_key_for_provider(&provider).unwrap_or("API_KEY");
+                let display = providers::display_name_for_provider(&provider).to_string();
+                let frame = serde_json::json!({
+                    "type": "secrets_store",
+                    "key": secret_key,
+                    "value": key,
+                });
+                self.send_to_gateway(frame.to_string()).await;
+                self.state.messages.push(DisplayMessage::info(format!(
+                    "Storing API key for {}…", display,
+                )));
+                // After storing, proceed to model selection
+                return Ok(Some(Action::FetchModels(provider.clone())));
             }
             Action::FetchModels(provider) => {
                 dialogs::spawn_fetch_models(
@@ -781,20 +801,17 @@ impl App {
                 let secret_key =
                     providers::secret_key_for_provider(provider).unwrap_or("COPILOT_TOKEN");
                 let display = providers::display_name_for_provider(provider).to_string();
-                match self.state.secrets_manager.store_secret(secret_key, token) {
-                    Ok(()) => {
-                        self.state.messages.push(DisplayMessage::success(format!(
-                            "{} authenticated successfully. Token stored.",
-                            display,
-                        )));
-                    }
-                    Err(e) => {
-                        self.state.messages.push(DisplayMessage::error(format!(
-                            "Failed to store token: {}. Token set for this session only.",
-                            e,
-                        )));
-                    }
-                }
+                // Store via gateway
+                let frame = serde_json::json!({
+                    "type": "secrets_store",
+                    "key": secret_key,
+                    "value": token,
+                });
+                self.send_to_gateway(frame.to_string()).await;
+                self.state.messages.push(DisplayMessage::success(format!(
+                    "{} authenticated successfully. Storing token…",
+                    display,
+                )));
                 // Proceed to model selection
                 return Ok(Some(Action::FetchModels(provider.clone())));
             }
@@ -805,15 +822,12 @@ impl App {
                 return Ok(Some(Action::Update));
             }
             Action::ShowCredentialDialog { name, disabled, .. } => {
-                let has_totp = self.state.secrets_manager.has_totp();
-                // Look up the actual current policy from the vault metadata
-                let current_policy = self
-                    .state
-                    .secrets_manager
-                    .list_all_entries()
-                    .iter()
-                    .find(|(n, _)| n == name)
-                    .map(|(_, entry)| entry.policy.clone())
+                let has_totp = self.state.config.totp_enabled;
+                // Look up the actual current policy from the cached secrets
+                let current_policy = self.cached_secrets.iter()
+                    .find(|e| e.get("name").and_then(|n| n.as_str()) == Some(name))
+                    .and_then(|e| e.get("policy"))
+                    .and_then(|p| serde_json::from_value::<crate::secrets::AccessPolicy>(p.clone()).ok())
                     .unwrap_or_default();
                 self.credential_dialog = Some(CredentialDialogState {
                     name: name.clone(),
@@ -825,26 +839,14 @@ impl App {
                 return Ok(None);
             }
             Action::ShowTotpSetup => {
-                if self.state.secrets_manager.has_totp() {
+                if self.state.config.totp_enabled {
                     self.totp_dialog = Some(TotpDialogState {
                         phase: TotpDialogPhase::AlreadyConfigured,
                     });
                 } else {
-                    match self.state.secrets_manager.setup_totp("rustyclaw") {
-                        Ok(uri) => {
-                            self.totp_dialog = Some(TotpDialogState {
-                                phase: TotpDialogPhase::ShowUri {
-                                    uri,
-                                    input: String::new(),
-                                },
-                            });
-                        }
-                        Err(e) => {
-                            self.state
-                                .messages
-                                .push(DisplayMessage::error(format!("Failed to set up 2FA: {}", e)));
-                        }
-                    }
+                    // Request TOTP setup via gateway
+                    let frame = serde_json::json!({"type": "secrets_setup_totp"});
+                    self.send_to_gateway(frame.to_string()).await;
                 }
                 return Ok(None);
             }
@@ -904,7 +906,7 @@ impl App {
     }
 
     /// Handle gateway messages received from the WebSocket.
-    fn handle_gateway_message(&mut self, text: &str) -> Result<Option<Action>> {
+    async fn handle_gateway_message(&mut self, text: &str) -> Result<Option<Action>> {
         // Parse the gateway JSON envelope.
         let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
         let frame_type = parsed
@@ -1000,6 +1002,8 @@ impl App {
                 // The hello + status frames will follow from the
                 // gateway, so keep the Connecting status.
                 self.state.gateway_status = GatewayStatus::Connected;
+                // Request secrets list after authentication
+                self.request_secrets_list().await;
             } else if retry {
                 // Wrong code but gateway allows retry — show message and re-prompt
                 let msg = parsed
@@ -1047,6 +1051,171 @@ impl App {
                     .as_ref()
                     .and_then(|v| v.get("message").and_then(|m| m.as_str()))
                     .unwrap_or("Failed to unlock vault.");
+                self.state.messages.push(DisplayMessage::error(msg));
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        // ── Handle secrets result frames from the gateway ──────
+        if frame_type == Some("secrets_list_result") {
+            let entries = parsed
+                .as_ref()
+                .and_then(|v| v.get("entries"))
+                .and_then(|e| e.as_array())
+                .cloned()
+                .unwrap_or_default();
+            self.cached_secrets = entries;
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_store_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("");
+            if ok {
+                self.state.messages.push(DisplayMessage::success(msg));
+            } else {
+                self.state.messages.push(DisplayMessage::error(msg));
+            }
+            // Refresh the cached secrets list
+            self.request_secrets_list().await;
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_get_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            let key = parsed.as_ref().and_then(|v| v.get("key").and_then(|k| k.as_str())).unwrap_or("").to_string();
+            let value = parsed.as_ref().and_then(|v| v.get("value").and_then(|val| val.as_str())).map(|s| s.to_string());
+            // Check if we have a pending request for provider probing
+            if self.pending_secret_key.as_deref() == Some(&key) {
+                self.pending_secret_key = None;
+                if ok && value.is_some() {
+                    // Key exists — proceed to fetch models
+                    return Ok(Some(Action::FetchModels(key)));
+                } else {
+                    // Key doesn't exist — prompt for it
+                    return Ok(Some(Action::PromptApiKey(key)));
+                }
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_peek_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            let name = parsed.as_ref().and_then(|v| v.get("name").and_then(|n| n.as_str())).unwrap_or("").to_string();
+            if ok {
+                let fields: Vec<(String, String)> = parsed.as_ref()
+                    .and_then(|v| v.get("fields"))
+                    .and_then(|f| f.as_array())
+                    .map(|arr| arr.iter().filter_map(|item| {
+                        let pair = item.as_array()?;
+                        Some((pair.get(0)?.as_str()?.to_string(), pair.get(1)?.as_str()?.to_string()))
+                    }).collect())
+                    .unwrap_or_default();
+                self.secret_viewer = Some(SecretViewerState {
+                    name,
+                    fields,
+                    revealed: false,
+                    selected: 0,
+                    scroll_offset: 0,
+                    status: None,
+                });
+            } else {
+                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed to peek");
+                self.state.messages.push(DisplayMessage::error(msg));
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_set_policy_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str()));
+            if ok {
+                self.state.messages.push(DisplayMessage::success("Policy updated."));
+            } else {
+                self.state.messages.push(DisplayMessage::error(msg.unwrap_or("Failed to set policy.")));
+            }
+            self.request_secrets_list().await;
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_set_disabled_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            if ok {
+                self.state.messages.push(DisplayMessage::success("Credential updated."));
+            } else {
+                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed");
+                self.state.messages.push(DisplayMessage::error(msg));
+            }
+            self.request_secrets_list().await;
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_delete_result") || frame_type == Some("secrets_delete_credential_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            if ok {
+                self.state.messages.push(DisplayMessage::success("Credential deleted."));
+            } else {
+                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed");
+                self.state.messages.push(DisplayMessage::error(msg));
+            }
+            self.request_secrets_list().await;
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_has_totp_result") {
+            // Update cached totp status — just trigger a UI refresh
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_setup_totp_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            if ok {
+                let uri = parsed.as_ref().and_then(|v| v.get("uri").and_then(|u| u.as_str())).unwrap_or("").to_string();
+                self.totp_dialog = Some(TotpDialogState {
+                    phase: TotpDialogPhase::ShowUri {
+                        uri,
+                        input: String::new(),
+                    },
+                });
+            } else {
+                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed to set up 2FA");
+                self.state.messages.push(DisplayMessage::error(msg));
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_verify_totp_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            if ok {
+                self.state.config.totp_enabled = true;
+                let _ = self.state.config.save(None);
+                self.state.messages.push(DisplayMessage::success("2FA configured successfully."));
+                self.totp_dialog = Some(TotpDialogState {
+                    phase: TotpDialogPhase::Verified,
+                });
+            } else {
+                // Verification failed — let user retry
+                if let Some(ref mut dlg) = self.totp_dialog {
+                    if let TotpDialogPhase::ShowUri { ref uri, .. } = dlg.phase {
+                        let saved_uri = uri.clone();
+                        dlg.phase = TotpDialogPhase::Failed {
+                            uri: saved_uri,
+                            input: String::new(),
+                        };
+                    }
+                }
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("secrets_remove_totp_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
+            if ok {
+                self.state.config.totp_enabled = false;
+                let _ = self.state.config.save(None);
+                self.state.messages.push(DisplayMessage::info("2FA has been removed."));
+            } else {
+                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed to remove 2FA");
                 self.state.messages.push(DisplayMessage::error(msg));
             }
             return Ok(Some(Action::Update));
@@ -1322,33 +1491,35 @@ impl App {
         match auth_method {
             providers::AuthMethod::DeviceFlow => {
                 if let Some(secret_key) = providers::secret_key_for_provider(&provider) {
-                    match self.state.secrets_manager.get_secret(secret_key, true) {
-                        Ok(Some(_)) => {
-                            self.state.messages.push(DisplayMessage::success(format!(
-                                "Access token for {} is already stored.",
-                                providers::display_name_for_provider(&provider),
-                            )));
-                            return Ok(Some(Action::FetchModels(provider)));
-                        }
-                        _ => {
-                            return Ok(Some(Action::StartDeviceFlow(provider)));
-                        }
+                    // Check cached secrets for existing token
+                    let has_key = self.cached_secrets.iter().any(|e| {
+                        e.get("name").and_then(|n| n.as_str()) == Some(secret_key)
+                    });
+                    if has_key {
+                        self.state.messages.push(DisplayMessage::success(format!(
+                            "Access token for {} is already stored.",
+                            providers::display_name_for_provider(&provider),
+                        )));
+                        return Ok(Some(Action::FetchModels(provider)));
+                    } else {
+                        return Ok(Some(Action::StartDeviceFlow(provider)));
                     }
                 }
             }
             providers::AuthMethod::ApiKey => {
                 if let Some(secret_key) = providers::secret_key_for_provider(&provider) {
-                    match self.state.secrets_manager.get_secret(secret_key, true) {
-                        Ok(Some(_)) => {
-                            self.state.messages.push(DisplayMessage::success(format!(
-                                "API key for {} is already stored.",
-                                providers::display_name_for_provider(&provider),
-                            )));
-                            return Ok(Some(Action::FetchModels(provider)));
-                        }
-                        _ => {
-                            return Ok(Some(Action::PromptApiKey(provider)));
-                        }
+                    // Check cached secrets for existing key
+                    let has_key = self.cached_secrets.iter().any(|e| {
+                        e.get("name").and_then(|n| n.as_str()) == Some(secret_key)
+                    });
+                    if has_key {
+                        self.state.messages.push(DisplayMessage::success(format!(
+                            "API key for {} is already stored.",
+                            providers::display_name_for_provider(&provider),
+                        )));
+                        return Ok(Some(Action::FetchModels(provider)));
+                    } else {
+                        return Ok(Some(Action::PromptApiKey(provider)));
                     }
                 }
             }
@@ -1582,10 +1753,9 @@ impl App {
         let Some(picker) = self.policy_picker.take() else {
             return Action::Noop;
         };
-        let (new_state, action) = dialogs::handle_policy_picker_key(
+        let (new_state, action) = dialogs::handle_policy_picker_key_gateway(
             picker,
             code,
-            &mut self.state.secrets_manager,
             &mut self.state.messages,
         );
         self.policy_picker = new_state;
@@ -1607,23 +1777,15 @@ impl App {
         let Some(dlg) = self.credential_dialog.take() else {
             return Action::Noop;
         };
-        let (new_dlg, new_picker, new_viewer, action): (
-            Option<dialogs::CredentialDialogState>,
-            Option<dialogs::PolicyPickerState>,
-            Option<dialogs::SecretViewerState>,
-            Action,
-        ) = dialogs::handle_credential_dialog_key(
-            dlg,
-            code,
-            &mut self.state.secrets_manager,
-            &mut self.state.messages,
-        );
+        let (new_dlg, new_picker, action) =
+            dialogs::handle_credential_dialog_key_gateway(
+                dlg,
+                code,
+                &mut self.state.messages,
+            );
         self.credential_dialog = new_dlg;
         if new_picker.is_some() {
             self.policy_picker = new_picker;
-        }
-        if new_viewer.is_some() {
-            self.secret_viewer = new_viewer;
         }
         action
     }
@@ -1633,11 +1795,9 @@ impl App {
         let Some(dlg) = self.totp_dialog.take() else {
             return Action::Noop;
         };
-        let (new_state, action) = dialogs::handle_totp_dialog_key(
+        let (new_state, action) = dialogs::handle_totp_dialog_key_gateway(
             dlg,
             code,
-            &mut self.state.secrets_manager,
-            &mut self.state.config,
             &mut self.state.messages,
         );
         self.totp_dialog = new_state;
@@ -1668,6 +1828,12 @@ impl App {
             dialogs::handle_vault_unlock_prompt_key(prompt, code, &mut self.state.messages);
         self.vault_unlock_prompt = new_state;
         action
+    }
+
+    /// Request the secrets list from the gateway to update the cached snapshot.
+    async fn request_secrets_list(&mut self) {
+        let frame = serde_json::json!({"type": "secrets_list"});
+        self.send_to_gateway(frame.to_string()).await;
     }
 
     // ── Gateway connection ──────────────────────────────────────────────────
@@ -1766,6 +1932,9 @@ impl App {
                 self.reader_task = Some(tokio::spawn(async move {
                     Self::gateway_reader_loop(stream, tx).await;
                 }));
+
+                // Request cached secrets from gateway
+                self.request_secrets_list().await;
             }
             Err(err) => {
                 self.state.gateway_status = GatewayStatus::Error;
@@ -2212,7 +2381,7 @@ impl App {
         tui.draw(|frame| {
             let area = frame.area();
 
-            let mut ps = PaneState {
+            let ps = PaneState {
                 config: &self.state.config,
                 secrets_manager: &mut self.state.secrets_manager,
                 skill_manager: &mut self.state.skill_manager,
@@ -2251,9 +2420,9 @@ impl App {
                 Self::draw_skills_dialog(frame, area, &ps);
             }
 
-            // Secrets dialog overlay
+            // Secrets dialog overlay (uses cached_secrets, not PaneState)
             if self.show_secrets_dialog {
-                Self::draw_secrets_dialog(frame, area, &mut ps, self.secrets_scroll);
+                Self::draw_secrets_dialog(frame, area, &self.cached_secrets, &self.state.config, self.secrets_scroll);
             }
 
             // API key dialog overlay
@@ -2382,20 +2551,20 @@ impl App {
     fn draw_secrets_dialog(
         frame: &mut ratatui::Frame<'_>,
         area: Rect,
-        state: &mut PaneState<'_>,
+        cached_secrets: &[serde_json::Value],
+        config: &Config,
         scroll_offset: usize,
     ) {
         use crate::secrets::AccessPolicy;
         use crate::theme::tui_palette as tp;
         use ratatui::widgets::{Block, Borders, Clear, List, ListItem};
 
-        let creds = state.secrets_manager.list_all_entries();
-        let agent_access = state.secrets_manager.has_agent_access();
-        let has_totp = state.secrets_manager.has_totp();
+        let agent_access = config.agent_access;
+        let has_totp = config.totp_enabled;
 
         // Size: 70 cols or 90% width, height = creds + header lines + border
         let dialog_w = 70.min(area.width.saturating_sub(4));
-        let dialog_h = ((creds.len() as u16) + 8)
+        let dialog_h = ((cached_secrets.len() as u16) + 8)
             .min(area.height.saturating_sub(4))
             .max(8);
         let x = area.x + (area.width.saturating_sub(dialog_w)) / 2;
@@ -2419,8 +2588,8 @@ impl App {
             Span::styled(
                 format!(
                     "  │  {} cred{}",
-                    creds.len(),
-                    if creds.len() == 1 { "" } else { "s" }
+                    cached_secrets.len(),
+                    if cached_secrets.len() == 1 { "" } else { "s" }
                 ),
                 Style::default().fg(tp::TEXT_DIM),
             ),
@@ -2435,7 +2604,7 @@ impl App {
         items.push(ListItem::new(""));
 
         // ── Credential rows ─────────────────────────────────────────
-        if creds.is_empty() {
+        if cached_secrets.is_empty() {
             items.push(ListItem::new(Span::styled(
                 "  No credentials stored.",
                 Style::default()
@@ -2443,9 +2612,17 @@ impl App {
                     .add_modifier(Modifier::ITALIC),
             )));
         } else {
-            for (i, (name, entry)) in creds.iter().enumerate() {
+            for (i, entry_val) in cached_secrets.iter().enumerate() {
                 let highlight = i == scroll_offset;
-                let is_disabled = entry.disabled;
+                let name = entry_val.get("name").and_then(|n| n.as_str()).unwrap_or("?");
+                let is_disabled = entry_val.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false);
+                let label = entry_val.get("label").and_then(|l| l.as_str()).unwrap_or(name);
+                let kind_str = entry_val.get("kind").and_then(|k| k.as_str()).unwrap_or("ApiKey");
+                let description = entry_val.get("description").and_then(|d| d.as_str()).unwrap_or("");
+
+                let policy: AccessPolicy = entry_val.get("policy")
+                    .and_then(|p| serde_json::from_value(p.clone()).ok())
+                    .unwrap_or_default();
 
                 let row_style = if highlight {
                     tp::selected()
@@ -2455,8 +2632,16 @@ impl App {
                     Style::default()
                 };
 
-                let icon = entry.kind.icon();
-                let kind_label = format!(" {:10} ", entry.kind.to_string());
+                // Map kind string to icon
+                let icon = match kind_str {
+                    "ApiKey" => "🔑",
+                    "Credential" => "🪪",
+                    "Token" => "🎟",
+                    "SshKey" => "🔐",
+                    "Certificate" => "📜",
+                    _ => "🔑",
+                };
+                let kind_label = format!(" {:10} ", kind_str);
 
                 let badge = if is_disabled {
                     Span::styled(
@@ -2466,7 +2651,7 @@ impl App {
                             .bg(tp::MUTED),
                     )
                 } else {
-                    let (label, color) = match &entry.policy {
+                    let (badge_label, color) = match &policy {
                         AccessPolicy::Always => (" OPEN ", tp::SUCCESS),
                         AccessPolicy::WithApproval => (" ASK ", tp::WARN),
                         AccessPolicy::WithAuth => (" AUTH ", tp::ERROR),
@@ -2476,18 +2661,17 @@ impl App {
                         AccessPolicy::SkillOnly(_) => (" SKILL ", tp::INFO),
                     };
                     Span::styled(
-                        label,
+                        badge_label,
                         Style::default()
                             .fg(Color::Rgb(0x1E, 0x1C, 0x1A))
                             .bg(color),
                     )
                 };
 
-                let desc = entry.description.as_deref().unwrap_or("");
-                let detail = if desc.is_empty() {
+                let detail = if description.is_empty() {
                     format!(" {}", name)
                 } else {
-                    format!(" {} — {}", name, desc)
+                    format!(" {} — {}", name, description)
                 };
 
                 let label_style = if is_disabled {
@@ -2509,7 +2693,7 @@ impl App {
                     Span::styled(kind_label, kind_style),
                     badge,
                     Span::styled(" ", row_style),
-                    Span::styled(&entry.label, label_style),
+                    Span::styled(label.to_string(), label_style),
                     Span::styled(detail, Style::default().fg(tp::TEXT_DIM).patch(row_style)),
                 ])));
             }
