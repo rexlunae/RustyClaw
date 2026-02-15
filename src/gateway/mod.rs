@@ -38,7 +38,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 use tokio_util::sync::CancellationToken;
@@ -57,6 +57,12 @@ pub type SharedVault = Arc<Mutex<SecretsManager>>;
 
 /// Gateway-owned skill manager, shared across connections.
 pub type SharedSkillManager = Arc<Mutex<SkillManager>>;
+
+/// Shared config, updated on reload.
+pub type SharedConfig = Arc<RwLock<Config>>;
+
+/// Shared model context, updated on reload.
+pub type SharedModelCtx = Arc<RwLock<Option<Arc<ModelContext>>>>;
 
 // Re-export validate_model_connection for external use
 pub use providers::validate_model_connection;
@@ -230,6 +236,8 @@ pub async fn run_gateway(
     };
 
     let model_ctx = model_ctx.map(Arc::new);
+    let shared_config: SharedConfig = Arc::new(RwLock::new(config.clone()));
+    let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
     let rate_limiter = auth::new_rate_limiter();
 
     // ── Initialize and start messenger loop ─────────────────────────
@@ -285,8 +293,8 @@ pub async fn run_gateway(
             }
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
-                let config_clone = config.clone();
-                let ctx_clone = model_ctx.clone();
+                let shared_cfg = shared_config.clone();
+                let shared_ctx = shared_model_ctx.clone();
                 let session_clone = copilot_session.clone();
                 let vault_clone = vault.clone();
                 let skill_clone = skill_mgr.clone();
@@ -294,7 +302,7 @@ pub async fn run_gateway(
                 let child_cancel = cancel.child_token();
                 tokio::spawn(async move {
                     if let Err(err) = handle_connection(
-                        stream, peer, config_clone, ctx_clone,
+                        stream, peer, shared_cfg, shared_ctx,
                         session_clone, vault_clone, skill_clone,
                         limiter_clone, child_cancel,
                     ).await {
@@ -311,8 +319,8 @@ pub async fn run_gateway(
 async fn handle_connection(
     stream: tokio::net::TcpStream,
     peer: SocketAddr,
-    config: Config,
-    model_ctx: Option<Arc<ModelContext>>,
+    shared_config: SharedConfig,
+    shared_model_ctx: SharedModelCtx,
     copilot_session: Option<Arc<CopilotSession>>,
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
@@ -324,6 +332,11 @@ async fn handle_connection(
         .context("WebSocket handshake failed")?;
     let (mut writer, mut reader) = ws_stream.split();
     let peer_ip = peer.ip();
+
+    // Snapshot config and model context for this connection.
+    // Reload updates the shared state; new connections pick up changes.
+    let config = shared_config.read().await.clone();
+    let model_ctx = shared_model_ctx.read().await.clone();
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -930,17 +943,76 @@ async fn handle_connection(
                                     let _ = writer.send(Message::Text(resp.to_string().into())).await;
                                     continue;
                                 }
+                                Some("reload") => {
+                                    // ── Reload config + model context from disk ─────
+                                    let settings_dir = config.settings_dir.clone();
+                                    let config_path = settings_dir.join("config.toml");
+                                    match Config::load(Some(config_path)) {
+                                        Ok(new_config) => {
+                                            // Re-resolve model context from new config + vault
+                                            let new_model_ctx = {
+                                                let mut v = vault.lock().await;
+                                                ModelContext::resolve(&new_config, &mut v).ok().map(Arc::new)
+                                            };
+
+                                            let (provider, model) = if let Some(ref ctx) = new_model_ctx {
+                                                (ctx.provider.clone(), ctx.model.clone())
+                                            } else {
+                                                ("(none)".to_string(), "(none)".to_string())
+                                            };
+
+                                            // Update shared state so new connections pick up changes
+                                            {
+                                                let mut cfg = shared_config.write().await;
+                                                *cfg = new_config;
+                                            }
+                                            {
+                                                let mut ctx = shared_model_ctx.write().await;
+                                                *ctx = new_model_ctx.clone();
+                                            }
+
+                                            let resp = json!({
+                                                "type": "reload_result",
+                                                "ok": true,
+                                                "provider": provider,
+                                                "model": model,
+                                            });
+                                            let _ = writer.send(Message::Text(resp.to_string().into())).await;
+
+                                            // Send status update about new model
+                                            if let Some(ref ctx) = new_model_ctx {
+                                                let display = crate_providers::display_name_for_provider(&ctx.provider);
+                                                let detail = format!("{} / {} (reloaded)", display, ctx.model);
+                                                let _ = writer.send(Message::Text(
+                                                    helpers::status_frame("model_configured", &detail).into(),
+                                                )).await;
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let resp = json!({
+                                                "type": "reload_result",
+                                                "ok": false,
+                                                "message": format!("Failed to reload config: {}", e),
+                                            });
+                                            let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                        }
+                                    }
+                                    continue;
+                                }
                                 _ => {
-                                    // Not a secrets control message — fall through to dispatch
+                                    // Not a control message — fall through to dispatch
                                 }
                             }
                         }
 
+                        // Re-read model_ctx from shared state for each dispatch
+                        // so reloaded config takes effect on existing connections.
+                        let current_model_ctx = shared_model_ctx.read().await.clone();
                         let workspace_dir = config.workspace_dir();
                         if let Err(err) = dispatch_text_message(
                             &http,
                             text.as_str(),
-                            model_ctx.as_deref(),
+                            current_model_ctx.as_deref(),
                             copilot_session.as_deref(),
                             &mut writer,
                             &workspace_dir,

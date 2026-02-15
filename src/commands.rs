@@ -26,6 +26,8 @@ pub enum CommandAction {
     ShowSecrets,
     /// Show the provider selector dialog
     ShowProviderSelector,
+    /// Reload gateway configuration
+    GatewayReload,
     /// Download media by ID (id, optional destination path)
     Download(String, Option<String>),
 }
@@ -57,6 +59,7 @@ pub fn command_names() -> Vec<String> {
         "gateway start".into(),
         "gateway stop".into(),
         "gateway restart".into(),
+        "reload".into(),
         "provider".into(),
         "model".into(),
         "skills".into(),
@@ -113,6 +116,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /gateway start           - Connect to the gateway".to_string(),
                 "  /gateway stop            - Disconnect from the gateway".to_string(),
                 "  /gateway restart         - Restart the gateway connection".to_string(),
+                "  /reload                  - Reload gateway config (no restart)".to_string(),
                 "  /provider <name>         - Change the AI provider".to_string(),
                 "  /model <name>            - Change the AI model".to_string(),
                 "  /skills                  - Show loaded skills".to_string(),
@@ -206,6 +210,10 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 messages: Vec::new(),
                 action: CommandAction::GatewayInfo,
             },
+        },
+        "reload" => CommandResponse {
+            messages: vec!["Reloading gateway configuration…".to_string()],
+            action: CommandAction::GatewayReload,
         },
         "skills" => CommandResponse {
             messages: Vec::new(),
