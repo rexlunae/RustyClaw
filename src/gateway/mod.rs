@@ -889,7 +889,14 @@ async fn dispatch_text_message(
         // Stream any text content to the client.
         // For Anthropic, text is already streamed via the writer, so skip if empty.
         // For other providers, send the accumulated text.
+        eprintln!(
+            "[Gateway] provider='{}', text_len={}, tool_calls={}",
+            resolved.provider,
+            model_resp.text.len(),
+            model_resp.tool_calls.len()
+        );
         if !model_resp.text.is_empty() && resolved.provider != "anthropic" {
+            eprintln!("[Gateway] Sending chunk to TUI: {} chars", model_resp.text.len());
             providers::send_chunk(writer, &model_resp.text).await?;
         }
 
