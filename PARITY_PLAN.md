@@ -28,11 +28,11 @@
 23. `secrets_store` — store/update encrypted secret
 24. `gateway` — config get/apply/patch, restart, update
 25. `message` — cross-platform messaging (send, broadcast)
-26. `tts` — text-to-speech conversion
-27. `image` — vision model image analysis
-28. `nodes` — paired device discovery and control
-29. `browser` — web browser automation (Playwright/CDP stub)
-30. `canvas` — node canvas UI presentation (A2UI stub)
+26. `tts` — text-to-speech conversion (functional with API key, graceful fallback without)
+27. `image` — vision model image analysis (functional with OpenAI/Anthropic/Google API keys)
+28. `nodes` — paired device discovery and control (SSH/ADB backends)
+29. `browser` — web browser automation (real CDP with `browser` feature; stub without)
+30. `canvas` — node canvas UI presentation (stub — requires canvas integration)
 
 ### ✅ Implemented Features
 - Multi-provider support (OpenAI, Anthropic, Google, GitHub Copilot, xAI, OpenRouter, Ollama, custom)
@@ -50,6 +50,7 @@
 - Gateway daemon management (spawn, PID tracking, restart, kill)
 - Config migration from legacy flat layout
 - CLI commands: setup, gateway, configure, secrets, doctor, tui, command, status, version, skill
+- Messenger backends: Webhook, Console, Discord, Telegram, Signal (optional)
 
 ---
 
@@ -61,7 +62,7 @@
 | Capture OpenClaw config schema and default paths | ✅ Done | Config schema implemented in config.rs, matching OpenClaw layout |
 | Capture OpenClaw gateway/WebSocket protocol | ✅ Done | Handshake, message types (chat, chunk, response_done, tool_call, tool_result, error, info, status, auth_*), ping/pong |
 | Capture OpenClaw skills format and runtime behavior | ✅ Done | JSON/TOML/YAML/YML skill loading implemented |
-| Capture OpenClaw messenger integrations and config requirements | ⚠️ Partial | Messenger trait + manager scaffold exists, no concrete backends |
+| Capture OpenClaw messenger integrations and config requirements | ✅ Done | Trait + 5 backends (Webhook, Console, Discord, Telegram, Signal) |
 | Capture OpenClaw TUI screens, commands, and shortcuts | ✅ Done | 12+ slash-commands, tab-completion, pane navigation |
 | Capture OpenClaw secrets approval/permissions flow | ✅ Done | Full policy enforcement (Always/WithAuth/SkillOnly), TOTP, lockout |
 | Build a parity matrix mapping features to RustyClaw coverage | ✅ Done | This document |
@@ -97,9 +98,10 @@
 
 | Task | Status | Notes |
 |------|--------|-------|
-| Implement required messenger interfaces and config fields | ✅ Done | Full trait + 4 backends |
-| Match connection lifecycle, retries, and message formatting | ✅ Done | Webhook, Console, Discord, Telegram backends |
+| Implement required messenger interfaces and config fields | ✅ Done | Full trait + 5 backends |
+| Match connection lifecycle, retries, and message formatting | ✅ Done | Webhook, Console, Discord, Telegram, Signal backends |
 | Match inbound/outbound event handling | ✅ Done | send_message + receive_messages trait methods |
+| Add WhatsApp and Slack messenger backends | ⚠️ Missing | OpenClaw supports WhatsApp and Slack; RustyClaw does not |
 
 ## Phase 5 — TUI Parity
 
@@ -136,159 +138,46 @@
 
 ---
 
-## Gap Analysis: Missing OpenClaw Capabilities
+## Remaining Gaps
 
-### 🔴 Critical (Core Agentic Features)
+### ⚠️ Incomplete Items (from phases above)
 
-#### 1. Process Management (`process` tool)
-OpenClaw has backgrounded process management:
-- `list`, `poll`, `log`, `write`, `send-keys`, `kill`, `clear`, `remove`
-- PTY support for interactive CLIs
-- Session persistence across tool rounds
+1. **CLI env var precedence audit** — env var override behavior not fully audited against OpenClaw (Phase 1)
+2. **Dedicated TUI log view** — messages pane exists but no separate log/debug view (Phase 5)
+3. **Cross-tool secret import** — legacy migration works but OpenClaw→RustyClaw secret import not tested (Phase 6)
+4. **Doctor command edge cases** — `--repair` exists but doesn't cover all invalid config states (Phase 7)
+5. **Dedicated migration guide** — only config.example.toml exists; no step-by-step migration doc (Phase 7)
 
-**RustyClaw status**: `execute_command` blocks until completion, no background support. Gateway daemon management exists but is separate from agent-accessible process control.
+### ⚠️ Stub / Partial Implementations
 
-#### 2. Memory System
-- `memory_search` — semantic search over MEMORY.md + memory/*.md
-- `memory_get` — snippet retrieval with line ranges
+6. **Canvas tool** — accepts parameters and returns descriptive text but has no actual canvas rendering integration (`src/tools/devices.rs:1135`)
+7. **Browser tool (without `browser` feature)** — returns stub descriptions of what would happen; real CDP is behind the `browser` feature flag (`src/tools/browser.rs:530`)
+8. **TTS tool (without API key)** — returns a descriptive fallback; functional when OPENAI_API_KEY is set (`src/tools/gateway_tools.rs:370`)
+9. **Process tool: `send-keys`** — not implemented; `write` action exists for stdin but no PTY/send-keys support
 
-**RustyClaw status**: Not implemented. Conversation history persists across sessions (current.json), but no structured memory recall or semantic search.
+### ⚠️ Missing OpenClaw Features
 
-#### 3. Session/Multi-Agent Tools
-- `sessions_list` — list active sessions
-- `sessions_history` — fetch transcript history
-- `sessions_send` — cross-session messaging
-- `sessions_spawn` — spawn sub-agent tasks
-- `session_status` — usage/cost tracking
-- `agents_list` — list available agents for spawning
+10. **WhatsApp messenger backend** — OpenClaw supports WhatsApp; RustyClaw does not
+11. **Slack messenger backend** — OpenClaw supports Slack; RustyClaw does not
+12. **Gateway WSS/TLS support** — OpenClaw supports `wss://`; RustyClaw only supports `ws://`
+13. **Sandbox enforcement** — Landlock and PathValidation modes are stubs; only bwrap provides real isolation
+14. **SECURITY.md accuracy** — document references wrong crate (`keyring` instead of `securestore`) and lists outdated dependency versions
 
-**RustyClaw status**: Single-session only. No multi-agent support.
+### ✅ Previously Missing, Now Implemented
 
-### 🟡 Important (Extended Capabilities)
+The following items were listed as "Not implemented" in the original Gap Analysis but have since been completed:
 
-#### 4. Browser Automation (`browser` tool)
-- Multi-profile browser control
-- Snapshot (aria/ai accessibility tree)
-- Screenshot
-- UI actions (click/type/press/hover/drag)
-- Chrome extension relay support
-
-**RustyClaw status**: Not implemented.
-
-#### 5. Cron/Scheduling (`cron` tool)
-- Scheduled jobs (at, every, cron expressions)
-- System events and agent turns
-- Job management (add/update/remove/run/runs)
-- Wake events
-
-**RustyClaw status**: Not implemented.
-
-#### 6. Message Tool (`message`)
-- Cross-platform messaging (Discord/Telegram/WhatsApp/Signal/Slack/etc.)
-- Polls, reactions, threads, search
-- Media attachments
-
-**RustyClaw status**: Messenger abstraction exists but no tool exposure and no backends.
-
-#### 7. Node/Device Control (`nodes` tool)
-- Paired device discovery
-- Camera/screen capture
-- Location services
-- Remote command execution
-- Notifications
-
-**RustyClaw status**: Not implemented.
-
-#### 8. Canvas (`canvas` tool)
-- Present/hide/navigate/eval
-- Snapshot rendering
-- A2UI (accessibility-to-UI)
-
-**RustyClaw status**: Not implemented.
-
-#### 9. True Streaming from Providers
-OpenClaw streams tokens from the provider as they arrive (SSE).
-
-**RustyClaw status**: Provider calls are non-streaming (await full JSON response, then send as single chunk). The TUI handles chunk frames, so adding streaming is a gateway-only change.
-
-### 🟢 Nice-to-Have
-
-#### 10. Gateway Control (`gateway` tool)
-- Config get/apply/patch from within agent
-- In-place restart
-- Self-update
-
-**RustyClaw status**: Gateway daemon management exists via CLI/TUI commands, but no agent-accessible tool.
-
-#### 11. Image Analysis (`image` tool)
-- Vision model integration
-- Image understanding
-
-**RustyClaw status**: Not implemented.
-
-#### 12. TTS (`tts` tool)
-- Text-to-speech generation
-
-**RustyClaw status**: Not implemented.
-
-#### 13. Apply Patch (`apply_patch` tool)
-- Multi-hunk structured patches
-
-**RustyClaw status**: Not implemented (edit_file handles single replacements).
-
----
-
-## Implementation Priority
-
-### Phase 1: Core Tool Parity (Weeks 1-2)
-1. ~~**Web tools** — web_search, web_fetch~~ ✅ **Done**
-2. **Process management** — background exec, session tracking, PTY
-3. **Memory system** — memory_search, memory_get with semantic search
-
-### Phase 2: Extended Tools (Weeks 3-4)
-4. **Cron/scheduling** — job management, scheduled agent turns
-5. **Message tool** — expose messenger abstraction to agent + build backends
-6. **Session tools** — multi-session awareness (sessions_list, sessions_send)
-7. **True streaming** — SSE streaming from providers
-
-### Phase 3: Advanced Features (Weeks 5-6)
-8. **Browser automation** — Playwright/CDP integration
-9. **Node control** — device pairing, remote execution
-10. **Canvas** — A2UI rendering
-
-### Phase 4: Polish (Week 7+)
-11. Image analysis, TTS, apply_patch
-12. Gateway self-management tool
-13. Tool profiles and policies
-14. Integration test suite
-15. CLI conformance tests (golden-file)
-
----
-
-## Architecture Notes
-
-### Tool Registration
-Current: Static `all_tools()` returns a fixed vec of 9 tools.
-Needed: Dynamic registry supporting:
-- Core tools (always available)
-- Optional tools (web, browser, etc.)
-- Plugin tools (extensible)
-- Tool policies (allow/deny lists)
-
-### Async Execution
-Current: Tools execute synchronously (except web_fetch/web_search which use reqwest).
-Needed: Async tool execution for:
-- Background processes
-- Long-running web fetches
-- Browser automation
-
-### Configuration
-Current: `config.toml` for basic settings.
-Needed: Extended config for:
-- `tools.web.search.enabled`, `tools.web.fetch.enabled`
-- `browser.enabled`, `browser.defaultProfile`
-- `tools.allow`, `tools.deny`
-- Tool-specific settings
+- Process management (list, poll, log, write, kill) — `src/process_manager.rs`, `src/tools/runtime.rs`
+- Memory system (memory_search BM25, memory_get) — `src/memory.rs`, `src/tools/memory_tools.rs`
+- Session/multi-agent tools (list, spawn, send, history, status) — `src/sessions.rs`, `src/tools/sessions_tools.rs`
+- Cron/scheduling (at, every, cron expressions) — `src/cron.rs`, `src/tools/cron_tool.rs`
+- Message tool (send, broadcast) — `src/tools/gateway_tools.rs`
+- Node/device control (SSH/ADB: camera, screen, location, run, notify) — `src/tools/devices.rs`
+- Image analysis (OpenAI/Anthropic/Google vision APIs) — `src/tools/gateway_tools.rs:441`
+- TTS (OpenAI TTS API) — `src/tools/gateway_tools.rs:348`
+- Apply patch (multi-hunk unified diff) — `src/tools/patch.rs`
+- Gateway control tool (config get/apply/patch, restart) — `src/tools/gateway_tools.rs`
+- True streaming from providers (OpenAI SSE + Anthropic SSE) — `src/streaming.rs`, `src/gateway/providers.rs`
 
 ---
 
@@ -306,17 +195,19 @@ Needed: Extended config for:
 | Secrets vault & policies | ✅ Complete | list, get, store |
 | Gateway control | ✅ Complete | config get/apply/patch, restart |
 | Message tool | ✅ Complete | send, broadcast |
-| TTS | ✅ Complete | text-to-speech stub |
+| TTS | ✅ Complete | functional with API key |
 | Apply patch | ✅ Complete | multi-hunk diff |
-| Image analysis | ✅ Complete | vision model stub |
-| Browser automation | ✅ Complete | Playwright/CDP stub |
-| Node/device control | ✅ Complete | camera, screen, location, run, invoke |
-| Canvas | ✅ Complete | present, eval, snapshot, A2UI |
+| Image analysis | ✅ Complete | OpenAI/Anthropic/Google vision |
+| Browser automation | ⚠️ Partial | Real CDP behind `browser` feature; stub without |
+| Node/device control | ✅ Complete | SSH/ADB backends |
+| Canvas | ⚠️ Stub | Parameter handling only; no rendering integration |
 | Context management (compaction, token tracking) | ✅ Complete | — |
 | Conversation memory (persistence, replay) | ✅ Complete | — |
 | Gateway (auth, heartbeat, message types) | ✅ Complete | — |
 | CLI commands | ✅ Complete | 10 subcommands |
 | TUI commands | ✅ Complete | 12+ slash-commands |
 | Skills (loading, format support) | ✅ Complete | Load + gate checks + prompt injection |
-| Messengers | ✅ Complete | Webhook, Console, Discord, Telegram |
+| Messengers | ⚠️ Partial | Webhook, Console, Discord, Telegram, Signal (missing WhatsApp, Slack) |
 | Provider streaming | ✅ Complete | OpenAI SSE + Anthropic SSE |
+| Gateway TLS (WSS) | ❌ Missing | Only ws:// supported |
+| Sandbox enforcement | ⚠️ Partial | Only bwrap works; Landlock/PathValidation are stubs |
