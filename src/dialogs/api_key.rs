@@ -31,6 +31,10 @@ pub struct ApiKeyDialogState {
     pub input: String,
     /// Which phase the dialog is in
     pub phase: ApiKeyDialogPhase,
+    /// URL where the user can get an API key
+    pub help_url: Option<String>,
+    /// Short help text shown in the dialog
+    pub help_text: Option<String>,
 }
 
 /// Open the API-key input dialog for the given provider.
@@ -47,12 +51,21 @@ pub fn open_api_key_dialog(
         "No API key found for {}. Please enter one below.",
         display,
     )));
+    let help_url = providers::provider_by_id(provider)
+        .and_then(|p| p.help_url)
+        .map(|s| s.to_string());
+    let help_text = providers::provider_by_id(provider)
+        .and_then(|p| p.help_text)
+        .map(|s| s.to_string());
+
     Some(ApiKeyDialogState {
         provider: provider.to_string(),
         display,
         secret_key,
         input: String::new(),
         phase: ApiKeyDialogPhase::EnterKey,
+        help_url,
+        help_text,
     })
 }
 
@@ -146,8 +159,10 @@ pub fn handle_confirm_store_secret(
 
 /// Draw a centered API-key dialog overlay.
 pub fn draw_api_key_dialog(frame: &mut ratatui::Frame<'_>, area: Rect, dialog: &ApiKeyDialogState) {
-    let dialog_w = 56.min(area.width.saturating_sub(4));
-    let dialog_h = 7_u16.min(area.height.saturating_sub(4)).max(5);
+    let dialog_w = 60.min(area.width.saturating_sub(4));
+    let has_help = dialog.help_text.is_some() || dialog.help_url.is_some();
+    let base_h = if has_help { 9_u16 } else { 7_u16 };
+    let dialog_h = base_h.min(area.height.saturating_sub(4)).max(5);
     let x = area.x + (area.width.saturating_sub(dialog_w)) / 2;
     let y = area.y + (area.height.saturating_sub(dialog_h)) / 2;
     let dialog_area = Rect::new(x, y, dialog_w, dialog_h);
@@ -186,11 +201,42 @@ pub fn draw_api_key_dialog(frame: &mut ratatui::Frame<'_>, area: Rect, dialog: &
                 );
             }
 
+            // Help text (where to get the key)
+            let help_offset = if let Some(ref help) = dialog.help_text {
+                if inner.height >= 2 {
+                    let help_line = Line::from(Span::styled(
+                        format!(" {}", help),
+                        Style::default().fg(tp::MUTED).add_modifier(Modifier::ITALIC),
+                    ));
+                    frame.render_widget(
+                        Paragraph::new(help_line),
+                        Rect::new(inner.x, inner.y + 1, inner.width, 1),
+                    );
+                }
+                if let Some(ref url) = dialog.help_url {
+                    if inner.height >= 3 {
+                        let url_line = Line::from(Span::styled(
+                            format!(" → {}", url),
+                            Style::default().fg(tp::ACCENT),
+                        ));
+                        frame.render_widget(
+                            Paragraph::new(url_line),
+                            Rect::new(inner.x, inner.y + 2, inner.width, 1),
+                        );
+                    }
+                    3_u16
+                } else {
+                    2_u16
+                }
+            } else {
+                1_u16
+            };
+
             // Masked input
-            if inner.height >= 3 {
+            if inner.height >= help_offset + 2 {
                 let masked: String = "•".repeat(dialog.input.len());
                 let input_area =
-                    Rect::new(inner.x + 1, inner.y + 2, inner.width.saturating_sub(2), 1);
+                    Rect::new(inner.x + 1, inner.y + help_offset + 1, inner.width.saturating_sub(2), 1);
                 let prompt = Line::from(vec![
                     Span::styled("❯ ", Style::default().fg(tp::ACCENT)),
                     Span::styled(&masked, Style::default().fg(tp::TEXT)),

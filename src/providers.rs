@@ -42,6 +42,10 @@ pub struct ProviderDef {
     pub device_flow: Option<&'static DeviceFlowConfig>,
     pub base_url: Option<&'static str>,
     pub models: &'static [&'static str],
+    /// URL where the user can sign up or get an API key.
+    pub help_url: Option<&'static str>,
+    /// Short hint shown in the API key dialog (e.g. "Get one at …").
+    pub help_text: Option<&'static str>,
 }
 
 // GitHub Copilot device flow configuration.
@@ -67,6 +71,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
             "claude-sonnet-4-20250514",
             "claude-haiku-4-20250514",
         ],
+        help_url: Some("https://console.anthropic.com/settings/keys"),
+        help_text: Some("Get a key at console.anthropic.com → API Keys"),
     },
     ProviderDef {
         id: "openai",
@@ -82,6 +88,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
             "o3",
             "o4-mini",
         ],
+        help_url: Some("https://platform.openai.com/api-keys"),
+        help_text: Some("Get a key at platform.openai.com → API Keys"),
     },
     ProviderDef {
         id: "google",
@@ -95,6 +103,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
             "gemini-2.5-flash",
             "gemini-2.0-flash",
         ],
+        help_url: Some("https://aistudio.google.com/apikey"),
+        help_text: Some("Get a key at aistudio.google.com → API Key"),
     },
     ProviderDef {
         id: "xai",
@@ -104,6 +114,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
         device_flow: None,
         base_url: Some("https://api.x.ai/v1"),
         models: &["grok-3", "grok-3-mini"],
+        help_url: Some("https://console.x.ai/"),
+        help_text: Some("Get a key at console.x.ai"),
     },
     ProviderDef {
         id: "openrouter",
@@ -118,6 +130,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
             "openai/gpt-4.1",
             "google/gemini-2.5-pro",
         ],
+        help_url: Some("https://openrouter.ai/keys"),
+        help_text: Some("Get a key at openrouter.ai/keys (free tier available)"),
     },
     ProviderDef {
         id: "github-copilot",
@@ -134,6 +148,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
             "claude-sonnet-4-20250514",
             "claude-opus-4-20250514",
         ],
+        help_url: None,
+        help_text: Some("Uses GitHub device flow — no manual key needed"),
     },
     ProviderDef {
         id: "copilot-proxy",
@@ -143,6 +159,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
         device_flow: Some(&GITHUB_COPILOT_DEVICE_FLOW),
         base_url: None, // will prompt for proxy URL
         models: &[],
+        help_url: None,
+        help_text: None,
     },
     ProviderDef {
         id: "ollama",
@@ -152,6 +170,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
         device_flow: None,
         base_url: Some("http://localhost:11434/v1"),
         models: &["llama3.1", "mistral", "codellama", "deepseek-coder"],
+        help_url: None,
+        help_text: Some("No key needed — runs locally. Install: ollama.com"),
     },
     ProviderDef {
         id: "custom",
@@ -161,6 +181,8 @@ pub const PROVIDERS: &[ProviderDef] = &[
         device_flow: None,
         base_url: None, // will prompt
         models: &[],
+        help_url: None,
+        help_text: Some("Enter the API key for your custom endpoint"),
     },
 ];
 
