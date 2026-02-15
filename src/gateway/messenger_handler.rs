@@ -120,8 +120,21 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             let password = config.password.clone();
             let access_token = config.access_token.clone();
 
-            let messenger = MatrixMessenger::new(&homeserver, &user_id, password, access_token)
-                .context("Failed to create Matrix messenger")?;
+            // Store path for Matrix SQLite database
+            let store_path = dirs::data_dir()
+                .context("Failed to get data directory")?
+                .join("rustyclaw")
+                .join("matrix")
+                .join(&name);
+
+            let messenger = if let Some(pwd) = password {
+                MatrixMessenger::with_password(name.clone(), homeserver, user_id, pwd, store_path)
+            } else if let Some(token) = access_token {
+                // Device ID is optional, defaults to "RUSTYCLAW" if not provided
+                MatrixMessenger::with_token(name.clone(), homeserver, user_id, token, None, store_path)
+            } else {
+                anyhow::bail!("Matrix requires either 'password' or 'access_token'");
+            };
             Box::new(messenger)
         }
         #[cfg(feature = "signal")]

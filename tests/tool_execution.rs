@@ -3,9 +3,6 @@
 //! Tests for all 30 tools to verify correct behavior.
 
 use serde_json::json;
-use std::fs;
-use std::path::PathBuf;
-use tempfile::TempDir;
 
 // ── File Tools ──────────────────────────────────────────────────────────────
 

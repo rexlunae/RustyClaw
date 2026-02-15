@@ -117,45 +117,60 @@ pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, Str
     }
 
     // Parse HTML and extract content
-    let document = scraper::Html::parse_document(&body);
+    #[cfg(feature = "web-tools")]
+    {
+        let document = scraper::Html::parse_document(&body);
 
-    // Try to find the main content area
-    let content = extract_readable_content(&document);
+        // Try to find the main content area
+        let content = extract_readable_content(&document);
 
-    let result = match extract_mode {
-        "text" => {
-            // Plain text extraction
-            html_to_text(&content)
+        let result = match extract_mode {
+            "text" => {
+                // Plain text extraction
+                html_to_text(&content)
+            }
+            _ => {
+                // Markdown conversion (default)
+                html2md::parse_html(&content)
+            }
+        };
+
+        // Clean up the result
+        let mut result = result
+            .lines()
+            .map(|l| l.trim_end())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Collapse multiple blank lines
+        while result.contains("\n\n\n") {
+            result = result.replace("\n\n\n", "\n\n");
         }
-        _ => {
-            // Markdown conversion (default)
-            html2md::parse_html(&content)
+
+        // Truncate if needed
+        if result.len() > max_chars {
+            result.truncate(max_chars);
+            result.push_str("\n\n[truncated]");
         }
-    };
 
-    // Clean up the result
-    let mut result = result
-        .lines()
-        .map(|l| l.trim_end())
-        .collect::<Vec<_>>()
-        .join("\n");
+        if result.trim().is_empty() {
+            return Err("Page returned no extractable content".to_string());
+        }
 
-    // Collapse multiple blank lines
-    while result.contains("\n\n\n") {
-        result = result.replace("\n\n\n", "\n\n");
+        Ok(result)
     }
 
-    // Truncate if needed
-    if result.len() > max_chars {
-        result.truncate(max_chars);
-        result.push_str("\n\n[truncated]");
+    // Without web-tools, return raw HTML body (no extraction)
+    #[cfg(not(feature = "web-tools"))]
+    {
+        let _ = extract_mode; // suppress unused warning
+        let mut result = body;
+        if result.len() > max_chars {
+            result.truncate(max_chars);
+            result.push_str("\n\n[truncated]");
+        }
+        Ok(result)
     }
-
-    if result.trim().is_empty() {
-        return Err("Page returned no extractable content".to_string());
-    }
-
-    Ok(result)
 }
 
 /// Get the Cookie header for a request, if cookies are available.
@@ -181,6 +196,7 @@ fn store_response_cookies(domain: &str, headers: &[String]) {
 }
 
 /// Extract the main readable content from an HTML document.
+#[cfg(feature = "web-tools")]
 fn extract_readable_content(document: &scraper::Html) -> String {
     use scraper::Selector;
 
@@ -219,6 +235,7 @@ fn extract_readable_content(document: &scraper::Html) -> String {
 }
 
 /// Convert HTML to plain text, stripping all tags.
+#[cfg(feature = "web-tools")]
 fn html_to_text(html: &str) -> String {
     use scraper::{Html, Selector};
 

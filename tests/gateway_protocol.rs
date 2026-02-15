@@ -4,8 +4,6 @@
 //! and authentication flows.
 
 use serde_json::json;
-use std::time::Duration;
-use tokio::time::timeout;
 
 // Note: These tests require the gateway to NOT be running, or run in isolation.
 // They test protocol compliance and message handling.

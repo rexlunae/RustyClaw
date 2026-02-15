@@ -147,8 +147,8 @@ impl Messenger for MatrixMessenger {
                 .context("Matrix login failed")?;
         } else if let Some(ref token) = self.access_token {
             // Token-based session restore
-            let session = matrix_sdk::AuthSession::Matrix(
-                matrix_sdk::matrix_auth::MatrixSession {
+            let session = matrix_sdk::authentication::AuthSession::Matrix(
+                matrix_sdk::authentication::matrix::MatrixSession {
                     meta: matrix_sdk::SessionMeta {
                         user_id: OwnedUserId::try_from(self.user_id.as_str())?,
                         device_id: self.device_id
@@ -157,7 +157,7 @@ impl Messenger for MatrixMessenger {
                             .transpose()?
                             .unwrap_or_else(|| "RUSTYCLAW".into()),
                     },
-                    tokens: matrix_sdk::matrix_auth::MatrixSessionTokens {
+                    tokens: matrix_sdk::authentication::matrix::MatrixSessionTokens {
                         access_token: token.clone(),
                         refresh_token: None,
                     },

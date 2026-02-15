@@ -5,7 +5,7 @@
 use serde_json::json;
 
 mod openai_streaming {
-    use super::*;
+    
 
     #[test]
     fn test_openai_sse_text_chunk_parsing() {
@@ -71,7 +71,7 @@ mod openai_streaming {
 }
 
 mod anthropic_streaming {
-    use super::*;
+    
 
     #[test]
     fn test_anthropic_message_start() {
@@ -231,7 +231,7 @@ mod stream_chunk_types {
 }
 
 mod sse_parsing {
-    use super::*;
+    
 
     #[test]
     fn test_parse_sse_event_separator() {
@@ -269,7 +269,7 @@ mod sse_parsing {
 }
 
 mod buffer_accumulation {
-    use super::*;
+    
 
     #[test]
     fn test_tool_call_argument_accumulation() {

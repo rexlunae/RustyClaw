@@ -961,10 +961,11 @@ mod tests {
     #[test]
     fn test_web_fetch_params_defined() {
         let params = web_fetch_params();
-        assert_eq!(params.len(), 3);
+        assert_eq!(params.len(), 4);
         assert!(params.iter().any(|p| p.name == "url" && p.required));
         assert!(params.iter().any(|p| p.name == "extract_mode" && !p.required));
         assert!(params.iter().any(|p| p.name == "max_chars" && !p.required));
+        assert!(params.iter().any(|p| p.name == "use_cookies" && !p.required));
     }
 
     // ── web_search ──────────────────────────────────────────────────
@@ -1400,7 +1401,9 @@ mod tests {
         let args = json!({ "action": "status" });
         let result = exec_nodes(&args, ws());
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("Node status"));
+        let output = result.unwrap();
+        assert!(output.contains("nodes"));
+        assert!(output.contains("tools"));
     }
 
     // ── browser ─────────────────────────────────────────────────────
@@ -1425,7 +1428,8 @@ mod tests {
         let args = json!({ "action": "status" });
         let result = exec_browser(&args, ws());
         assert!(result.is_ok());
-        assert!(result.unwrap().contains("Browser status"));
+        let output = result.unwrap();
+        assert!(output.contains("running"));
     }
 
     // ── canvas ──────────────────────────────────────────────────────

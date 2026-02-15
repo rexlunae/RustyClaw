@@ -433,7 +433,7 @@ mod tests {
 
     #[test]
     fn test_log_output_with_limits() {
-        let mut session = ExecSession {
+        let session = ExecSession {
             id: "test".to_string(),
             command: "echo test".to_string(),
             working_dir: "/tmp".to_string(),

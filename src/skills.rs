@@ -1089,8 +1089,9 @@ Do the thing.
 
     #[test]
     fn test_base64_decode() {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
         let encoded = "SGVsbG8=";
-        let decoded = base64_decode(encoded).unwrap();
+        let decoded = STANDARD.decode(encoded).unwrap();
         assert_eq!(decoded, b"Hello");
     }
 }

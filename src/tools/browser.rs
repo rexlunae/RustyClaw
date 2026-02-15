@@ -291,9 +291,30 @@ mod real {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
-        page.press_key(key)
+        // Use CDP DispatchKeyEventParams for key press
+        use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
+
+        // Press key down
+        let key_down = DispatchKeyEventParams::builder()
+            .key(key.to_string())
+            .text(key.to_string())
+            .r#type(DispatchKeyEventType::KeyDown)
+            .build()
+            .map_err(|e| format!("Failed to build key down params: {}", e))?;
+        page.execute(key_down)
             .await
-            .map_err(|e| format!("Key press failed: {}", e))?;
+            .map_err(|e| format!("Key down failed: {}", e))?;
+
+        // Release key
+        let key_up = DispatchKeyEventParams::builder()
+            .key(key.to_string())
+            .text(key.to_string())
+            .r#type(DispatchKeyEventType::KeyUp)
+            .build()
+            .map_err(|e| format!("Failed to build key up params: {}", e))?;
+        page.execute(key_up)
+            .await
+            .map_err(|e| format!("Key up failed: {}", e))?;
 
         Ok(json!({
             "success": true,

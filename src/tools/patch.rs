@@ -86,27 +86,27 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> Result<String, St
 
 /// A single hunk from a unified diff.
 #[derive(Debug)]
-struct DiffHunk {
-    file_path: String,
-    old_start: usize,
+pub struct DiffHunk {
+    pub file_path: String,
+    pub old_start: usize,
     #[allow(dead_code)]
-    old_count: usize,
+    pub old_count: usize,
     #[allow(dead_code)]
-    new_start: usize,
+    pub new_start: usize,
     #[allow(dead_code)]
-    new_count: usize,
-    lines: Vec<DiffLine>,
+    pub new_count: usize,
+    pub lines: Vec<DiffLine>,
 }
 
 #[derive(Debug)]
-enum DiffLine {
+pub enum DiffLine {
     Context(String),
     Remove(String),
     Add(String),
 }
 
 /// Parse a unified diff into hunks.
-fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
+pub fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
     let mut hunks = Vec::new();
     let mut current_file: Option<String> = None;
     let mut lines = patch.lines().peekable();

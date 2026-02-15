@@ -82,7 +82,7 @@ This skill requires git.
 }
 
 mod frontmatter_parsing {
-    use super::*;
+    
 
     #[test]
     fn test_parse_name_and_description() {
@@ -132,7 +132,7 @@ metadata: {"openclaw": {"emoji": "⚡", "requires": {"bins": ["node", "npm"]}}}
 }
 
 mod gating {
-    use super::*;
+    
 
     #[test]
     fn test_gate_always_true() {
@@ -221,7 +221,7 @@ Browser automation.
 }
 
 mod prompt_context {
-    use super::*;
+    
 
     #[test]
     fn test_base_dir_placeholder() {

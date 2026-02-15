@@ -32,6 +32,7 @@ impl MessagesPane {
     }
 
     /// Map a [`MessageRole`] to its foreground colour.
+    #[allow(dead_code)]
     fn role_color(role: &MessageRole) -> Color {
         match role {
             MessageRole::User => tp::ACCENT_BRIGHT,
@@ -60,6 +61,7 @@ impl MessagesPane {
     /// Whether this role should show a leading icon.
     ///
     /// User and Assistant rely on background colour instead of an icon.
+    #[allow(dead_code)]
     fn should_show_icon(role: &MessageRole) -> bool {
         !matches!(role, MessageRole::User | MessageRole::Assistant)
     }

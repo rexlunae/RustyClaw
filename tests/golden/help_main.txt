@@ -5,17 +5,19 @@ Run without a subcommand to launch the TUI.
 Usage: rustyclaw [OPTIONS] [COMMAND]
 
 Commands:
-  setup      Initialise config + workspace (runs the wizard when wizard flags are present)
-  onboard    Interactive onboarding wizard — set up gateway, workspace, and skills
-  configure  Interactive configuration wizard (models, gateway, skills)
-  config     Config helpers: get / set / unset
-  doctor     Health checks + quick fixes for gateway and configuration
-  tui        Launch the terminal UI
-  command    Send a one-shot message / slash-command
-  status     Show system status (gateway, model, workspace)
-  gateway    Gateway management (start / stop / restart / status)
-  skills     List / manage skills
-  help       Print this message or the help of the given subcommand(s)
+  setup          Initialise config + workspace (runs the wizard when wizard flags are present)
+  onboard        Interactive onboarding wizard — set up gateway, workspace, and skills
+  import         Import an existing OpenClaw installation into RustyClaw
+  configure      Interactive configuration wizard (models, gateway, skills)
+  config         Config helpers: get / set / unset
+  doctor         Health checks + quick fixes for gateway and configuration
+  tui            Launch the terminal UI
+  command        Send a one-shot message / slash-command
+  status         Show system status (gateway, model, workspace)
+  gateway        Gateway management (start / stop / restart / status)
+  skills         List / manage skills
+  refresh-token  Refresh the GitHub Copilot session token from OpenClaw
+  help           Print this message or the help of the given subcommand(s)
 
 Options:
   -c, --config <PATH>

@@ -154,7 +154,7 @@ impl DisplayMessage {
     /// Build styled lines for this message (internal implementation).
     fn build_lines_cached(role: &MessageRole, content: &str, tab_width: usize) -> Vec<ratatui::text::Line<'static>> {
         use ratatui::text::{Line, Span};
-        use ratatui::style::{Style, Color};
+        use ratatui::style::Style;
         use tui_markdown::{from_str_with_options, Options};
         use crate::theme::tui_palette::{self as tp, RustyClawMarkdownStyle};
 
