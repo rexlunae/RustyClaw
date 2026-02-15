@@ -665,6 +665,255 @@ async fn handle_connection(
                                 }
                                 continue;
                             }
+
+                            // ── Handle secrets control messages ──────
+                            let msg_type = val.get("type").and_then(|t| t.as_str());
+
+                            match msg_type {
+                                Some("secrets_list") => {
+                                    let mut v = vault.lock().await;
+                                    let entries = v.list_all_entries();
+                                    let json_entries: Vec<serde_json::Value> = entries.iter().map(|(name, entry)| {
+                                        let mut obj = serde_json::to_value(entry).unwrap_or_default();
+                                        if let Some(map) = obj.as_object_mut() {
+                                            map.insert("name".to_string(), json!(name));
+                                        }
+                                        obj
+                                    }).collect();
+                                    let resp = json!({
+                                        "type": "secrets_list_result",
+                                        "ok": true,
+                                        "entries": json_entries,
+                                    });
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_store") => {
+                                    let key = val.get("key").and_then(|k| k.as_str()).unwrap_or("");
+                                    let value = val.get("value").and_then(|v| v.as_str()).unwrap_or("");
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.store_secret(key, value) {
+                                        Ok(()) => json!({
+                                            "type": "secrets_store_result",
+                                            "ok": true,
+                                            "message": format!("Secret '{}' stored.", key),
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_store_result",
+                                            "ok": false,
+                                            "message": format!("Failed to store secret: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_get") => {
+                                    let key = val.get("key").and_then(|k| k.as_str()).unwrap_or("");
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.get_secret(key, true) {
+                                        Ok(Some(value)) => json!({
+                                            "type": "secrets_get_result",
+                                            "ok": true,
+                                            "key": key,
+                                            "value": value,
+                                        }),
+                                        Ok(None) => json!({
+                                            "type": "secrets_get_result",
+                                            "ok": false,
+                                            "key": key,
+                                            "message": format!("Secret '{}' not found.", key),
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_get_result",
+                                            "ok": false,
+                                            "key": key,
+                                            "message": format!("Failed to get secret: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_delete") => {
+                                    let key = val.get("key").and_then(|k| k.as_str()).unwrap_or("");
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.delete_secret(key) {
+                                        Ok(()) => json!({
+                                            "type": "secrets_delete_result",
+                                            "ok": true,
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_delete_result",
+                                            "ok": false,
+                                            "message": format!("Failed to delete: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_peek") => {
+                                    let name = val.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.peek_credential_display(name) {
+                                        Ok(fields) => {
+                                            let field_arrays: Vec<serde_json::Value> = fields.iter()
+                                                .map(|(label, value)| json!([label, value]))
+                                                .collect();
+                                            json!({
+                                                "type": "secrets_peek_result",
+                                                "ok": true,
+                                                "fields": field_arrays,
+                                            })
+                                        }
+                                        Err(e) => json!({
+                                            "type": "secrets_peek_result",
+                                            "ok": false,
+                                            "message": format!("Failed to peek: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_set_policy") => {
+                                    let name = val.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let policy_str = val.get("policy").and_then(|p| p.as_str()).unwrap_or("");
+                                    let skills_list = val.get("skills").and_then(|s| s.as_array())
+                                        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect::<Vec<_>>())
+                                        .unwrap_or_default();
+                                    let policy = match policy_str {
+                                        "always" => Some(crate::secrets::AccessPolicy::Always),
+                                        "ask" => Some(crate::secrets::AccessPolicy::WithApproval),
+                                        "auth" => Some(crate::secrets::AccessPolicy::WithAuth),
+                                        "skill_only" => Some(crate::secrets::AccessPolicy::SkillOnly(skills_list)),
+                                        _ => None,
+                                    };
+                                    let mut v = vault.lock().await;
+                                    let resp = if let Some(policy) = policy {
+                                        match v.set_credential_policy(name, policy) {
+                                            Ok(()) => json!({
+                                                "type": "secrets_set_policy_result",
+                                                "ok": true,
+                                            }),
+                                            Err(e) => json!({
+                                                "type": "secrets_set_policy_result",
+                                                "ok": false,
+                                                "message": format!("Failed to set policy: {}", e),
+                                            }),
+                                        }
+                                    } else {
+                                        json!({
+                                            "type": "secrets_set_policy_result",
+                                            "ok": false,
+                                            "message": format!("Unknown policy: {}", policy_str),
+                                        })
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_set_disabled") => {
+                                    let name = val.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let disabled = val.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false);
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.set_credential_disabled(name, disabled) {
+                                        Ok(()) => json!({
+                                            "type": "secrets_set_disabled_result",
+                                            "ok": true,
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_set_disabled_result",
+                                            "ok": false,
+                                            "message": format!("Failed: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_delete_credential") => {
+                                    let name = val.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                                    let mut v = vault.lock().await;
+                                    // Also delete legacy bare key if present
+                                    let meta_key = format!("cred:{}", name);
+                                    let is_legacy = v.get_secret(&meta_key, true).ok().flatten().is_none();
+                                    if is_legacy {
+                                        let _ = v.delete_secret(name);
+                                    }
+                                    let resp = match v.delete_credential(name) {
+                                        Ok(()) => json!({
+                                            "type": "secrets_delete_credential_result",
+                                            "ok": true,
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_delete_credential_result",
+                                            "ok": false,
+                                            "message": format!("Failed: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_has_totp") => {
+                                    let mut v = vault.lock().await;
+                                    let has_totp = v.has_totp();
+                                    let resp = json!({
+                                        "type": "secrets_has_totp_result",
+                                        "has_totp": has_totp,
+                                    });
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_setup_totp") => {
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.setup_totp("rustyclaw") {
+                                        Ok(uri) => json!({
+                                            "type": "secrets_setup_totp_result",
+                                            "ok": true,
+                                            "uri": uri,
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_setup_totp_result",
+                                            "ok": false,
+                                            "message": format!("Failed: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_verify_totp") => {
+                                    let code = val.get("code").and_then(|c| c.as_str()).unwrap_or("");
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.verify_totp(code) {
+                                        Ok(valid) => json!({
+                                            "type": "secrets_verify_totp_result",
+                                            "ok": valid,
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_verify_totp_result",
+                                            "ok": false,
+                                            "message": format!("Error: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("secrets_remove_totp") => {
+                                    let mut v = vault.lock().await;
+                                    let resp = match v.remove_totp() {
+                                        Ok(()) => json!({
+                                            "type": "secrets_remove_totp_result",
+                                            "ok": true,
+                                        }),
+                                        Err(e) => json!({
+                                            "type": "secrets_remove_totp_result",
+                                            "ok": false,
+                                            "message": format!("Failed: {}", e),
+                                        }),
+                                    };
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                _ => {
+                                    // Not a secrets control message — fall through to dispatch
+                                }
+                            }
                         }
 
                         let workspace_dir = config.workspace_dir();

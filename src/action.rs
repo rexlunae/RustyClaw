@@ -86,5 +86,27 @@ pub enum Action {
     HatchingResponse(String),
     /// The hatching exchange is complete — save SOUL.md and close
     FinishHatching(String),
+    /// Gateway returned the secrets list
+    SecretsListResult { entries: Vec<serde_json::Value> },
+    /// Gateway returned a secret value (for provider probing, device flow, etc.)
+    SecretsGetResult { key: String, value: Option<String> },
+    /// Gateway stored a secret successfully
+    SecretsStoreResult { ok: bool, message: String },
+    /// Gateway returned peek result (for secret viewer)
+    SecretsPeekResult { name: String, ok: bool, fields: Vec<(String, String)>, message: Option<String> },
+    /// Gateway set policy result
+    SecretsSetPolicyResult { ok: bool, message: Option<String> },
+    /// Gateway set disabled result
+    SecretsSetDisabledResult { ok: bool, cred_name: String, disabled: bool },
+    /// Gateway deleted credential result
+    SecretsDeleteCredentialResult { ok: bool, cred_name: String },
+    /// Gateway returned TOTP status
+    SecretsHasTotpResult { has_totp: bool },
+    /// Gateway returned TOTP setup URI
+    SecretsSetupTotpResult { ok: bool, uri: Option<String>, message: Option<String> },
+    /// Gateway returned TOTP verification result
+    SecretsVerifyTotpResult { ok: bool },
+    /// Gateway returned TOTP removal result
+    SecretsRemoveTotpResult { ok: bool },
     Noop,
 }
