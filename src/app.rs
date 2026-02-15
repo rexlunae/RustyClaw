@@ -1177,7 +1177,7 @@ impl App {
                 if !self.showing_hatching {
                     // Update the last assistant message with accumulated text.
                     if let Some(last) = self.state.messages.last_mut() {
-                        last.content = buf.clone();
+                        last.update_content(buf.clone());
                         debug_log(&format!("Updated last message to {} chars", last.content.len()));
                     } else {
                         debug_log("WARNING: No last message to update!");

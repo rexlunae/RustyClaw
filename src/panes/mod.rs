@@ -101,11 +101,14 @@ impl MessageRole {
 pub struct DisplayMessage {
     pub role: MessageRole,
     pub content: String,
+    /// Cached styled lines (lazily computed on first access).
+    /// This avoids re-parsing markdown on every frame.
+    cached_lines: std::cell::OnceCell<Vec<ratatui::text::Line<'static>>>,
 }
 
 impl DisplayMessage {
     pub fn new(role: MessageRole, content: impl Into<String>) -> Self {
-        Self { role, content: content.into() }
+        Self { role, content: content.into(), cached_lines: std::cell::OnceCell::new() }
     }
 
     pub fn user(content: impl Into<String>) -> Self {
@@ -134,6 +137,94 @@ impl DisplayMessage {
     }
     pub fn tool_result(content: impl Into<String>) -> Self {
         Self::new(MessageRole::ToolResult, content)
+    }
+
+    /// Update the content and invalidate the cache.
+    /// Used during streaming when content is appended.
+    pub fn update_content(&mut self, new_content: String) {
+        self.content = new_content;
+        self.cached_lines = std::cell::OnceCell::new();
+    }
+
+    /// Get cached lines, computing them if needed.
+    pub fn get_lines(&self, tab_width: usize) -> &Vec<ratatui::text::Line<'static>> {
+        self.cached_lines.get_or_init(|| Self::build_lines_cached(&self.role, &self.content, tab_width))
+    }
+
+    /// Build styled lines for this message (internal implementation).
+    fn build_lines_cached(role: &MessageRole, content: &str, tab_width: usize) -> Vec<ratatui::text::Line<'static>> {
+        use ratatui::text::{Line, Span};
+        use ratatui::style::{Style, Color};
+        use tui_markdown::{from_str_with_options, Options};
+        use crate::theme::tui_palette::{self as tp, RustyClawMarkdownStyle};
+
+        // Expand tab characters to spaces
+        let content: String = if content.contains('\t') {
+            content.replace('\t', &" ".repeat(tab_width))
+        } else {
+            content.to_string()
+        };
+
+        let color = match role {
+            MessageRole::User => tp::ACCENT_BRIGHT,
+            MessageRole::Assistant => tp::TEXT,
+            MessageRole::Info => tp::INFO,
+            MessageRole::Success => tp::SUCCESS,
+            MessageRole::Warning => tp::WARN,
+            MessageRole::Error => tp::ERROR,
+            MessageRole::System => tp::MUTED,
+            MessageRole::ToolCall => tp::MUTED,
+            MessageRole::ToolResult => tp::TEXT_DIM,
+        };
+
+        let is_assistant = matches!(role, MessageRole::Assistant);
+
+        if !is_assistant {
+            // Non-assistant messages stay single-line (no markdown processing).
+            let mut spans: Vec<Span<'static>> = Vec::new();
+            spans.push(Span::raw(" "));
+            let icon_fn = || match role {
+                MessageRole::User => "▶",
+                MessageRole::Assistant => "◀",
+                MessageRole::Info => "ℹ",
+                MessageRole::Success => "✅",
+                MessageRole::Warning => "⚠",
+                MessageRole::Error => "❌",
+                MessageRole::System => "📡",
+                MessageRole::ToolCall => "🔧",
+                MessageRole::ToolResult => "📎",
+            };
+            if matches!(role, MessageRole::User | MessageRole::Assistant | MessageRole::Info | 
+                       MessageRole::Success | MessageRole::Warning | MessageRole::Error | 
+                       MessageRole::System | MessageRole::ToolCall | MessageRole::ToolResult) {
+                let icon = icon_fn();
+                spans.push(Span::styled(
+                    format!("{icon} "),
+                    Style::default().fg(color),
+                ));
+            }
+            spans.push(Span::styled(content, Style::default().fg(color)));
+            return vec![Line::from(spans)];
+        }
+
+        // Assistant: use tui-markdown for full CommonMark rendering
+        let options = Options::new(RustyClawMarkdownStyle);
+        let text = from_str_with_options(&content, &options);
+
+        // Add a leading space to each line for padding
+        text.lines
+            .into_iter()
+            .map(|line| {
+                let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+                for span in line.spans {
+                    spans.push(Span::styled(
+                        span.content.into_owned(),
+                        span.style,
+                    ));
+                }
+                Line::from(spans)
+            })
+            .collect()
     }
 }
 

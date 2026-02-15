@@ -6,14 +6,13 @@ use ratatui::{
     prelude::*,
     widgets::{Paragraph, Wrap},
 };
-use tui_markdown::{from_str_with_options, Options};
 
 use crate::action::Action;
 use crate::panes::{DisplayMessage, MessageRole, Pane, PaneState};
-use crate::theme::tui_palette::{self as tp, RustyClawMarkdownStyle};
+use crate::theme::tui_palette as tp;
 use crate::tui::Frame;
 
-// ── Global tab-width setting (read by build_lines) ──────────────────────
+// ── Global tab-width setting (read by get_lines) ──────────────────────
 
 static TAB_WIDTH: AtomicU16 = AtomicU16::new(5);
 
@@ -104,58 +103,10 @@ impl MessagesPane {
 
     // ── Layout helpers ──────────────────────────────────────────────────
 
-    /// Build styled [`Line`]s for a single message.
-    ///
-    /// Uses tui-markdown for full CommonMark support (headings, bold, italic,
-    /// code blocks, lists, tables, links, blockquotes, etc.)
-    fn build_lines(msg: &DisplayMessage) -> Vec<Line<'static>> {
-        // Expand tab characters to spaces (default 5).
+    /// Get styled lines for a message (uses cache).
+    fn get_lines(msg: &DisplayMessage) -> &Vec<Line<'static>> {
         let tab_stop = TAB_WIDTH.load(std::sync::atomic::Ordering::Relaxed) as usize;
-        let content: String = if msg.content.contains('\t') {
-            msg.content.replace('\t', &" ".repeat(tab_stop))
-        } else {
-            msg.content.clone()
-        };
-
-        let color = Self::role_color(&msg.role);
-        let is_assistant = matches!(msg.role, MessageRole::Assistant);
-
-        if !is_assistant {
-            // Non-assistant messages stay single-line (no markdown processing).
-            let mut spans: Vec<Span<'static>> = Vec::new();
-            spans.push(Span::raw(" "));
-            if Self::should_show_icon(&msg.role) {
-                let icon = msg.role.icon();
-                spans.push(Span::styled(
-                    format!("{icon} "),
-                    Style::default().fg(color),
-                ));
-            }
-            spans.push(Span::styled(content, Style::default().fg(color)));
-            return vec![Line::from(spans)];
-        }
-
-        // ── Assistant: use tui-markdown for full CommonMark rendering ──
-
-        // Convert markdown to ratatui Text using tui-markdown with our custom style
-        let options = Options::new(RustyClawMarkdownStyle);
-        let text = from_str_with_options(&content, &options);
-
-        // Add a leading space to each line for padding, and convert to owned strings
-        text.lines
-            .into_iter()
-            .map(|line| {
-                let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-                // Convert each span's content to an owned String
-                for span in line.spans {
-                    spans.push(Span::styled(
-                        span.content.into_owned(),
-                        span.style,
-                    ));
-                }
-                Line::from(spans)
-            })
-            .collect()
+        msg.get_lines(tab_stop)
     }
 
     /// Count how many visual (wrapped) rows a set of `Line`s occupies at `width`.
@@ -191,8 +142,8 @@ impl MessagesPane {
             if i > 0 {
                 accum += spacing as usize;
             }
-            let lines = Self::build_lines(msg);
-            let h = Self::visual_lines_count(&lines, width);
+            let lines = Self::get_lines(msg);
+            let h = Self::visual_lines_count(lines, width);
             if accum + h > visual_row {
                 return i;
             }
@@ -247,7 +198,7 @@ impl Pane for MessagesPane {
                 let total: usize = state
                     .messages
                     .iter()
-                    .map(|m| Self::visual_lines_count(&Self::build_lines(m), 200))
+                    .map(|m| Self::visual_lines_count(Self::get_lines(m), 200))
                     .sum::<usize>()
                     + if msg_count > 1 {
                         (msg_count - 1) * spacing as usize
@@ -334,10 +285,10 @@ impl Pane for MessagesPane {
                     height: spacing,
                 });
             }
-            let lines = Self::build_lines(msg);
-            let h = Self::visual_lines_count(&lines, width) as u16;
+            let lines = Self::get_lines(msg);
+            let h = Self::visual_lines_count(lines, width) as u16;
             entries.push(Entry {
-                text: Text::from(lines),
+                text: Text::from(lines.clone()),
                 bg: Self::role_bg(&msg.role),
                 height: h,
             });
