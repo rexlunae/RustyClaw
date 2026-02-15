@@ -1166,6 +1166,8 @@ impl App {
             self.state.streaming_started = None;
 
             if let Some(buf) = self.streaming_response.take() {
+                debug_log(&format!("response_done: buf len={}, showing_hatching={}", buf.len(), self.showing_hatching));
+                
                 // During hatching, deliver the full accumulated text
                 // to the hatching page instead of the messages pane.
                 if self.showing_hatching {
@@ -1180,9 +1182,13 @@ impl App {
 
                 // Trim trailing whitespace from the final message.
                 let trimmed = buf.trim_end().to_string();
+                debug_log(&format!("response_done: trimmed len={}, messages count={}", trimmed.len(), self.state.messages.len()));
+                
                 if let Some(last) = self.state.messages.last_mut() {
+                    debug_log(&format!("response_done: last message role={:?}", last.role));
                     if matches!(last.role, crate::panes::MessageRole::Assistant) {
                         last.content = trimmed.clone();
+                        debug_log(&format!("response_done: set content to {} chars", trimmed.len()));
                     }
                 }
 
@@ -1192,6 +1198,8 @@ impl App {
                     self.state.conversation_history.push(ChatMessage::text("assistant", &trimmed));
                     self.save_history();
                 }
+            } else {
+                debug_log("response_done: no streaming_response buffer!");
             }
             return Ok(Some(Action::Update));
         }
