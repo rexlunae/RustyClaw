@@ -30,6 +30,7 @@ use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
 use crate::tools;
 use anyhow::{Context, Result};
+use dirs;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
@@ -67,6 +68,50 @@ const TOTP_LOCKOUT_SECS: u64 = 30;
 
 /// Compaction fires when estimated usage exceeds this fraction of the context window.
 const COMPACTION_THRESHOLD: f64 = 0.75;
+
+/// Try to import a fresh GitHub Copilot token from OpenClaw's credential store.
+///
+/// This allows RustyClaw to automatically refresh its session token when the
+/// vault copy expires, as long as OpenClaw is running and has a valid token.
+fn try_import_openclaw_token(vault: &mut SecretsManager) -> Option<CopilotSession> {
+    let openclaw_dir = dirs::home_dir()?.join(".openclaw");
+    let token_file = openclaw_dir.join("credentials/github-copilot.token.json");
+
+    if !token_file.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(&token_file).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    let token = json.get("token")?.as_str()?;
+    let expires_at_ms = json.get("expiresAt")?.as_i64()?;
+    let expires_at = expires_at_ms / 1000; // Convert ms to seconds
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64;
+
+    let remaining = expires_at - now;
+    if remaining <= 60 {
+        eprintln!("  ⊘ OpenClaw token also expired");
+        return None;
+    }
+
+    eprintln!("  ✓ Auto-imported fresh token from OpenClaw (~{}h remaining)", remaining / 3600);
+
+    // Store in our vault for next time
+    let session_data = serde_json::json!({
+        "session_token": token,
+        "expires_at": expires_at,
+    });
+    if let Err(e) = vault.store_secret("GITHUB_COPILOT_SESSION", &session_data.to_string()) {
+        eprintln!("    ⚠ Failed to cache in vault: {}", e);
+    }
+
+    Some(CopilotSession::from_session_token(token.to_string(), expires_at))
+}
 
 /// Run the gateway WebSocket server.
 ///
@@ -113,17 +158,18 @@ pub async fn run_gateway(
 
     // If the provider uses Copilot session tokens, check for:
     // 1. Imported session token (GITHUB_COPILOT_SESSION) - use until expiry
-    // 2. OAuth token (GITHUB_COPILOT_TOKEN) - can refresh sessions
+    // 2. Fresh token from OpenClaw (~/.openclaw/credentials/github-copilot.token.json)
+    // 3. OAuth token (GITHUB_COPILOT_TOKEN) - can refresh sessions
     let copilot_session: Option<Arc<CopilotSession>> = if model_ctx
         .as_ref()
         .map(|ctx| crate_providers::needs_copilot_session(&ctx.provider))
         .unwrap_or(false)
     {
-        // First check for imported session token
+        // First check for imported session token in our vault
         let mut vault_guard = vault.lock().await;
         let session_result = vault_guard.get_secret("GITHUB_COPILOT_SESSION", true);
         
-        let session_from_import = match &session_result {
+        let mut session_from_import = match &session_result {
             Ok(Some(json_str)) => {
                 eprintln!("  ✓ Found GITHUB_COPILOT_SESSION in vault");
                 serde_json::from_str::<serde_json::Value>(json_str)
@@ -157,6 +203,13 @@ pub async fn run_gateway(
                 None
             }
         };
+
+        // If vault session is expired/missing, try to auto-import from OpenClaw
+        if session_from_import.is_none() {
+            if let Some(session) = try_import_openclaw_token(&mut vault_guard) {
+                session_from_import = Some(session);
+            }
+        }
         drop(vault_guard);
 
         if let Some(session) = session_from_import {
