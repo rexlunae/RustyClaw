@@ -1073,6 +1073,32 @@ impl App {
             return Ok(Some(Action::Update));
         }
 
+        // ── Handle extended thinking frames (Anthropic) ──────
+        if frame_type == Some("thinking_start") {
+            // Show thinking indicator in the loading line
+            self.state.loading_line = Some("🤔 Thinking...".to_string());
+            self.state.streaming_started = Some(std::time::Instant::now());
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("thinking_delta") {
+            // Update thinking indicator with elapsed time
+            // The actual thinking content is available in delta but we don't display it
+            // to keep the UI clean. The loading_line shows we're still working.
+            if let Some(started) = self.state.streaming_started {
+                let elapsed = started.elapsed().as_secs();
+                self.state.loading_line = Some(format!("🤔 Thinking... ({}s)", elapsed));
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("thinking_end") {
+            // Thinking complete — clear indicator, text streaming will begin
+            self.state.loading_line = None;
+            // Keep streaming_started for the text phase timing
+            return Ok(Some(Action::Update));
+        }
+
         // ── Handle streaming chunk frames ────────────────────
         if frame_type == Some("chunk") {
             let delta = parsed

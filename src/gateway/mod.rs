@@ -809,7 +809,8 @@ async fn dispatch_text_message(
         }
 
         let result = if resolved.provider == "anthropic" {
-            providers::call_anthropic_with_tools(http, &resolved).await
+            // Anthropic: use streaming mode with writer for real-time chunks
+            providers::call_anthropic_with_tools(http, &resolved, Some(writer)).await
         } else if resolved.provider == "google" {
             providers::call_google_with_tools(http, &resolved).await
         } else {
@@ -833,7 +834,9 @@ async fn dispatch_text_message(
         };
 
         // Stream any text content to the client.
-        if !model_resp.text.is_empty() {
+        // For Anthropic, text is already streamed via the writer, so skip if empty.
+        // For other providers, send the accumulated text.
+        if !model_resp.text.is_empty() && resolved.provider != "anthropic" {
             providers::send_chunk(writer, &model_resp.text).await?;
         }
 

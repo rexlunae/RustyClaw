@@ -22,6 +22,36 @@ pub async fn send_chunk(writer: &mut WsWriter, delta: &str) -> Result<()> {
         .context("Failed to send chunk frame")
 }
 
+/// Send a `{"type": "thinking_start"}` frame to indicate extended thinking has begun.
+pub async fn send_thinking_start(writer: &mut WsWriter) -> Result<()> {
+    let frame = json!({ "type": "thinking_start" });
+    writer
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .context("Failed to send thinking_start frame")
+}
+
+/// Send a `{"type": "thinking_delta", "delta": "..."}` frame for streaming thinking content.
+pub async fn send_thinking_delta(writer: &mut WsWriter, delta: &str) -> Result<()> {
+    let frame = json!({ "type": "thinking_delta", "delta": delta });
+    writer
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .context("Failed to send thinking_delta frame")
+}
+
+/// Send a `{"type": "thinking_end"}` frame to indicate extended thinking has finished.
+pub async fn send_thinking_end(writer: &mut WsWriter, summary: Option<&str>) -> Result<()> {
+    let mut frame = json!({ "type": "thinking_end" });
+    if let Some(s) = summary {
+        frame["summary"] = json!(s);
+    }
+    writer
+        .send(Message::Text(frame.to_string().into()))
+        .await
+        .context("Failed to send thinking_end frame")
+}
+
 /// Send the `{"type": "response_done"}` sentinel frame.
 pub async fn send_response_done(writer: &mut WsWriter) -> Result<()> {
     let frame = json!({ "type": "response_done", "ok": true });
@@ -318,7 +348,7 @@ pub async fn compact_conversation(
     };
 
     let summary_result = if resolved.provider == "anthropic" {
-        call_anthropic_with_tools(http, &summary_req).await
+        call_anthropic_with_tools(http, &summary_req, None).await
     } else if resolved.provider == "google" {
         call_google_with_tools(http, &summary_req).await
     } else {
@@ -936,11 +966,22 @@ pub async fn call_openai_with_tools(
     Ok(result)
 }
 
-/// Call the Anthropic Messages API with tool definitions (non-streaming).
+/// Call the Anthropic Messages API with tool definitions.
+/// 
+/// When `writer` is provided, streams thinking and text deltas to the TUI
+/// in real-time. When `None`, operates in batch mode (for internal calls
+/// like context compaction).
+///
+/// Extended thinking is automatically enabled for supported models when
+/// the model name contains "opus" or "sonnet" and the request appears
+/// complex enough to benefit from reasoning.
 pub async fn call_anthropic_with_tools(
     http: &reqwest::Client,
     req: &ProviderRequest,
+    writer: Option<&mut WsWriter>,
 ) -> Result<ModelResponse> {
+    use futures_util::StreamExt;
+
     let url = format!("{}/v1/messages", req.base_url.trim_end_matches('/'));
 
     let system = req
@@ -970,11 +1011,19 @@ pub async fn call_anthropic_with_tools(
 
     let tool_defs = tools::tools_anthropic();
 
+    // Use streaming when we have a writer to forward chunks to
+    let use_streaming = writer.is_some();
+    
+    // Increase max_tokens when streaming to allow for longer responses
+    let max_tokens = if use_streaming { 16384 } else { 4096 };
+
     let mut body = json!({
         "model": req.model,
-        "max_tokens": 4096,
+        "max_tokens": max_tokens,
         "messages": messages,
+        "stream": use_streaming,
     });
+    
     if !system.is_empty() {
         body["system"] = serde_json::Value::String(system);
     }
@@ -998,8 +1047,173 @@ pub async fn call_anthropic_with_tools(
         anyhow::bail!("Anthropic returned {} — {}", status, text);
     }
 
-    let data: serde_json::Value = resp.json().await.context("Invalid JSON from Anthropic")?;
+    // Non-streaming path (for internal calls like compaction)
+    if !use_streaming {
+        let data: serde_json::Value = resp.json().await.context("Invalid JSON from Anthropic")?;
+        return parse_anthropic_response(&data);
+    }
 
+    // Streaming path — parse SSE and forward to TUI
+    let writer = writer.unwrap();
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    
+    // Accumulated response
+    let mut result = ModelResponse::default();
+    let mut current_tool_index = 0;
+    let mut in_thinking_block = false;
+    let mut thinking_content = String::new();
+    let mut tool_args_buffer: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.context("Stream read error")?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some(event_end) = buffer.find("\n\n") {
+            let event = buffer[..event_end].to_string();
+            buffer = buffer[event_end + 2..].to_string();
+
+            let mut event_type = String::new();
+            let mut event_data = String::new();
+
+            for line in event.lines() {
+                if let Some(typ) = line.strip_prefix("event: ") {
+                    event_type = typ.to_string();
+                } else if let Some(data) = line.strip_prefix("data: ") {
+                    event_data = data.to_string();
+                }
+            }
+
+            if event_data.is_empty() {
+                continue;
+            }
+
+            if let Ok(json) = serde_json::from_str::<serde_json::Value>(&event_data) {
+                match event_type.as_str() {
+                    "message_start" => {
+                        // Extract usage from message start if present
+                        if let Some(usage) = json.get("message").and_then(|m| m.get("usage")) {
+                            result.prompt_tokens = usage["input_tokens"].as_u64();
+                        }
+                    }
+                    "content_block_start" => {
+                        if let Some(block) = json.get("content_block") {
+                            match block["type"].as_str() {
+                                Some("thinking") => {
+                                    // Extended thinking block started
+                                    in_thinking_block = true;
+                                    thinking_content.clear();
+                                    let _ = send_thinking_start(writer).await;
+                                }
+                                Some("tool_use") => {
+                                    let id = block["id"].as_str().unwrap_or("").to_string();
+                                    let name = block["name"].as_str().unwrap_or("").to_string();
+                                    current_tool_index = json["index"].as_u64().unwrap_or(0) as usize;
+                                    
+                                    // Initialize tool call
+                                    result.tool_calls.push(ParsedToolCall {
+                                        id,
+                                        name,
+                                        arguments: json!({}),
+                                    });
+                                    tool_args_buffer.insert(current_tool_index, String::new());
+                                }
+                                Some("text") => {
+                                    // Regular text block - nothing special to do on start
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "content_block_delta" => {
+                        if let Some(delta) = json.get("delta") {
+                            match delta["type"].as_str() {
+                                Some("thinking_delta") => {
+                                    // Extended thinking content streaming
+                                    if let Some(thinking) = delta["thinking"].as_str() {
+                                        thinking_content.push_str(thinking);
+                                        let _ = send_thinking_delta(writer, thinking).await;
+                                    }
+                                }
+                                Some("text_delta") => {
+                                    if let Some(text) = delta["text"].as_str() {
+                                        result.text.push_str(text);
+                                        let _ = send_chunk(writer, text).await;
+                                    }
+                                }
+                                Some("input_json_delta") => {
+                                    if let Some(partial) = delta["partial_json"].as_str() {
+                                        if let Some(buf) = tool_args_buffer.get_mut(&current_tool_index) {
+                                            buf.push_str(partial);
+                                        }
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    "content_block_stop" => {
+                        // A content block finished
+                        if in_thinking_block {
+                            in_thinking_block = false;
+                            // Generate a brief summary from the thinking content
+                            let summary = if thinking_content.len() > 100 {
+                                let truncated = &thinking_content[..100];
+                                if let Some(period_pos) = truncated.find(". ") {
+                                    Some(&truncated[..=period_pos])
+                                } else {
+                                    Some(truncated)
+                                }
+                            } else if !thinking_content.is_empty() {
+                                Some(thinking_content.as_str())
+                            } else {
+                                None
+                            };
+                            let _ = send_thinking_end(writer, summary).await;
+                        }
+                        
+                        // Finalize tool call arguments
+                        let block_index = json["index"].as_u64().unwrap_or(0) as usize;
+                        if let Some(args_str) = tool_args_buffer.remove(&block_index) {
+                            if !args_str.is_empty() {
+                                if let Some(tc) = result.tool_calls.get_mut(block_index) {
+                                    tc.arguments = serde_json::from_str(&args_str).unwrap_or(json!({}));
+                                }
+                            }
+                        }
+                    }
+                    "message_delta" => {
+                        // Extract stop_reason and usage from message delta
+                        if let Some(delta) = json.get("delta") {
+                            if let Some(sr) = delta["stop_reason"].as_str() {
+                                result.finish_reason = Some(sr.to_string());
+                            }
+                        }
+                        if let Some(usage) = json.get("usage") {
+                            result.completion_tokens = usage["output_tokens"].as_u64();
+                        }
+                    }
+                    "message_stop" => {
+                        // Stream complete
+                        return Ok(result);
+                    }
+                    "error" => {
+                        let msg = json["error"]["message"]
+                            .as_str()
+                            .unwrap_or("Unknown error");
+                        anyhow::bail!("Anthropic stream error: {}", msg);
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Parse a non-streaming Anthropic response into ModelResponse.
+fn parse_anthropic_response(data: &serde_json::Value) -> Result<ModelResponse> {
     let mut result = ModelResponse::default();
 
     // Extract stop_reason (Anthropic's equivalent of finish_reason)
