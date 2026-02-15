@@ -345,6 +345,8 @@ enum GatewayCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Reload gateway configuration without restarting
+    Reload,
     /// Run the gateway in the foreground (like `rustyclaw-gateway`)
     Run(GatewayRunArgs),
 }
@@ -707,6 +709,25 @@ async fn main() -> Result<()> {
                         if log.exists() {
                             println!("{}", t::label_value("Log        ",
                                 &log.display().to_string()));
+                        }
+                    }
+                }
+                GatewayCommands::Reload => {
+                    use rustyclaw::theme as t;
+
+                    let url = config.gateway_url.as_deref().unwrap_or("ws://127.0.0.1:9001");
+                    let sp = t::spinner("Reloading gateway configuration\u{2026}");
+
+                    match send_gateway_reload(url, config.totp_enabled).await {
+                        Ok((provider, model)) => {
+                            t::spinner_ok(&sp, &format!(
+                                "Gateway reloaded: {} / {}",
+                                t::info(&provider),
+                                t::info(&model),
+                            ));
+                        }
+                        Err(e) => {
+                            t::spinner_fail(&sp, &format!("Reload failed: {}", e));
                         }
                     }
                 }
@@ -1799,6 +1820,163 @@ fn run_local_command(config: &mut Config, input: &str) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Send a reload command to the running gateway and wait for the result.
+async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(String, String)> {
+    let url = Url::parse(gateway_url).context("Invalid gateway URL")?;
+
+    let (ws_stream, _) = tokio_tungstenite::connect_async(url.to_string())
+        .await
+        .context("Failed to connect to gateway. Is it running?")?;
+    let (mut writer, mut reader) = ws_stream.split();
+
+    // Handle auth challenge if TOTP is enabled
+    if totp_enabled {
+        while let Some(msg) = reader.next().await {
+            let msg = msg.context("Gateway read error")?;
+            if let Message::Text(text) = msg {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
+                    let frame_type = val.get("type").and_then(|t| t.as_str());
+                    if frame_type == Some("auth_challenge") {
+                        let code = rpassword::prompt_password(
+                            format!("{} 2FA code: ", rustyclaw::theme::info("🔑")),
+                        )
+                        .unwrap_or_default();
+                        let auth = serde_json::json!({
+                            "type": "auth_response",
+                            "code": code.trim(),
+                        });
+                        writer.send(Message::Text(auth.to_string().into())).await?;
+                        continue;
+                    }
+                    if frame_type == Some("auth_result") {
+                        let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                        if !ok {
+                            let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Auth failed");
+                            anyhow::bail!("{}", msg);
+                        }
+                        break; // Auth succeeded, continue to send reload
+                    }
+                    if frame_type == Some("hello") {
+                        break; // No auth needed (shouldn't happen if totp_enabled)
+                    }
+                }
+            }
+        }
+    }
+
+    // Wait for hello frame (skip status frames)
+    loop {
+        match reader.next().await {
+            Some(Ok(Message::Text(text))) => {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
+                    let frame_type = val.get("type").and_then(|t| t.as_str());
+                    if frame_type == Some("hello") || frame_type == Some("auth_challenge") {
+                        if frame_type == Some("auth_challenge") {
+                            // Handle TOTP even when totp_enabled was false in config
+                            let code = rpassword::prompt_password(
+                                format!("{} 2FA code: ", rustyclaw::theme::info("🔑")),
+                            )
+                            .unwrap_or_default();
+                            let auth = serde_json::json!({
+                                "type": "auth_response",
+                                "code": code.trim(),
+                            });
+                            writer.send(Message::Text(auth.to_string().into())).await?;
+                            continue;
+                        }
+                        break;
+                    }
+                    if frame_type == Some("auth_result") {
+                        let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                        if !ok {
+                            let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Auth failed");
+                            anyhow::bail!("{}", msg);
+                        }
+                        // auth ok, wait for hello
+                        continue;
+                    }
+                    // Skip status frames while waiting for hello
+                    if frame_type == Some("status") {
+                        continue;
+                    }
+                }
+            }
+            Some(Ok(_)) => continue,
+            Some(Err(e)) => anyhow::bail!("Gateway error: {}", e),
+            None => anyhow::bail!("Gateway closed before hello"),
+        }
+    }
+
+    // Drain remaining status frames briefly
+    let drain_timeout = tokio::time::sleep(std::time::Duration::from_millis(500));
+    tokio::pin!(drain_timeout);
+    loop {
+        tokio::select! {
+            _ = &mut drain_timeout => break,
+            msg = reader.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
+                            let ft = val.get("type").and_then(|t| t.as_str());
+                            if ft == Some("status") || ft == Some("model_configured") || ft == Some("model_ready") || ft == Some("model_error") {
+                                continue; // Skip status frames
+                            }
+                        }
+                        break; // Non-status frame, stop draining
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => anyhow::bail!("Gateway error during drain: {}", e),
+                    None => anyhow::bail!("Gateway closed unexpectedly"),
+                }
+            }
+        }
+    }
+
+    // Send reload command
+    let reload = serde_json::json!({ "type": "reload" });
+    writer.send(Message::Text(reload.to_string().into())).await
+        .context("Failed to send reload command")?;
+
+    // Wait for reload_result
+    let timeout = tokio::time::sleep(std::time::Duration::from_secs(10));
+    tokio::pin!(timeout);
+
+    loop {
+        tokio::select! {
+            _ = &mut timeout => {
+                anyhow::bail!("Timeout waiting for reload result");
+            }
+            msg = reader.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
+                            let frame_type = val.get("type").and_then(|t| t.as_str());
+                            if frame_type == Some("reload_result") {
+                                let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                                if ok {
+                                    let provider = val.get("provider").and_then(|p| p.as_str()).unwrap_or("unknown").to_string();
+                                    let model = val.get("model").and_then(|m| m.as_str()).unwrap_or("unknown").to_string();
+                                    // Close cleanly
+                                    let _ = writer.send(Message::Close(None)).await;
+                                    return Ok((provider, model));
+                                } else {
+                                    let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Unknown error");
+                                    anyhow::bail!("{}", msg);
+                                }
+                            }
+                            // Skip other frames (status updates from reload)
+                            continue;
+                        }
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => anyhow::bail!("Gateway error: {}", e),
+                    None => anyhow::bail!("Gateway closed without reload result"),
+                }
+            }
+        }
+    }
 }
 
 async fn send_command_via_gateway(gateway_url: &str, command: &str) -> Result<String> {
