@@ -926,16 +926,20 @@ async fn dispatch_text_message(
                     .iter()
                     .any(|p| model_resp.text.contains(p));
 
-                if text_suggests_action {
+                // Also trigger continuation if response ends with colon (about to list/show something)
+                let ends_with_continuation = model_resp.text.trim_end().ends_with(':');
+
+                if text_suggests_action || ends_with_continuation {
                     // Model said it would act but didn't — prompt continuation
                     eprintln!(
-                        "[Gateway] Detected incomplete intent ({} chars text, no tool calls), prompting continuation",
-                        model_resp.text.len()
+                        "[Gateway] Detected incomplete intent ({} chars text, no tool calls, ends_colon={}), prompting continuation",
+                        model_resp.text.len(),
+                        ends_with_continuation
                     );
 
-                    // Send the partial text to the client so they see it
+                    // Send the partial text to the client so they see it (with newline for visual separation)
                     if !model_resp.text.is_empty() && resolved.provider != "anthropic" {
-                        providers::send_chunk(writer, &model_resp.text).await?;
+                        providers::send_chunk(writer, &format!("{}\n", model_resp.text)).await?;
                     }
 
                     // Append assistant message and continuation prompt
