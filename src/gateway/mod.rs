@@ -791,8 +791,13 @@ async fn dispatch_text_message(
     // cancel by sending a {"type": "cancel"} message (e.g., pressing Esc).
     // We use a very high limit as a safety net against infinite loops.
     const MAX_TOOL_ROUNDS: usize = 500;
+    /// Maximum consecutive auto-continuations before giving up.
+    /// Prevents infinite loops when the model keeps narrating intent
+    /// but never actually makes tool calls.
+    const MAX_AUTO_CONTINUES: usize = 2;
 
     let context_limit = helpers::context_window_for_model(&resolved.model);
+    let mut consecutive_continues: usize = 0;
 
     for _round in 0..MAX_TOOL_ROUNDS {
         // ── Check for cancellation ──────────────────────────────────
@@ -929,12 +934,17 @@ async fn dispatch_text_message(
                 // Also trigger continuation if response ends with colon (about to list/show something)
                 let ends_with_continuation = model_resp.text.trim_end().ends_with(':');
 
-                if text_suggests_action || ends_with_continuation {
+                if (text_suggests_action || ends_with_continuation)
+                    && consecutive_continues < MAX_AUTO_CONTINUES
+                {
+                    consecutive_continues += 1;
                     // Model said it would act but didn't — prompt continuation
                     eprintln!(
-                        "[Gateway] Detected incomplete intent ({} chars text, no tool calls, ends_colon={}), prompting continuation",
+                        "[Gateway] Detected incomplete intent ({} chars text, no tool calls, ends_colon={}, attempt {}/{}), prompting continuation",
                         model_resp.text.len(),
-                        ends_with_continuation
+                        ends_with_continuation,
+                        consecutive_continues,
+                        MAX_AUTO_CONTINUES
                     );
 
                     // Send the partial text to the client so they see it (with newline for visual separation)
@@ -983,6 +993,9 @@ async fn dispatch_text_message(
                 return Ok(());
             }
         }
+
+        // Reset continuation counter — model made an actual tool call
+        consecutive_continues = 0;
 
         // ── Execute each requested tool ─────────────────────────────
         let mut tool_results: Vec<ToolCallResult> = Vec::new();
