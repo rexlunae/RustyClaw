@@ -24,12 +24,14 @@ exclude = [
 maintenance = { status = "actively-developed" }
 
 [features]
-default = []
+default = ["tui", "web-tools"]
+tui = ["dep:ratatui", "dep:crossterm", "dep:tui-markdown", "dep:tui-input"]
+web-tools = ["dep:scraper", "dep:html2md"]
 matrix = ["dep:matrix-sdk"]
 browser = ["dep:chromiumoxide"]
 # Publishable feature sets
 all-messengers = ["matrix"]
-full = ["matrix", "browser"]
+full = ["tui", "web-tools", "matrix", "browser"]
 
 # Signal support is temporarily disabled for crates.io publishing.
 # presage and presage-store-sqlite require building from git source.
@@ -37,10 +39,10 @@ full = ["matrix", "browser"]
 # signal = ["dep:presage", "dep:presage-store-sqlite"]
 
 [dependencies]
-# TUI dependencies
-ratatui = "0.30"
-crossterm = { version = "0.29", features = ["event-stream"] }
-tui-markdown = "0.3"
+# TUI dependencies (optional — disable with --no-default-features for headless builds)
+ratatui = { version = "0.30", optional = true }
+crossterm = { version = "0.29", features = ["event-stream"], optional = true }
+tui-markdown = { version = "0.3", optional = true }
 
 # Configuration and serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -78,17 +80,16 @@ tokio-tungstenite = "0.28"
 # Note: 0.13+ renamed rustls-tls to rustls
 reqwest = { version = "0.13", features = ["json", "rustls", "stream", "blocking", "form"], default-features = false }
 url = "2.5"
-tui-input = "0.15"
+tui-input = { version = "0.15", optional = true }
 strum = { version = "0.27", features = ["derive"] }
 sysinfo = "0.38"
-syntect = { version = "5", default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 which = "8"
 glob = "0.3"
 walkdir = "2"
 
-# HTML parsing and text extraction
-scraper = "0.25"
-html2md = "0.2"
+# HTML parsing and text extraction (optional — disable with --no-default-features)
+scraper = { version = "0.25", optional = true }
+html2md = { version = "0.2", optional = true }
 urlencoding = "2.1"
 
 # Time handling

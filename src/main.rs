@@ -1,10 +1,12 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};
+#[cfg(feature = "tui")]
 use rustyclaw::app::App;
 use rustyclaw::args::CommonArgs;
 use rustyclaw::commands::{handle_command, CommandAction, CommandContext};
 use rustyclaw::config::Config;
+#[cfg(feature = "tui")]
 use rustyclaw::onboard::run_onboard_wizard;
 use rustyclaw::providers;
 use rustyclaw::secrets::SecretsManager;
@@ -416,8 +418,16 @@ async fn main() -> Result<()> {
                 || args.remote_token.is_some();
 
             if has_wizard_flags {
-                let mut secrets = open_secrets(&config)?;
-                run_onboard_wizard(&mut config, &mut secrets, false)?;
+                #[cfg(feature = "tui")]
+                {
+                    let mut secrets = open_secrets(&config)?;
+                    run_onboard_wizard(&mut config, &mut secrets, false)?;
+                }
+                #[cfg(not(feature = "tui"))]
+                {
+                    eprintln!("Onboarding wizard is not available in this build. Build with --features tui to enable.");
+                    std::process::exit(1);
+                }
             } else {
                 // Minimal setup: ensure directory skeleton + default config.
                 if let Some(ws) = args.workspace {
@@ -432,9 +442,17 @@ async fn main() -> Result<()> {
         }
 
         // ── Onboard ─────────────────────────────────────────────
-        Commands::Onboard(args) => {
-            let mut secrets = open_secrets(&config)?;
-            run_onboard_wizard(&mut config, &mut secrets, args.reset)?;
+        Commands::Onboard(_args) => {
+            #[cfg(feature = "tui")]
+            {
+                let mut secrets = open_secrets(&config)?;
+                run_onboard_wizard(&mut config, &mut secrets, _args.reset)?;
+            }
+            #[cfg(not(feature = "tui"))]
+            {
+                eprintln!("Onboarding wizard is not available in this build. Build with --features tui to enable.");
+                std::process::exit(1);
+            }
         }
 
         // ── Import ──────────────────────────────────────────────
@@ -449,8 +467,16 @@ async fn main() -> Result<()> {
 
         // ── Configure ───────────────────────────────────────────
         Commands::Configure => {
-            let mut secrets = open_secrets(&config)?;
-            run_onboard_wizard(&mut config, &mut secrets, false)?;
+            #[cfg(feature = "tui")]
+            {
+                let mut secrets = open_secrets(&config)?;
+                run_onboard_wizard(&mut config, &mut secrets, false)?;
+            }
+            #[cfg(not(feature = "tui"))]
+            {
+                eprintln!("Configuration wizard is not available in this build. Build with --features tui to enable.");
+                std::process::exit(1);
+            }
         }
 
         // ── Config get / set / unset ────────────────────────────
@@ -517,20 +543,28 @@ async fn main() -> Result<()> {
         }
 
         // ── TUI ─────────────────────────────────────────────────
-        Commands::Tui(args) => {
-            // Apply TUI-specific overrides.
-            if let Some(url) = &args.url {
-                config.gateway_url = Some(url.clone());
+        Commands::Tui(_args) => {
+            #[cfg(feature = "tui")]
+            {
+                // Apply TUI-specific overrides.
+                if let Some(url) = &_args.url {
+                    config.gateway_url = Some(url.clone());
+                }
+                // The gateway owns the secrets vault.  The TUI no longer needs
+                // a local vault password — it fetches secrets via gateway messages.
+                // A --password flag is forwarded to the gateway after connect if
+                // the vault is locked.
+                let mut app = App::new(config)?;
+                if let Some(pw) = _args.password {
+                    app.set_deferred_vault_password(pw);
+                }
+                app.run().await?;
             }
-            // The gateway owns the secrets vault.  The TUI no longer needs
-            // a local vault password — it fetches secrets via gateway messages.
-            // A --password flag is forwarded to the gateway after connect if
-            // the vault is locked.
-            let mut app = App::new(config)?;
-            if let Some(pw) = args.password {
-                app.set_deferred_vault_password(pw);
+            #[cfg(not(feature = "tui"))]
+            {
+                eprintln!("TUI is not available in this build. Build with --features tui to enable.");
+                std::process::exit(1);
             }
-            app.run().await?;
         }
 
         // ── Command / Message ───────────────────────────────────

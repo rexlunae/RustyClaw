@@ -1,0 +1,160 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  check:
+    name: Check (${{ matrix.target }}, ${{ matrix.features_label }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ── Native Linux x86_64 ──────────────────────────────────
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: ""
+            features_label: default
+            use_cross: false
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: "--no-default-features"
+            features_label: no-default
+            use_cross: false
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: "--features full"
+            features_label: full
+            use_cross: false
+
+          # ── ARM64 (Raspberry Pi 3/4/5 64-bit) ───────────────────
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: "--no-default-features"
+            features_label: no-default
+            use_cross: true
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: "--no-default-features --features web-tools"
+            features_label: web-tools
+            use_cross: true
+
+          # ── ARMv7 (Raspberry Pi 2/3 32-bit) ─────────────────────
+          - target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-latest
+            features: "--no-default-features"
+            features_label: no-default
+            use_cross: true
+
+          # ── macOS x86_64 ─────────────────────────────────────────
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            features: ""
+            features_label: default
+            use_cross: false
+
+          # ── macOS Apple Silicon ──────────────────────────────────
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            features: ""
+            features_label: default
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Check
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross check --target ${{ matrix.target }} ${{ matrix.features }}
+          else
+            cargo check --target ${{ matrix.target }} ${{ matrix.features }}
+          fi
+
+  test:
+    name: Test (x86_64-linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Test (default features)
+        run: cargo test
+      - name: Test (no default features)
+        run: cargo test --no-default-features
+
+  build-release:
+    name: Build (${{ matrix.target }})
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, test]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: ""
+            use_cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            features: "--no-default-features --features web-tools"
+            use_cross: true
+          - target: armv7-unknown-linux-gnueabihf
+            runner: ubuntu-latest
+            features: "--no-default-features --features web-tools"
+            use_cross: true
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            features: ""
+            use_cross: false
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            features: ""
+            use_cross: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.use_cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build release
+        run: |
+          if [ "${{ matrix.use_cross }}" = "true" ]; then
+            cross build --release --target ${{ matrix.target }} ${{ matrix.features }}
+          else
+            cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+          fi
+
+      - name: Package binaries
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/rustyclaw dist/rustyclaw-${{ matrix.target }} 2>/dev/null || true
+          cp target/${{ matrix.target }}/release/rustyclaw-gateway dist/rustyclaw-gateway-${{ matrix.target }} 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustyclaw-${{ matrix.target }}
+          path: dist/

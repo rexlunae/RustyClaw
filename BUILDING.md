@@ -6,28 +6,36 @@
 cargo install rustyclaw
 ```
 
-This installs RustyClaw with default features (no messengers).
+This installs RustyClaw with default features (TUI + web tools, no messengers).
 
 ## Feature Flags
 
-| Feature | Description | crates.io |
-|---------|-------------|-----------|
-| `matrix` | Matrix messenger support | ✅ |
-| `browser` | CDP browser automation | ✅ |
-| `full` | matrix + browser | ✅ |
-| `signal` | Signal messenger | ❌ (source only) |
+| Feature | Description | Default | crates.io |
+|---------|-------------|---------|-----------|
+| `tui` | Terminal UI (ratatui, crossterm) | ✅ | ✅ |
+| `web-tools` | HTML parsing (scraper, html2md) | ✅ | ✅ |
+| `matrix` | Matrix messenger support | | ✅ |
+| `browser` | CDP browser automation | | ✅ |
+| `full` | tui + web-tools + matrix + browser | | ✅ |
+| `signal` | Signal messenger | | ❌ (source only) |
 
 ### Install with Features
 
 ```bash
+# Default (TUI + web tools)
+cargo install rustyclaw
+
 # With Matrix support
 cargo install rustyclaw --features matrix
 
 # With browser automation
 cargo install rustyclaw --features browser
 
-# Full (Matrix + Browser)
+# Full (TUI + web tools + Matrix + Browser)
 cargo install rustyclaw --features full
+
+# Headless gateway only (no TUI)
+cargo install rustyclaw --no-default-features --features web-tools
 ```
 
 ## Building from Source
@@ -106,6 +114,24 @@ The Signal integration depends on:
 These libraries are maintained separately and not regularly published to crates.io.
 We'll add crates.io support when upstream publishes compatible versions.
 
+## Raspberry Pi (Headless Gateway)
+
+Build a minimal gateway binary for Raspberry Pi using [cross](https://github.com/cross-rs/cross):
+
+```bash
+# Install cross (one-time)
+cargo install cross --git https://github.com/cross-rs/cross
+
+# 64-bit (Pi 3/4/5)
+cross build --release --target aarch64-unknown-linux-gnu --no-default-features --features web-tools
+
+# 32-bit (Pi 2/3)
+cross build --release --target armv7-unknown-linux-gnueabihf --no-default-features --features web-tools
+```
+
+The `--no-default-features` flag disables the TUI, producing a smaller binary
+suitable for running `rustyclaw-gateway` as a headless service.
+
 ## Cross-Compilation
 
 ### Linux (from macOS)
@@ -116,6 +142,21 @@ rustup target add x86_64-unknown-linux-gnu
 
 # Build
 cargo build --release --target x86_64-unknown-linux-gnu
+```
+
+### ARM / Raspberry Pi
+
+Use [cross](https://github.com/cross-rs/cross) for ARM targets (handles
+toolchains and sysroots automatically via Docker):
+
+```bash
+cargo install cross --git https://github.com/cross-rs/cross
+
+# ARM64
+cross build --release --target aarch64-unknown-linux-gnu
+
+# ARMv7
+cross build --release --target armv7-unknown-linux-gnueabihf
 ```
 
 ### macOS (from Linux)

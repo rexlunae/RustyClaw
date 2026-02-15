@@ -291,6 +291,7 @@ mod tests {
 // Pre-built `ratatui::style::Color` and `Style` values derived from the
 // lobster palette, for use in TUI pane rendering.
 
+#[cfg(feature = "tui")]
 pub mod tui_palette {
     use ratatui::style::{Color, Modifier, Style};
 
