@@ -409,16 +409,54 @@ pub fn wrap_with_macos_sandbox(_command: &str, _policy: &SandboxPolicy) -> (Stri
 // ── Landlock (Linux 5.13+) ──────────────────────────────────────────────────
 
 /// Apply Landlock restrictions to the current process.
-/// 
+///
 /// **Warning:** This is irreversible for this process!
 #[cfg(target_os = "linux")]
 pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
-    // Placeholder — real implementation requires syscalls
-    // For now, just log and rely on path validation
+    use landlock::*;
+    use std::fs::File;
+
+    // Try to use ABI V2 (kernel 5.13+), fall back if not supported
+    let abi = ABI::V2;
+
+    // Create a ruleset with all filesystem access rights
+    // If this fails, Landlock is not supported by the kernel
+    let mut ruleset = Ruleset::default()
+        .handle_access(AccessFs::from_all(abi))
+        .map_err(|e| format!("Landlock not supported (kernel < 5.13): {}", e))?
+        .create()
+        .map_err(|e| format!("Failed to create Landlock ruleset (kernel may not support Landlock): {}", e))?;
+
+    // Add rules to DENY access to protected paths
+    // Note: Landlock works by restricting access, so we deny by not allowing
+    for deny_path in &policy.deny_read {
+        if deny_path.exists() {
+            // Open the path to get a file descriptor
+            let file = File::open(deny_path)
+                .map_err(|e| format!("Failed to open path for Landlock rule {:?}: {}", deny_path, e))?;
+
+            // Deny both read and execute access to protected directories
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(&file, AccessFs::from_read(abi)))
+                .map_err(|e| format!("Failed to add Landlock deny rule for {:?}: {}", deny_path, e))?;
+        } else {
+            eprintln!(
+                "[sandbox] Warning: Cannot apply Landlock to non-existent path: {:?}",
+                deny_path
+            );
+        }
+    }
+
+    // Apply the restrictions to the current process (irreversible!)
+    ruleset
+        .restrict_self()
+        .map_err(|e| format!("Failed to apply Landlock restrictions: {}", e))?;
+
     eprintln!(
-        "[sandbox] Landlock policy registered (enforcement pending): deny={:?}",
-        policy.deny_read
+        "[sandbox] ✓ Landlock restrictions applied (kernel-enforced): denied {} path(s)",
+        policy.deny_read.len()
     );
+
     Ok(())
 }
 

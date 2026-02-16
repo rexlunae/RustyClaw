@@ -126,6 +126,10 @@ chromiumoxide = { version = "0.8", default-features = false, features = ["tokio-
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+# Linux-specific security: Landlock LSM for kernel-enforced filesystem restrictions
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
 # Terminal styling
 colored = "3.1"
 indicatif = "0.18"
