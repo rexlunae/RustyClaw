@@ -301,10 +301,9 @@ Contributions welcome! We have a comprehensive prioritized roadmap based on ecos
 - 📖 **[Contributing Guide](docs/CONTRIBUTING.md)** — Development guidelines and PR process
 
 **P0 Quick Wins (Start Here):**
-- #52 — Unified Safety Layer consolidation (1-2 weeks)
 - #70 — CSRF protection for gateway endpoints (1 week)
 
-**Recently completed**: #81 (retry/backoff engine), #83 (config validation), #84 (personality files), #85 (DuckDuckGo fallback), #86 (secure credential memory)
+**Recently completed**: #52 (unified safety layer), #81 (retry/backoff engine), #83 (config validation), #84 (personality files), #85 (DuckDuckGo fallback), #86 (secure credential memory)
 
 **P1 High Value:**
 - #76 — Structured memory with auto-reflector (2-3 weeks)

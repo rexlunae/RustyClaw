@@ -1521,7 +1521,7 @@ async fn dispatch_text_message(
     hook_registry: &Arc<crate::hooks::HookRegistry>,
 ) -> Result<()> {
     // Try to parse as a structured JSON request.
-    let req = match serde_json::from_str::<ChatRequest>(text) {
+    let mut req = match serde_json::from_str::<ChatRequest>(text) {
         Ok(r) if r.msg_type == "chat" => r,
         Ok(r) => {
             let frame = json!({
@@ -1549,23 +1549,26 @@ async fn dispatch_text_message(
         }
     };
 
-    // Prompt injection defense: scan messages before processing
+    // Unified safety layer: scan/sanitize/block suspicious user input.
     if config.prompt_guard.enabled {
-        use crate::security::{GuardAction, GuardResult, PromptGuard};
+        use crate::safety::{SafetyDecision, SafetyLayer};
 
-        let action = GuardAction::from_str(&config.prompt_guard.action);
-        let guard = PromptGuard::with_config(action, config.prompt_guard.sensitivity);
+        let safety = SafetyLayer::new(
+            config.ssrf.allow_private_ips,
+            &config.ssrf.blocked_cidrs,
+            &config.prompt_guard.action,
+            config.prompt_guard.sensitivity,
+        );
 
-        // Scan all user messages for injection patterns
-        for msg in &req.messages {
+        for msg in &mut req.messages {
             if msg.role == "user" {
-                match guard.scan(&msg.content) {
-                    GuardResult::Blocked(reason) => {
-                        eprintln!("[Security] Prompt injection blocked: {}", reason);
+                match safety.inspect_prompt(&msg.content) {
+                    SafetyDecision::Block(reason) => {
+                        eprintln!("[Safety] User message blocked: {}", reason);
                         let frame = json!({
                             "type": "error",
                             "ok": false,
-                            "message": format!("Security: Message blocked due to potential prompt injection attack"),
+                            "message": "Safety: Message blocked due to policy validation.",
                         });
                         writer
                             .send(Message::Text(frame.to_string().into()))
@@ -1573,14 +1576,14 @@ async fn dispatch_text_message(
                             .context("Failed to send security error")?;
                         return Ok(());
                     }
-                    GuardResult::Suspicious(patterns, score) if score >= 0.5 => {
-                        eprintln!(
-                            "[Security] Suspicious patterns detected (score: {:.2}): {:?}",
-                            score, patterns
-                        );
-                        // Continue processing if action is Warn
+                    SafetyDecision::Sanitize { sanitized, reason } => {
+                        eprintln!("[Safety] User message sanitized: {}", reason);
+                        msg.content = sanitized;
                     }
-                    _ => {}
+                    SafetyDecision::Warn(reason) => {
+                        eprintln!("[Safety] User message warning: {}", reason);
+                    }
+                    SafetyDecision::Allow => {}
                 }
             }
         }
