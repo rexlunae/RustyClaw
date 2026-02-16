@@ -110,17 +110,22 @@ rustyclaw tui
 
 ## Recent Enhancements ✨
 
-**February 2026** — Major security, architecture, and planning improvements:
+**February 2026** — Phase 1 (Quick Wins) complete! All 4 priority features shipped:
 
+### 🎉 Phase 1 Features (100% Complete)
+- ⚡ **Multi-Provider LLM Failover** — Automatic failover across providers with 3 strategies (priority, round-robin, cost-optimized), error classification, and cost tracking
+- 🛡️ **Safety Layer Consolidation** — Unified security defense with 4 components: Sanitizer, Validator, Policy Engine (Warn/Block/Sanitize/Ignore), and Leak Detector (API keys, passwords, tokens, private keys, PII)
+- 📊 **Context Compaction** — Intelligent message history compaction (sliding window + importance scoring) enabling indefinite conversation length
+- 🔐 **Local Embeddings** — Privacy-preserving offline embeddings via fastembed-rs (384-dim) with automatic fallback to OpenAI (1536-dim)
+
+### Earlier Enhancements
 - 🛡️ **Defense-in-Depth Sandboxing** — Combined Landlock+Bubblewrap mode for kernel-enforced + namespace isolation
 - 🐳 **Docker Container Support** — Cross-platform sandboxing with Alpine Linux, resource limits, and credential injection
 - 🎯 **Prioritized Development Roadmap** — Complexity-based prioritization of 44 features with ecosystem analysis
-- 🏆 **102 Feature Issues Created** — Comprehensive [issue tracker](https://github.com/aecs4u/RustyClaw/issues) with prior art and acceptance criteria
-- 📨 **DORA Metrics Tracking** — First project in ecosystem with DevOps performance metrics (Deployment Frequency, Lead Time, CFR, MTTR)
-- 📊 **Ecosystem Analysis** — Deep dive into 7 projects (OpenClaw, AutoGPT, PicoClaw, Moltis, MicroClaw, Carapace, IronClaw)
-- 💬 **Messenger Integrations** — Slack, Discord, Telegram, Matrix support with dedicated branches
+- 📨 **DORA Metrics Tracking** — First project in ecosystem with DevOps performance metrics
+- 💬 **Messenger Integrations** — Slack, Discord, Telegram, Matrix, Google Chat, Teams, Mattermost support
 
-See [ROADMAP_INDEX.md](ROADMAP_INDEX.md) for the complete prioritized development plan based on lowest complexity and highest implementation availability.
+See [docs/ROADMAP.md](docs/ROADMAP.md) for Phase 2 features (Routines Engine, Hybrid Search, MCP Support) and the complete development plan.
 
 ## Features
 
@@ -160,7 +165,7 @@ Skills support **gating** — require binaries, environment variables, or specif
 
 ### Multi-Provider Support
 
-Connect to any major AI provider:
+Connect to any major AI provider with automatic failover:
 
 - **Anthropic** (Claude 4, Claude Sonnet)
 - **OpenAI** (GPT-4, GPT-4o)
@@ -169,6 +174,56 @@ Connect to any major AI provider:
 - **xAI** (Grok)
 - **Ollama** (local models)
 - **OpenRouter** (any model)
+
+**NEW**: Multi-provider failover with 3 strategies:
+```toml
+[failover]
+enabled = true
+strategy = "priority"  # or "round-robin", "cost-optimized"
+providers = [
+  { provider = "anthropic", priority = 1 },
+  { provider = "openai", priority = 2 }
+]
+```
+
+### Embeddings & Semantic Search
+
+Generate vector embeddings locally or via cloud with automatic failover:
+
+- **Local Embeddings** (fastembed-rs) — Privacy-preserving, offline, 384-dim (all-MiniLM-L6-v2)
+- **OpenAI Embeddings** — Higher quality, 1536-dim (text-embedding-3-small)
+- **Fallback Provider** — Try local first, fallback to OpenAI on error
+
+```toml
+[embeddings]
+provider = "fallback"  # "local", "openai", or "fallback"
+model = "all-MiniLM-L6-v2"
+cache_dir = "~/.cache/rustyclaw/embeddings"
+```
+
+Build with `--features local-embeddings` for offline support.
+
+### Advanced Memory Systems
+
+RustyClaw includes multiple memory layers for intelligent context management:
+
+- **File-Based Memory** — Manual facts in AGENTS.md with BM25 keyword search
+- **Structured Memory** — SQLite database with auto-extracted facts, confidence scoring, deduplication
+- **Context Compaction** — Intelligent message history compaction with sliding window & importance scoring
+- **Indefinite Conversations** — Never hit context limits with automatic compaction strategies
+
+```toml
+[context_compaction]
+enabled = true
+strategy = "hybrid"  # "sliding_window", "importance", or "hybrid"
+window_size = 50
+
+[structured_memory]
+enabled = true
+db_path = "memory/facts.db"
+min_confidence = 0.5
+max_facts = 10000
+```
 
 ### Terminal UI
 
@@ -246,6 +301,38 @@ allow_paths = ["/tmp", "/var/tmp"]
 docker_image = "alpine:latest"
 docker_memory_limit_mb = 2048
 docker_cpu_shares = 1024
+
+# Multi-provider failover (Phase 1)
+[failover]
+enabled = true
+strategy = "priority"  # "priority", "round-robin", or "cost-optimized"
+providers = [
+  { provider = "anthropic", priority = 1 },
+  { provider = "openai", priority = 2 }
+]
+
+# Context compaction (Phase 1)
+[context_compaction]
+enabled = true
+strategy = "hybrid"  # "sliding_window", "importance", or "hybrid"
+window_size = 50
+
+# Structured memory (Phase 1)
+[structured_memory]
+enabled = true
+db_path = "memory/facts.db"
+min_confidence = 0.5
+
+# Local embeddings (Phase 1)
+[embeddings]
+provider = "fallback"  # "local", "openai", or "fallback"
+model = "all-MiniLM-L6-v2"
+
+# Unified safety layer (Phase 1)
+[safety]
+prompt_injection_policy = "warn"  # "ignore", "warn", "block", or "sanitize"
+leak_detection_policy = "warn"
+prompt_sensitivity = 0.7
 ```
 
 See [docs/SANDBOX.md](docs/SANDBOX.md) for detailed sandbox configuration options.
@@ -300,16 +387,20 @@ Contributions welcome! We have a comprehensive prioritized roadmap based on ecos
 - 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — 102 tracked issues
 - 📖 **[Contributing Guide](docs/CONTRIBUTING.md)** — Development guidelines and PR process
 
-**P0 Quick Wins (Start Here):**
-- #51 — Multi-provider LLM failover (1-2 weeks)
+**Phase 1 Complete** ✅ — All Quick Wins shipped (Feb 2026):
+- ✅ #50 — Multi-provider LLM failover
+- ✅ #51 — Context Compaction
+- ✅ #52 — Structured Memory with SQLite backend
+- ✅ #53 — Gateway Service Lifecycle Management
+- ✅ #54 — Safety Layer Consolidation
 
-**Recently completed**: #52 (unified safety layer), #63 (heartbeat monitoring), #70 (CSRF protection), #81 (retry/backoff engine), #83 (config validation), #84 (personality files), #85 (DuckDuckGo fallback), #86 (secure credential memory)
-
-**P1 High Value:**
-- #76 — Structured memory with auto-reflector (2-3 weeks)
-- #66 — Sub-agent spawning for parallel tasks (2-3 weeks)
+**Phase 2 Features (Start Here):**
 - #56 — Hybrid search with BM25+Vector (2-3 weeks)
 - #58 — MCP (Model Context Protocol) support (2-3 weeks)
+- #66 — Sub-agent spawning for parallel tasks (2-3 weeks)
+- Routines Engine — Cron, event triggers, webhooks (2-3 weeks)
+
+**Also completed**: #42 (Discord), #45-46 (Google Chat, Mattermost), #47-49 (P0 features)
 
 See [ROADMAP_SUMMARY.md](ROADMAP_SUMMARY.md) for complete prioritization and [individual issues](https://github.com/aecs4u/RustyClaw/issues) for implementation details.
 
