@@ -288,3 +288,86 @@ The following items were listed as "Not implemented" in the original Gap Analysi
 - ✅ **Feature-gated builds** — headless/TUI/full builds for different deployment scenarios
 - ✅ **Raspberry Pi optimized** — ARM cross-compilation + CI/CD for Pi deployment
 - ✅ **Simpler architecture** — fewer dependencies, easier to audit and maintain
+
+---
+
+## PicoClaw Comparison
+
+### Overview
+[PicoClaw](https://github.com/sipeed/picoclaw) is an ultra-lightweight AI assistant implementation in Go, inspired by nanobot and designed for extremely resource-constrained hardware. It represents a third approach to the Claw architecture, optimized for minimal footprint.
+
+### Implementation Comparison
+
+| Metric | RustyClaw | OpenClaw | PicoClaw |
+|--------|-----------|----------|----------|
+| **Language** | Rust | TypeScript (Node.js) | Go |
+| **RAM Required** | ~50-200MB (estimated) | >1GB | <10MB |
+| **Startup Time (0.8GHz)** | ~2-5s (estimated) | >500s | <1s |
+| **Binary Size** | ~15-30MB (stripped) | N/A (interpreted) | Single self-contained binary |
+| **Target Hardware** | Raspberry Pi 3B+ (~$35) | Mac Mini ($599+) | LicheeRV-Nano (~$10) |
+| **Architectures** | x64, ARM64, ARMv7 | x64, ARM64 | x64, ARM64, RISC-V |
+
+### PicoClaw Feature Set
+
+**✅ Core Features**
+- Single self-contained binary deployment
+- Multi-platform messenger support (Telegram, Discord, QQ, DingTalk, LINE)
+- Web search (DuckDuckGo, Brave Search)
+- Memory management system
+- Scheduled task automation (cron-like)
+- Security sandbox (workspace-restricted file/command access)
+- Custom skills and tools support
+
+**❌ Notable Limitations (vs OpenClaw/RustyClaw)**
+- Minimal tool ecosystem compared to OpenClaw/RustyClaw's 30+ tools
+- No TUI interface (daemon + messenger only)
+- No gateway WebSocket architecture (simpler direct integration)
+- No multi-provider support (focused on single LLM backend)
+- No voice/visual features (Canvas, TTS, Voice Wake, etc.)
+- No advanced security features (typed secrets vault, TOTP, access policies)
+- No session management or multi-agent spawning
+- No browser automation or device control tools
+
+### Design Philosophy
+
+| Project | Philosophy | Target Use Case |
+|---------|-----------|-----------------|
+| **RustyClaw** | Performance + feature balance | Raspberry Pi/SBC, self-hosted with strong parity |
+| **OpenClaw** | Feature-complete agent platform | Desktop/server, full-featured AI assistant |
+| **PicoClaw** | Ultra-minimal footprint | $10 hardware, embedded systems, IoT devices |
+
+### When to Choose Each
+
+**Choose RustyClaw if:**
+- You want strong parity with OpenClaw's tools (30/30 tools implemented)
+- You're deploying to Raspberry Pi or similar ARM SBCs (~$35)
+- You need native performance with reasonable memory usage
+- You want a Rust codebase for security/maintainability
+
+**Choose OpenClaw if:**
+- You need the full feature set (voice, visual, companion apps)
+- You have >1GB RAM available
+- You want the most mature, feature-complete platform
+- You need Control UI, WebChat, or macOS/iOS/Android apps
+
+**Choose PicoClaw if:**
+- You have <10MB RAM budget
+- You're deploying to ultra-cheap hardware ($10 devices)
+- You only need basic AI assistant features via messengers
+- You need RISC-V support
+- Boot time and memory are critical constraints
+
+### PicoClaw Development Model
+PicoClaw is notable for being **95% agent-generated** with human-in-the-loop refinement, demonstrating the viability of AI-driven development for creating minimal, production-ready systems.
+
+---
+
+## Three-Way Ecosystem Summary
+
+The Claw ecosystem now spans three implementations optimized for different deployment scenarios:
+
+1. **RustyClaw (Rust)** — Performance-optimized with strong tool parity for SBCs ($35+ hardware)
+2. **OpenClaw (TypeScript)** — Full-featured platform for desktop/server ($599+ hardware)
+3. **PicoClaw (Go)** — Ultra-minimal for embedded/IoT deployment ($10+ hardware)
+
+**RustyClaw** occupies the middle ground: more capable than PicoClaw (30 tools vs basic set), more efficient than OpenClaw (~50-200MB vs >1GB RAM), targeting the sweet spot of self-hosted Raspberry Pi deployments with near-complete OpenClaw tool compatibility.
