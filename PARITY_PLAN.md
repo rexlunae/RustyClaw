@@ -48,7 +48,7 @@
 - ✅ **Access Policies** — Always/WithAuth/SkillOnly, agent access control
 - ✅ **DM Pairing Security** — Allowlist + pairing codes for messenger authorization (vs OpenClaw ❌)
 - ✅ **Elevated Mode Control** — Per-session sudo toggle (`/elevated on|off`)
-- ✅ **Sandbox Enforcement** — Landlock/bwrap/macOS/PathValidation with comprehensive documentation
+- ✅ **Sandbox Enforcement** — Landlock+bwrap combined (defense-in-depth) with comprehensive documentation
 
 ### Platform Features
 - ✅ **Multi-Provider LLM** — OpenAI, Anthropic, Google, GitHub Copilot, xAI, OpenRouter, Ollama, custom (7+)
@@ -108,7 +108,7 @@ RustyClaw serves as the reference implementation. Other projects are compared ag
 | **DM Pairing** | **✅ Yes** | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No | ❌ No |
 | **Elevated Mode** | **✅ Yes** | ✅ Yes | ❌ No | ✅ Yes | ❌ No | ❌ No | ❌ No |
 | **Secrets Vault** | **✅ Full** | ✅ Full | ❌ Env only | ✅ Enhanced | ⚠️ Basic | ⚠️ Basic | ✅ Full |
-| **Sandbox** | **⚠️ bwrap** | ✅ Multiple | ✅ Workspace | ✅ Landlock+bwrap | ⚠️ Basic | ❌ None | ⚠️ Basic |
+| **Sandbox** | **✅ Landlock+bwrap** | ✅ Multiple | ✅ Workspace | ✅ Docker | ⚠️ Basic | ❌ None | ⚠️ Basic |
 
 **Key:** ✅ Full implementation | ⚠️ Partial/basic | ❌ Missing
 

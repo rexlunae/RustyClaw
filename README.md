@@ -22,7 +22,7 @@ RustyClaw is a drop-in Rust implementation of [OpenClaw](https://github.com/open
 | **Memory usage** | ~15 MB | ~150 MB |
 | **Startup time** | <50 ms | ~500 ms |
 | **Binary size** | ~8 MB | ~200 MB (with node) |
-| **Sandbox isolation** | Built-in (bwrap/Landlock/macOS) | External only |
+| **Sandbox isolation** | Built-in (Landlock+bwrap/Docker/macOS) | External only |
 | **Secrets vault** | AES-256 + TOTP | External (1Password, etc.) |
 | **Language** | Rust 🦀 | TypeScript |
 
@@ -33,7 +33,7 @@ RustyClaw was built with the assumption that **AI agents can't always be trusted
 - **Encrypted secrets vault** — AES-256 encryption for API keys, credentials, SSH keys
 - **TOTP two-factor authentication** — Optional 2FA for vault access
 - **Per-credential access policies** — Always, WithApproval, WithAuth, SkillOnly
-- **Sandbox isolation** — Bubblewrap (Linux), Landlock (Linux 5.13+), sandbox-exec (macOS)
+- **Sandbox isolation** — Landlock+Bubblewrap (Linux), Docker (cross-platform), sandbox-exec (macOS)
 - **Credentials directory protection** — Agent tools cannot read the secrets directory
 
 👉 **[Read the Security Model →](docs/SECURITY.md)**

@@ -15,7 +15,7 @@ pub struct ModelProvider {
 /// Sandbox configuration for agent isolation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SandboxConfig {
-    /// Sandbox mode: "none", "path", "bwrap", "landlock"
+    /// Sandbox mode: "auto", "landlock+bwrap", "landlock", "bwrap", "docker", "macos", "path", "none"
     #[serde(default)]
     pub mode: String,
     /// Additional paths to deny (beyond credentials dir)
@@ -531,6 +531,8 @@ impl Default for Config {
             ssrf: SsrfConfig::default(),
             prompt_guard: PromptGuardConfig::default(),
             tls: TlsConfig::default(),
+            health: HealthConfig::default(),
+            voice: VoiceConfig::default(),
             metrics: MetricsConfig::default(),
             hooks: HooksConfig::default(),
             webauthn: WebAuthnConfig::default(),

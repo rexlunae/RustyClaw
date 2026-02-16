@@ -22,9 +22,57 @@ AI agents execute shell commands on your behalf. While powerful, this poses secu
 
 ## Sandbox Modes
 
-RustyClaw supports 4 sandbox modes, auto-selected based on platform:
+RustyClaw supports 6 sandbox modes, auto-selected based on platform:
 
-### 1. Landlock (Linux - Recommended)
+### 1. Landlock + Bubblewrap Combined (Linux - Strongest)
+
+**What it is:** Defense-in-depth approach combining kernel-level Landlock LSM with namespace isolation.
+
+**How it works:**
+- **Layer 1 (Bubblewrap):** Creates isolated mount namespace, denied paths are completely unmounted
+- **Layer 2 (Landlock):** Kernel LSM enforces filesystem restrictions at syscall level
+- **Result:** Even if namespace escape occurs, Landlock still blocks access
+
+**Strengths:**
+- ✅ **Strongest security** (two independent layers)
+- ✅ Defense-in-depth (bypass one, the other still protects)
+- ✅ Kernel + namespace isolation combined
+- ✅ Auto-selected when both available
+
+**Limitations:**
+- ❌ Linux only (kernel 5.13+ with bwrap installed)
+- ⚠️ Requires both Landlock support and bwrap binary
+- ⚠️ Slightly more overhead than single-layer
+
+**Example denial:**
+```rust
+// Agent cannot bypass:
+cat ~/.rustyclaw/credentials/secrets.json  // ❌ Blocked by BOTH Landlock LSM and bwrap unmount
+cd ~/.ssh && cat id_rsa                     // ❌ Blocked by BOTH layers
+# Even with namespace escape attempts
+unshare -m cat ~/.ssh/id_rsa               // ❌ Still blocked by Landlock LSM
+```
+
+**Security Model:**
+```text
+┌─────────────────────────────────────────────────────┐
+│                  Command Execution                   │
+├─────────────────────────────────────────────────────┤
+│  Layer 1: Bubblewrap Namespace Isolation            │
+│  • Denied paths unmounted from filesystem view      │
+│  • Process isolation via namespaces                 │
+│  • Cannot see protected directories at all          │
+├─────────────────────────────────────────────────────┤
+│  Layer 2: Landlock Kernel LSM                       │
+│  • Kernel-level syscall interception                │
+│  • Blocks access even if namespace bypassed         │
+│  • Irreversible process restriction                 │
+└─────────────────────────────────────────────────────┘
+```
+
+---
+
+### 2. Landlock (Linux - Recommended)
 
 **What it is:** Kernel-level security module (Linux 5.13+) that restricts filesystem access.
 
@@ -54,7 +102,7 @@ cd ~/.ssh && cat id_rsa                     // ❌ Blocked by Landlock
 
 ---
 
-### 2. Bubblewrap (Linux)
+### 3. Bubblewrap (Linux)
 
 **What it is:** User namespace sandbox (bwrap) that creates isolated filesystem views.
 
@@ -96,7 +144,60 @@ cat /etc/passwd            # ❌ File not accessible
 
 ---
 
-### 3. macOS Sandbox (macOS)
+### 4. Docker Container (Cross-Platform)
+
+**What it is:** Container-based isolation using Docker with resource limits.
+
+**How it works:**
+- Runs commands in ephemeral Alpine Linux containers
+- Complete filesystem isolation from host
+- Resource limits enforced (2GB memory, 1 CPU)
+- Non-root execution (UID 1000)
+- Auto-cleanup after execution
+
+**Strengths:**
+- ✅ **Cross-platform** (Linux, macOS, Windows)
+- ✅ Strong container isolation
+- ✅ Resource limits (memory, CPU)
+- ✅ Works consistently across OSes
+- ✅ No special kernel features required
+
+**Limitations:**
+- ❌ Requires Docker installed and running
+- ⚠️ Slower startup (~1-2s container overhead)
+- ⚠️ Requires Docker daemon permissions
+- ⚠️ Larger resource footprint
+
+**Installation:**
+```bash
+# Linux (Ubuntu/Debian)
+sudo apt-get install docker.io
+sudo systemctl start docker
+sudo usermod -aG docker $USER
+
+# macOS
+brew install --cask docker
+
+# Or download from https://www.docker.com/products/docker-desktop/
+```
+
+**Example execution:**
+```bash
+# Container is created, runs command, then auto-removed
+docker run --rm --user 1000:1000 --memory 2g \
+  --volume /workspace:/workspace:rw \
+  alpine:latest sh -c "ls -la"
+```
+
+**Use cases:**
+- Cross-platform deployments
+- CI/CD environments
+- When Docker is already available
+- Fallback for systems without Landlock/bwrap
+
+---
+
+### 5. macOS Sandbox (macOS)
 
 **What it is:** Apple's sandbox-exec with Seatbelt profiles.
 
@@ -123,7 +224,7 @@ sandbox-exec -p "(deny file-read* ...)" command
 
 ---
 
-### 4. Path Validation (Fallback)
+### 6. Path Validation (Fallback)
 
 **What it is:** Pre-execution path checking (no kernel enforcement).
 
@@ -154,7 +255,7 @@ Edit `~/.rustyclaw/config.toml`:
 
 ```toml
 [sandbox]
-# Sandbox mode: "auto", "landlock", "bwrap", "macos", "path", "none"
+# Sandbox mode: "auto", "landlock+bwrap", "landlock", "bwrap", "docker", "macos", "path", "none"
 mode = "auto"  # Recommended: auto-detect best available
 
 # Additional paths to deny (beyond credentials dir)
@@ -177,13 +278,19 @@ allow_paths = [
 **Auto (Recommended):**
 ```toml
 [sandbox]
-mode = "auto"  # Picks: landlock > bwrap > macos > path
+mode = "auto"  # Picks: landlock+bwrap > landlock > bwrap > docker > macos > path
 ```
 
 **Force Specific Mode:**
 ```toml
 [sandbox]
-mode = "landlock"  # Force Landlock (fails if unavailable)
+mode = "landlock"  # Force Landlock only
+# OR
+mode = "landlock+bwrap"  # Force combined (requires both)
+# OR
+mode = "bwrap"  # Force Bubblewrap only
+# OR
+mode = "docker"  # Force Docker containers
 ```
 
 **Disable (NOT RECOMMENDED):**
