@@ -119,7 +119,7 @@ pub async fn resolve_bearer_token(
 /// Reads WebSocket messages until we get a JSON frame with
 /// `{"type": "auth_response", "code": "..."}` or the connection drops.
 pub async fn wait_for_auth_response(
-    reader: &mut futures_util::stream::SplitStream<WebSocketStream<tokio::net::TcpStream>>,
+    reader: &mut futures_util::stream::SplitStream<WebSocketStream<super::MaybeTlsStream>>,
 ) -> Result<String> {
     while let Some(msg) = reader.next().await {
         match msg {

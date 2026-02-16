@@ -10,7 +10,9 @@ pub mod daemon;
 #[cfg(feature = "tui")]
 pub mod dialogs;
 pub mod gateway;
+pub mod hooks;
 pub mod memory;
+pub mod metrics;
 pub mod messengers;
 #[cfg(feature = "tui")]
 pub mod onboard;
@@ -22,6 +24,7 @@ pub mod process_manager;
 pub mod providers;
 pub mod sandbox;
 pub mod secrets;
+pub mod security;
 pub mod sessions;
 pub mod skills;
 pub mod soul;

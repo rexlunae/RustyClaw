@@ -11,7 +11,58 @@ mod messenger_handler;
 mod providers;
 mod secrets_handler;
 mod skills_handler;
+mod tls;
 mod types;
+
+use tokio::io::{AsyncRead, AsyncWrite};
+use std::pin::Pin;
+use std::task::{Context as TaskContext, Poll};
+
+/// Stream type that can be either plain TCP or TLS-wrapped
+pub enum MaybeTlsStream {
+    Plain(tokio::net::TcpStream),
+    Tls(tokio_rustls::server::TlsStream<tokio::net::TcpStream>),
+}
+
+impl AsyncRead for MaybeTlsStream {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for MaybeTlsStream {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut TaskContext<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<std::io::Result<()>> {
+        match self.get_mut() {
+            MaybeTlsStream::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            MaybeTlsStream::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
 
 // Re-export public types
 pub use types::{
@@ -47,7 +98,7 @@ use tokio_util::sync::CancellationToken;
 pub type ToolCancelFlag = Arc<AtomicBool>;
 
 /// Type alias for the server-side WebSocket write half.
-type WsWriter = SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
+type WsWriter = SplitSink<WebSocketStream<MaybeTlsStream>, Message>;
 
 /// Gateway-owned secrets vault, shared across connections.
 ///
@@ -145,6 +196,10 @@ pub async fn run_gateway(
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());
 
+    // Register the config for tool access (e.g., SSRF validation settings).
+    let shared_config = Arc::new(tokio::sync::Mutex::new(config.clone()));
+    tools::set_config(shared_config);
+
     // Register the vault so web_fetch can access the cookie jar.
     tools::set_vault(vault.clone());
 
@@ -161,6 +216,23 @@ pub async fn run_gateway(
     let listener = TcpListener::bind(addr)
         .await
         .with_context(|| format!("Failed to bind gateway to {}", addr))?;
+
+    // Create TLS acceptor if TLS is enabled
+    let tls_acceptor = if config.tls.enabled {
+        let acceptor = tls::create_tls_acceptor(
+            config.tls.cert_path.as_deref(),
+            config.tls.key_path.as_deref(),
+            config.tls.self_signed,
+        )
+        .await
+        .context("Failed to create TLS acceptor")?;
+
+        eprintln!("[gateway] TLS enabled (wss://{})", addr);
+        Some(acceptor)
+    } else {
+        eprintln!("[gateway] TLS disabled (ws://{})", addr);
+        None
+    };
 
     // If the provider uses Copilot session tokens, check for:
     // 1. Imported session token (GITHUB_COPILOT_SESSION) - use until expiry
@@ -281,18 +353,158 @@ pub async fn run_gateway(
         None
     };
 
+    // Start Prometheus metrics server if enabled
+    if config.metrics.enabled {
+        let metrics_addr: SocketAddr = config
+            .metrics
+            .listen
+            .parse()
+            .context("Invalid metrics listen address")?;
+        let metrics_cancel = cancel.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = metrics_cancel.cancelled() => {
+                    eprintln!("[metrics] Shutting down metrics server");
+                }
+                result = crate::metrics::start_metrics_server(metrics_addr) => {
+                    if let Err(e) = result {
+                        eprintln!("[metrics] Metrics server error: {}", e);
+                    }
+                }
+            }
+        });
+    }
+
     eprintln!("[gateway] Listening on {}", addr);
     if messenger_mgr.is_some() {
         eprintln!("[gateway] Messenger polling enabled");
     }
+
+    // Initialize lifecycle hook registry
+    let hook_registry = if config.hooks.enabled {
+        let mut registry = crate::hooks::HookRegistry::new();
+
+        // Register built-in metrics hook
+        if config.hooks.metrics_hook {
+            registry.register(Arc::new(crate::hooks::builtin::MetricsHook));
+            eprintln!("[gateway] Registered metrics hook");
+        }
+
+        // Register built-in audit log hook
+        if config.hooks.audit_log_hook {
+            let audit_log_path = config
+                .hooks
+                .audit_log_path
+                .clone()
+                .unwrap_or_else(|| config.settings_dir.join("logs").join("audit.log"));
+            registry.register(Arc::new(crate::hooks::builtin::AuditLogHook::new(
+                audit_log_path,
+            )));
+            eprintln!("[gateway] Registered audit log hook");
+        }
+
+        Arc::new(registry)
+    } else {
+        Arc::new(crate::hooks::HookRegistry::new())
+    };
+
+    // Invoke Startup hook
+    let startup_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::Startup)
+        .with_metadata("gateway_url", serde_json::json!(addr.to_string()))
+        .with_metadata("tls_enabled", serde_json::json!(config.tls.enabled));
+    if let Err(e) = hook_registry.invoke(&startup_ctx).await {
+        eprintln!("[gateway] Error invoking startup hook: {}", e);
+    }
+
+    // Get config path for reloading
+    let config_path = config.settings_dir.join("config.toml");
+
+    // Setup SIGHUP handler for config hot-reload (Unix only)
+    // Create a future that either listens for SIGHUP (Unix) or never completes (non-Unix)
+    #[cfg(unix)]
+    let mut sighup_receiver = {
+        use tokio::signal::unix::{signal, SignalKind};
+        signal(SignalKind::hangup()).expect("Failed to setup SIGHUP handler")
+    };
+
+    #[cfg(unix)]
+    eprintln!("[gateway] Hot-reload enabled: Send SIGHUP (kill -HUP {}) to reload config", std::process::id());
+
+    #[cfg(not(unix))]
+    eprintln!("[gateway] Hot-reload not available on this platform");
 
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
                 break;
             }
+
+            // SIGHUP handler (Unix only) - uses async fn to work with select!
+            result = async {
+                #[cfg(unix)]
+                {
+                    sighup_receiver.recv().await
+                }
+                #[cfg(not(unix))]
+                {
+                    // Never-resolving future on non-Unix platforms
+                    std::future::pending::<()>().await;
+                    None
+                }
+            } => {
+                if result.is_some() {
+                    eprintln!("[gateway] Received SIGHUP signal, reloading configuration...");
+
+                    // Read current config for comparison
+                    let old_config = shared_config.read().await.clone();
+
+                    match Config::load(Some(config_path.clone())) {
+                        Ok(new_config) => {
+                            // Update shared config
+                            *shared_config.write().await = new_config.clone();
+
+                            // Reload model context if provider settings changed
+                            let new_model_ctx = if let Some(ref _model_provider) = new_config.model {
+                                ModelContext::resolve(&new_config, &mut *vault.lock().await).ok().map(Arc::new)
+                            } else {
+                                None
+                            };
+
+                            if let Some(ctx) = new_model_ctx {
+                                *shared_model_ctx.write().await = Some(ctx);
+                            }
+
+                            eprintln!("[gateway] ✓ Configuration reloaded successfully");
+                            eprintln!("[gateway]   New settings will apply to new connections");
+
+                            // Log key config changes
+                            if new_config.tls.enabled != old_config.tls.enabled {
+                                eprintln!("[gateway]   TLS: {} -> {}",
+                                    old_config.tls.enabled, new_config.tls.enabled);
+                            }
+                            if new_config.metrics.enabled != old_config.metrics.enabled {
+                                eprintln!("[gateway]   Metrics: {} -> {}",
+                                    old_config.metrics.enabled, new_config.metrics.enabled);
+                            }
+                            if new_config.ssrf.enabled != old_config.ssrf.enabled {
+                                eprintln!("[gateway]   SSRF protection: {} -> {}",
+                                    old_config.ssrf.enabled, new_config.ssrf.enabled);
+                            }
+                            if new_config.prompt_guard.enabled != old_config.prompt_guard.enabled {
+                                eprintln!("[gateway]   Prompt guard: {} -> {}",
+                                    old_config.prompt_guard.enabled, new_config.prompt_guard.enabled);
+                            }
+                        }
+                        Err(e) => {
+                            eprintln!("[gateway] ✗ Config reload failed: {}", e);
+                            eprintln!("[gateway]   Continuing with current configuration");
+                        }
+                    }
+                }
+            }
+
             accepted = listener.accept() => {
-                let (stream, peer) = accepted?;
+                let (tcp_stream, peer) = accepted?;
                 let shared_cfg = shared_config.clone();
                 let shared_ctx = shared_model_ctx.clone();
                 let session_clone = copilot_session.clone();
@@ -300,11 +512,27 @@ pub async fn run_gateway(
                 let skill_clone = skill_mgr.clone();
                 let limiter_clone = rate_limiter.clone();
                 let child_cancel = cancel.child_token();
+                let tls_acceptor_clone = tls_acceptor.clone();
+                let hooks_clone = hook_registry.clone();
+
                 tokio::spawn(async move {
+                    // Perform TLS handshake if TLS is enabled
+                    let stream: MaybeTlsStream = if let Some(acceptor) = tls_acceptor_clone {
+                        match tls::accept_tls(&acceptor, tcp_stream).await {
+                            Ok(tls_stream) => MaybeTlsStream::Tls(tls_stream),
+                            Err(err) => {
+                                eprintln!("TLS handshake failed from {}: {}", peer, err);
+                                return;
+                            }
+                        }
+                    } else {
+                        MaybeTlsStream::Plain(tcp_stream)
+                    };
+
                     if let Err(err) = handle_connection(
                         stream, peer, shared_cfg, shared_ctx,
                         session_clone, vault_clone, skill_clone,
-                        limiter_clone, child_cancel,
+                        limiter_clone, hooks_clone, child_cancel,
                     ).await {
                         eprintln!("Gateway connection error from {}: {}", peer, err);
                     }
@@ -317,7 +545,7 @@ pub async fn run_gateway(
 }
 
 async fn handle_connection(
-    stream: tokio::net::TcpStream,
+    stream: MaybeTlsStream,
     peer: SocketAddr,
     shared_config: SharedConfig,
     shared_model_ctx: SharedModelCtx,
@@ -325,6 +553,7 @@ async fn handle_connection(
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     rate_limiter: auth::RateLimiter,
+    hook_registry: Arc<crate::hooks::HookRegistry>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(stream)
@@ -332,6 +561,14 @@ async fn handle_connection(
         .context("WebSocket handshake failed")?;
     let (mut writer, mut reader) = ws_stream.split();
     let peer_ip = peer.ip();
+
+    // Invoke Connection hook
+    let conn_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::Connection)
+        .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
+        .with_metadata("peer_ip", serde_json::json!(peer_ip.to_string()));
+    if let Err(e) = hook_registry.invoke(&conn_ctx).await {
+        eprintln!("[hooks] Error invoking connection hook: {}", e);
+    }
 
     // Snapshot config and model context for this connection.
     // Reload updates the shared state; new connections pick up changes.
@@ -380,12 +617,31 @@ async fn handle_connection(
                     };
                     if valid {
                         auth::clear_rate_limit(&rate_limiter, peer_ip).await;
+
+                        // Invoke AuthSuccess hook
+                        let auth_success_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::AuthSuccess)
+                            .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
+                            .with_metadata("method", "totp");
+                        if let Err(e) = hook_registry.invoke(&auth_success_ctx).await {
+                            eprintln!("[hooks] Error invoking auth success hook: {}", e);
+                        }
+
                         let ok = json!({ "type": "auth_result", "ok": true });
                         writer.send(Message::Text(ok.to_string().into())).await?;
                         break; // Authentication successful, continue to main loop
                     } else {
                         attempts += 1;
                         let locked_out = auth::record_totp_failure(&rate_limiter, peer_ip).await;
+
+                        // Invoke AuthFailure hook
+                        let auth_failure_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::AuthFailure)
+                            .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
+                            .with_metadata("method", "totp")
+                            .with_metadata("attempts", serde_json::json!(attempts))
+                            .with_metadata("locked_out", serde_json::json!(locked_out));
+                        if let Err(e) = hook_registry.invoke(&auth_failure_ctx).await {
+                            eprintln!("[hooks] Error invoking auth failure hook: {}", e);
+                        }
 
                         if locked_out {
                             let msg = format!(
@@ -1024,7 +1280,8 @@ async fn handle_connection(
                         // Re-read model_ctx from shared state for each dispatch
                         // so reloaded config takes effect on existing connections.
                         let current_model_ctx = shared_model_ctx.read().await.clone();
-                        let workspace_dir = config.workspace_dir();
+                        let current_config = shared_config.read().await.clone();
+                        let workspace_dir = current_config.workspace_dir();
                         if let Err(err) = dispatch_text_message(
                             &http,
                             text.as_str(),
@@ -1036,6 +1293,8 @@ async fn handle_connection(
                             &skill_mgr,
                             &tool_cancel,
                             &elevated_mode,
+                            &current_config,
+                            &hook_registry,
                         )
                         .await
                         {
@@ -1099,6 +1358,8 @@ async fn dispatch_text_message(
     skill_mgr: &SharedSkillManager,
     tool_cancel: &ToolCancelFlag,
     elevated_mode: &Arc<AtomicBool>,
+    config: &Config,
+    hook_registry: &Arc<crate::hooks::HookRegistry>,
 ) -> Result<()> {
     // Try to parse as a structured JSON request.
     let req = match serde_json::from_str::<ChatRequest>(text) {
@@ -1128,6 +1389,43 @@ async fn dispatch_text_message(
             return Ok(());
         }
     };
+
+    // Prompt injection defense: scan messages before processing
+    if config.prompt_guard.enabled {
+        use crate::security::{GuardAction, GuardResult, PromptGuard};
+
+        let action = GuardAction::from_str(&config.prompt_guard.action);
+        let guard = PromptGuard::with_config(action, config.prompt_guard.sensitivity);
+
+        // Scan all user messages for injection patterns
+        for msg in &req.messages {
+            if msg.role == "user" {
+                match guard.scan(&msg.content) {
+                    GuardResult::Blocked(reason) => {
+                        eprintln!("[Security] Prompt injection blocked: {}", reason);
+                        let frame = json!({
+                            "type": "error",
+                            "ok": false,
+                            "message": format!("Security: Message blocked due to potential prompt injection attack"),
+                        });
+                        writer
+                            .send(Message::Text(frame.to_string().into()))
+                            .await
+                            .context("Failed to send security error")?;
+                        return Ok(());
+                    }
+                    GuardResult::Suspicious(patterns, score) if score >= 0.5 => {
+                        eprintln!(
+                            "[Security] Suspicious patterns detected (score: {:.2}): {:?}",
+                            score, patterns
+                        );
+                        // Continue processing if action is Warn
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 
     let mut resolved = match providers::resolve_request(req, model_ctx) {
         Ok(r) => r,
@@ -1407,10 +1705,29 @@ async fn dispatch_text_message(
                     tc.arguments.clone()
                 };
 
-                match tools::execute_tool(&tc.name, &args, workspace_dir) {
+                // Invoke BeforeToolCall hook
+                let before_tool_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::BeforeToolCall)
+                    .with_metadata("tool_name", serde_json::json!(tc.name.clone()))
+                    .with_metadata("tool_id", serde_json::json!(tc.id.clone()));
+                if let Err(e) = hook_registry.invoke(&before_tool_ctx).await {
+                    eprintln!("[hooks] Error invoking before tool call hook: {}", e);
+                }
+
+                let result = match tools::execute_tool(&tc.name, &args, workspace_dir) {
                     Ok(text) => (text, false),
                     Err(err) => (err, true),
+                };
+
+                // Invoke AfterToolCall hook
+                let after_tool_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::AfterToolCall)
+                    .with_metadata("tool_name", serde_json::json!(tc.name.clone()))
+                    .with_metadata("tool_id", serde_json::json!(tc.id.clone()))
+                    .with_metadata("success", serde_json::json!(!result.1));
+                if let Err(e) = hook_registry.invoke(&after_tool_ctx).await {
+                    eprintln!("[hooks] Error invoking after tool call hook: {}", e);
                 }
+
+                result
             };
 
             // Sanitize the output (truncate large outputs, warn about garbage).

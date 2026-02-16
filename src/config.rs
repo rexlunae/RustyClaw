@@ -26,6 +26,166 @@ pub struct SandboxConfig {
     pub allow_paths: Vec<PathBuf>,
 }
 
+/// SSRF (Server-Side Request Forgery) protection configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SsrfConfig {
+    /// Whether SSRF protection is enabled
+    #[serde(default = "SsrfConfig::default_enabled")]
+    pub enabled: bool,
+    /// Additional blocked CIDR ranges beyond the defaults
+    #[serde(default)]
+    pub blocked_cidrs: Vec<String>,
+    /// Allow private IPs (override for trusted environments)
+    #[serde(default)]
+    pub allow_private_ips: bool,
+}
+
+impl Default for SsrfConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            blocked_cidrs: Vec::new(),
+            allow_private_ips: false,
+        }
+    }
+}
+
+impl SsrfConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+}
+
+/// Prompt injection defense configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptGuardConfig {
+    /// Whether prompt injection defense is enabled
+    #[serde(default = "PromptGuardConfig::default_enabled")]
+    pub enabled: bool,
+    /// Action to take: "warn", "block", or "sanitize"
+    #[serde(default = "PromptGuardConfig::default_action")]
+    pub action: String,
+    /// Sensitivity threshold (0.0-1.0, higher = more strict)
+    #[serde(default = "PromptGuardConfig::default_sensitivity")]
+    pub sensitivity: f64,
+}
+
+impl Default for PromptGuardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            action: Self::default_action(),
+            sensitivity: Self::default_sensitivity(),
+        }
+    }
+}
+
+impl PromptGuardConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_action() -> String {
+        "warn".to_string()
+    }
+
+    fn default_sensitivity() -> f64 {
+        0.7
+    }
+}
+
+/// TLS/WSS configuration for the gateway.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TlsConfig {
+    /// Whether TLS is enabled for the gateway
+    #[serde(default)]
+    pub enabled: bool,
+    /// Path to TLS certificate file (PEM format)
+    #[serde(default)]
+    pub cert_path: Option<PathBuf>,
+    /// Path to TLS private key file (PEM format)
+    #[serde(default)]
+    pub key_path: Option<PathBuf>,
+    /// Generate self-signed certificate for development/local use
+    #[serde(default)]
+    pub self_signed: bool,
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            cert_path: None,
+            key_path: None,
+            self_signed: false,
+        }
+    }
+}
+
+/// Prometheus metrics configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MetricsConfig {
+    /// Whether metrics endpoint is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Address to bind metrics server (default: 127.0.0.1:9090)
+    #[serde(default = "MetricsConfig::default_listen")]
+    pub listen: String,
+}
+
+impl Default for MetricsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: Self::default_listen(),
+        }
+    }
+}
+
+impl MetricsConfig {
+    fn default_listen() -> String {
+        "127.0.0.1:9090".to_string()
+    }
+}
+
+/// Lifecycle hooks configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HooksConfig {
+    /// Whether lifecycle hooks are enabled
+    #[serde(default = "HooksConfig::default_enabled")]
+    pub enabled: bool,
+    /// Whether the built-in metrics hook is enabled
+    #[serde(default = "HooksConfig::default_metrics_hook")]
+    pub metrics_hook: bool,
+    /// Whether the built-in audit log hook is enabled
+    #[serde(default)]
+    pub audit_log_hook: bool,
+    /// Path to audit log file (default: <settings_dir>/logs/audit.log)
+    #[serde(default)]
+    pub audit_log_path: Option<PathBuf>,
+}
+
+impl Default for HooksConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            metrics_hook: true,
+            audit_log_hook: false,
+            audit_log_path: None,
+        }
+    }
+}
+
+impl HooksConfig {
+    fn default_enabled() -> bool {
+        true
+    }
+
+    fn default_metrics_hook() -> bool {
+        true
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Root state directory (e.g. `~/.rustyclaw`).
@@ -74,6 +234,21 @@ pub struct Config {
     /// Sandbox configuration for agent isolation.
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    /// SSRF protection configuration.
+    #[serde(default)]
+    pub ssrf: SsrfConfig,
+    /// Prompt injection defense configuration.
+    #[serde(default)]
+    pub prompt_guard: PromptGuardConfig,
+    /// TLS configuration for the gateway.
+    #[serde(default)]
+    pub tls: TlsConfig,
+    /// Prometheus metrics configuration.
+    #[serde(default)]
+    pub metrics: MetricsConfig,
+    /// Lifecycle hooks configuration.
+    #[serde(default)]
+    pub hooks: HooksConfig,
     /// ClawHub registry URL (default: `https://registry.clawhub.dev/api/v1`).
     #[serde(default)]
     pub clawhub_url: Option<String>,
@@ -156,6 +331,11 @@ impl Default for Config {
             message_spacing: Self::default_message_spacing(),
             tab_width: Self::default_tab_width(),
             sandbox: SandboxConfig::default(),
+            ssrf: SsrfConfig::default(),
+            prompt_guard: PromptGuardConfig::default(),
+            tls: TlsConfig::default(),
+            metrics: MetricsConfig::default(),
+            hooks: HooksConfig::default(),
             clawhub_url: None,
             clawhub_token: None,
             system_prompt: None,

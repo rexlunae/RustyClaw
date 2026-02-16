@@ -1,5 +1,6 @@
 //! Helper functions and global state for the tools system.
 
+use crate::config::Config;
 use crate::process_manager::{ProcessManager, SharedProcessManager};
 use crate::sandbox::{Sandbox, SandboxMode, SandboxPolicy};
 use std::path::{Path, PathBuf};
@@ -98,6 +99,24 @@ pub fn prepare_sandboxed_spawn(command: &str, cwd: &Path) -> (String, Vec<String
 
 /// Absolute path of the credentials directory, set once at gateway startup.
 static CREDENTIALS_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+// ── Global config for tool access ──────────────────────────────────────────
+
+/// Shared config type for thread-safe access (uses tokio::sync::Mutex for async).
+pub type SharedConfig = Arc<tokio::sync::Mutex<Config>>;
+
+/// Global config instance, set once at gateway startup.
+static CONFIG: OnceLock<SharedConfig> = OnceLock::new();
+
+/// Called once from the gateway to register the config for tool access.
+pub fn set_config(config: SharedConfig) {
+    let _ = CONFIG.set(config);
+}
+
+/// Get the global config instance, if initialized.
+pub fn config() -> Option<&'static SharedConfig> {
+    CONFIG.get()
+}
 
 // ── Global vault for cookie jar access ──────────────────────────────────────
 

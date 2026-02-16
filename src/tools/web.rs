@@ -1,6 +1,7 @@
 //! Web tools: web_fetch and web_search.
 
-use super::helpers::vault;
+use super::helpers::{config, vault};
+use crate::security::SsrfValidator;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
@@ -32,9 +33,29 @@ pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, Str
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    // Validate URL
+    // Validate URL scheme
     if !url.starts_with("http://") && !url.starts_with("https://") {
         return Err("URL must start with http:// or https://".to_string());
+    }
+
+    // SSRF protection: validate URL before making request
+    if let Some(config_ref) = config() {
+        let config_guard = config_ref.blocking_lock();
+        if config_guard.ssrf.enabled {
+            let mut validator = SsrfValidator::new(config_guard.ssrf.allow_private_ips);
+
+            // Add custom blocked CIDRs from config
+            for cidr in &config_guard.ssrf.blocked_cidrs {
+                if let Err(e) = validator.add_blocked_range(cidr) {
+                    eprintln!("[web_fetch] Warning: Invalid CIDR in config: {}", e);
+                }
+            }
+
+            // Validate the URL
+            if let Err(e) = validator.validate_url(url) {
+                return Err(format!("SSRF validation failed: {}", e));
+            }
+        }
     }
 
     // Parse URL for domain extraction

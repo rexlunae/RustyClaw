@@ -108,6 +108,23 @@ base64 = "0.22"
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"
 
+# SSRF protection (IP CIDR range matching)
+ipnetwork = "0.20"
+
+# Prompt injection defense (pattern matching)
+regex = "1.11"
+
+# TLS/WSS gateway support
+tokio-rustls = "0.26"
+rustls-pemfile = "2.2"
+rcgen = "0.13"  # Self-signed certificate generation
+time = "0.3"    # For certificate validity period
+
+# Observability - Prometheus metrics
+prometheus = "0.14"
+lazy_static = "1.5"
+warp = "0.3"    # HTTP server for metrics endpoint
+
 # Matrix messenger support (optional)
 # Features: e2e-encryption (default), sqlite (persistence), rustls-tls (TLS)
 # rustls-tls is required when default-features = false
@@ -129,6 +146,7 @@ rpassword = "7"
 # Unix process management
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+signal-hook = "0.3"  # SIGHUP handler for config hot-reload
 
 # Linux-specific security: Landlock LSM for kernel-enforced filesystem restrictions
 [target.'cfg(target_os = "linux")'.dependencies]
