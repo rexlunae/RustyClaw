@@ -147,6 +147,32 @@ Run as a daemon for integration with other tools:
 rustyclaw gateway start
 ```
 
+### Messenger Integrations 💬
+
+RustyClaw can be integrated with multiple messaging platforms, making your AI assistant accessible wherever your team communicates:
+
+| Platform | Status | Setup |
+|----------|--------|-------|
+| **Slack** | ✅ Available | [Quick Start](docs/MESSENGER_SLACK.md) |
+| **Discord** | ✅ Available | [Quick Start](docs/MESSENGER_DISCORD.md) |
+| **Telegram** | ✅ Available | [Quick Start](docs/MESSENGER_TELEGRAM.md) |
+| **Matrix** | ✅ Available | [Quick Start](docs/MESSENGER_MATRIX.md) |
+
+Each messenger integration is available on its own feature branch for easy testing and deployment:
+
+```bash
+# Checkout and test Slack integration
+git checkout feature/messenger-slack
+cargo build --features messenger-slack
+rustyclaw gateway start
+
+# Or try Discord
+git checkout feature/messenger-discord
+cargo build --features messenger-discord
+```
+
+**Learn more**: [Messenger Integrations Overview](docs/MESSENGERS.md)
+
 Supports WebSocket connections, heartbeats, and multi-session management.
 
 ## Configuration
