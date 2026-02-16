@@ -6,8 +6,8 @@
 
 use crate::config::{Config, MessengerConfig};
 use crate::messengers::{
-    DiscordMessenger, MediaAttachment, Message, Messenger, MessengerManager, SendOptions,
-    TelegramMessenger, WebhookMessenger,
+    DiscordMessenger, GmailConfig, GmailMessenger, MediaAttachment, Message, Messenger,
+    MessengerManager, SendOptions, TelegramMessenger, WebhookMessenger,
 };
 use crate::pairing::PairingManager;
 use crate::tools;
@@ -149,6 +149,34 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .context("Signal requires 'phone' number")?;
             let messenger =
                 SignalMessenger::new(&phone).context("Failed to create Signal messenger")?;
+            Box::new(messenger)
+        }
+        "gmail" => {
+            let client_id = config
+                .client_id
+                .clone()
+                .context("Gmail requires 'client_id'")?;
+            let client_secret = config
+                .client_secret
+                .clone()
+                .context("Gmail requires 'client_secret'")?;
+            let refresh_token = config
+                .refresh_token
+                .clone()
+                .context("Gmail requires 'refresh_token'")?;
+
+            let gmail_config = GmailConfig {
+                client_id,
+                client_secret,
+                refresh_token,
+                user: config.gmail_user.clone().unwrap_or_else(|| "me".to_string()),
+                poll_interval: config.gmail_poll_interval.unwrap_or(60),
+                label: config.gmail_label.clone().unwrap_or_else(|| "INBOX".to_string()),
+                unread_only: config.gmail_unread_only.unwrap_or(true),
+            };
+
+            let messenger = GmailMessenger::new(gmail_config)
+                .context("Failed to create Gmail messenger")?;
             Box::new(messenger)
         }
         other => anyhow::bail!("Unknown messenger type: {}", other),

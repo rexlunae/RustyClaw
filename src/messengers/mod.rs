@@ -159,11 +159,13 @@ mod webhook;
 mod console;
 mod discord;
 mod telegram;
+mod gmail;
 
 pub use webhook::WebhookMessenger;
 pub use console::ConsoleMessenger;
 pub use discord::DiscordMessenger;
 pub use telegram::TelegramMessenger;
+pub use gmail::{GmailMessenger, GmailConfig};
 
 // ── Optional messengers (feature-gated) ─────────────────────────────────────
 
