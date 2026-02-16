@@ -327,22 +327,6 @@ pub struct Config {
     /// DM pairing security configuration for messengers.
     #[serde(default)]
     pub pairing: PairingConfig,
-    /// Slack messenger configuration.
-    #[cfg(feature = "messenger-slack")]
-    #[serde(default)]
-    pub slack: Option<crate::gateway::messengers::slack::SlackConfig>,
-    /// Discord messenger configuration.
-    #[cfg(feature = "messenger-discord")]
-    #[serde(default)]
-    pub discord: Option<crate::gateway::messengers::discord::DiscordConfig>,
-    /// Telegram messenger configuration.
-    #[cfg(feature = "messenger-telegram")]
-    #[serde(default)]
-    pub telegram: Option<crate::gateway::messengers::telegram::TelegramConfig>,
-    /// Matrix messenger configuration.
-    #[cfg(feature = "matrix")]
-    #[serde(default)]
-    pub matrix_messenger: Option<crate::gateway::messengers::matrix::MatrixConfig>,
     /// ClawHub registry URL (default: `https://registry.clawhub.dev/api/v1`).
     #[serde(default)]
     pub clawhub_url: Option<String>,
@@ -432,14 +416,6 @@ impl Default for Config {
             hooks: HooksConfig::default(),
             webauthn: WebAuthnConfig::default(),
             pairing: PairingConfig::default(),
-            #[cfg(feature = "messenger-slack")]
-            slack: None,
-            #[cfg(feature = "messenger-discord")]
-            discord: None,
-            #[cfg(feature = "messenger-telegram")]
-            telegram: None,
-            #[cfg(feature = "matrix")]
-            matrix_messenger: None,
             clawhub_url: None,
             clawhub_token: None,
             system_prompt: None,
