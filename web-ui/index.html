@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#1a1a1a">
+    <title>RustyClaw Control</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon.svg">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: #1a1a1a;
+            color: #e0e0e0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            background: #2a2a2a;
+            padding: 12px 16px;
+            border-bottom: 1px solid #3a3a3a;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .header h1 {
+            font-size: 18px;
+            font-weight: 600;
+        }
+
+        .status {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #666;
+        }
+
+        .status-dot.connected {
+            background: #4ade80;
+        }
+
+        /* Main content */
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            background: #2a2a2a;
+            border-bottom: 1px solid #3a3a3a;
+        }
+
+        .tab {
+            flex: 1;
+            padding: 12px;
+            text-align: center;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab.active {
+            border-bottom-color: #4ade80;
+            color: #4ade80;
+        }
+
+        /* Tab content */
+        .tab-content {
+            flex: 1;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .tab-content.active {
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Messages */
+        .messages {
+            flex: 1;
+            padding: 16px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 16px;
+            padding: 12px;
+            background: #2a2a2a;
+            border-radius: 8px;
+            border-left: 3px solid #4a4a4a;
+        }
+
+        .message.user {
+            border-left-color: #3b82f6;
+        }
+
+        .message.assistant {
+            border-left-color: #4ade80;
+        }
+
+        .message.system {
+            border-left-color: #f59e0b;
+        }
+
+        .message-header {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 12px;
+            color: #888;
+        }
+
+        .message-content {
+            font-size: 14px;
+            line-height: 1.5;
+            white-space: pre-wrap;
+        }
+
+        /* Input area */
+        .input-area {
+            padding: 16px;
+            background: #2a2a2a;
+            border-top: 1px solid #3a3a3a;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        input, textarea {
+            flex: 1;
+            padding: 12px;
+            background: #1a1a1a;
+            border: 1px solid #3a3a3a;
+            border-radius: 8px;
+            color: #e0e0e0;
+            font-size: 14px;
+            resize: none;
+        }
+
+        button {
+            padding: 12px 24px;
+            background: #4ade80;
+            color: #1a1a1a;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+
+        button:active {
+            background: #22c55e;
+        }
+
+        button:disabled {
+            background: #3a3a3a;
+            color: #666;
+            cursor: not-allowed;
+        }
+
+        /* Sessions */
+        .sessions {
+            padding: 16px;
+        }
+
+        .session-card {
+            background: #2a2a2a;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+            border-left: 3px solid #4ade80;
+        }
+
+        .session-header {
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .session-meta {
+            font-size: 12px;
+            color: #888;
+        }
+
+        /* Settings */
+        .settings {
+            padding: 16px;
+        }
+
+        .setting-group {
+            margin-bottom: 24px;
+        }
+
+        .setting-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .setting-group input {
+            width: 100%;
+        }
+
+        /* Empty state */
+        .empty-state {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            padding: 32px;
+            text-align: center;
+        }
+
+        .empty-state-icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>🦀 RustyClaw</h1>
+        <div class="status">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Disconnected</span>
+        </div>
+    </div>
+
+    <!-- Main content -->
+    <div class="main">
+        <!-- Tabs -->
+        <div class="tabs">
+            <div class="tab active" data-tab="chat">Chat</div>
+            <div class="tab" data-tab="sessions">Sessions</div>
+            <div class="tab" data-tab="settings">Settings</div>
+        </div>
+
+        <!-- Chat tab -->
+        <div class="tab-content active" id="chat-tab">
+            <div class="messages" id="messages">
+                <div class="empty-state">
+                    <div class="empty-state-icon">💬</div>
+                    <p>No messages yet. Connect to get started.</p>
+                </div>
+            </div>
+            <div class="input-area">
+                <div class="input-group">
+                    <textarea id="messageInput" placeholder="Type a message..." rows="1"></textarea>
+                    <button id="sendBtn" disabled>Send</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Sessions tab -->
+        <div class="tab-content" id="sessions-tab">
+            <div class="sessions" id="sessions">
+                <div class="empty-state">
+                    <div class="empty-state-icon">📋</div>
+                    <p>No active sessions</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings tab -->
+        <div class="tab-content" id="settings-tab">
+            <div class="settings">
+                <div class="setting-group">
+                    <label for="gatewayUrl">Gateway URL</label>
+                    <input type="text" id="gatewayUrl" value="ws://localhost:8080" placeholder="ws://localhost:8080">
+                </div>
+                <div class="setting-group">
+                    <button onclick="app.connect()">Connect</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
