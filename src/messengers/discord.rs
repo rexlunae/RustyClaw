@@ -85,4 +85,26 @@ impl Messenger for DiscordMessenger {
         self.connected = false;
         Ok(())
     }
+
+    async fn set_typing(&self, channel_id: &str, typing: bool) -> Result<()> {
+        if !typing {
+            // Discord's typing indicator auto-expires after 10 seconds
+            return Ok(());
+        }
+
+        let url = format!(
+            "https://discord.com/api/v10/channels/{}/typing",
+            channel_id
+        );
+
+        let _ = self
+            .http
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.bot_token))
+            .send()
+            .await;
+
+        // Ignore errors - typing indicator is best-effort
+        Ok(())
+    }
 }

@@ -76,6 +76,9 @@ qrcode = { version = "0.14", default-features = false }
 # SSH key generation (Ed25519)
 ssh-key = { version = "0.6", features = ["ed25519", "getrandom", "std"] }
 
+# Random number generation (for pairing codes)
+rand = "0.8"
+
 # File system and path handling
 dirs = "6.0"
 shellexpand = "3.1"

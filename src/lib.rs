@@ -16,6 +16,7 @@ pub mod metrics;
 pub mod messengers;
 #[cfg(feature = "tui")]
 pub mod onboard;
+pub mod pairing;
 #[cfg(feature = "tui")]
 pub mod pages;
 #[cfg(feature = "tui")]

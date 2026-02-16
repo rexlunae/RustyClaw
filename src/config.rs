@@ -220,6 +220,44 @@ impl WebAuthnConfig {
     }
 }
 
+/// DM pairing security configuration for messenger authorization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PairingConfig {
+    /// Whether pairing security is enabled for messengers
+    #[serde(default = "PairingConfig::default_enabled")]
+    pub enabled: bool,
+    /// Whether to require pairing codes (if false, auto-approve all senders)
+    #[serde(default = "PairingConfig::default_require_code")]
+    pub require_code: bool,
+    /// Pairing code expiry in seconds (default: 300 = 5 minutes)
+    #[serde(default = "PairingConfig::default_code_expiry")]
+    pub code_expiry_secs: u64,
+}
+
+impl Default for PairingConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false, // Disabled by default for backwards compatibility
+            require_code: true,
+            code_expiry_secs: Self::default_code_expiry(),
+        }
+    }
+}
+
+impl PairingConfig {
+    fn default_enabled() -> bool {
+        false
+    }
+
+    fn default_require_code() -> bool {
+        true
+    }
+
+    fn default_code_expiry() -> u64 {
+        300 // 5 minutes
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Root state directory (e.g. `~/.rustyclaw`).
@@ -286,16 +324,23 @@ pub struct Config {
     /// WebAuthn/Passkey authentication configuration.
     #[serde(default)]
     pub webauthn: WebAuthnConfig,
+    /// DM pairing security configuration for messengers.
+    #[serde(default)]
+    pub pairing: PairingConfig,
     /// Slack messenger configuration.
+    #[cfg(feature = "messenger-slack")]
     #[serde(default)]
     pub slack: Option<crate::gateway::messengers::slack::SlackConfig>,
     /// Discord messenger configuration.
+    #[cfg(feature = "messenger-discord")]
     #[serde(default)]
     pub discord: Option<crate::gateway::messengers::discord::DiscordConfig>,
     /// Telegram messenger configuration.
+    #[cfg(feature = "messenger-telegram")]
     #[serde(default)]
     pub telegram: Option<crate::gateway::messengers::telegram::TelegramConfig>,
     /// Matrix messenger configuration.
+    #[cfg(feature = "matrix")]
     #[serde(default)]
     pub matrix_messenger: Option<crate::gateway::messengers::matrix::MatrixConfig>,
     /// ClawHub registry URL (default: `https://registry.clawhub.dev/api/v1`).
@@ -386,9 +431,14 @@ impl Default for Config {
             metrics: MetricsConfig::default(),
             hooks: HooksConfig::default(),
             webauthn: WebAuthnConfig::default(),
+            pairing: PairingConfig::default(),
+            #[cfg(feature = "messenger-slack")]
             slack: None,
+            #[cfg(feature = "messenger-discord")]
             discord: None,
+            #[cfg(feature = "messenger-telegram")]
             telegram: None,
+            #[cfg(feature = "matrix")]
             matrix_messenger: None,
             clawhub_url: None,
             clawhub_token: None,

@@ -74,6 +74,20 @@ pub trait Messenger: Send + Sync {
 
     /// Disconnect the messenger
     async fn disconnect(&mut self) -> Result<()>;
+
+    /// Set typing indicator status (optional, defaults to no-op)
+    async fn set_typing(&self, _channel: &str, _typing: bool) -> Result<()> {
+        // Default implementation does nothing
+        // Platforms that support typing indicators should override this
+        Ok(())
+    }
+
+    /// Update presence status (optional, defaults to no-op)
+    async fn set_presence(&self, _status: &str) -> Result<()> {
+        // Default implementation does nothing
+        // Platforms that support presence should override this
+        Ok(())
+    }
 }
 
 // ── Messenger manager ───────────────────────────────────────────────────────

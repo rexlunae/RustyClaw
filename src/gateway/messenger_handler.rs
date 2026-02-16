@@ -9,6 +9,7 @@ use crate::messengers::{
     DiscordMessenger, MediaAttachment, Message, Messenger, MessengerManager, SendOptions,
     TelegramMessenger, WebhookMessenger,
 };
+use crate::pairing::PairingManager;
 use crate::tools;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -31,6 +32,9 @@ use crate::messengers::SignalMessenger;
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
+
+/// Shared pairing manager for DM security.
+pub type SharedPairingManager = Arc<PairingManager>;
 
 /// Conversation history storage per chat.
 /// Key: "messenger_type:chat_id" or "messenger_type:sender_id"
@@ -164,6 +168,7 @@ pub async fn run_messenger_loop(
     model_ctx: Option<Arc<ModelContext>>,
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
+    pairing_mgr: Option<SharedPairingManager>,
     cancel: CancellationToken,
 ) -> Result<()> {
     // If no model context, we can't process messages
@@ -214,6 +219,7 @@ pub async fn run_messenger_loop(
                         &model_ctx,
                         &vault,
                         &skill_mgr,
+                        &pairing_mgr,
                         &conversations,
                         &messenger_type,
                         msg,
@@ -262,6 +268,7 @@ async fn process_incoming_message(
     model_ctx: &Arc<ModelContext>,
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
+    pairing_mgr: &Option<SharedPairingManager>,
     conversations: &ConversationStore,
     messenger_type: &str,
     msg: Message,
@@ -277,7 +284,54 @@ async fn process_incoming_message(
         }
     );
 
+    // Check pairing authorization if enabled
+    if let Some(pairing) = pairing_mgr {
+        if config.pairing.enabled {
+            let is_authorized = pairing.is_authorized(messenger_type, &msg.sender).await;
+
+            if !is_authorized {
+                // Check if message contains a pairing code
+                let content = msg.content.trim().to_uppercase();
+
+                // If it's an 8-character alphanumeric code, try to verify it
+                if content.len() == 8 && content.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    if pairing.verify_code(messenger_type, &msg.sender, &content).await {
+                        // Code is valid! Auto-approve the sender
+                        let sender_name = msg.sender.clone();
+                        if let Err(e) = pairing.approve_sender(messenger_type, &msg.sender, sender_name.clone()).await {
+                            eprintln!("[pairing] Failed to approve sender {}: {}", sender_name, e);
+                            return send_pairing_error(messenger_mgr, messenger_type, &msg).await;
+                        }
+
+                        eprintln!("[pairing] ✓ Sender {} ({}) authorized via pairing code", msg.sender, messenger_type);
+
+                        // Send welcome message
+                        return send_pairing_welcome(messenger_mgr, messenger_type, &msg).await;
+                    } else {
+                        // Invalid code
+                        return send_pairing_invalid_code(messenger_mgr, messenger_type, &msg).await;
+                    }
+                }
+
+                // Not authorized and not a valid code — generate and send pairing code
+                let code = pairing.generate_code(messenger_type, &msg.sender).await;
+                eprintln!("[pairing] Generated pairing code for {} ({}): {}", msg.sender, messenger_type, code);
+
+                return send_pairing_challenge(messenger_mgr, messenger_type, &msg, &code).await;
+            }
+        }
+    }
+
     let workspace_dir = config.workspace_dir();
+
+    // Show typing indicator while processing
+    let typing_channel = msg.channel.as_deref().unwrap_or(&msg.sender);
+    {
+        let mgr = messenger_mgr.lock().await;
+        if let Some(messenger) = mgr.get_messenger_by_type(messenger_type) {
+            let _ = messenger.set_typing(typing_channel, true).await;
+        }
+    }
 
     // Build conversation key for this chat
     let conv_key = format!(
@@ -442,6 +496,9 @@ async fn process_incoming_message(
     {
         let mgr = messenger_mgr.lock().await;
         if let Some(messenger) = mgr.get_messenger_by_type(messenger_type) {
+            // Stop typing indicator before sending response
+            let _ = messenger.set_typing(typing_channel, false).await;
+
             let recipient = msg.channel.as_deref().unwrap_or(&msg.sender);
 
             let opts = SendOptions {
@@ -468,6 +525,12 @@ async fn process_incoming_message(
                     eprintln!("[messenger] Failed to send response: {}", e);
                 }
             }
+        }
+    } else {
+        // No response being sent - ensure typing indicator is stopped
+        let mgr = messenger_mgr.lock().await;
+        if let Some(messenger) = mgr.get_messenger_by_type(messenger_type) {
+            let _ = messenger.set_typing(typing_channel, false).await;
         }
     }
 
@@ -720,6 +783,84 @@ async fn process_attachments(
     }
 
     images
+}
+
+// ── Pairing Helper Functions ───────────────────────────────────────────────
+
+/// Send pairing challenge to an unauthorized sender
+async fn send_pairing_challenge(
+    messenger_mgr: &SharedMessengerManager,
+    messenger_type: &str,
+    msg: &Message,
+    code: &str,
+) -> Result<()> {
+    let response = format!(
+        "🔒 Authorization Required\n\n\
+        You are not authorized to use this assistant.\n\n\
+        **Pairing Code:** `{}`\n\n\
+        To complete pairing:\n\
+        1. Share this code with the admin\n\
+        2. Wait for admin approval\n\
+        3. Send the code back to me to verify\n\n\
+        This code will expire in 5 minutes.",
+        code
+    );
+
+    send_messenger_response(messenger_mgr, messenger_type, msg, &response).await
+}
+
+/// Send welcome message after successful pairing
+async fn send_pairing_welcome(
+    messenger_mgr: &SharedMessengerManager,
+    messenger_type: &str,
+    msg: &Message,
+) -> Result<()> {
+    let response = "✅ Pairing successful! You are now authorized to use this assistant.";
+    send_messenger_response(messenger_mgr, messenger_type, msg, response).await
+}
+
+/// Send invalid code message
+async fn send_pairing_invalid_code(
+    messenger_mgr: &SharedMessengerManager,
+    messenger_type: &str,
+    msg: &Message,
+) -> Result<()> {
+    let response = "❌ Invalid pairing code. Please request a new code or contact the admin.";
+    send_messenger_response(messenger_mgr, messenger_type, msg, response).await
+}
+
+/// Send pairing error message
+async fn send_pairing_error(
+    messenger_mgr: &SharedMessengerManager,
+    messenger_type: &str,
+    msg: &Message,
+) -> Result<()> {
+    let response = "⚠️ Pairing system error. Please try again later or contact the admin.";
+    send_messenger_response(messenger_mgr, messenger_type, msg, response).await
+}
+
+/// Helper to send a response via the messenger
+async fn send_messenger_response(
+    messenger_mgr: &SharedMessengerManager,
+    messenger_type: &str,
+    msg: &Message,
+    content: &str,
+) -> Result<()> {
+    let mgr = messenger_mgr.lock().await;
+    if let Some(messenger) = mgr.get_messenger_by_type(messenger_type) {
+        let recipient = msg.channel.as_deref().unwrap_or(&msg.sender);
+
+        let opts = SendOptions {
+            recipient,
+            content,
+            reply_to: Some(&msg.id),
+            silent: false,
+            media: None,
+        };
+
+        messenger.send_message_with_options(opts).await?;
+    }
+    Ok(())
 }
 
 /// Build a multi-modal user message with text and images.

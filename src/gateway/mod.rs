@@ -73,7 +73,7 @@ pub use types::{
 
 // Re-export messenger handler types
 pub use messenger_handler::{
-    create_messenger_manager, run_messenger_loop, SharedMessengerManager,
+    create_messenger_manager, run_messenger_loop, SharedMessengerManager, SharedPairingManager,
 };
 
 use crate::config::Config;
@@ -313,6 +313,27 @@ pub async fn run_gateway(
     let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
     let rate_limiter = auth::new_rate_limiter();
 
+    // ── Initialize pairing manager for DM security ──────────────────
+    use crate::pairing::PairingManager;
+    use messenger_handler::SharedPairingManager;
+
+    let pairing_mgr: Option<SharedPairingManager> = if config.pairing.enabled {
+        let allowlist_path = config.credentials_dir().join("allowlist.json");
+        match PairingManager::new(&allowlist_path) {
+            Ok(pm) => {
+                eprintln!("[gateway] DM pairing security enabled");
+                Some(Arc::new(pm))
+            }
+            Err(e) => {
+                eprintln!("[gateway] Failed to initialize pairing manager: {}", e);
+                eprintln!("[gateway] Continuing without DM pairing security");
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // ── Initialize and start messenger loop ─────────────────────────
     //
     // If messengers are configured, we poll them for incoming messages
@@ -321,15 +342,16 @@ pub async fn run_gateway(
         match messenger_handler::create_messenger_manager(&config).await {
             Ok(mgr) => {
                 let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));
-                
+
                 // Spawn messenger loop
                 let messenger_config = config.clone();
                 let messenger_ctx = model_ctx.clone();
                 let messenger_vault = vault.clone();
                 let messenger_skills = skill_mgr.clone();
+                let messenger_pairing = pairing_mgr.clone();
                 let messenger_cancel = cancel.child_token();
                 let mgr_clone = shared_mgr.clone();
-                
+
                 tokio::spawn(async move {
                     if let Err(e) = messenger_handler::run_messenger_loop(
                         messenger_config,
@@ -337,12 +359,13 @@ pub async fn run_gateway(
                         messenger_ctx,
                         messenger_vault,
                         messenger_skills,
+                        messenger_pairing,
                         messenger_cancel,
                     ).await {
                         eprintln!("[gateway] Messenger loop error: {}", e);
                     }
                 });
-                
+
                 Some(shared_mgr)
             }
             Err(e) => {

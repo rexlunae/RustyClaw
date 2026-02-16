@@ -169,4 +169,25 @@ impl Messenger for TelegramMessenger {
         self.connected = false;
         Ok(())
     }
+
+    async fn set_typing(&self, chat_id: &str, typing: bool) -> Result<()> {
+        if !typing {
+            // Telegram doesn't have an explicit "stop typing" action
+            // The typing indicator auto-expires after 5 seconds
+            return Ok(());
+        }
+
+        let _ = self
+            .http
+            .post(self.api_url("sendChatAction"))
+            .json(&serde_json::json!({
+                "chat_id": chat_id,
+                "action": "typing"
+            }))
+            .send()
+            .await;
+
+        // Ignore errors - typing indicator is best-effort
+        Ok(())
+    }
 }
