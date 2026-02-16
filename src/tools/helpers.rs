@@ -53,6 +53,40 @@ pub fn run_sandboxed_command(command: &str, cwd: &Path) -> Result<std::process::
     }
 }
 
+/// Prepare a sandboxed command wrapper for spawning processes.
+///
+/// Returns (command, args) tuple for use with Command::new().
+/// For modes that don't support per-command sandboxing (Landlock, PathValidation, None),
+/// returns plain sh -c wrapper.
+pub fn prepare_sandboxed_spawn(command: &str, cwd: &Path) -> (String, Vec<String>) {
+    use crate::sandbox::SandboxMode;
+    #[cfg(target_os = "linux")]
+    use crate::sandbox::wrap_with_bwrap;
+    #[cfg(target_os = "macos")]
+    use crate::sandbox::wrap_with_macos_sandbox;
+
+    if let Some(sb) = SANDBOX.get() {
+        // Update policy workspace to the actual cwd
+        let mut policy = sb.policy.clone();
+        policy.workspace = cwd.to_path_buf();
+
+        match sb.effective_mode() {
+            #[cfg(target_os = "linux")]
+            SandboxMode::Bubblewrap => wrap_with_bwrap(command, &policy),
+
+            #[cfg(target_os = "macos")]
+            SandboxMode::MacOSSandbox => wrap_with_macos_sandbox(command, &policy),
+
+            // Landlock is process-wide, can't be applied per-command
+            // PathValidation and None don't have command wrappers
+            _ => ("sh".to_string(), vec!["-c".to_string(), command.to_string()]),
+        }
+    } else {
+        // No sandbox configured
+        ("sh".to_string(), vec!["-c".to_string(), command.to_string()])
+    }
+}
+
 // ── Credentials directory protection ────────────────────────────────────────
 
 /// Absolute path of the credentials directory, set once at gateway startup.

@@ -1,8 +1,8 @@
 //! Runtime tools: execute_command and process management.
 
 use super::helpers::{
-    command_references_credentials, is_protected_path, process_manager, resolve_path,
-    run_sandboxed_command, VAULT_ACCESS_DENIED,
+    command_references_credentials, is_protected_path, prepare_sandboxed_spawn, process_manager,
+    resolve_path, run_sandboxed_command, VAULT_ACCESS_DENIED,
 };
 use crate::process_manager::SessionStatus;
 use serde_json::{json, Value};
@@ -46,20 +46,35 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
     }
 
     // If background requested immediately, spawn and return session ID
-    // Note: Background processes can't be fully sandboxed (we need the child handle)
-    // but we still do path validation checks above.
+    // Apply sandbox wrapper before spawning (Bubblewrap/macOS only; Landlock is process-wide)
     if background {
+        let (sandbox_cmd, sandbox_args) = prepare_sandboxed_spawn(command, &cwd);
+
+        // Construct the wrapped command string for process manager
+        let mut wrapped_command = sandbox_cmd.clone();
+        for arg in &sandbox_args {
+            wrapped_command.push(' ');
+            // Quote arguments that contain spaces
+            if arg.contains(' ') {
+                wrapped_command.push('"');
+                wrapped_command.push_str(arg);
+                wrapped_command.push('"');
+            } else {
+                wrapped_command.push_str(arg);
+            }
+        }
+
         let manager = process_manager();
         let mut mgr = manager
             .lock()
             .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
-        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
+        let session_id = mgr.spawn(&wrapped_command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
 
         return Ok(json!({
             "status": "running",
             "sessionId": session_id,
-            "message": format!("Command backgrounded. Use process tool to poll session '{}'.", session_id)
+            "message": format!("Command backgrounded (sandboxed). Use process tool to poll session '{}'.", session_id)
         })
         .to_string());
     }
@@ -72,10 +87,11 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
 
     // For commands with yield support, we need to spawn directly so we can
     // transfer the child to the process manager if it takes too long.
-    // Path validation is done above; sandboxing is best-effort here.
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
+    // Apply sandbox wrapper before spawning (Bubblewrap/macOS only; Landlock is process-wide)
+    let (sandbox_cmd, sandbox_args) = prepare_sandboxed_spawn(command, &cwd);
+
+    let mut child = std::process::Command::new(&sandbox_cmd)
+        .args(&sandbox_args)
         .current_dir(&cwd)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
