@@ -30,6 +30,8 @@ pub enum CommandAction {
     GatewayReload,
     /// Download media by ID (id, optional destination path)
     Download(String, Option<String>),
+    /// Toggle elevated (sudo) mode for execute_command
+    SetElevated(bool),
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +74,9 @@ pub fn command_names() -> Vec<String> {
         "skill link-secret".into(),
         "skill unlink-secret".into(),
         "secrets".into(),
+        "elevated".into(),
+        "elevated on".into(),
+        "elevated off".into(),
         "quit".into(),
     ];
     for p in providers::provider_ids() {
@@ -122,6 +127,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /skills                  - Show loaded skills".to_string(),
                 "  /skill                   - Skill management (info/install/publish/link)".to_string(),
                 "  /secrets                 - Open the secrets vault".to_string(),
+                "  /elevated <on|off>       - Toggle elevated (sudo) mode for commands".to_string(),
             ],
             action: CommandAction::None,
         },
@@ -255,6 +261,35 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                         format!("Known models: {}", list),
                     ],
                     action: CommandAction::None,
+                }
+            }
+        },
+        "elevated" => {
+            if parts.len() < 2 {
+                CommandResponse {
+                    messages: vec![
+                        "Usage: /elevated <on|off>".to_string(),
+                        "Enable or disable elevated (sudo) mode for execute_command".to_string(),
+                    ],
+                    action: CommandAction::None,
+                }
+            } else {
+                match parts[1] {
+                    "on" => CommandResponse {
+                        messages: vec!["⚠️  Elevated mode enabled. Commands will run with sudo.".to_string()],
+                        action: CommandAction::SetElevated(true),
+                    },
+                    "off" => CommandResponse {
+                        messages: vec!["✓ Elevated mode disabled.".to_string()],
+                        action: CommandAction::SetElevated(false),
+                    },
+                    _ => CommandResponse {
+                        messages: vec![
+                            format!("Invalid option: {}", parts[1]),
+                            "Usage: /elevated <on|off>".to_string(),
+                        ],
+                        action: CommandAction::None,
+                    },
                 }
             }
         },
