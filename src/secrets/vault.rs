@@ -3,7 +3,9 @@
 use anyhow::{Context, Result};
 use securestore::KeySource;
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
+use zeroize::Zeroize;
 
+use crate::secret::{ExposeSecret, SecretString};
 use super::types::{
     AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind,
 };
@@ -16,7 +18,10 @@ impl SecretsManager {
             let vault = if self.vault_path.exists() {
                 // Existing vault — load with password or key file.
                 if let Some(ref pw) = self.password {
-                    securestore::SecretsManager::load(&self.vault_path, KeySource::Password(pw))
+                    securestore::SecretsManager::load(
+                        &self.vault_path,
+                        KeySource::Password(pw.expose_secret()),
+                    )
                         .context("Failed to load secrets vault (wrong password?)")?
                 } else if self.key_path.exists() {
                     securestore::SecretsManager::load(
@@ -38,11 +43,14 @@ impl SecretsManager {
                 }
                 if let Some(ref pw) = self.password {
                     // Password-based vault — no key file needed.
-                    let sman = securestore::SecretsManager::new(KeySource::Password(pw))
+                    let sman = securestore::SecretsManager::new(KeySource::Password(pw.expose_secret()))
                         .context("Failed to create new secrets vault")?;
                     sman.save_as(&self.vault_path)
                         .context("Failed to save new secrets vault")?;
-                    securestore::SecretsManager::load(&self.vault_path, KeySource::Password(pw))
+                    securestore::SecretsManager::load(
+                        &self.vault_path,
+                        KeySource::Password(pw.expose_secret()),
+                    )
                         .context("Failed to reload newly-created secrets vault")?
                 } else {
                     // Key-file-based vault.
@@ -72,6 +80,8 @@ impl SecretsManager {
     /// back all the secrets, and saves.  On success the in-memory state
     /// is updated to use the new password.
     pub fn change_password(&mut self, new_password: String) -> Result<()> {
+        let new_password = SecretString::new(new_password);
+
         // 1. Make sure the vault is loaded with the *current* credentials.
         let old_vault = self.ensure_vault()?;
 
@@ -90,20 +100,23 @@ impl SecretsManager {
         self.vault = None;
 
         let new_vault =
-            securestore::SecretsManager::new(KeySource::Password(&new_password))
+            securestore::SecretsManager::new(KeySource::Password(new_password.expose_secret()))
                 .context("Failed to create vault with new password")?;
         new_vault
             .save_as(&self.vault_path)
             .context("Failed to save re-encrypted vault")?;
 
         // 4. Reload so we can write to it.
-        let mut reloaded =
-            securestore::SecretsManager::load(&self.vault_path, KeySource::Password(&new_password))
-                .context("Failed to reload vault with new password")?;
+        let mut reloaded = securestore::SecretsManager::load(
+            &self.vault_path,
+            KeySource::Password(new_password.expose_secret()),
+        )
+        .context("Failed to reload vault with new password")?;
 
         // 5. Write all secrets back.
-        for (key, value) in entries {
-            reloaded.set(&key, value);
+        for (key, mut value) in entries {
+            reloaded.set(&key, value.clone());
+            value.zeroize();
         }
         reloaded.save().context("Failed to save re-keyed vault")?;
 

@@ -5,7 +5,7 @@ use futures_util::{SinkExt, StreamExt};
 use rustyclaw::app::App;
 use rustyclaw::args::CommonArgs;
 use rustyclaw::commands::{handle_command, CommandAction, CommandContext};
-use rustyclaw::config::Config;
+use rustyclaw::config::{Config, ConfigDiagnosticSeverity, ConfigValidationReport};
 #[cfg(feature = "tui")]
 use rustyclaw::onboard::run_onboard_wizard;
 use rustyclaw::providers;
@@ -261,6 +261,12 @@ enum ConfigCommands {
         #[arg(value_name = "PATH")]
         path: String,
     },
+    /// Validate config file and report errors/warnings
+    Validate {
+        /// Emit JSON diagnostics
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 // ── Doctor ──────────────────────────────────────────────────────────────────
@@ -407,7 +413,18 @@ async fn main() -> Result<()> {
     rustyclaw::theme::init_color(cli.common.no_color);
 
     let config_path = cli.common.config_path();
-    let mut config = Config::load(config_path)?;
+
+    // Run config validation before loading, so malformed config can still be diagnosed.
+    if let Some(Commands::Config(ConfigCommands::Validate { json })) = &cli.command {
+        let report = Config::validate_file(config_path.clone())?;
+        print_config_validation_report(&report, *json)?;
+        if report.has_errors() {
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
+
+    let mut config = Config::load(config_path.clone())?;
     cli.common.apply_overrides(&mut config);
 
     match cli.command.unwrap_or(Commands::Tui(TuiArgs::default())) {
@@ -505,6 +522,13 @@ async fn main() -> Result<()> {
                     println!("{}", rustyclaw::theme::icon_ok(
                         &format!("Unset {}", rustyclaw::theme::accent_bright(&path))
                     ));
+                }
+                ConfigCommands::Validate { json } => {
+                    let report = Config::validate_file(config_path.clone())?;
+                    print_config_validation_report(&report, json)?;
+                    if report.has_errors() {
+                        std::process::exit(2);
+                    }
                 }
             }
         }
@@ -1095,6 +1119,42 @@ fn config_unset(config: &mut Config, path: &str) -> Result<()> {
         "model" | "model.provider" | "model.model" => config.model = None,
         _ => anyhow::bail!("Unknown config path: {}", path),
     }
+    Ok(())
+}
+
+fn print_config_validation_report(report: &ConfigValidationReport, json: bool) -> Result<()> {
+    if json {
+        let out = serde_json::to_string_pretty(report)?;
+        println!("{}", out);
+        return Ok(());
+    }
+
+    use rustyclaw::theme as t;
+    println!("{}", t::heading("Config validation"));
+    if report.diagnostics.is_empty() {
+        println!("  {}", t::icon_ok("No diagnostics found."));
+        return Ok(());
+    }
+
+    for diag in &report.diagnostics {
+        let (label, msg) = match diag.severity {
+            ConfigDiagnosticSeverity::Error => ("error", t::icon_fail(&diag.message)),
+            ConfigDiagnosticSeverity::Warning => ("warn", t::icon_warn(&diag.message)),
+            ConfigDiagnosticSeverity::Info => ("info", t::icon_ok(&diag.message)),
+        };
+        println!("  [{}] {} ({})", label, msg, diag.path);
+        if let Some(s) = &diag.suggestion {
+            println!("      {}", t::muted(s));
+        }
+    }
+
+    println!();
+    println!(
+        "  {} errors, {} warnings",
+        report.error_count(),
+        report.warning_count()
+    );
+
     Ok(())
 }
 

@@ -21,6 +21,7 @@ mod types;
 mod vault;
 
 use std::path::PathBuf;
+use crate::secret::{ExposeSecret, SecretString};
 
 pub use types::{
     AccessContext, AccessPolicy, BrowserStore, Cookie, CredentialValue, Secret, SecretEntry,
@@ -34,7 +35,7 @@ pub struct SecretsManager {
     /// Path to the key file (only used when no password is set)
     pub(crate) key_path: PathBuf,
     /// Optional user-supplied password (used instead of the key file)
-    pub(crate) password: Option<String>,
+    pub(crate) password: Option<SecretString>,
     /// In-memory vault handle (loaded lazily)
     pub(crate) vault: Option<securestore::SecretsManager>,
     /// Whether the agent can access secrets without prompting
@@ -64,7 +65,7 @@ impl SecretsManager {
         Self {
             vault_path: dir.join("secrets.json"),
             key_path: dir.join("secrets.key"),
-            password: Some(password),
+            password: Some(SecretString::new(password)),
             vault: None,
             agent_access_enabled: false,
         }
@@ -76,7 +77,7 @@ impl SecretsManager {
     /// If the vault already exists on disk with a different key source, you
     /// must call [`change_password`](Self::change_password) instead.
     pub fn set_password(&mut self, password: String) {
-        self.password = Some(password);
+        self.password = Some(SecretString::new(password));
         // Invalidate any previously loaded vault so it reloads with the
         // new key source.
         self.vault = None;
@@ -123,7 +124,9 @@ impl SecretsManager {
     /// Used by the TUI to forward the vault password to the gateway
     /// daemon so it can open the vault without prompting.
     pub fn password(&self) -> Option<&str> {
-        self.password.as_deref()
+        self.password
+            .as_ref()
+            .map(|pw| pw.expose_secret())
     }
 
     // ── Access control ──────────────────────────────────────────────

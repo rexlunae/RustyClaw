@@ -1,5 +1,6 @@
 use crate::config::Config;
 use crate::providers;
+use crate::secret::{ExposeSecret, SecretString};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
@@ -143,7 +144,7 @@ impl ChatMessage {
 ///
 /// All fields except `messages` and `type` are optional — the gateway fills
 /// missing values from its own [`ModelContext`] (resolved at startup).
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 pub struct ChatRequest {
     /// Must be `"chat"`.
     #[serde(rename = "type")]
@@ -164,6 +165,19 @@ pub struct ChatRequest {
     pub api_key: Option<String>,
 }
 
+impl std::fmt::Debug for ChatRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ChatRequest")
+            .field("msg_type", &self.msg_type)
+            .field("messages", &self.messages)
+            .field("model", &self.model)
+            .field("provider", &self.provider)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
 /// Fully-resolved request ready for dispatch to a model provider.
 ///
 /// Created by merging an incoming [`ChatRequest`] with the gateway's
@@ -173,7 +187,7 @@ pub struct ProviderRequest {
     pub model: String,
     pub provider: String,
     pub base_url: String,
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
 }
 
 // ── Model context (resolved once at startup) ────────────────────────────────
@@ -184,12 +198,23 @@ pub struct ProviderRequest {
 /// the API key from the secrets vault, and holds everything in this struct
 /// so per-connection handlers can call the provider without the client
 /// needing to send credentials.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ModelContext {
     pub provider: String,
     pub model: String,
     pub base_url: String,
-    pub api_key: Option<String>,
+    pub api_key: Option<SecretString>,
+}
+
+impl std::fmt::Debug for ModelContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModelContext")
+            .field("provider", &self.provider)
+            .field("model", &self.model)
+            .field("base_url", &self.base_url)
+            .field("api_key", &self.api_key.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
 }
 
 impl ModelContext {
@@ -212,9 +237,9 @@ impl ModelContext {
                 .to_string()
         });
 
-        let api_key = providers::secret_key_for_provider(&provider).and_then(|key_name| {
-            secrets.get_secret(key_name, true).ok().flatten()
-        });
+        let api_key = providers::secret_key_for_provider(&provider)
+            .and_then(|key_name| secrets.get_secret(key_name, true).ok().flatten())
+            .map(SecretString::new);
 
         if api_key.is_none() && providers::secret_key_for_provider(&provider).is_some() {
             eprintln!(
@@ -261,7 +286,7 @@ impl ModelContext {
             provider,
             model,
             base_url,
-            api_key,
+            api_key: api_key.map(SecretString::new),
         })
     }
 }
@@ -279,12 +304,12 @@ impl ModelContext {
 /// In that case, it will use the session token until it expires, then fail.
 pub struct CopilotSession {
     /// OAuth token for refreshing (None if using imported session only)
-    oauth_token: Option<String>,
+    oauth_token: Option<SecretString>,
     inner: tokio::sync::Mutex<Option<CopilotSessionEntry>>,
 }
 
 struct CopilotSessionEntry {
-    token: String,
+    token: SecretString,
     expires_at: i64,
 }
 
@@ -292,7 +317,7 @@ impl CopilotSession {
     /// Create a new session manager wrapping the given OAuth token.
     pub fn new(oauth_token: String) -> Self {
         Self {
-            oauth_token: Some(oauth_token),
+            oauth_token: Some(SecretString::new(oauth_token)),
             inner: tokio::sync::Mutex::new(None),
         }
     }
@@ -302,7 +327,7 @@ impl CopilotSession {
         Self {
             oauth_token: None,
             inner: tokio::sync::Mutex::new(Some(CopilotSessionEntry {
-                token: session_token,
+                token: SecretString::new(session_token),
                 expires_at,
             })),
         }
@@ -323,7 +348,7 @@ impl CopilotSession {
         // Return cached token if still valid (with 60 s safety margin).
         if let Some(ref entry) = *guard {
             if now < entry.expires_at - 60 {
-                return Ok(entry.token.clone());
+                return Ok(entry.token.expose_secret().to_string());
             }
         }
 
@@ -338,16 +363,49 @@ impl CopilotSession {
         };
 
         // Exchange the OAuth token for a fresh session token.
-        let session = providers::exchange_copilot_session(http, oauth_token)
+        let session = providers::exchange_copilot_session(http, oauth_token.expose_secret())
             .await
             .map_err(|e| anyhow::anyhow!(e))?;
 
-        let token = session.token.clone();
+        let token = SecretString::new(session.token);
         *guard = Some(CopilotSessionEntry {
-            token: session.token,
+            token: token.clone(),
             expires_at: session.expires_at,
         });
-        Ok(token)
+        Ok(token.expose_secret().to_string())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn model_context_debug_redacts_api_key() {
+        let ctx = ModelContext {
+            provider: "openai".to_string(),
+            model: "gpt-4".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            api_key: Some(SecretString::new("sk-test-secret".to_string())),
+        };
+        let dbg = format!("{:?}", ctx);
+        assert!(!dbg.contains("sk-test-secret"));
+        assert!(dbg.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn chat_request_debug_redacts_api_key() {
+        let req = ChatRequest {
+            msg_type: "chat".to_string(),
+            messages: vec![ChatMessage::text("user", "hi")],
+            model: Some("gpt-4".to_string()),
+            provider: Some("openai".to_string()),
+            base_url: Some("https://api.openai.com/v1".to_string()),
+            api_key: Some("sk-inline-secret".to_string()),
+        };
+        let dbg = format!("{:?}", req);
+        assert!(!dbg.contains("sk-inline-secret"));
+        assert!(dbg.contains("[REDACTED]"));
     }
 }
 

@@ -83,6 +83,7 @@ pub use health::{HealthStats, SharedHealthStats};
 use crate::config::Config;
 use crate::hooks::HookAction;
 use crate::providers as crate_providers;
+use crate::secret::{ExposeSecret, SecretString};
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
 use crate::tools;
@@ -309,7 +310,9 @@ pub async fn run_gateway(
             // Fall back to OAuth token
             if let Some(oauth) = model_ctx.as_ref().and_then(|ctx| ctx.api_key.clone()) {
                 eprintln!("  → Falling back to OAuth token");
-                Some(Arc::new(CopilotSession::new(oauth)))
+                Some(Arc::new(CopilotSession::new(
+                    oauth.expose_secret().to_string(),
+                )))
             } else {
                 eprintln!("  ✗ No OAuth token available either");
                 None
@@ -917,7 +920,7 @@ async fn handle_connection(
                     let mut v = vault.lock().await;
                     if let Ok(Some(key)) = v.get_secret(key_name, true) {
                         let mut updated = (**ctx).clone();
-                        updated.api_key = Some(key);
+                        updated.api_key = Some(SecretString::new(key));
                         std::sync::Arc::new(updated)
                     } else {
                         ctx.clone()
@@ -1602,7 +1605,7 @@ async fn dispatch_text_message(
         if let Some(key_name) = crate::providers::secret_key_for_provider(&resolved.provider) {
             let mut v = vault.lock().await;
             if let Ok(Some(key)) = v.get_secret(key_name, true) {
-                resolved.api_key = Some(key);
+                resolved.api_key = Some(SecretString::new(key));
             }
         }
     }
@@ -1644,12 +1647,12 @@ async fn dispatch_text_message(
         match auth::resolve_bearer_token(
             http,
             &resolved.provider,
-            original_api_key.as_deref(),
+            original_api_key.as_ref().map(|v| v.expose_secret()),
             copilot_session,
         )
         .await
         {
-            Ok(token) => resolved.api_key = token,
+            Ok(token) => resolved.api_key = token.map(SecretString::new),
             Err(err) => {
                 let frame = json!({
                     "type": "error",

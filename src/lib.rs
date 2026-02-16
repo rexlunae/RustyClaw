@@ -24,6 +24,7 @@ pub mod panes;
 pub mod process_manager;
 pub mod providers;
 pub mod sandbox;
+pub mod secret;
 pub mod secrets;
 pub mod security;
 pub mod sessions;

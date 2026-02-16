@@ -3,6 +3,7 @@ use futures_util::SinkExt;
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::secret::{ExposeSecret, SecretString};
 use super::types::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProviderRequest,
     ProbeResult, ToolCallResult,
@@ -169,6 +170,7 @@ pub fn resolve_request(
         .ok_or_else(|| "No base_url specified and gateway has no model configured".to_string())?;
     let api_key = req
         .api_key
+        .map(SecretString::new)
         .or_else(|| ctx.and_then(|c| c.api_key.clone()));
 
     Ok(ProviderRequest {
@@ -477,7 +479,7 @@ pub async fn validate_model_connection(
     let effective_key = match super::auth::resolve_bearer_token(
         http,
         &ctx.provider,
-        ctx.api_key.as_deref(),
+        ctx.api_key.as_ref().map(|v| v.expose_secret()),
         copilot_session,
     )
     .await
@@ -499,13 +501,23 @@ pub async fn validate_model_connection(
             "messages": [{"role": "user", "content": "Hi"}],
         });
         let builder = http.post(&url)
-            .header("x-api-key", ctx.api_key.as_deref().unwrap_or(""))
+            .header(
+                "x-api-key",
+                ctx.api_key
+                    .as_ref()
+                    .map(|v| v.expose_secret())
+                    .unwrap_or(""),
+            )
             .header("anthropic-version", "2023-06-01")
             .json(&body);
         send_with_retry(builder).await
     } else if ctx.provider == "google" {
         // Google: check the model metadata endpoint (no chat needed).
-        let key = ctx.api_key.as_deref().unwrap_or("");
+        let key = ctx
+            .api_key
+            .as_ref()
+            .map(|v| v.expose_secret())
+            .unwrap_or("");
         let url = format!(
             "{}/models/{}?key={}",
             ctx.base_url.trim_end_matches('/'),
@@ -923,7 +935,7 @@ pub async fn call_openai_with_tools(
 
     let mut builder = http.post(&url).json(&body);
     if let Some(ref key) = req.api_key {
-        builder = builder.bearer_auth(key);
+        builder = builder.bearer_auth(key.expose_secret());
     }
     builder = apply_copilot_headers(builder, &req.provider, &req.messages);
 
@@ -1079,7 +1091,11 @@ pub async fn call_anthropic_with_tools(
         let _ = w.send(Message::Text(waiting_frame.to_string().into())).await;
     }
 
-    let api_key = req.api_key.as_deref().unwrap_or("");
+    let api_key = req
+        .api_key
+        .as_ref()
+        .map(|v| v.expose_secret())
+        .unwrap_or("");
     let builder = http
         .post(&url)
         .header("x-api-key", api_key)
@@ -1321,7 +1337,11 @@ pub async fn call_google_with_tools(
     http: &reqwest::Client,
     req: &ProviderRequest,
 ) -> Result<ModelResponse> {
-    let api_key = req.api_key.as_deref().unwrap_or("");
+    let api_key = req
+        .api_key
+        .as_ref()
+        .map(|v| v.expose_secret())
+        .unwrap_or("");
     let url = format!(
         "{}/models/{}:generateContent?key={}",
         req.base_url.trim_end_matches('/'),

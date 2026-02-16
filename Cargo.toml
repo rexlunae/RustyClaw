@@ -63,6 +63,7 @@ thiserror = "2.0"
 
 # Secrets management (encrypted on-disk vault)
 securestore = "0.100.0"
+zeroize = "1.7"
 
 # OpenSSL with vendored feature for cross-compilation (used by securestore + reqwest native-tls)
 openssl-sys = { version = "0.9", features = ["vendored"] }

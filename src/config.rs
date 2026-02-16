@@ -544,6 +544,68 @@ pub struct MessengerConfig {
     pub allowed_users: Vec<String>,
 }
 
+/// Validation severity for configuration diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ConfigDiagnosticSeverity {
+    Error,
+    Warning,
+    Info,
+}
+
+/// Single config validation diagnostic.
+#[derive(Debug, Clone, Serialize)]
+pub struct ConfigDiagnostic {
+    pub severity: ConfigDiagnosticSeverity,
+    pub path: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggestion: Option<String>,
+}
+
+/// Validation report for a config file.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ConfigValidationReport {
+    pub diagnostics: Vec<ConfigDiagnostic>,
+}
+
+impl ConfigValidationReport {
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics
+            .iter()
+            .any(|d| d.severity == ConfigDiagnosticSeverity::Error)
+    }
+
+    pub fn error_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == ConfigDiagnosticSeverity::Error)
+            .count()
+    }
+
+    pub fn warning_count(&self) -> usize {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.severity == ConfigDiagnosticSeverity::Warning)
+            .count()
+    }
+
+    fn push(
+        &mut self,
+        severity: ConfigDiagnosticSeverity,
+        path: impl Into<String>,
+        message: impl Into<String>,
+        suggestion: Option<String>,
+    ) {
+        self.diagnostics.push(ConfigDiagnostic {
+            severity,
+            path: path.into(),
+            message: message.into(),
+            suggestion,
+        });
+    }
+}
+
 fn default_true() -> bool {
     true
 }
@@ -702,6 +764,449 @@ impl Config {
         Ok(())
     }
 
+    /// Validate configuration file syntax, unknown fields, and common safety settings.
+    ///
+    /// Returns a report containing errors/warnings. This does not mutate config.
+    pub fn validate_file(path: Option<PathBuf>) -> Result<ConfigValidationReport> {
+        let mut report = ConfigValidationReport::default();
+        let config_path = if let Some(p) = path {
+            p
+        } else {
+            let home_dir = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+            home_dir.join(".rustyclaw").join("config.toml")
+        };
+
+        if !config_path.exists() {
+            report.push(
+                ConfigDiagnosticSeverity::Error,
+                "config",
+                format!("Config file not found: {}", config_path.display()),
+                Some("Run `rustyclaw setup` to generate a default config.".to_string()),
+            );
+            return Ok(report);
+        }
+
+        let content = std::fs::read_to_string(&config_path)?;
+        let root_value: toml::Value = match toml::from_str(&content) {
+            Ok(v) => v,
+            Err(e) => {
+                report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "syntax",
+                    format!("Invalid TOML syntax: {}", e),
+                    None,
+                );
+                return Ok(report);
+            }
+        };
+
+        if let Err(e) = toml::from_str::<Config>(&content) {
+            report.push(
+                ConfigDiagnosticSeverity::Error,
+                "schema",
+                format!("Config schema/type validation failed: {}", e),
+                None,
+            );
+        }
+
+        let Some(root) = root_value.as_table() else {
+            report.push(
+                ConfigDiagnosticSeverity::Error,
+                "root",
+                "Config root must be a TOML table.".to_string(),
+                None,
+            );
+            return Ok(report);
+        };
+
+        // Top-level keys
+        let root_allowed = [
+            "settings_dir",
+            "soul_path",
+            "skills_dir",
+            "workspace_dir",
+            "credentials_dir",
+            "messengers",
+            "use_secrets",
+            "gateway_url",
+            "model",
+            "secrets_password_protected",
+            "totp_enabled",
+            "agent_access",
+            "agent_name",
+            "message_spacing",
+            "tab_width",
+            "sandbox",
+            "ssrf",
+            "prompt_guard",
+            "tls",
+            "metrics",
+            "health",
+            "voice",
+            "hooks",
+            "webauthn",
+            "pairing",
+            "clawhub_url",
+            "clawhub_token",
+            "system_prompt",
+            "messenger_poll_interval_ms",
+        ];
+        validate_unknown_table_keys("", root, &root_allowed, &mut report);
+
+        // Nested [model]
+        if let Some(model_val) = root.get("model") {
+            match model_val.as_table() {
+                Some(model) => {
+                    let allowed = ["provider", "model", "base_url"];
+                    validate_unknown_table_keys("model", model, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "model",
+                    "Expected [model] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [sandbox]
+        if let Some(v) = root.get("sandbox") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["mode", "deny_paths", "allow_paths"];
+                    validate_unknown_table_keys("sandbox", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "sandbox",
+                    "Expected [sandbox] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [ssrf]
+        if let Some(v) = root.get("ssrf") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "blocked_cidrs", "allow_private_ips"];
+                    validate_unknown_table_keys("ssrf", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "ssrf",
+                    "Expected [ssrf] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [prompt_guard]
+        if let Some(v) = root.get("prompt_guard") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "action", "sensitivity"];
+                    validate_unknown_table_keys("prompt_guard", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "prompt_guard",
+                    "Expected [prompt_guard] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [tls]
+        if let Some(v) = root.get("tls") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "cert_path", "key_path", "self_signed"];
+                    validate_unknown_table_keys("tls", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "tls",
+                    "Expected [tls] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [metrics]
+        if let Some(v) = root.get("metrics") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "listen"];
+                    validate_unknown_table_keys("metrics", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "metrics",
+                    "Expected [metrics] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [health]
+        if let Some(v) = root.get("health") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "listen"];
+                    validate_unknown_table_keys("health", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "health",
+                    "Expected [health] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [voice]
+        if let Some(v) = root.get("voice") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = [
+                        "enabled",
+                        "stt_provider",
+                        "tts_provider",
+                        "wake_word_enabled",
+                        "wake_word",
+                        "input_device",
+                        "output_device",
+                        "sample_rate",
+                    ];
+                    validate_unknown_table_keys("voice", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "voice",
+                    "Expected [voice] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [hooks]
+        if let Some(v) = root.get("hooks") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "metrics_hook", "audit_log_hook", "audit_log_path"];
+                    validate_unknown_table_keys("hooks", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "hooks",
+                    "Expected [hooks] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [webauthn]
+        if let Some(v) = root.get("webauthn") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "rp_id", "rp_origin"];
+                    validate_unknown_table_keys("webauthn", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "webauthn",
+                    "Expected [webauthn] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [pairing]
+        if let Some(v) = root.get("pairing") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "require_code", "code_expiry_secs"];
+                    validate_unknown_table_keys("pairing", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "pairing",
+                    "Expected [pairing] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // [[messengers]]
+        if let Some(v) = root.get("messengers") {
+            match v.as_array() {
+                Some(arr) => {
+                    let allowed = [
+                        "name",
+                        "messenger_type",
+                        "enabled",
+                        "config_path",
+                        "token",
+                        "webhook_url",
+                        "base_url",
+                        "api_version",
+                        "channel_id",
+                        "team_id",
+                        "phone_number_id",
+                        "space",
+                        "from",
+                        "homeserver",
+                        "user_id",
+                        "password",
+                        "access_token",
+                        "phone",
+                        "server",
+                        "port",
+                        "nickname",
+                        "username",
+                        "realname",
+                        "default_recipient",
+                        "client_id",
+                        "client_secret",
+                        "refresh_token",
+                        "gmail_user",
+                        "gmail_label",
+                        "gmail_poll_interval",
+                        "gmail_unread_only",
+                        "allowed_chats",
+                        "allowed_users",
+                    ];
+
+                    for (idx, entry) in arr.iter().enumerate() {
+                        match entry.as_table() {
+                            Some(tbl) => {
+                                let prefix = format!("messengers[{}]", idx);
+                                validate_unknown_table_keys(&prefix, tbl, &allowed, &mut report);
+                            }
+                            None => report.push(
+                                ConfigDiagnosticSeverity::Error,
+                                format!("messengers[{}]", idx),
+                                "Each messenger entry must be a table.".to_string(),
+                                None,
+                            ),
+                        }
+                    }
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "messengers",
+                    "Expected `messengers` to be an array of tables ([[messengers]])."
+                        .to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Security-oriented warnings. Prefer typed config when available, but
+        // still validate partial files by falling back to raw TOML values.
+        let parsed = toml::from_str::<Config>(&content).ok();
+        let ssrf_enabled = parsed
+            .as_ref()
+            .map(|c| c.ssrf.enabled)
+            .unwrap_or_else(|| table_bool(root, "ssrf", "enabled").unwrap_or(true));
+        if !ssrf_enabled {
+            report.push(
+                ConfigDiagnosticSeverity::Warning,
+                "ssrf.enabled",
+                "SSRF protection is disabled.".to_string(),
+                Some("Set [ssrf].enabled = true for safer defaults.".to_string()),
+            );
+        }
+
+        let prompt_guard_enabled = parsed
+            .as_ref()
+            .map(|c| c.prompt_guard.enabled)
+            .unwrap_or_else(|| table_bool(root, "prompt_guard", "enabled").unwrap_or(true));
+        if !prompt_guard_enabled {
+            report.push(
+                ConfigDiagnosticSeverity::Warning,
+                "prompt_guard.enabled",
+                "Prompt injection defense is disabled.".to_string(),
+                Some("Set [prompt_guard].enabled = true.".to_string()),
+            );
+        }
+
+        let tls_enabled = parsed
+            .as_ref()
+            .map(|c| c.tls.enabled)
+            .unwrap_or_else(|| table_bool(root, "tls", "enabled").unwrap_or(false));
+        let gateway_url = parsed
+            .as_ref()
+            .and_then(|c| c.gateway_url.as_deref())
+            .or_else(|| root.get("gateway_url").and_then(|v| v.as_str()));
+        if !tls_enabled && gateway_url.is_some_and(|v| v.starts_with("ws://")) {
+            report.push(
+                ConfigDiagnosticSeverity::Warning,
+                "gateway_url",
+                "Gateway URL uses unencrypted ws:// while TLS is disabled.".to_string(),
+                Some("Use wss:// and enable [tls].enabled for remote deployments.".to_string()),
+            );
+        }
+
+        let metrics_enabled = parsed
+            .as_ref()
+            .map(|c| c.metrics.enabled)
+            .unwrap_or_else(|| table_bool(root, "metrics", "enabled").unwrap_or(false));
+        let metrics_listen = parsed
+            .as_ref()
+            .map(|c| c.metrics.listen.clone())
+            .or_else(|| table_string(root, "metrics", "listen").map(ToString::to_string))
+            .unwrap_or_else(MetricsConfig::default_listen);
+        if metrics_enabled && is_non_local_bind(&metrics_listen) {
+            report.push(
+                ConfigDiagnosticSeverity::Warning,
+                "metrics.listen",
+                format!(
+                    "Metrics endpoint is exposed on non-local address `{}`.",
+                    metrics_listen
+                ),
+                Some("Bind to 127.0.0.1 unless external scraping is required.".to_string()),
+            );
+        }
+
+        let health_enabled = parsed
+            .as_ref()
+            .map(|c| c.health.enabled)
+            .unwrap_or_else(|| table_bool(root, "health", "enabled").unwrap_or(false));
+        let health_listen = parsed
+            .as_ref()
+            .map(|c| c.health.listen.clone())
+            .or_else(|| table_string(root, "health", "listen").map(ToString::to_string))
+            .unwrap_or_else(HealthConfig::default_listen);
+        if health_enabled && is_non_local_bind(&health_listen) {
+            report.push(
+                ConfigDiagnosticSeverity::Warning,
+                "health.listen",
+                format!(
+                    "Health endpoint is exposed on non-local address `{}`.",
+                    health_listen
+                ),
+                Some("Bind to 127.0.0.1 unless external monitoring is required.".to_string()),
+            );
+        }
+
+        let use_secrets = parsed
+            .as_ref()
+            .map(|c| c.use_secrets)
+            .unwrap_or_else(|| root.get("use_secrets").and_then(|v| v.as_bool()).unwrap_or(true));
+        if !use_secrets {
+            report.push(
+                ConfigDiagnosticSeverity::Info,
+                "use_secrets",
+                "Secrets vault is disabled.".to_string(),
+                Some("Enable `use_secrets = true` to keep credentials encrypted.".to_string()),
+            );
+        }
+
+        Ok(report)
+    }
+
     // ── Legacy migration ────────────────────────────────────────────
 
     /// Detect the pre-restructure flat layout and move files into the
@@ -772,5 +1277,168 @@ impl Config {
 
         eprintln!("Migration complete.");
         Ok(())
+    }
+}
+
+fn validate_unknown_table_keys(
+    prefix: &str,
+    table: &toml::value::Table,
+    allowed: &[&str],
+    report: &mut ConfigValidationReport,
+) {
+    for key in table.keys() {
+        if allowed.contains(&key.as_str()) {
+            continue;
+        }
+        let path = if prefix.is_empty() {
+            key.to_string()
+        } else {
+            format!("{}.{}", prefix, key)
+        };
+        let suggestion = nearest_key(key, allowed)
+            .map(|candidate| format!("Did you mean `{}`?", candidate));
+        report.push(
+            ConfigDiagnosticSeverity::Error,
+            path,
+            format!("Unknown configuration field `{}`.", key),
+            suggestion,
+        );
+    }
+}
+
+fn nearest_key<'a>(key: &str, allowed: &'a [&str]) -> Option<&'a str> {
+    let mut best: Option<(&str, usize)> = None;
+    for candidate in allowed {
+        let dist = levenshtein(key, candidate);
+        match best {
+            None => best = Some((candidate, dist)),
+            Some((_, best_dist)) if dist < best_dist => best = Some((candidate, dist)),
+            _ => {}
+        }
+    }
+    let (candidate, dist) = best?;
+    if dist <= 3 {
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+fn levenshtein(a: &str, b: &str) -> usize {
+    if a == b {
+        return 0;
+    }
+    if a.is_empty() {
+        return b.chars().count();
+    }
+    if b.is_empty() {
+        return a.chars().count();
+    }
+
+    let a_chars: Vec<char> = a.chars().collect();
+    let b_chars: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b_chars.len()).collect();
+    let mut curr = vec![0; b_chars.len() + 1];
+
+    for (i, &ac) in a_chars.iter().enumerate() {
+        curr[0] = i + 1;
+        for (j, &bc) in b_chars.iter().enumerate() {
+            let cost = if ac == bc { 0 } else { 1 };
+            curr[j + 1] = (prev[j + 1] + 1).min(curr[j] + 1).min(prev[j] + cost);
+        }
+        std::mem::swap(&mut prev, &mut curr);
+    }
+
+    prev[b_chars.len()]
+}
+
+fn is_non_local_bind(bind: &str) -> bool {
+    !(bind.starts_with("127.0.0.1:")
+        || bind.starts_with("localhost:")
+        || bind.starts_with("[::1]:"))
+}
+
+fn table_bool(root: &toml::value::Table, section: &str, key: &str) -> Option<bool> {
+    root.get(section)
+        .and_then(|v| v.as_table())
+        .and_then(|tbl| tbl.get(key))
+        .and_then(|v| v.as_bool())
+}
+
+fn table_string<'a>(root: &'a toml::value::Table, section: &str, key: &str) -> Option<&'a str> {
+    root.get(section)
+        .and_then(|v| v.as_table())
+        .and_then(|tbl| tbl.get(key))
+        .and_then(|v| v.as_str())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_unknown_root_field_with_suggestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+settings_dir = "/tmp/rustyclaw-test"
+gatewy_url = "ws://localhost:8080"
+"#,
+        )
+        .unwrap();
+
+        let report = Config::validate_file(Some(path)).unwrap();
+        assert!(report.has_errors());
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.path == "gatewy_url" && d.suggestion.as_deref() == Some("Did you mean `gateway_url`?")));
+    }
+
+    #[test]
+    fn test_validate_unknown_messenger_field_with_suggestion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+settings_dir = "/tmp/rustyclaw-test"
+[[messengers]]
+name = "tg"
+messenger_type = "telegram"
+tokn = "abc123"
+"#,
+        )
+        .unwrap();
+
+        let report = Config::validate_file(Some(path)).unwrap();
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.path == "messengers[0].tokn" && d.suggestion.as_deref() == Some("Did you mean `token`?")));
+    }
+
+    #[test]
+    fn test_validate_security_warning_for_disabled_ssrf() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(
+            &path,
+            r#"
+settings_dir = "/tmp/rustyclaw-test"
+[ssrf]
+enabled = false
+"#,
+        )
+        .unwrap();
+
+        let report = Config::validate_file(Some(path)).unwrap();
+        assert!(report.warning_count() >= 1);
+        assert!(report
+            .diagnostics
+            .iter()
+            .any(|d| d.path == "ssrf.enabled" && d.severity == ConfigDiagnosticSeverity::Warning));
     }
 }

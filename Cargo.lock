@@ -4868,6 +4868,7 @@ dependencies = [
  "webauthn-rs",
  "webauthn-rs-proto",
  "which",
+ "zeroize",
  "zip",
 ]
 

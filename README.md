@@ -301,11 +301,11 @@ Contributions welcome! We have a comprehensive prioritized roadmap based on ecos
 - 📖 **[Contributing Guide](docs/CONTRIBUTING.md)** — Development guidelines and PR process
 
 **P0 Quick Wins (Start Here):**
-- #86 — Secure credential memory with zeroize/secrecy (1 week)
 - #81 — Retry/backoff engine with exponential backoff (1-2 weeks)
 - #52 — Unified Safety Layer consolidation (1-2 weeks)
 - #70 — CSRF protection for gateway endpoints (1 week)
-- #83 — Config validation with suggestions (1-2 weeks)
+
+**Recently completed**: #83 (config validation), #84 (personality files), #85 (DuckDuckGo fallback), #86 (secure credential memory)
 
 **P1 High Value:**
 - #76 — Structured memory with auto-reflector (2-3 weeks)

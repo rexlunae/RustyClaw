@@ -141,7 +141,7 @@ pub struct SecretEntry {
 
 /// The result of reading a credential — includes the metadata envelope
 /// plus the decrypted value(s).
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum CredentialValue {
     /// A single opaque string (ApiKey, Token, HttpPasskey, Other).
     Single(String),
@@ -161,6 +161,36 @@ pub enum CredentialValue {
         /// Optional billing-address / notes fields.
         extra: BTreeMap<String, String>,
     },
+}
+
+impl std::fmt::Debug for CredentialValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Single(_) => f.write_str("Single([REDACTED])"),
+            Self::UserPass { .. } => f
+                .debug_struct("UserPass")
+                .field("username", &"[REDACTED]")
+                .field("password", &"[REDACTED]")
+                .finish(),
+            Self::SshKeyPair { .. } => f
+                .debug_struct("SshKeyPair")
+                .field("private_key", &"[REDACTED]")
+                .field("public_key", &"[REDACTED]")
+                .finish(),
+            Self::FormFields(fields) => f
+                .debug_tuple("FormFields")
+                .field(&format!("[REDACTED: {} field(s)]", fields.len()))
+                .finish(),
+            Self::PaymentCard { extra, .. } => f
+                .debug_struct("PaymentCard")
+                .field("cardholder", &"[REDACTED]")
+                .field("number", &"[REDACTED]")
+                .field("expiry", &"[REDACTED]")
+                .field("cvv", &"[REDACTED]")
+                .field("extra", &format!("[REDACTED: {} field(s)]", extra.len()))
+                .finish(),
+        }
+    }
 }
 
 /// Context supplied by the caller when requesting access to a
@@ -475,5 +505,22 @@ impl BrowserStore {
     /// List all origins that have storage.
     pub fn storage_origins(&self) -> Vec<&String> {
         self.storage.keys().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn credential_value_debug_is_redacted() {
+        let value = CredentialValue::UserPass {
+            username: "alice".to_string(),
+            password: "super-secret".to_string(),
+        };
+        let dbg = format!("{:?}", value);
+        assert!(!dbg.contains("alice"));
+        assert!(!dbg.contains("super-secret"));
+        assert!(dbg.contains("[REDACTED]"));
     }
 }
