@@ -121,6 +121,9 @@ matrix-sdk = { version = "0.10", default-features = false, features = ["e2e-encr
 
 # Browser automation (optional)
 chromiumoxide = { version = "0.8", default-features = false, features = ["tokio-runtime"], optional = true }
+colored = "3.1"
+indicatif = "0.18"
+unicode-width = "0.2"
 
 # Unix process management
 [target.'cfg(unix)'.dependencies]
