@@ -115,7 +115,8 @@ rustyclaw tui
 - 🛡️ **Defense-in-Depth Sandboxing** — Combined Landlock+Bubblewrap mode for kernel-enforced + namespace isolation
 - 🐳 **Docker Container Support** — Cross-platform sandboxing with Alpine Linux, resource limits, and credential injection
 - 🎯 **Prioritized Development Roadmap** — Complexity-based prioritization of 44 features with ecosystem analysis
-- 🏆 **94 Feature Issues Created** — Comprehensive [issue tracker](https://github.com/aecs4u/RustyClaw/issues) with prior art and acceptance criteria
+- 🏆 **102 Feature Issues Created** — Comprehensive [issue tracker](https://github.com/aecs4u/RustyClaw/issues) with prior art and acceptance criteria
+- 📨 **DORA Metrics Tracking** — First project in ecosystem with DevOps performance metrics (Deployment Frequency, Lead Time, CFR, MTTR)
 - 📊 **Ecosystem Analysis** — Deep dive into 7 projects (OpenClaw, AutoGPT, PicoClaw, Moltis, MicroClaw, Carapace, IronClaw)
 - 💬 **Messenger Integrations** — Slack, Discord, Telegram, Matrix support with dedicated branches
 
@@ -296,7 +297,7 @@ Contributions welcome! We have a comprehensive prioritized roadmap based on ecos
 - ⚡ **[Quick Reference](ROADMAP_SUMMARY.md)** — Priority tiers and effort estimates
 - 📊 **[Prioritization Matrix](PRIORITIZATION_MATRIX.md)** — Complexity scoring and risk assessment
 - 🏃 **[Sprint Plan](SPRINT_PLAN.md)** — 16-week actionable implementation plan
-- 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — 94 tracked issues
+- 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — 102 tracked issues
 - 📖 **[Contributing Guide](docs/CONTRIBUTING.md)** — Development guidelines and PR process
 
 **P0 Quick Wins (Start Here):**
