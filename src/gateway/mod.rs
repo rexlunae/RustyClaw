@@ -6,6 +6,7 @@
 //! for incoming messages and routes them through the model.
 
 mod auth;
+mod health;
 mod helpers;
 mod messenger_handler;
 mod providers;
@@ -75,6 +76,9 @@ pub use types::{
 pub use messenger_handler::{
     create_messenger_manager, run_messenger_loop, SharedMessengerManager, SharedPairingManager,
 };
+
+// Re-export health types
+pub use health::{HealthStats, SharedHealthStats};
 
 use crate::config::Config;
 use crate::providers as crate_providers;
@@ -377,6 +381,21 @@ pub async fn run_gateway(
         None
     };
 
+    // Initialize health stats for tracking gateway status
+    let health_stats = Arc::new(health::HealthStats::new());
+
+    // Start health check server if enabled
+    if config.health.enabled {
+        let health_addr = config.health.listen.clone();
+        let health_stats_clone = health_stats.clone();
+        let health_cancel = cancel.clone();
+        tokio::spawn(async move {
+            if let Err(e) = health::start_health_server(&health_addr, health_stats_clone, health_cancel).await {
+                eprintln!("[health] Health check server error: {}", e);
+            }
+        });
+    }
+
     // Start Prometheus metrics server if enabled
     if config.metrics.enabled {
         let metrics_addr: SocketAddr = config
@@ -538,6 +557,11 @@ pub async fn run_gateway(
                 let child_cancel = cancel.child_token();
                 let tls_acceptor_clone = tls_acceptor.clone();
                 let hooks_clone = hook_registry.clone();
+                let stats_clone = health_stats.clone();
+
+                // Update connection stats
+                stats_clone.total_connections.fetch_add(1, Ordering::Relaxed);
+                stats_clone.active_connections.fetch_add(1, Ordering::Relaxed);
 
                 tokio::spawn(async move {
                     // Perform TLS handshake if TLS is enabled
@@ -556,10 +580,13 @@ pub async fn run_gateway(
                     if let Err(err) = handle_connection(
                         stream, peer, shared_cfg, shared_ctx,
                         session_clone, vault_clone, skill_clone,
-                        limiter_clone, hooks_clone, child_cancel,
+                        limiter_clone, hooks_clone, stats_clone.clone(), child_cancel,
                     ).await {
                         eprintln!("Gateway connection error from {}: {}", peer, err);
                     }
+
+                    // Decrement active connections when connection ends
+                    stats_clone.active_connections.fetch_sub(1, Ordering::Relaxed);
                 });
             }
         }
@@ -578,6 +605,7 @@ async fn handle_connection(
     skill_mgr: SharedSkillManager,
     rate_limiter: auth::RateLimiter,
     hook_registry: Arc<crate::hooks::HookRegistry>,
+    health_stats: SharedHealthStats,
     cancel: CancellationToken,
 ) -> Result<()> {
     let ws_stream = tokio_tungstenite::accept_async(stream)
@@ -950,6 +978,9 @@ async fn handle_connection(
                     Message::Text(text) => {
                         // Reset cancel flag for new request
                         tool_cancel.store(false, Ordering::Relaxed);
+
+                        // Track message in health stats
+                        health_stats.total_messages.fetch_add(1, Ordering::Relaxed);
 
                         // ── Handle unlock_vault control message ─────
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {

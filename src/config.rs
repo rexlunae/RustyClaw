@@ -148,6 +148,32 @@ impl MetricsConfig {
     }
 }
 
+/// Health check endpoint configuration for remote monitoring.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthConfig {
+    /// Whether health check endpoint is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Address to bind health check server (default: 127.0.0.1:8080)
+    #[serde(default = "HealthConfig::default_listen")]
+    pub listen: String,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen: Self::default_listen(),
+        }
+    }
+}
+
+impl HealthConfig {
+    fn default_listen() -> String {
+        "127.0.0.1:8080".to_string()
+    }
+}
+
 /// Lifecycle hooks configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HooksConfig {
@@ -318,6 +344,9 @@ pub struct Config {
     /// Prometheus metrics configuration.
     #[serde(default)]
     pub metrics: MetricsConfig,
+    /// Health check endpoint configuration.
+    #[serde(default)]
+    pub health: HealthConfig,
     /// Lifecycle hooks configuration.
     #[serde(default)]
     pub hooks: HooksConfig,
