@@ -29,8 +29,12 @@ tui = ["dep:ratatui", "dep:crossterm", "dep:tui-markdown", "dep:tui-input"]
 web-tools = ["dep:scraper", "dep:html2md"]
 matrix = ["dep:matrix-sdk"]
 browser = ["dep:chromiumoxide"]
+messenger-discord = ["dep:urlencoding"]
+messenger-slack = []
+messenger-telegram = []
+messenger-matrix = []
 # Publishable feature sets
-all-messengers = ["matrix"]
+all-messengers = ["matrix", "messenger-discord"]
 full = ["tui", "web-tools", "matrix", "browser"]
 
 # Signal support is temporarily disabled for crates.io publishing.
@@ -161,6 +165,10 @@ rpassword = "7"
 # WebAuthn/Passkey authentication
 webauthn-rs = "0.5"
 webauthn-rs-proto = "0.5"
+
+# Messenger integrations (optional features)
+urlencoding = { version = "2.1", optional = true }
+bytes = "1.5"
 
 # Patches for crypto compatibility
 [patch.crates-io]
