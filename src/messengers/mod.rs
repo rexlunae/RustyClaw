@@ -160,12 +160,14 @@ mod console;
 mod discord;
 mod telegram;
 mod gmail;
+mod slack;
 
 pub use webhook::WebhookMessenger;
 pub use console::ConsoleMessenger;
 pub use discord::DiscordMessenger;
 pub use telegram::TelegramMessenger;
 pub use gmail::{GmailMessenger, GmailConfig};
+pub use slack::{SlackMessenger, SlackConfig};
 
 // ── Optional messengers (feature-gated) ─────────────────────────────────────
 
