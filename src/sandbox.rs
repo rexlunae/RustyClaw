@@ -481,9 +481,81 @@ fn run_unsandboxed(command: &str) -> Result<std::process::Output, String> {
         .map_err(|e| format!("Command failed: {}", e))
 }
 
-fn run_with_path_validation(command: &str, _policy: &SandboxPolicy) -> Result<std::process::Output, String> {
-    // Path validation happens at the tool level, not here
-    // This is just a marker that we're in "soft" mode
+/// Extract explicit paths from a shell command string.
+///
+/// This performs simple pattern matching to find:
+/// - Absolute paths starting with /
+/// - Home paths starting with ~/
+///
+/// Limitations: Cannot detect dynamic paths like `$(echo /path)` or command substitution.
+/// Those require kernel-level enforcement (Landlock/Bubblewrap).
+fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
+    use std::path::PathBuf;
+    let mut paths = Vec::new();
+
+    // Pattern 1: Absolute paths - /path/to/file
+    // Pattern 2: Home paths - ~/path/to/file
+    // Match word boundaries, handle quotes
+
+    let mut chars = command.chars().peekable();
+    let mut current_token = String::new();
+    let mut in_quotes = false;
+    let mut quote_char = ' ';
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\'' | '"' => {
+                if in_quotes && ch == quote_char {
+                    // End of quoted string
+                    in_quotes = false;
+                    if !current_token.is_empty() && (current_token.starts_with('/') || current_token.starts_with("~/")) {
+                        paths.push(PathBuf::from(&current_token));
+                    }
+                    current_token.clear();
+                } else if !in_quotes {
+                    // Start of quoted string
+                    in_quotes = true;
+                    quote_char = ch;
+                }
+            }
+            ' ' | '\t' | '\n' | ';' | '&' | '|' | '(' | ')' | '<' | '>' if !in_quotes => {
+                // Token boundary
+                if !current_token.is_empty() && (current_token.starts_with('/') || current_token.starts_with("~/")) {
+                    paths.push(PathBuf::from(&current_token));
+                }
+                current_token.clear();
+            }
+            _ => {
+                current_token.push(ch);
+            }
+        }
+    }
+
+    // Handle final token
+    if !current_token.is_empty() && (current_token.starts_with('/') || current_token.starts_with("~/")) {
+        paths.push(PathBuf::from(&current_token));
+    }
+
+    paths
+}
+
+fn run_with_path_validation(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+    // Extract explicit paths from command
+    let paths = extract_paths_from_command(command);
+
+    // Validate each path against policy (fail-closed)
+    for path in &paths {
+        validate_path(path, policy)?;
+    }
+
+    // Log warning if no paths detected (can't guarantee safety)
+    if paths.is_empty() {
+        eprintln!(
+            "[sandbox] Warning: PathValidation mode cannot detect dynamic paths in: {}",
+            &command[..command.len().min(50)]
+        );
+    }
+
     run_unsandboxed(command)
 }
 
@@ -682,6 +754,74 @@ mod tests {
         let output = run_unsandboxed("echo hello").unwrap();
         assert!(output.status.success());
         assert!(String::from_utf8_lossy(&output.stdout).contains("hello"));
+    }
+
+    #[test]
+    fn test_extract_paths_absolute() {
+        let paths = extract_paths_from_command("cat /etc/passwd");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], PathBuf::from("/etc/passwd"));
+    }
+
+    #[test]
+    fn test_extract_paths_home() {
+        let paths = extract_paths_from_command("cat ~/file.txt");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], PathBuf::from("~/file.txt"));
+    }
+
+    #[test]
+    fn test_extract_paths_multiple() {
+        let paths = extract_paths_from_command("cp /etc/hosts ~/backup/hosts");
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("/etc/hosts"));
+        assert_eq!(paths[1], PathBuf::from("~/backup/hosts"));
+    }
+
+    #[test]
+    fn test_extract_paths_quoted() {
+        let paths = extract_paths_from_command("cat \"/path/with spaces/file\"");
+        assert_eq!(paths.len(), 1);
+        assert_eq!(paths[0], PathBuf::from("/path/with spaces/file"));
+    }
+
+    #[test]
+    fn test_extract_paths_no_paths() {
+        let paths = extract_paths_from_command("echo hello world");
+        assert_eq!(paths.len(), 0);
+    }
+
+    #[test]
+    fn test_extract_paths_complex_command() {
+        let paths = extract_paths_from_command("tar czf /backup/archive.tar.gz ~/documents");
+        assert_eq!(paths.len(), 2);
+        assert_eq!(paths[0], PathBuf::from("/backup/archive.tar.gz"));
+        assert_eq!(paths[1], PathBuf::from("~/documents"));
+    }
+
+    #[test]
+    fn test_path_validation_blocks_credentials() {
+        let policy = SandboxPolicy::protect_credentials("/tmp/test_creds", "/tmp/test_workspace");
+        std::fs::create_dir_all("/tmp/test_creds").ok();
+
+        // This should fail because /tmp/test_creds is protected
+        let result = run_with_path_validation("cat /tmp/test_creds/secret.txt", &policy);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Access denied"));
+    }
+
+    #[test]
+    fn test_path_validation_allows_workspace() {
+        let policy = SandboxPolicy::protect_credentials("/tmp/test_creds2", "/tmp/test_workspace2");
+        std::fs::create_dir_all("/tmp/test_workspace2").ok();
+
+        // This should succeed because /tmp/test_workspace2 is not protected
+        let result = run_with_path_validation("echo hello > /tmp/test_workspace2/file.txt", &policy);
+        // Note: This will likely fail with "command failed" but NOT "Access denied"
+        // because the shell redirection happens before echo runs
+        if result.is_err() {
+            assert!(!result.unwrap_err().contains("Access denied"));
+        }
     }
 }
 
