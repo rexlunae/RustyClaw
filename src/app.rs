@@ -142,6 +142,8 @@ pub struct App {
     cached_secrets: Vec<serde_json::Value>,
     /// Whether we have a pending secrets_get for a specific key
     pending_secret_key: Option<String>,
+    /// Session CSRF token received from gateway hello frame
+    gateway_csrf_token: Option<String>,
 }
 
 impl App {
@@ -312,6 +314,7 @@ impl App {
             deferred_vault_password: None,
             cached_secrets: Vec::new(),
             pending_secret_key: None,
+            gateway_csrf_token: None,
         })
     }
 
@@ -676,6 +679,7 @@ impl App {
                 self.state.loading_line = None;
                 self.streaming_response = None;
                 self.state.streaming_started = None;
+                self.gateway_csrf_token = None;
                 self.state
                     .messages
                     .push(DisplayMessage::warning(format!(
@@ -919,6 +923,30 @@ impl App {
         // Debug: log all incoming frames
         debug_log(&format!("Received frame: type={:?}, len={}", frame_type, text.len()));
 
+        // ── Handle hello frame from gateway ──────────────────
+        if frame_type == Some("hello") {
+            self.gateway_csrf_token = parsed
+                .as_ref()
+                .and_then(|v| v.get("csrf_token").and_then(|t| t.as_str()))
+                .map(str::to_string);
+            if self.gateway_csrf_token.is_none() {
+                self.state.messages.push(DisplayMessage::warning(
+                    "Gateway hello missing CSRF token; control actions may fail.",
+                ));
+            } else {
+                self.request_secrets_list().await;
+            }
+            return Ok(Some(Action::Update));
+        }
+
+        if frame_type == Some("csrf_result") {
+            self.gateway_csrf_token = parsed
+                .as_ref()
+                .and_then(|v| v.get("csrf_token").and_then(|t| t.as_str()))
+                .map(str::to_string);
+            return Ok(Some(Action::Update));
+        }
+
         // ── Handle status frames from the gateway ────────────
         if frame_type == Some("status") {
             let status = parsed
@@ -1005,8 +1033,6 @@ impl App {
                 // The hello + status frames will follow from the
                 // gateway, so keep the Connecting status.
                 self.state.gateway_status = GatewayStatus::Connected;
-                // Request secrets list after authentication
-                self.request_secrets_list().await;
             } else if retry {
                 // Wrong code but gateway allows retry — show message and re-prompt
                 let msg = parsed
@@ -1956,6 +1982,7 @@ impl App {
     /// Connect the TUI as a WebSocket client to a running gateway.
     async fn connect_to_gateway(&mut self, url: &str) {
         self.state.gateway_status = GatewayStatus::Connecting;
+        self.gateway_csrf_token = None;
         match tokio_tungstenite::connect_async(url).await {
             Ok((ws_stream, _)) => {
                 let (sink, stream) = ws_stream.split();
@@ -1972,9 +1999,6 @@ impl App {
                 self.reader_task = Some(tokio::spawn(async move {
                     Self::gateway_reader_loop(stream, tx).await;
                 }));
-
-                // Request cached secrets from gateway
-                self.request_secrets_list().await;
             }
             Err(err) => {
                 self.state.gateway_status = GatewayStatus::Error;
@@ -2015,10 +2039,56 @@ impl App {
         }
     }
 
+    fn control_frame_requires_csrf(msg_type: &str) -> bool {
+        matches!(
+            msg_type,
+            "unlock_vault"
+                | "secrets_list"
+                | "secrets_store"
+                | "secrets_get"
+                | "secrets_delete"
+                | "secrets_peek"
+                | "secrets_set_policy"
+                | "secrets_set_disabled"
+                | "secrets_delete_credential"
+                | "secrets_has_totp"
+                | "secrets_setup_totp"
+                | "secrets_verify_totp"
+                | "secrets_remove_totp"
+                | "reload"
+                | "set_elevated"
+        )
+    }
+
     /// Send a text message to the gateway over the open WebSocket connection.
     async fn send_to_gateway(&mut self, text: String) {
+        if self.ws_sink.is_none() {
+            self.state
+                .messages
+                .push(DisplayMessage::warning("Cannot send: gateway not connected."));
+            return;
+        }
+
+        let mut payload = text;
+        if let Ok(mut val) = serde_json::from_str::<serde_json::Value>(&payload) {
+            if let Some(msg_type) = val.get("type").and_then(|t| t.as_str()) {
+                if Self::control_frame_requires_csrf(msg_type) && val.get("csrf_token").is_none()
+                {
+                    if let Some(token) = self.gateway_csrf_token.as_deref() {
+                        val["csrf_token"] = serde_json::Value::String(token.to_string());
+                        payload = val.to_string();
+                    } else {
+                        self.state.messages.push(DisplayMessage::warning(
+                            "Gateway CSRF token not ready yet; retry in a moment.",
+                        ));
+                        return;
+                    }
+                }
+            }
+        }
+
         if let Some(ref mut sink) = self.ws_sink {
-            match sink.send(Message::Text(text.into())).await {
+            match sink.send(Message::Text(payload.into())).await {
                 Ok(()) => {}
                 Err(err) => {
                     self.chat_loading_tick = None;
@@ -2032,16 +2102,13 @@ impl App {
                     self.ws_sink = None;
                 }
             }
-        } else {
-            self.state
-                .messages
-                .push(DisplayMessage::warning("Cannot send: gateway not connected."));
         }
     }
 
     /// Stop the gateway: disconnect the client and stop the daemon.
     async fn stop_gateway(&mut self) {
         let had_connection = self.ws_sink.is_some();
+        self.gateway_csrf_token = None;
 
         // Abort the reader task first so it doesn't fire a disconnect action.
         if let Some(handle) = self.reader_task.take() {

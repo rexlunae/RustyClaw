@@ -6,6 +6,7 @@
 //! for incoming messages and routes them through the model.
 
 mod auth;
+mod csrf;
 mod health;
 mod helpers;
 mod messenger_handler;
@@ -87,6 +88,7 @@ use crate::secret::{ExposeSecret, SecretString};
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
 use crate::tools;
+use csrf::{CsrfStore, DEFAULT_CSRF_TTL};
 use anyhow::{Context, Result, anyhow};
 use dirs;
 use futures_util::stream::SplitSink;
@@ -132,6 +134,27 @@ const TOTP_LOCKOUT_SECS: u64 = 30;
 
 /// Compaction fires when estimated usage exceeds this fraction of the context window.
 const COMPACTION_THRESHOLD: f64 = 0.75;
+
+fn requires_csrf(msg_type: &str) -> bool {
+    matches!(
+        msg_type,
+        "unlock_vault"
+            | "secrets_list"
+            | "secrets_store"
+            | "secrets_get"
+            | "secrets_delete"
+            | "secrets_peek"
+            | "secrets_set_policy"
+            | "secrets_set_disabled"
+            | "secrets_delete_credential"
+            | "secrets_has_totp"
+            | "secrets_setup_totp"
+            | "secrets_verify_totp"
+            | "secrets_remove_totp"
+            | "reload"
+            | "set_elevated"
+    )
+}
 
 /// Try to import a fresh GitHub Copilot token from OpenClaw's credential store.
 ///
@@ -838,12 +861,18 @@ async fn handle_connection(
         v.is_locked()
     };
 
+    // Session-scoped CSRF tokens for control operations.
+    let mut csrf_store = CsrfStore::new(DEFAULT_CSRF_TTL);
+    let csrf_token = csrf_store.issue_token();
+
     // ── Send hello ──────────────────────────────────────────────────
     let mut hello = json!({
         "type": "hello",
         "agent": "rustyclaw",
         "settings_dir": config.settings_dir,
         "vault_locked": vault_is_locked,
+        "csrf_token": csrf_token,
+        "csrf_ttl_seconds": DEFAULT_CSRF_TTL.as_secs(),
     });
     if let Some(ref ctx) = model_ctx {
         hello["provider"] = serde_json::Value::String(ctx.provider.clone());
@@ -1086,41 +1115,68 @@ async fn handle_connection(
                         // Track message in health stats
                         health_stats.total_messages.fetch_add(1, Ordering::Relaxed);
 
-                        // ── Handle unlock_vault control message ─────
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
-                            if val.get("type").and_then(|t| t.as_str()) == Some("unlock_vault") {
-                                if let Some(pw) = val.get("password").and_then(|p| p.as_str()) {
-                                    let mut v = vault.lock().await;
-                                    v.set_password(pw.to_string());
-                                    // Try to access the vault to verify the password works.
-                                    // get_secret returns Err if the vault cannot be decrypted.
-                                    match v.get_secret("__vault_check__", true) {
-                                        Ok(_) => {
-                                            let ok = json!({
-                                                "type": "vault_unlocked",
-                                                "ok": true,
-                                            });
-                                            let _ = writer.send(Message::Text(ok.to_string().into())).await;
-                                        }
-                                        Err(e) => {
-                                            // Revert to locked state.
-                                            v.clear_password();
-                                            let fail = json!({
-                                                "type": "vault_unlocked",
-                                                "ok": false,
-                                                "message": format!("Failed to unlock vault: {}", e),
-                                            });
-                                            let _ = writer.send(Message::Text(fail.to_string().into())).await;
-                                        }
-                                    }
-                                }
-                                continue;
-                            }
-
-                            // ── Handle secrets control messages ──────
                             let msg_type = val.get("type").and_then(|t| t.as_str());
 
+                            if let Some(msg_type) = msg_type {
+                                if requires_csrf(msg_type) {
+                                    let token = val
+                                        .get("csrf_token")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("");
+                                    if !csrf_store.validate(token) {
+                                        let err = json!({
+                                            "type": "error",
+                                            "ok": false,
+                                            "message": "Invalid or expired CSRF token. Reconnect and retry control actions.",
+                                        });
+                                        let _ = writer.send(Message::Text(err.to_string().into())).await;
+                                        continue;
+                                    }
+                                }
+                            }
+
+                            // ── Handle control messages ───────────────
                             match msg_type {
+                                Some("csrf") => {
+                                    let token = csrf_store.issue_token();
+                                    let resp = json!({
+                                        "type": "csrf_result",
+                                        "ok": true,
+                                        "csrf_token": token,
+                                        "csrf_ttl_seconds": DEFAULT_CSRF_TTL.as_secs(),
+                                    });
+                                    let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    continue;
+                                }
+                                Some("unlock_vault") => {
+                                    if let Some(pw) = val.get("password").and_then(|p| p.as_str()) {
+                                        let mut v = vault.lock().await;
+                                        v.set_password(pw.to_string());
+                                        // Try to access the vault to verify the password works.
+                                        // get_secret returns Err if the vault cannot be decrypted.
+                                        match v.get_secret("__vault_check__", true) {
+                                            Ok(_) => {
+                                                let ok = json!({
+                                                    "type": "vault_unlocked",
+                                                    "ok": true,
+                                                });
+                                                let _ = writer.send(Message::Text(ok.to_string().into())).await;
+                                            }
+                                            Err(e) => {
+                                                // Revert to locked state.
+                                                v.clear_password();
+                                                let fail = json!({
+                                                    "type": "vault_unlocked",
+                                                    "ok": false,
+                                                    "message": format!("Failed to unlock vault: {}", e),
+                                                });
+                                                let _ = writer.send(Message::Text(fail.to_string().into())).await;
+                                            }
+                                        }
+                                    }
+                                    continue;
+                                }
                                 Some("secrets_list") => {
                                     let mut v = vault.lock().await;
                                     let entries = v.list_all_entries();

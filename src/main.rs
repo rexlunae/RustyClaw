@@ -1928,6 +1928,7 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
         .await
         .context("Failed to connect to gateway. Is it running?")?;
     let (mut writer, mut reader) = ws_stream.split();
+    let mut csrf_token: Option<String> = None;
 
     // Handle auth challenge if TOTP is enabled
     if totp_enabled {
@@ -1957,6 +1958,10 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                         break; // Auth succeeded, continue to send reload
                     }
                     if frame_type == Some("hello") {
+                        csrf_token = val
+                            .get("csrf_token")
+                            .and_then(|t| t.as_str())
+                            .map(str::to_string);
                         break; // No auth needed (shouldn't happen if totp_enabled)
                     }
                 }
@@ -1965,45 +1970,51 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
     }
 
     // Wait for hello frame (skip status frames)
-    loop {
-        match reader.next().await {
-            Some(Ok(Message::Text(text))) => {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
-                    let frame_type = val.get("type").and_then(|t| t.as_str());
-                    if frame_type == Some("hello") || frame_type == Some("auth_challenge") {
-                        if frame_type == Some("auth_challenge") {
-                            // Handle TOTP even when totp_enabled was false in config
-                            let code = rpassword::prompt_password(
-                                format!("{} 2FA code: ", rustyclaw::theme::info("🔑")),
-                            )
-                            .unwrap_or_default();
-                            let auth = serde_json::json!({
-                                "type": "auth_response",
-                                "code": code.trim(),
-                            });
-                            writer.send(Message::Text(auth.to_string().into())).await?;
+    if csrf_token.is_none() {
+        loop {
+            match reader.next().await {
+                Some(Ok(Message::Text(text))) => {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
+                        let frame_type = val.get("type").and_then(|t| t.as_str());
+                        if frame_type == Some("hello") || frame_type == Some("auth_challenge") {
+                            if frame_type == Some("auth_challenge") {
+                                // Handle TOTP even when totp_enabled was false in config
+                                let code = rpassword::prompt_password(
+                                    format!("{} 2FA code: ", rustyclaw::theme::info("🔑")),
+                                )
+                                .unwrap_or_default();
+                                let auth = serde_json::json!({
+                                    "type": "auth_response",
+                                    "code": code.trim(),
+                                });
+                                writer.send(Message::Text(auth.to_string().into())).await?;
+                                continue;
+                            }
+                            csrf_token = val
+                                .get("csrf_token")
+                                .and_then(|t| t.as_str())
+                                .map(str::to_string);
+                            break;
+                        }
+                        if frame_type == Some("auth_result") {
+                            let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
+                            if !ok {
+                                let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Auth failed");
+                                anyhow::bail!("{}", msg);
+                            }
+                            // auth ok, wait for hello
                             continue;
                         }
-                        break;
-                    }
-                    if frame_type == Some("auth_result") {
-                        let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
-                        if !ok {
-                            let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Auth failed");
-                            anyhow::bail!("{}", msg);
+                        // Skip status frames while waiting for hello
+                        if frame_type == Some("status") {
+                            continue;
                         }
-                        // auth ok, wait for hello
-                        continue;
-                    }
-                    // Skip status frames while waiting for hello
-                    if frame_type == Some("status") {
-                        continue;
                     }
                 }
+                Some(Ok(_)) => continue,
+                Some(Err(e)) => anyhow::bail!("Gateway error: {}", e),
+                None => anyhow::bail!("Gateway closed before hello"),
             }
-            Some(Ok(_)) => continue,
-            Some(Err(e)) => anyhow::bail!("Gateway error: {}", e),
-            None => anyhow::bail!("Gateway closed before hello"),
         }
     }
 
@@ -2033,7 +2044,11 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
     }
 
     // Send reload command
-    let reload = serde_json::json!({ "type": "reload" });
+    let csrf_token = csrf_token.context("Gateway hello did not include CSRF token")?;
+    let reload = serde_json::json!({
+        "type": "reload",
+        "csrf_token": csrf_token,
+    });
     writer.send(Message::Text(reload.to_string().into())).await
         .context("Failed to send reload command")?;
 

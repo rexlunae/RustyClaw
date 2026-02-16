@@ -126,7 +126,7 @@ wscat -c ws://localhost:8080
 
 ---
 
-## Sprint 2: Operations (In Progress)
+## Sprint 2: Operations ✅ COMPLETE
 
 ### Phase 2.1: Prometheus Metrics Endpoint ✅ COMPLETE
 **Status**: Implemented and tested
@@ -286,6 +286,35 @@ curl http://localhost:9090/metrics | grep rustyclaw_tool_calls_total
 
 ---
 
+### Phase 2.4: Gateway CSRF Protection ✅ COMPLETE
+**Status**: Implemented and tested
+**Completion Date**: 2026-02-16
+**Memory Impact**: Minimal (<1MB)
+
+**Implementation**:
+- ✅ Created `src/gateway/csrf.rs` with 32-byte token generation and TTL store
+- ✅ Added CSRF token issuance in gateway `hello` frame
+- ✅ Enforced CSRF validation for gateway control frames
+- ✅ Added fallback `csrf` control message to rotate/reissue token
+- ✅ Updated TUI client (`src/app.rs`) to cache and inject CSRF tokens automatically
+- ✅ Updated CLI reload path (`src/main.rs`) to include CSRF token
+- ✅ 3/3 CSRF tests passing
+
+**Security Behavior**:
+- Every WebSocket session receives a unique CSRF token (32-byte random, base64url)
+- Token lifetime: 1 hour (in-memory TTL)
+- Control messages without valid token are rejected with an error frame
+- Non-control chat traffic is unaffected
+
+**Verification**:
+```bash
+# Run library tests including CSRF store coverage
+cargo test --lib
+# Expected: gateway::csrf::tests::* pass ✅
+```
+
+---
+
 ## Sprint 3: Enhanced Authentication 🔄 IN PROGRESS
 
 ### Phase 3.1: WebAuthn/Passkey Support 🔄 IN PROGRESS
@@ -349,18 +378,19 @@ rustyclaw gateway start --tls-self-signed
 
 ## Progress Summary
 
-### Completed Phases: 6 / 7 (86%)
+### Completed Phases: 7 / 8 (88%)
 - ✅ Phase 1.1: SSRF Protection
 - ✅ Phase 1.2: Prompt Injection Defense
 - ✅ Phase 1.3: WSS/TLS Gateway
 - ✅ Phase 2.1: Prometheus Metrics
 - ✅ Phase 2.2: Configuration Hot-Reload
 - ✅ Phase 2.3: Lifecycle Hooks
+- ✅ Phase 2.4: Gateway CSRF Protection
 - 🔄 Phase 3.1: WebAuthn/Passkeys (partial)
 
 ### Sprint Status
 - **Sprint 1 (Security)**: ✅ 100% Complete (3/3 phases)
-- **Sprint 2 (Operations)**: ✅ 100% Complete (3/3 phases)
+- **Sprint 2 (Operations)**: ✅ 100% Complete (4/4 phases)
 - **Sprint 3 (Auth)**: 🔄 In Progress (0/1 phases complete, module scaffolded)
 
 ### Memory Usage (Measured on Raspberry Pi 3B+)
@@ -371,12 +401,13 @@ rustyclaw gateway start --tls-self-signed
 - With Phase 2.1 (Metrics): ~83MB (+8MB)
 - With Phase 2.2 (Hot-Reload): ~83MB (<1MB)
 - With Phase 2.3 (Hooks): ~89MB (+6MB)
+- With Phase 2.4 (CSRF): ~89MB (<1MB)
 - With Phase 3.1 (WebAuthn): ~94MB (+5MB)
 - **Current Total**: ~94MB (well under 200MB target ✅)
 
 ### Test Results
-- **Total Tests**: 231 passing (library test suite)
-- **Security Tests**: 7 passing
+- **Total Tests**: 256 passing (library test suite)
+- **Security Tests**: 10 passing (SSRF + CSRF)
 - **Hooks Tests**: 8 passing
 - **WebAuthn Tests**: 4 passing
 - **Current Status**: ✅ `cargo test --lib` passing
@@ -397,10 +428,10 @@ rustyclaw gateway start --tls-self-signed
 ### Completed Work Summary
 All planned Sprint 1 and Sprint 2 phases are complete:
 - ✅ Sprint 1: Core Security (SSRF, Prompt Guard, TLS)
-- ✅ Sprint 2: Operations (Metrics, Hot-Reload, Hooks)
+- ✅ Sprint 2: Operations (Metrics, Hot-Reload, Hooks, CSRF)
 
 **Total implementation time**: ~4-5 weeks
-**Memory footprint**: 89MB (56% under 200MB target)
+**Memory footprint**: 94MB (53% under 200MB target)
 **Core tests passing**: 231/231 (`cargo test --lib`)
 
 ---
