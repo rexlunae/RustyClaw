@@ -12,7 +12,7 @@ pub mod discord;
 #[cfg(feature = "messenger-telegram")]
 pub mod telegram;
 
-#[cfg(feature = "messenger-matrix")]
+#[cfg(feature = "matrix")]
 pub mod matrix;
 
 use anyhow::Result;
