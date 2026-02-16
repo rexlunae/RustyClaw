@@ -157,11 +157,56 @@
 
 ### ⚠️ Missing OpenClaw Features
 
-10. **WhatsApp messenger backend** — OpenClaw supports WhatsApp; RustyClaw does not
-11. **Slack messenger backend** — OpenClaw supports Slack; RustyClaw does not
-12. **Gateway WSS/TLS support** — OpenClaw supports `wss://`; RustyClaw only supports `ws://`
-13. **Sandbox enforcement** — Landlock and PathValidation modes are stubs; only bwrap provides real isolation
-14. **SECURITY.md accuracy** — document references wrong crate (`keyring` instead of `securestore`) and lists outdated dependency versions
+#### Messenger Channels (RustyClaw has 5, OpenClaw has 13)
+10. **WhatsApp messenger** — OpenClaw has full Baileys integration; RustyClaw missing
+11. **Slack messenger** — OpenClaw has Bolt integration; RustyClaw missing
+12. **Google Chat messenger** — OpenClaw has Chat API integration; RustyClaw missing
+13. **BlueBubbles (iMessage)** — OpenClaw has iMessage via BlueBubbles API (recommended); RustyClaw missing
+14. **iMessage (legacy)** — OpenClaw has legacy imsg integration; RustyClaw missing
+15. **Microsoft Teams messenger** — OpenClaw extension support; RustyClaw missing
+16. **Matrix messenger** — OpenClaw extension support; RustyClaw has partial implementation (optional feature)
+17. **Zalo messenger** — OpenClaw extension; RustyClaw missing
+18. **Zalo Personal messenger** — OpenClaw extension; RustyClaw missing
+19. **WebChat** — OpenClaw serves WebChat UI from Gateway; RustyClaw missing
+
+#### Voice & Speech Features
+20. **Voice Wake** — OpenClaw has always-on speech with ElevenLabs (macOS/iOS/Android); RustyClaw missing
+21. **Talk Mode** — OpenClaw has continuous conversation overlay with ElevenLabs; RustyClaw missing
+
+#### Visual & UI Features
+22. **Live Canvas** — OpenClaw has agent-driven visual workspace with A2UI; RustyClaw canvas is stub
+23. **Control UI / Web Dashboard** — OpenClaw serves Control UI directly from Gateway; RustyClaw missing
+24. **macOS menu bar app** — OpenClaw has companion app with Voice Wake/PTT/Talk Mode; RustyClaw TUI only
+25. **iOS node app** — OpenClaw has Canvas/Voice/camera/screen recording; RustyClaw missing
+26. **Android node app** — OpenClaw has Canvas/Talk/camera/screen recording/SMS; RustyClaw missing
+
+#### Security & Access Features
+27. **DM pairing system** — OpenClaw has pairing codes for unknown senders with allowlist; RustyClaw missing
+28. **Tailscale Serve/Funnel** — OpenClaw auto-configures Tailscale for remote access; RustyClaw missing
+29. **Remote Gateway support** — OpenClaw designed for Linux server deployment with node pairing; RustyClaw local only
+30. **Gateway WSS/TLS support** — OpenClaw supports `wss://` + Tailscale HTTPS; RustyClaw only `ws://`
+31. **Token/password auth** — OpenClaw has gateway authentication modes; RustyClaw TOTP only
+
+#### Automation & Integration
+32. **Gmail Pub/Sub** — OpenClaw has Gmail webhook automation; RustyClaw missing
+33. **Presence & typing indicators** — OpenClaw updates channel presence/typing; RustyClaw missing
+34. **Session activation modes** — OpenClaw has mention gating, reply tags, group routing; RustyClaw basic sessions
+35. **Elevated bash toggle** — OpenClaw has `/elevated on|off` per-session control; RustyClaw missing
+
+#### Platform Features
+36. **Node mode (device-local actions)** — OpenClaw routes device actions to paired nodes; RustyClaw executes locally only
+37. **macOS TCC permission routing** — OpenClaw routes actions based on TCC permissions; RustyClaw missing
+38. **Bonjour/mDNS pairing** — OpenClaw auto-discovers nodes on local network; RustyClaw missing
+39. **Companion app debug tools** — OpenClaw macOS app has debug panel; RustyClaw CLI only
+
+#### Developer & Ops Features
+40. **Nix mode** — OpenClaw has declarative config via Nix; RustyClaw missing
+41. **Development channels** — OpenClaw has stable/beta/dev with `openclaw update --channel`; RustyClaw missing
+42. **Control UI skill management** — OpenClaw manages skills via web UI with install gating; RustyClaw CLI only
+
+#### Core Fixes Needed in RustyClaw
+43. **Sandbox enforcement** — ~~Landlock and PathValidation modes are stubs~~ PathValidation now enforced (Phase 1 complete); Landlock still stub; only bwrap provides real isolation
+44. **SECURITY.md accuracy** — document references wrong crate (`keyring` instead of `securestore`) and lists outdated dependency versions
 
 ### ✅ Previously Missing, Now Implemented
 
@@ -183,31 +228,63 @@ The following items were listed as "Not implemented" in the original Gap Analysi
 
 ## Progress Summary
 
-| Category | Status | Coverage |
-|----------|--------|----------|
-| File tools (read, write, edit, list, search, find) | ✅ Complete | 6/6 |
-| Web tools (fetch, search) | ✅ Complete | 2/2 |
-| Shell execution | ✅ Complete | 1/1 (with background) |
-| Process management | ✅ Complete | list, poll, log, write, kill |
-| Memory system | ✅ Complete | search + get |
-| Cron/scheduling | ✅ Complete | at, every, cron |
-| Multi-session / multi-agent | ✅ Complete | list, spawn, send, history, status |
-| Secrets vault & policies | ✅ Complete | list, get, store |
-| Gateway control | ✅ Complete | config get/apply/patch, restart |
-| Message tool | ✅ Complete | send, broadcast |
-| TTS | ✅ Complete | functional with API key |
-| Apply patch | ✅ Complete | multi-hunk diff |
-| Image analysis | ✅ Complete | OpenAI/Anthropic/Google vision |
-| Browser automation | ⚠️ Partial | Real CDP behind `browser` feature; stub without |
-| Node/device control | ✅ Complete | SSH/ADB backends |
-| Canvas | ⚠️ Stub | Parameter handling only; no rendering integration |
-| Context management (compaction, token tracking) | ✅ Complete | — |
-| Conversation memory (persistence, replay) | ✅ Complete | — |
-| Gateway (auth, heartbeat, message types) | ✅ Complete | — |
-| CLI commands | ✅ Complete | 10 subcommands |
-| TUI commands | ✅ Complete | 12+ slash-commands |
-| Skills (loading, format support) | ✅ Complete | Load + gate checks + prompt injection |
-| Messengers | ⚠️ Partial | Webhook, Console, Discord, Telegram, Signal (missing WhatsApp, Slack) |
-| Provider streaming | ✅ Complete | OpenAI SSE + Anthropic SSE |
-| Gateway TLS (WSS) | ❌ Missing | Only ws:// supported |
-| Sandbox enforcement | ⚠️ Partial | Only bwrap works; Landlock/PathValidation are stubs |
+### Core Tooling (✅ Strong Parity)
+| Category | RustyClaw Status | OpenClaw Comparison |
+|----------|------------------|---------------------|
+| File tools (read, write, edit, list, search, find) | ✅ Complete (6/6) | ✅ Full parity |
+| Web tools (fetch, search) | ✅ Complete (2/2) | ✅ Full parity |
+| Shell execution | ✅ Complete | ✅ Full parity + background support |
+| Process management | ✅ Complete | ✅ Full parity (list, poll, log, write, kill) |
+| Memory system | ✅ Complete | ✅ Full parity (BM25 search + get) |
+| Cron/scheduling | ✅ Complete | ✅ Full parity (at, every, cron expressions) |
+| Multi-session / multi-agent | ✅ Complete | ✅ Full parity (list, spawn, send, history, status) |
+| Secrets vault & policies | ✅ Complete | ✅ Full parity (typed credentials, access policies) |
+| Gateway control | ✅ Complete | ✅ Full parity (config get/apply/patch, restart) |
+| Message tool | ✅ Complete | ✅ Full parity (send, broadcast) |
+| TTS | ✅ Complete | ✅ Full parity (OpenAI TTS API) |
+| Apply patch | ✅ Complete | ✅ Full parity (multi-hunk unified diff) |
+| Image analysis | ✅ Complete | ✅ Full parity (OpenAI/Anthropic/Google vision) |
+| Context management | ✅ Complete | ✅ Full parity (compaction, token tracking) |
+| Conversation memory | ✅ Complete | ✅ Full parity (persistence, replay) |
+| Provider support | ✅ Complete | ✅ Full parity (OpenAI, Anthropic, Google, xAI, Ollama, custom) |
+| Provider streaming | ✅ Complete | ✅ Full parity (OpenAI SSE + Anthropic SSE) |
+
+### Platform Features (⚠️ Partial Parity)
+| Category | RustyClaw Status | OpenClaw Comparison | Gap |
+|----------|------------------|---------------------|-----|
+| CLI commands | ✅ Complete | ✅ Full parity | 10 subcommands aligned |
+| TUI interface | ✅ Complete | ⚠️ Partial parity | RustyClaw has TUI, OpenClaw has Control UI + WebChat + macOS app |
+| Skills system | ✅ Complete | ✅ Full parity | Load + gate checks + prompt injection |
+| Browser automation | ⚠️ Partial | ⚠️ Partial parity | RustyClaw has CDP (optional); OpenClaw has dedicated browser profiles |
+| Node/device control | ✅ Complete | ⚠️ Partial parity | RustyClaw has SSH/ADB backends; OpenClaw has node pairing + TCC routing |
+| Canvas | ⚠️ Stub | ❌ Major gap | RustyClaw stub only; OpenClaw has A2UI + visual workspace |
+| Messengers | ⚠️ Partial (5/13) | ❌ Major gap | RustyClaw missing 8 channels: WhatsApp, Slack, Google Chat, iMessage, Teams, Zalo, WebChat |
+| Gateway architecture | ✅ WebSocket + daemon | ⚠️ Partial parity | RustyClaw ws:// only; OpenClaw has wss:// + Tailscale |
+| Sandbox enforcement | ⚠️ In progress | ⚠️ Partial parity | RustyClaw fixing C1 issue; OpenClaw has sandboxing |
+
+### Missing Platform Features (❌ No Implementation)
+| Category | RustyClaw Status | OpenClaw Has | Priority |
+|----------|------------------|--------------|----------|
+| Voice features | ❌ Missing | Voice Wake + Talk Mode (ElevenLabs) | Medium |
+| Companion apps | ❌ Missing | macOS/iOS/Android apps | Low |
+| Control UI / Web Dashboard | ❌ Missing | Served from Gateway | Medium |
+| DM pairing security | ❌ Missing | Pairing codes + allowlist | High (security) |
+| Tailscale integration | ❌ Missing | Serve/Funnel auto-config | Low |
+| Remote Gateway | ❌ Missing | Linux server deployment pattern | Low |
+| Gmail Pub/Sub | ❌ Missing | Email webhook automation | Low |
+| Presence/typing | ❌ Missing | Channel presence updates | Low |
+| Elevated bash | ❌ Missing | Per-session privilege toggle | Low |
+| Nix mode | ❌ Missing | Declarative config | Very Low |
+
+### Summary Statistics
+- **Core tools parity**: ~95% (30/30 tools, excellent coverage)
+- **Messenger parity**: ~38% (5/13 channels)
+- **Platform features parity**: ~40% (missing voice, apps, UI, remote access)
+- **Security parity**: ~70% (strong vault, fixing sandbox, missing DM pairing/TLS)
+- **Overall estimated parity**: ~60%
+
+### RustyClaw Advantages
+- ✅ **Native Rust implementation** — faster startup, lower memory, better cross-compilation
+- ✅ **Feature-gated builds** — headless/TUI/full builds for different deployment scenarios
+- ✅ **Raspberry Pi optimized** — ARM cross-compilation + CI/CD for Pi deployment
+- ✅ **Simpler architecture** — fewer dependencies, easier to audit and maintain
