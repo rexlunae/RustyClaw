@@ -22,21 +22,40 @@ RustyClaw is a drop-in Rust implementation of [OpenClaw](https://github.com/open
 | **Memory usage** | ~15 MB | ~150 MB |
 | **Startup time** | <50 ms | ~500 ms |
 | **Binary size** | ~8 MB | ~200 MB (with node) |
-| **Sandbox isolation** | Built-in (Landlock+bwrap/Docker/macOS) | External only |
-| **Secrets vault** | AES-256 + TOTP | External (1Password, etc.) |
+| **Sandbox modes** | 6 (Landlock+bwrap/Docker/macOS/etc.) | External only |
+| **Defense-in-depth** | ✅ Combined kernel + namespace | ❌ |
+| **Container isolation** | ✅ Docker with resource limits | ❌ |
+| **Secrets vault** | AES-256-GCM + TOTP + WebAuthn | External (1Password, etc.) |
 | **Language** | Rust 🦀 | TypeScript |
 
-### Security-First Design
+### Security-First Design 🔒
 
-RustyClaw was built with the assumption that **AI agents can't always be trusted**. The security model includes:
+RustyClaw was built with the assumption that **AI agents can't always be trusted**. The multi-layer security model includes:
 
-- **Encrypted secrets vault** — AES-256 encryption for API keys, credentials, SSH keys
-- **TOTP two-factor authentication** — Optional 2FA for vault access
+#### Defense-in-Depth Sandboxing
+
+RustyClaw offers **6 sandbox modes** with automatic fallback for maximum security:
+
+1. **Landlock+Bubblewrap** (Linux) — Combined kernel LSM + namespace isolation for defense-in-depth
+2. **Landlock** (Linux 5.13+) — Kernel-enforced filesystem access control
+3. **Bubblewrap** (Linux) — User namespace isolation with mount/network restrictions
+4. **Docker** (Cross-platform) — Container isolation with resource limits (2GB memory, 1 CPU)
+5. **macOS Sandbox** (macOS) — Apple's sandbox-exec with TinyScheme profiles
+6. **Path Validation** (Fallback) — Allowlist-based path checking
+
+The sandbox automatically selects the strongest available mode for your platform.
+
+👉 **[Sandbox Documentation →](docs/SANDBOX.md)**
+
+#### Secrets Management
+
+- **Encrypted secrets vault** — AES-256-GCM encryption for API keys, credentials, SSH keys
+- **TOTP two-factor authentication** — Optional 2FA for vault access with recovery codes
 - **Per-credential access policies** — Always, WithApproval, WithAuth, SkillOnly
-- **Sandbox isolation** — Landlock+Bubblewrap (Linux), Docker (cross-platform), sandbox-exec (macOS)
-- **Credentials directory protection** — Agent tools cannot read the secrets directory
+- **Credentials directory protection** — Sandboxed tools cannot access `~/.rustyclaw/secrets/`
+- **WebAuthn support** — Hardware key authentication (YubiKey, etc.)
 
-👉 **[Read the Security Model →](docs/SECURITY.md)**
+👉 **[Complete Security Model →](docs/SECURITY.md)**
 
 ## Quick Start
 
@@ -80,6 +99,18 @@ rustyclaw onboard
 ```bash
 rustyclaw tui
 ```
+
+## Recent Enhancements ✨
+
+**February 2026** — Major security and architecture improvements:
+
+- 🛡️ **Defense-in-Depth Sandboxing** — Combined Landlock+Bubblewrap mode for kernel-enforced + namespace isolation
+- 🐳 **Docker Container Support** — Cross-platform sandboxing with Alpine Linux, resource limits, and credential injection
+- 📋 **Development Roadmap** — 3-phase plan covering multi-provider failover, WASM sandboxing, hybrid search, and more
+- 🔧 **15 Feature Issues Created** — [View all planned features](https://github.com/aecs4u/RustyClaw/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement) (#51-#65)
+- 💬 **Messenger Integrations** — Slack, Discord, Telegram, Matrix support with dedicated branches
+
+See [ROADMAP.md](ROADMAP.md) for the complete development plan and feature analysis based on IronClaw review.
 
 ## Features
 
@@ -196,19 +227,36 @@ model = "gpt-4.1"
 base_url = "https://openrouter.ai/api/v1"
 
 [sandbox]
-mode = ""
-deny_paths = []
-allow_paths = []
+# Mode: "auto" (default), "landlock+bwrap", "docker", "landlock", "bwrap", "macos", "path", "none"
+mode = "auto"
+deny_paths = ["/etc/passwd", "/etc/shadow"]
+allow_paths = ["/tmp", "/var/tmp"]
+
+# Docker-specific settings (when mode = "docker")
+docker_image = "alpine:latest"
+docker_memory_limit_mb = 2048
+docker_cpu_shares = 1024
 ```
+
+See [docs/SANDBOX.md](docs/SANDBOX.md) for detailed sandbox configuration options.
 
 ## Documentation
 
+### Getting Started
 - **[Building](BUILDING.md)** — Feature flags, Signal support, cross-compilation
 - **[Getting Started](docs/getting-started.md)** — Installation and first run
-- **[Security Model](docs/SECURITY.md)** — How RustyClaw protects your secrets
-- **[Tools Reference](docs/tools.md)** — All 30 tools explained
+- **[Configuration](docs/configuration.md)** — Settings and environment setup
+
+### Security & Architecture
+- **[Security Model](docs/SECURITY.md)** — Comprehensive security architecture
+- **[Sandbox Modes](docs/SANDBOX.md)** — 6 sandbox isolation strategies explained
+- **[Development Roadmap](ROADMAP.md)** — 3-phase feature plan with 15+ enhancements
+
+### Features & Integration
+- **[Tools Reference](docs/tools.md)** — All 30 agentic tools explained
 - **[Skills Guide](docs/skills.md)** — Writing and using skills
 - **[Gateway Protocol](docs/gateway.md)** — WebSocket API reference
+- **[Messenger Integrations](docs/MESSENGERS.md)** — Slack, Discord, Telegram, Matrix setup
 
 ## Testing
 
@@ -232,7 +280,20 @@ cargo test --test skill_execution
 
 ## Contributing
 
-Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+Contributions welcome! We have a detailed roadmap and active development:
+
+- 📋 **[Development Roadmap](ROADMAP.md)** — 3-phase plan with 15+ planned features
+- 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — Bug reports, feature requests, and tasks
+- 🏷️ **Good First Issues** — Look for `p3-medium` and `quick-win` labels (#51-#65)
+- 📖 **[Contributing Guide](CONTRIBUTING.md)** — Development guidelines and PR process
+
+**High-priority features from the roadmap:**
+- Multi-provider failover (Phase 1) — #52
+- Safety layer consolidation (Phase 1) — #53
+- WASM sandbox (Phase 3) — #60
+- Hybrid search with BM25+Vector (Phase 2) — #56
+
+See individual issues for implementation details and acceptance criteria.
 
 ## License
 
