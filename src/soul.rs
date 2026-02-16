@@ -1,6 +1,116 @@
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
+/// Workspace personality/context files loaded into the system prompt.
+/// Order matters (higher-priority identity first).
+pub const WORKSPACE_PERSONALITY_FILES: &[&str] = &[
+    "SOUL.md",
+    "IDENTITY.md",
+    "USER.md",
+    "AGENTS.md",
+    "HEARTBEAT.md",
+    "TOOLS.md",
+];
+
+const DEFAULT_IDENTITY_CONTENT: &str = r#"# IDENTITY.md
+
+- Agent name: RustyClaw
+- Primary role: coding assistant
+- Communication style: direct, precise, pragmatic
+"#;
+
+const DEFAULT_USER_CONTENT: &str = r#"# USER.md
+
+- Preferred verbosity: concise unless asked otherwise
+- Ask clarifying questions only when blocked
+- Favor actionable, implementation-first guidance
+"#;
+
+const DEFAULT_AGENTS_CONTENT: &str = r#"# AGENTS.md
+
+Describe long-lived workflows and delegation rules for sub-agents.
+"#;
+
+const DEFAULT_HEARTBEAT_CONTENT: &str = r#"# HEARTBEAT.md
+
+Periodic checks:
+1. Review failed jobs/tests from the last run.
+2. Surface high-risk TODOs that are still open.
+3. Summarize anything requiring human attention.
+"#;
+
+const DEFAULT_TOOLS_CONTENT: &str = r#"# TOOLS.md
+
+Tool usage preferences:
+- Prefer read/search tools before command execution.
+- For risky actions, explain and ask for confirmation.
+- Keep outputs concise and include file references.
+"#;
+
+/// Load workspace personality/context files and concatenate them into a prompt block.
+///
+/// When `include_soul` is false, `SOUL.md` is skipped (useful when SOUL is already loaded
+/// separately through `SoulManager`).
+pub fn load_workspace_personality_files(workspace_dir: &Path, include_soul: bool) -> String {
+    let mut sections = Vec::new();
+
+    for file_name in WORKSPACE_PERSONALITY_FILES {
+        if !include_soul && *file_name == "SOUL.md" {
+            continue;
+        }
+
+        let file_path = workspace_dir.join(file_name);
+        if !file_path.exists() {
+            continue;
+        }
+
+        let Ok(content) = std::fs::read_to_string(&file_path) else {
+            continue;
+        };
+        let content = content.trim();
+        if content.is_empty() {
+            continue;
+        }
+
+        if *file_name == "SOUL.md" {
+            sections.push(content.to_string());
+        } else {
+            sections.push(format!("## {} Context\n{}", file_name, content));
+        }
+    }
+
+    sections.join("\n\n")
+}
+
+/// Ensure default workspace personality templates exist (except SOUL.md, which is managed
+/// by `SoulManager`).
+///
+/// Returns a list of file paths created during this call.
+pub fn ensure_workspace_personality_templates(workspace_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut created = Vec::new();
+    let templates = [
+        ("IDENTITY.md", DEFAULT_IDENTITY_CONTENT),
+        ("USER.md", DEFAULT_USER_CONTENT),
+        ("AGENTS.md", DEFAULT_AGENTS_CONTENT),
+        ("HEARTBEAT.md", DEFAULT_HEARTBEAT_CONTENT),
+        ("TOOLS.md", DEFAULT_TOOLS_CONTENT),
+    ];
+
+    std::fs::create_dir_all(workspace_dir).context("Failed to create workspace directory")?;
+
+    for (name, content) in templates {
+        let path = workspace_dir.join(name);
+        if path.exists() {
+            continue;
+        }
+        std::fs::write(&path, content)
+            .with_context(|| format!("Failed to create {}", name))?;
+        created.push(path);
+    }
+
+    Ok(created)
+}
+
 /// Default SOUL.md content, used when creating a new SOUL file.
 /// Modeled after the openclaw SOUL.md template.
 pub const DEFAULT_SOUL_CONTENT: &str = r#"# SOUL.md - Who You Are
@@ -125,11 +235,49 @@ impl SoulManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
     fn test_soul_manager_creation() {
         let temp_path = std::env::temp_dir().join("rustyclaw_test_soul.md");
         let manager = SoulManager::new(temp_path);
         assert!(manager.get_content().is_none());
+    }
+
+    #[test]
+    fn test_load_workspace_personality_files() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path();
+
+        std::fs::write(ws.join("SOUL.md"), "# Soul").unwrap();
+        std::fs::write(ws.join("IDENTITY.md"), "I am RustyClaw.").unwrap();
+        std::fs::write(ws.join("USER.md"), "User prefers concise replies.").unwrap();
+
+        let with_soul = load_workspace_personality_files(ws, true);
+        assert!(with_soul.contains("# Soul"));
+        assert!(with_soul.contains("IDENTITY.md Context"));
+        assert!(with_soul.contains("USER.md Context"));
+
+        let without_soul = load_workspace_personality_files(ws, false);
+        assert!(!without_soul.contains("# Soul"));
+        assert!(without_soul.contains("IDENTITY.md Context"));
+    }
+
+    #[test]
+    fn test_ensure_workspace_personality_templates() {
+        let tmp = tempdir().unwrap();
+        let ws = tmp.path();
+
+        let created = ensure_workspace_personality_templates(ws).unwrap();
+        assert!(!created.is_empty());
+        assert!(ws.join("IDENTITY.md").exists());
+        assert!(ws.join("USER.md").exists());
+        assert!(ws.join("AGENTS.md").exists());
+        assert!(ws.join("HEARTBEAT.md").exists());
+        assert!(ws.join("TOOLS.md").exists());
+
+        // Idempotent: second run should not create new files.
+        let created_again = ensure_workspace_personality_templates(ws).unwrap();
+        assert!(created_again.is_empty());
     }
 }

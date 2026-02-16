@@ -13,6 +13,7 @@ use crate::messengers::{
     XmppConfig, XmppMessenger,
 };
 use crate::pairing::PairingManager;
+use crate::soul::load_workspace_personality_files;
 use crate::tools;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -784,9 +785,22 @@ async fn process_incoming_message(
 
 /// Build system prompt with messenger context.
 fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Message) -> String {
-    let base_prompt = config.system_prompt.clone().unwrap_or_else(|| {
-        "You are a helpful AI assistant.".to_string()
-    });
+    let mut base_prompt = String::new();
+    if let Some(cfg_prompt) = &config.system_prompt {
+        base_prompt.push_str(cfg_prompt.trim());
+    }
+
+    let workspace_prompt = load_workspace_personality_files(&config.workspace_dir(), true);
+    if !workspace_prompt.is_empty() {
+        if !base_prompt.is_empty() {
+            base_prompt.push_str("\n\n");
+        }
+        base_prompt.push_str(&workspace_prompt);
+    }
+
+    if base_prompt.is_empty() {
+        base_prompt = "You are a helpful AI assistant.".to_string();
+    }
 
     format!(
         "{}\n\n## Messaging Context\n\

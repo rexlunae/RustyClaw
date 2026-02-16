@@ -12,7 +12,7 @@ use crossterm::terminal;
 use crate::config::{Config, MessengerConfig, ModelProvider};
 use crate::providers::PROVIDERS;
 use crate::secrets::SecretsManager;
-use crate::soul::{SoulManager, DEFAULT_SOUL_CONTENT};
+use crate::soul::{DEFAULT_SOUL_CONTENT, SoulManager, ensure_workspace_personality_templates};
 use crate::theme as t;
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -463,6 +463,14 @@ pub fn run_onboard_wizard(
         println!("  {}", t::icon_ok(&format!("SOUL.md initialised at {}", t::info(&soul_path.display().to_string()))));
     } else {
         println!("  {}", t::icon_ok("Keeping existing SOUL.md"));
+    }
+
+    let created_templates = ensure_workspace_personality_templates(&config.workspace_dir())?;
+    if !created_templates.is_empty() {
+        println!(
+            "  {}",
+            t::icon_ok("Personality templates initialised: IDENTITY.md, USER.md, AGENTS.md, HEARTBEAT.md, TOOLS.md")
+        );
     }
 
     // ── 7. Configure messengers ────────────────────────────────────

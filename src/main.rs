@@ -11,6 +11,7 @@ use rustyclaw::onboard::run_onboard_wizard;
 use rustyclaw::providers;
 use rustyclaw::secrets::SecretsManager;
 use rustyclaw::skills::SkillManager;
+use rustyclaw::soul::{SoulManager, ensure_workspace_personality_templates};
 use std::path::PathBuf;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
@@ -436,6 +437,9 @@ async fn main() -> Result<()> {
                     config.workspace_dir = Some(ws.into());
                 }
                 config.ensure_dirs()?;
+                let mut soul = SoulManager::new(config.soul_path());
+                soul.load()?;
+                let _ = ensure_workspace_personality_templates(&config.workspace_dir())?;
                 config.save(None)?;
                 println!("{}", rustyclaw::theme::icon_ok(
                     &format!("Initialised config + workspace at {}", rustyclaw::theme::info(&config.settings_dir.display().to_string()))

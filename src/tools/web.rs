@@ -311,7 +311,309 @@ fn html_to_text(html: &str) -> String {
     text
 }
 
-/// Search the web using Brave Search API.
+#[derive(Debug, Clone)]
+struct SearchResult {
+    title: String,
+    url: String,
+    description: String,
+}
+
+trait SearchProvider {
+    fn name(&self) -> &'static str;
+    fn search(
+        &self,
+        query: &str,
+        count: usize,
+        country: &str,
+        search_lang: Option<&str>,
+        freshness: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String>;
+}
+
+struct BraveSearchProvider {
+    api_key: String,
+}
+
+impl SearchProvider for BraveSearchProvider {
+    fn name(&self) -> &'static str {
+        "brave"
+    }
+
+    fn search(
+        &self,
+        query: &str,
+        count: usize,
+        country: &str,
+        search_lang: Option<&str>,
+        freshness: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String> {
+        let mut url = format!(
+            "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
+            urlencoding::encode(query),
+            count,
+        );
+
+        if country != "ALL" {
+            url.push_str(&format!("&country={}", country));
+        }
+
+        if let Some(lang) = search_lang {
+            url.push_str(&format!("&search_lang={}", lang));
+        }
+
+        if let Some(fresh) = freshness {
+            url.push_str(&format!("&freshness={}", fresh));
+        }
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        let response = client
+            .get(&url)
+            .header("Accept", "application/json")
+            .header("Accept-Encoding", "gzip")
+            .header("X-Subscription-Token", &self.api_key)
+            .send()
+            .map_err(|e| format!("Brave Search request failed: {}", e))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let body = response.text().unwrap_or_default();
+            return Err(format!(
+                "Brave Search API error {}: {}",
+                status.as_u16(),
+                body
+            ));
+        }
+
+        let data: Value = response
+            .json()
+            .map_err(|e| format!("Failed to parse Brave Search response: {}", e))?;
+
+        let web_results = data
+            .get("web")
+            .and_then(|w| w.get("results"))
+            .and_then(|r| r.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut out = Vec::new();
+        for result in web_results.into_iter().take(count) {
+            out.push(SearchResult {
+                title: result
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("(no title)")
+                    .to_string(),
+                url: result
+                    .get("url")
+                    .and_then(|u| u.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                description: result
+                    .get("description")
+                    .and_then(|d| d.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+            });
+        }
+
+        Ok(out)
+    }
+}
+
+struct DuckDuckGoSearchProvider;
+
+impl DuckDuckGoSearchProvider {
+    fn extract_topic_results(value: &Value, out: &mut Vec<SearchResult>) {
+        let Some(items) = value.as_array() else {
+            return;
+        };
+
+        for item in items {
+            if let Some(nested) = item.get("Topics") {
+                Self::extract_topic_results(nested, out);
+                continue;
+            }
+
+            let text = item
+                .get("Text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            let url = item
+                .get("FirstURL")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .trim();
+            if text.is_empty() || url.is_empty() {
+                continue;
+            }
+
+            let title = text
+                .split(" - ")
+                .next()
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .unwrap_or("(no title)")
+                .to_string();
+
+            out.push(SearchResult {
+                title,
+                url: url.to_string(),
+                description: text.to_string(),
+            });
+        }
+    }
+}
+
+impl SearchProvider for DuckDuckGoSearchProvider {
+    fn name(&self) -> &'static str {
+        "duckduckgo"
+    }
+
+    fn search(
+        &self,
+        query: &str,
+        count: usize,
+        country: &str,
+        search_lang: Option<&str>,
+        freshness: Option<&str>,
+    ) -> Result<Vec<SearchResult>, String> {
+        // DuckDuckGo Instant Answer API has limited filtering controls.
+        let _ = freshness;
+        let kl = if let Some(lang) = search_lang {
+            format!("{}-{}", country.to_lowercase(), lang.to_lowercase())
+        } else {
+            format!("{}-en", country.to_lowercase())
+        };
+
+        let url = format!(
+            "https://api.duckduckgo.com/?q={}&format=json&no_html=1&no_redirect=1&skip_disambig=0&kl={}",
+            urlencoding::encode(query),
+            urlencoding::encode(&kl)
+        );
+
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(30))
+            .user_agent("RustyClaw/0.1 (web_search tool)")
+            .build()
+            .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+
+        let response = client
+            .get(&url)
+            .send()
+            .map_err(|e| format!("DuckDuckGo search request failed: {}", e))?;
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().unwrap_or_default();
+            return Err(format!("DuckDuckGo API error {}: {}", status, body));
+        }
+
+        let data: Value = response
+            .json()
+            .map_err(|e| format!("Failed to parse DuckDuckGo response: {}", e))?;
+
+        let mut out = Vec::new();
+
+        let heading = data
+            .get("Heading")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let abstract_text = data
+            .get("AbstractText")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let abstract_url = data
+            .get("AbstractURL")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if !heading.is_empty() && !abstract_url.is_empty() {
+            out.push(SearchResult {
+                title: heading.to_string(),
+                url: abstract_url.to_string(),
+                description: abstract_text.to_string(),
+            });
+        }
+
+        if let Some(results) = data.get("Results").and_then(|v| v.as_array()) {
+            for item in results {
+                let text = item
+                    .get("Text")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                let url = item
+                    .get("FirstURL")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .trim();
+                if text.is_empty() || url.is_empty() {
+                    continue;
+                }
+                let title = text
+                    .split(" - ")
+                    .next()
+                    .map(|s| s.trim())
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or("(no title)")
+                    .to_string();
+                out.push(SearchResult {
+                    title,
+                    url: url.to_string(),
+                    description: text.to_string(),
+                });
+            }
+        }
+
+        if let Some(topics) = data.get("RelatedTopics") {
+            Self::extract_topic_results(topics, &mut out);
+        }
+
+        out.truncate(count);
+        Ok(out)
+    }
+}
+
+fn format_search_results(
+    query: &str,
+    provider_name: &str,
+    results: &[SearchResult],
+    note: Option<&str>,
+) -> String {
+    if results.is_empty() {
+        if let Some(n) = note {
+            return format!("{}\n\nNo results found.", n);
+        }
+        return "No results found.".to_string();
+    }
+
+    let mut output = String::new();
+    output.push_str(&format!("Search results for: {}\n", query));
+    output.push_str(&format!("Provider: {}\n\n", provider_name));
+    if let Some(n) = note {
+        output.push_str(n);
+        output.push_str("\n\n");
+    }
+
+    for (i, result) in results.iter().enumerate() {
+        output.push_str(&format!("{}. {}\n", i + 1, result.title));
+        output.push_str(&format!("   {}\n", result.url));
+        if !result.description.is_empty() {
+            output.push_str(&format!("   {}\n", result.description));
+        }
+        output.push('\n');
+    }
+
+    output
+}
+
+/// Search the web using Brave API with DuckDuckGo fallback.
 pub fn exec_web_search(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     let query = args
         .get("query")
@@ -322,8 +624,7 @@ pub fn exec_web_search(args: &Value, _workspace_dir: &Path) -> Result<String, St
         .get("count")
         .and_then(|v| v.as_u64())
         .unwrap_or(5)
-        .min(10)
-        .max(1) as usize;
+        .clamp(1, 10) as usize;
 
     let country = args
         .get("country")
@@ -332,97 +633,64 @@ pub fn exec_web_search(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
     let search_lang = args.get("search_lang").and_then(|v| v.as_str());
     let freshness = args.get("freshness").and_then(|v| v.as_str());
+    let provider_pref = args
+        .get("provider")
+        .and_then(|v| v.as_str())
+        .map(|v| v.to_lowercase())
+        .or_else(|| {
+            std::env::var("RUSTYCLAW_WEB_SEARCH_PROVIDER")
+                .ok()
+                .map(|v| v.to_lowercase())
+        })
+        .unwrap_or_else(|| "auto".to_string());
 
-    // Get API key from environment
-    let api_key = std::env::var("BRAVE_API_KEY").map_err(|_| {
-        "BRAVE_API_KEY environment variable not set. \
-         Get a free API key at https://brave.com/search/api/"
-            .to_string()
-    })?;
+    let brave_api_key = std::env::var("BRAVE_API_KEY").ok();
 
-    // Build the request URL
-    let mut url = format!(
-        "https://api.search.brave.com/res/v1/web/search?q={}&count={}",
-        urlencoding::encode(query),
-        count,
-    );
-
-    if country != "ALL" {
-        url.push_str(&format!("&country={}", country));
-    }
-
-    if let Some(lang) = search_lang {
-        url.push_str(&format!("&search_lang={}", lang));
-    }
-
-    if let Some(fresh) = freshness {
-        url.push_str(&format!("&freshness={}", fresh));
-    }
-
-    // Make the request
-    let client = reqwest::blocking::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
-
-    let response = client
-        .get(&url)
-        .header("Accept", "application/json")
-        .header("Accept-Encoding", "gzip")
-        .header("X-Subscription-Token", &api_key)
-        .send()
-        .map_err(|e| format!("Brave Search request failed: {}", e))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let body = response.text().unwrap_or_default();
-        return Err(format!(
-            "Brave Search API error {}: {}",
-            status.as_u16(),
-            body
-        ));
-    }
-
-    let data: Value = response
-        .json()
-        .map_err(|e| format!("Failed to parse Brave Search response: {}", e))?;
-
-    // Extract web results
-    let web_results = data
-        .get("web")
-        .and_then(|w| w.get("results"))
-        .and_then(|r| r.as_array());
-
-    let Some(results) = web_results else {
-        return Ok("No results found.".to_string());
-    };
-
-    if results.is_empty() {
-        return Ok("No results found.".to_string());
-    }
-
-    // Format results
-    let mut output = String::new();
-    output.push_str(&format!("Search results for: {}\n\n", query));
-
-    for (i, result) in results.iter().take(count).enumerate() {
-        let title = result
-            .get("title")
-            .and_then(|t| t.as_str())
-            .unwrap_or("(no title)");
-        let url = result.get("url").and_then(|u| u.as_str()).unwrap_or("");
-        let description = result
-            .get("description")
-            .and_then(|d| d.as_str())
-            .unwrap_or("");
-
-        output.push_str(&format!("{}. {}\n", i + 1, title));
-        output.push_str(&format!("   {}\n", url));
-        if !description.is_empty() {
-            output.push_str(&format!("   {}\n", description));
+    match provider_pref.as_str() {
+        "brave" => {
+            let key = brave_api_key.ok_or_else(|| {
+                "BRAVE_API_KEY environment variable not set. \
+                 Get a free API key at https://brave.com/search/api/"
+                    .to_string()
+            })?;
+            let brave = BraveSearchProvider { api_key: key };
+            let results = brave.search(query, count, country, search_lang, freshness)?;
+            Ok(format_search_results(query, brave.name(), &results, None))
         }
-        output.push('\n');
+        "duckduckgo" | "ddg" => {
+            let ddg = DuckDuckGoSearchProvider;
+            let results = ddg.search(query, count, country, search_lang, freshness)?;
+            Ok(format_search_results(query, ddg.name(), &results, None))
+        }
+        "auto" => {
+            if let Some(key) = brave_api_key {
+                let brave = BraveSearchProvider { api_key: key };
+                match brave.search(query, count, country, search_lang, freshness) {
+                    Ok(results) => Ok(format_search_results(query, brave.name(), &results, None)),
+                    Err(err) => {
+                        let ddg = DuckDuckGoSearchProvider;
+                        let results = ddg.search(query, count, country, search_lang, freshness)?;
+                        let note = format!(
+                            "Brave search failed ({}). Automatically fell back to DuckDuckGo.",
+                            err
+                        );
+                        Ok(format_search_results(
+                            query,
+                            ddg.name(),
+                            &results,
+                            Some(&note),
+                        ))
+                    }
+                }
+            } else {
+                let ddg = DuckDuckGoSearchProvider;
+                let results = ddg.search(query, count, country, search_lang, freshness)?;
+                Ok(format_search_results(query, ddg.name(), &results, None))
+            }
+        }
+        other => Err(format!(
+            "Invalid provider '{}'. Valid values: auto, brave, duckduckgo",
+            other
+        )),
     }
-
-    Ok(output)
 }

@@ -31,7 +31,7 @@ use crate::panes::{DisplayMessage, GatewayStatus, InputMode, Pane, PaneState};
 use crate::providers;
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
-use crate::soul::SoulManager;
+use crate::soul::{SoulManager, load_workspace_personality_files};
 use crate::tui::{Event, EventResponse, Tui};
 
 /// Debug log to file (avoids TUI interference)
@@ -2266,6 +2266,17 @@ impl App {
             content.push_str(soul_text);
         }
 
+        // Add additional workspace personality files (IDENTITY.md, USER.md, etc.).
+        if let Some(workspace_dir) = soul.get_path().parent() {
+            let workspace_context = load_workspace_personality_files(workspace_dir, false);
+            if !workspace_context.is_empty() {
+                if !content.is_empty() {
+                    content.push_str("\n\n");
+                }
+                content.push_str(&workspace_context);
+            }
+        }
+
         // Add skills context
         let skills_context = skill_manager.generate_prompt_context();
         if !skills_context.is_empty() {
@@ -2312,7 +2323,8 @@ impl App {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        // Strip the system prompt — we always regenerate it from SOUL.md.
+        // Strip the system prompt — we always regenerate it from workspace
+        // personality files and skills context.
         let turns: Vec<&ChatMessage> = self
             .state
             .conversation_history

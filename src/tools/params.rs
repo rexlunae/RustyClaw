@@ -246,6 +246,15 @@ pub fn web_search_params() -> Vec<ToolParam> {
             param_type: "string".into(),
             required: false,
         },
+        ToolParam {
+            name: "provider".into(),
+            description: "Search provider: 'auto' (default), 'brave', or 'duckduckgo'. \
+                          In auto mode, Brave is used when BRAVE_API_KEY is set, with \
+                          automatic DuckDuckGo fallback on failure."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
     ]
 }
 

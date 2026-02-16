@@ -226,9 +226,10 @@ pub static WEB_FETCH: ToolDef = ToolDef {
 
 pub static WEB_SEARCH: ToolDef = ToolDef {
     name: "web_search",
-    description: "Search the web using Brave Search API. Returns titles, URLs, and snippets. \
-                  Requires BRAVE_API_KEY environment variable to be set. \
-                  Use for finding current information, research, and fact-checking.",
+    description: "Search the web and return titles, URLs, and snippets. \
+                  Uses Brave Search when BRAVE_API_KEY is configured, with \
+                  automatic DuckDuckGo fallback in auto mode. \
+                  Use for current information, research, and fact-checking.",
     parameters: vec![],
     execute: exec_web_search,
 };
@@ -984,21 +985,30 @@ mod tests {
         // Clear any existing key for the test
         // SAFETY: This test is single-threaded and no other thread reads BRAVE_API_KEY.
         unsafe { std::env::remove_var("BRAVE_API_KEY") };
-        let args = json!({ "query": "test" });
+        let args = json!({ "query": "test", "provider": "brave" });
         let result = exec_web_search(&args, ws());
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("BRAVE_API_KEY"));
     }
 
     #[test]
+    fn test_web_search_invalid_provider() {
+        let args = json!({ "query": "test", "provider": "invalid" });
+        let result = exec_web_search(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Invalid provider"));
+    }
+
+    #[test]
     fn test_web_search_params_defined() {
         let params = web_search_params();
-        assert_eq!(params.len(), 5);
+        assert_eq!(params.len(), 6);
         assert!(params.iter().any(|p| p.name == "query" && p.required));
         assert!(params.iter().any(|p| p.name == "count" && !p.required));
         assert!(params.iter().any(|p| p.name == "country" && !p.required));
         assert!(params.iter().any(|p| p.name == "search_lang" && !p.required));
         assert!(params.iter().any(|p| p.name == "freshness" && !p.required));
+        assert!(params.iter().any(|p| p.name == "provider" && !p.required));
     }
 
     // ── process ─────────────────────────────────────────────────────
