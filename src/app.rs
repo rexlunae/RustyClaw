@@ -61,6 +61,8 @@ struct SharedState {
     skill_manager: SkillManager,
     soul_manager: SoulManager,
     gateway_status: GatewayStatus,
+    /// Whether elevated (sudo) mode is enabled for execute_command
+    elevated_mode: bool,
     /// Animated loading line shown at the bottom of the messages list.
     loading_line: Option<String>,
     /// When streaming started (for elapsed time display in footer).
@@ -272,6 +274,7 @@ impl App {
             skill_manager,
             soul_manager,
             gateway_status,
+            elevated_mode: false,
             loading_line: None,
             streaming_started: None,
         };
@@ -1681,6 +1684,18 @@ impl App {
                             ));
                         }
                     }
+                }
+                CommandAction::SetElevated(enabled) => {
+                    self.state.elevated_mode = enabled;
+                    for msg in response.messages {
+                        self.state.messages.push(DisplayMessage::info(msg));
+                    }
+                    // Send elevated mode state to gateway
+                    let frame = serde_json::json!({
+                        "type": "set_elevated",
+                        "enabled": enabled,
+                    });
+                    return Ok(Some(Action::SendToGateway(frame.to_string())));
                 }
                 CommandAction::None => {
                     for msg in response.messages {
