@@ -377,6 +377,27 @@ pub struct MessengerConfig {
     /// Phone number (Signal).
     #[serde(default)]
     pub phone: Option<String>,
+    /// Gmail client ID (OAuth2).
+    #[serde(default)]
+    pub client_id: Option<String>,
+    /// Gmail client secret (OAuth2).
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    /// Gmail refresh token (OAuth2).
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    /// Gmail user/email (defaults to "me").
+    #[serde(default)]
+    pub gmail_user: Option<String>,
+    /// Gmail label to monitor (defaults to "INBOX").
+    #[serde(default)]
+    pub gmail_label: Option<String>,
+    /// Gmail poll interval in seconds (defaults to 60).
+    #[serde(default)]
+    pub gmail_poll_interval: Option<u64>,
+    /// Gmail: only respond to unread messages.
+    #[serde(default)]
+    pub gmail_unread_only: Option<bool>,
     /// Allowed chat IDs/channels (whitelist).
     #[serde(default)]
     pub allowed_chats: Vec<String>,
