@@ -286,6 +286,7 @@ pub struct Config {
     /// WebAuthn/Passkey authentication configuration.
     #[serde(default)]
     pub webauthn: WebAuthnConfig,
+<<<<<<< HEAD
     /// Slack messenger configuration.
     #[serde(default)]
     pub slack: Option<crate::gateway::messengers::slack::SlackConfig>,
