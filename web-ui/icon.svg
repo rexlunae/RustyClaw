@@ -1,0 +1,34 @@
+<svg width="192" height="192" viewBox="0 0 192 192" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#f97316;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#ea580c;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="192" height="192" rx="42" fill="#1a1a1a"/>
+
+  <!-- Crab claw icon -->
+  <g transform="translate(96, 96)">
+    <!-- Left claw -->
+    <path d="M -40,-30 Q -50,-40 -60,-35 Q -65,-30 -60,-25 L -40,-15 Z" fill="url(#grad1)"/>
+    <!-- Right claw -->
+    <path d="M 40,-30 Q 50,-40 60,-35 Q 65,-30 60,-25 L 40,-15 Z" fill="url(#grad1)"/>
+    <!-- Body -->
+    <ellipse cx="0" cy="0" rx="35" ry="30" fill="url(#grad1)"/>
+    <!-- Eyes -->
+    <circle cx="-12" cy="-8" r="4" fill="#1a1a1a"/>
+    <circle cx="12" cy="-8" r="4" fill="#1a1a1a"/>
+    <!-- Legs (left) -->
+    <path d="M -25,15 L -35,30" stroke="url(#grad1)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M -15,15 L -20,30" stroke="url(#grad1)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <!-- Legs (right) -->
+    <path d="M 25,15 L 35,30" stroke="url(#grad1)" stroke-width="4" fill="none" stroke-linecap="round"/>
+    <path d="M 15,15 L 20,30" stroke="url(#grad1)" stroke-width="4" fill="none" stroke-linecap="round"/>
+  </g>
+
+  <!-- Badge/indicator -->
+  <circle cx="150" cy="42" r="20" fill="#4ade80"/>
+  <text x="150" y="50" text-anchor="middle" font-size="24" fill="#1a1a1a" font-weight="bold">R</text>
+</svg>
