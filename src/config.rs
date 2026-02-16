@@ -240,6 +240,32 @@ impl VoiceConfig {
     }
 }
 
+/// Heartbeat monitoring configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeartbeatConfig {
+    /// Whether heartbeat monitoring is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Heartbeat interval in seconds.
+    #[serde(default = "HeartbeatConfig::default_interval_secs")]
+    pub interval_secs: u64,
+}
+
+impl Default for HeartbeatConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            interval_secs: Self::default_interval_secs(),
+        }
+    }
+}
+
+impl HeartbeatConfig {
+    fn default_interval_secs() -> u64 {
+        900
+    }
+}
+
 /// Lifecycle hooks configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HooksConfig {
@@ -416,6 +442,9 @@ pub struct Config {
     /// Voice features configuration (STT/TTS).
     #[serde(default)]
     pub voice: VoiceConfig,
+    /// Heartbeat monitoring configuration.
+    #[serde(default)]
+    pub heartbeat: HeartbeatConfig,
     /// Lifecycle hooks configuration.
     #[serde(default)]
     pub hooks: HooksConfig,
@@ -635,6 +664,7 @@ impl Default for Config {
             tls: TlsConfig::default(),
             health: HealthConfig::default(),
             voice: VoiceConfig::default(),
+            heartbeat: HeartbeatConfig::default(),
             metrics: MetricsConfig::default(),
             hooks: HooksConfig::default(),
             webauthn: WebAuthnConfig::default(),
@@ -843,6 +873,7 @@ impl Config {
             "metrics",
             "health",
             "voice",
+            "heartbeat",
             "hooks",
             "webauthn",
             "pairing",
@@ -985,6 +1016,22 @@ impl Config {
                     ConfigDiagnosticSeverity::Error,
                     "voice",
                     "Expected [voice] to be a table.".to_string(),
+                    None,
+                ),
+            }
+        }
+
+        // Nested [heartbeat]
+        if let Some(v) = root.get("heartbeat") {
+            match v.as_table() {
+                Some(tbl) => {
+                    let allowed = ["enabled", "interval_secs"];
+                    validate_unknown_table_keys("heartbeat", tbl, &allowed, &mut report);
+                }
+                None => report.push(
+                    ConfigDiagnosticSeverity::Error,
+                    "heartbeat",
+                    "Expected [heartbeat] to be a table.".to_string(),
                     None,
                 ),
             }

@@ -7,6 +7,7 @@
 
 mod auth;
 mod csrf;
+mod heartbeat;
 mod health;
 mod helpers;
 mod messenger_handler;
@@ -455,9 +456,37 @@ pub async fn run_gateway(
         });
     }
 
+    // Start heartbeat loop (polls config so it can be enabled/disabled via hot-reload)
+    {
+        let heartbeat_cfg = shared_config.clone();
+        let heartbeat_ctx = shared_model_ctx.clone();
+        let heartbeat_vault = vault.clone();
+        let heartbeat_cancel = cancel.clone();
+        let heartbeat_session = copilot_session.clone();
+        tokio::spawn(async move {
+            if let Err(e) = heartbeat::run_heartbeat_loop(
+                heartbeat_cfg,
+                heartbeat_ctx,
+                heartbeat_vault,
+                heartbeat_session,
+                heartbeat_cancel,
+            )
+            .await
+            {
+                eprintln!("[heartbeat] Loop failed: {}", e);
+            }
+        });
+    }
+
     eprintln!("[gateway] Listening on {}", addr);
     if messenger_mgr.is_some() {
         eprintln!("[gateway] Messenger polling enabled");
+    }
+    if config.heartbeat.enabled {
+        eprintln!(
+            "[gateway] Heartbeat enabled (interval={}s)",
+            config.heartbeat.interval_secs
+        );
     }
 
     // Initialize lifecycle hook registry
