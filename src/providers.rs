@@ -174,6 +174,28 @@ pub const PROVIDERS: &[ProviderDef] = &[
         help_text: Some("No key needed — runs locally. Install: ollama.com"),
     },
     ProviderDef {
+        id: "lmstudio",
+        display: "LM Studio (local)",
+        auth_method: AuthMethod::None,
+        secret_key: None,
+        device_flow: None,
+        base_url: Some("http://localhost:1234/v1"),
+        models: &[],
+        help_url: None,
+        help_text: Some("No key needed — runs locally. Default port 1234. Install: lmstudio.ai"),
+    },
+    ProviderDef {
+        id: "exo",
+        display: "exo cluster (local)",
+        auth_method: AuthMethod::None,
+        secret_key: None,
+        device_flow: None,
+        base_url: Some("http://localhost:52415/v1"),
+        models: &[],
+        help_url: None,
+        help_text: Some("No key needed — exo cluster. Default port 52415. Install: github.com/exo-explore/exo"),
+    },
+    ProviderDef {
         id: "custom",
         display: "Custom / OpenAI-compatible endpoint",
         auth_method: AuthMethod::ApiKey,
@@ -259,8 +281,8 @@ pub async fn fetch_models(
     let result = match provider_id {
         // Google Gemini uses a different response shape
         "google" => fetch_google_models(base, api_key).await,
-        // Ollama — no auth needed, OpenAI-compatible /v1/models
-        "ollama" => fetch_openai_compatible_models(base, None).await,
+        // Local providers — no auth needed, OpenAI-compatible /v1/models
+        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models(base, None).await,
         // Everything else is OpenAI-compatible
         _ => fetch_openai_compatible_models(base, api_key).await,
     };

@@ -1057,6 +1057,23 @@ impl App {
         }
 
         // ── Handle secrets result frames from the gateway ──────
+        if frame_type == Some("reload_result") {
+            let ok = parsed.as_ref().and_then(|v| v.get("ok")).and_then(|o| o.as_bool()).unwrap_or(false);
+            if ok {
+                let provider = parsed.as_ref().and_then(|v| v.get("provider")).and_then(|p| p.as_str()).unwrap_or("?");
+                let model = parsed.as_ref().and_then(|v| v.get("model")).and_then(|m| m.as_str()).unwrap_or("?");
+                self.state.messages.push(DisplayMessage::success(format!(
+                    "Gateway config reloaded: {} / {}", provider, model
+                )));
+            } else {
+                let msg = parsed.as_ref().and_then(|v| v.get("message")).and_then(|m| m.as_str()).unwrap_or("Unknown error");
+                self.state.messages.push(DisplayMessage::error(format!(
+                    "Reload failed: {}", msg
+                )));
+            }
+            return Ok(Some(Action::Update));
+        }
+
         if frame_type == Some("secrets_list_result") {
             let entries = parsed
                 .as_ref()
@@ -1592,6 +1609,14 @@ impl App {
                         url_display,
                         self.state.gateway_status.label()
                     )));
+                }
+                CommandAction::GatewayReload => {
+                    for msg in response.messages {
+                        self.state.messages.push(DisplayMessage::info(msg));
+                    }
+                    // Send reload command to the gateway
+                    let reload_json = serde_json::json!({ "type": "reload" }).to_string();
+                    return Ok(Some(Action::SendToGateway(reload_json)));
                 }
                 CommandAction::SetProvider(ref provider) => {
                     for msg in &response.messages {

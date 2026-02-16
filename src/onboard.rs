@@ -337,8 +337,13 @@ pub fn run_onboard_wizard(
         println!();
     }
 
-    // ── 4. Base URL (only for custom or copilot-proxy) ────────────
-    let base_url: String = if provider.id == "custom" || provider.id == "copilot-proxy" {
+    // ── 4. Base URL ────────────────────────────────────────────────
+    // For custom/proxy providers: prompt for the full URL.
+    // For local providers (Ollama, LM Studio, exo): show default and
+    // allow override (e.g. non-standard ports).
+    let needs_url_prompt = provider.id == "custom" || provider.id == "copilot-proxy";
+    let is_local_provider = provider.id == "ollama" || provider.id == "lmstudio" || provider.id == "exo";
+    let base_url: String = if needs_url_prompt {
         let prompt_text = if provider.id == "copilot-proxy" {
             "Copilot Proxy URL:"
         } else {
@@ -349,6 +354,21 @@ pub fn run_onboard_wizard(
         if url.is_empty() {
             println!("  {}", t::icon_warn("No URL entered. You can set model.base_url in config.toml later."));
             String::new()
+        } else {
+            println!("  {}", t::icon_ok(&format!("Base URL: {}", t::info(&url))));
+            url
+        }
+    } else if is_local_provider {
+        let default_url = provider.base_url.unwrap_or("http://localhost:8080/v1");
+        println!("  {} Default: {}", t::muted("ℹ"), t::info(default_url));
+        let url = prompt_line(
+            &mut reader,
+            &format!("{} ", t::accent("Base URL (Enter for default, or type custom):")),
+        )?;
+        let url = url.trim().to_string();
+        if url.is_empty() {
+            println!("  {}", t::icon_ok(&format!("Using default: {}", t::info(default_url))));
+            default_url.to_string()
         } else {
             println!("  {}", t::icon_ok(&format!("Base URL: {}", t::info(&url))));
             url

@@ -35,7 +35,11 @@ pub fn disable_color() {
 /// Initialise the colour system.  Checks `NO_COLOR` env-var and optional
 /// `--no-color` flag.
 pub fn init_color(no_color_flag: bool) {
-    if no_color_flag || std::env::var("NO_COLOR").map(|v| !v.is_empty()).unwrap_or(false) {
+    if no_color_flag
+        || std::env::var("NO_COLOR")
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+    {
         disable_color();
     }
 }
@@ -229,13 +233,7 @@ pub fn print_header(title: &str) {
     let left = pad / 2;
     let right = pad - left;
     println!();
-    println!(
-        "{}",
-        accent(&format!(
-            "┌{}┐",
-            "─".repeat(inner)
-        ))
-    );
+    println!("{}", accent(&format!("┌{}┐", "─".repeat(inner))));
     println!(
         "{}",
         accent(&format!(
@@ -245,13 +243,7 @@ pub fn print_header(title: &str) {
             " ".repeat(right)
         ))
     );
-    println!(
-        "{}",
-        accent(&format!(
-            "└{}┘",
-            "─".repeat(inner)
-        ))
-    );
+    println!("{}", accent(&format!("└{}┘", "─".repeat(inner))));
     println!();
 }
 
@@ -313,16 +305,30 @@ pub mod tui_palette {
     pub const ERROR: Color = rgb(palette::ERROR);
     pub const MUTED: Color = rgb(palette::MUTED);
 
-    // Extra neutrals for the TUI
-    pub const SURFACE: Color = Color::Rgb(0x1E, 0x1C, 0x1A);   // dark warm grey bg
-    pub const SURFACE_BRIGHT: Color = Color::Rgb(0x2D, 0x2A, 0x27); // slightly lighter
-    pub const TEXT: Color = Color::Rgb(0xE8, 0xE0, 0xD8);      // warm off-white text
-    pub const TEXT_DIM: Color = Color::Rgb(0x9E, 0x94, 0x8C);   // subdued text
+    // Extra neutrals for the TUI - 12-step grayscale like opencode
+    pub const SURFACE_1: Color = Color::Rgb(0x0A, 0x0A, 0x0A); // deepest background
+    pub const SURFACE_2: Color = Color::Rgb(0x14, 0x14, 0x14); // panel background
+    pub const SURFACE_3: Color = Color::Rgb(0x1E, 0x1E, 0x1E); // element background
+    pub const SURFACE_4: Color = Color::Rgb(0x28, 0x28, 0x28); // hover/elevated
+    pub const SURFACE_5: Color = Color::Rgb(0x32, 0x32, 0x32); // active element
+    pub const SURFACE_6: Color = Color::Rgb(0x3C, 0x3C, 0x3C); // borders
+    pub const SURFACE_7: Color = Color::Rgb(0x48, 0x48, 0x48); // subtle border
+    pub const SURFACE_8: Color = Color::Rgb(0x60, 0x60, 0x60); // active border
+    pub const SURFACE_9: Color = Color::Rgb(0x82, 0x82, 0x82); // muted text
+    pub const SURFACE_10: Color = Color::Rgb(0xA0, 0xA0, 0xA0); // dim text
+    pub const SURFACE_11: Color = Color::Rgb(0xC0, 0xC0, 0xC0); // secondary text
+    pub const SURFACE_12: Color = Color::Rgb(0xEE, 0xEE, 0xEE); // primary text
 
-    // Subtle background tints for message bubbles
-    pub const BG_USER: Color = Color::Rgb(0x2A, 0x24, 0x20);       // warm dark for user input
-    pub const BG_ASSISTANT: Color = Color::Rgb(0x1A, 0x1E, 0x22);  // cool dark for bot output
-    pub const BG_CODE: Color = Color::Rgb(0x22, 0x28, 0x30);       // slightly blue-tinted for code blocks
+    // Backwards compatibility aliases
+    pub const SURFACE: Color = SURFACE_1;
+    pub const SURFACE_BRIGHT: Color = SURFACE_3;
+    pub const TEXT: Color = SURFACE_12;
+    pub const TEXT_DIM: Color = SURFACE_9;
+
+    // Message bubbles - more contrast between roles
+    pub const BG_USER: Color = Color::Rgb(0x1A, 0x1A, 0x1A); // dark for user input
+    pub const BG_ASSISTANT: Color = Color::Rgb(0x14, 0x14, 0x14); // slightly lighter for bot
+    pub const BG_CODE: Color = Color::Rgb(0x1E, 0x1E, 0x22); // subtle blue tint for code
 
     // ── Pre-built styles ────────────────────────────────────
 
@@ -333,7 +339,17 @@ pub mod tui_palette {
 
     /// Border style for unfocused pane.
     pub const fn unfocused_border() -> Style {
-        Style::new().fg(MUTED)
+        Style::new().fg(SURFACE_6)
+    }
+
+    /// Active/selected border.
+    pub const fn active_border() -> Style {
+        Style::new().fg(ACCENT)
+    }
+
+    /// Subtle border for contained elements.
+    pub const fn subtle_border() -> Style {
+        Style::new().fg(SURFACE_5)
     }
 
     /// Pane title when focused.
@@ -343,7 +359,7 @@ pub mod tui_palette {
 
     /// Pane title when unfocused.
     pub const fn title_unfocused() -> Style {
-        Style::new().fg(TEXT_DIM)
+        Style::new().fg(SURFACE_10)
     }
 
     /// Style for the input prompt indicator when active.
@@ -358,27 +374,33 @@ pub mod tui_palette {
 
     /// Status line hint text style.
     pub const fn hint() -> Style {
-        Style::new().fg(MUTED)
+        Style::new().fg(SURFACE_9)
     }
 
     /// Highlighted / selected item in a list.
     pub const fn selected() -> Style {
-        Style::new().fg(TEXT).bg(SURFACE_BRIGHT).add_modifier(Modifier::BOLD)
+        Style::new()
+            .fg(SURFACE_12)
+            .bg(SURFACE_4)
+            .add_modifier(Modifier::BOLD)
     }
 
     /// Completion popup background.
     pub const fn popup_bg() -> Style {
-        Style::new().bg(SURFACE_BRIGHT)
+        Style::new().bg(SURFACE_3).fg(SURFACE_12)
     }
 
     /// Highlighted completion entry.
     pub const fn popup_selected() -> Style {
-        Style::new().fg(ACCENT_BRIGHT).bg(ACCENT_DIM).add_modifier(Modifier::BOLD)
+        Style::new()
+            .fg(ACCENT_BRIGHT)
+            .bg(SURFACE_4)
+            .add_modifier(Modifier::BOLD)
     }
 
     /// Normal completion entry.
     pub const fn popup_item() -> Style {
-        Style::new().fg(TEXT_DIM)
+        Style::new().fg(SURFACE_10)
     }
 
     /// Style for user-typed messages ("▶ something").
@@ -396,6 +418,16 @@ pub mod tui_palette {
         Style::new().fg(TEXT)
     }
 
+    // ── Diff colors ────────────────────────────────────────────────
+
+    pub const DIFF_ADDED: Color = Color::Rgb(0x4F, 0xD6, 0xBE);
+    pub const DIFF_REMOVED: Color = Color::Rgb(0xC5, 0x3B, 0x53);
+    pub const DIFF_CONTEXT: Color = Color::Rgb(0x82, 0x8B, 0xB8);
+
+    pub const DIFF_ADDED_BG: Color = Color::Rgb(0x20, 0x30, 0x3B);
+    pub const DIFF_REMOVED_BG: Color = Color::Rgb(0x37, 0x22, 0x2C);
+    pub const DIFF_CONTEXT_BG: Color = SURFACE_2;
+
     // ── Markdown StyleSheet for tui-markdown ────────────────────
 
     /// Custom stylesheet for markdown rendering that uses the lobster palette.
@@ -405,9 +437,13 @@ pub mod tui_palette {
     impl tui_markdown::StyleSheet for RustyClawMarkdownStyle {
         fn heading(&self, level: u8) -> Style {
             match level {
-                1 => Style::new().fg(ACCENT).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                1 => Style::new()
+                    .fg(ACCENT)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                 2 => Style::new().fg(ACCENT_BRIGHT).add_modifier(Modifier::BOLD),
-                3 => Style::new().fg(ACCENT_DIM).add_modifier(Modifier::BOLD | Modifier::ITALIC),
+                3 => Style::new()
+                    .fg(ACCENT_DIM)
+                    .add_modifier(Modifier::BOLD | Modifier::ITALIC),
                 _ => Style::new().fg(INFO).add_modifier(Modifier::ITALIC),
             }
         }
