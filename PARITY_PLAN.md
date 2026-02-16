@@ -48,7 +48,7 @@
 - ✅ **Access Policies** — Always/WithAuth/SkillOnly, agent access control
 - ✅ **DM Pairing Security** — Allowlist + pairing codes for messenger authorization (vs OpenClaw ❌)
 - ✅ **Elevated Mode Control** — Per-session sudo toggle (`/elevated on|off`)
-- ✅ **Sandbox Enforcement** — bwrap/Landlock/PathValidation modes
+- ✅ **Sandbox Enforcement** — Landlock/bwrap/macOS/PathValidation with comprehensive documentation
 
 ### Platform Features
 - ✅ **Multi-Provider LLM** — OpenAI, Anthropic, Google, GitHub Copilot, xAI, OpenRouter, Ollama, custom (7+)
@@ -240,12 +240,13 @@ These features from competing projects could enhance RustyClaw:
 - ✅ **DM Pairing Security** — Unique to RustyClaw
 - ✅ **Presence/Typing Indicators** — Unique to RustyClaw
 - ✅ **Elevated Bash Toggle** — Matching OpenClaw/IronClaw
+- ✅ **Sandbox Documentation** — Comprehensive guide for Landlock/bwrap/macOS/PathValidation
 - ✅ **Remote Gateway with Health Monitoring** — HTTP endpoints for status/metrics [Issue #39]
 - ✅ **Tailscale Integration** — Zero-config VPN with automated setup [Issue #40]
 - ⚠️ **Voice Features Framework** — Architecture complete, providers pending [Issue #41]
 
 ### High Priority (Security & Core)
-1. ⚠️ **Enhanced sandbox** — Landlock integration (partial)
+1. ✅ **Enhanced sandbox** — Landlock/bwrap/macOS with comprehensive documentation
 2. ❌ **Plugin signature verification** — Ed25519 for WASM plugins
 3. ❌ **Anthropic Skills validation** — Ensure official compatibility
 
