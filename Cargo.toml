@@ -124,6 +124,7 @@ chromiumoxide = { version = "0.8", default-features = false, features = ["tokio-
 colored = "3.1"
 indicatif = "0.18"
 unicode-width = "0.2"
+rpassword = "7"
 
 # Unix process management
 [target.'cfg(unix)'.dependencies]
