@@ -286,6 +286,9 @@ pub struct Config {
     /// WebAuthn/Passkey authentication configuration.
     #[serde(default)]
     pub webauthn: WebAuthnConfig,
+    /// Slack messenger configuration.
+    #[serde(default)]
+    pub slack: Option<crate::gateway::messengers::slack::SlackConfig>,
     /// ClawHub registry URL (default: `https://registry.clawhub.dev/api/v1`).
     #[serde(default)]
     pub clawhub_url: Option<String>,
@@ -374,6 +377,7 @@ impl Default for Config {
             metrics: MetricsConfig::default(),
             hooks: HooksConfig::default(),
             webauthn: WebAuthnConfig::default(),
+            slack: None,
             clawhub_url: None,
             clawhub_token: None,
             system_prompt: None,

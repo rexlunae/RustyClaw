@@ -28,6 +28,10 @@ default = ["tui", "web-tools"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-markdown", "dep:tui-input"]
 web-tools = ["dep:scraper", "dep:html2md"]
 matrix = ["dep:matrix-sdk"]
+messenger-slack = ["dep:hmac", "dep:sha2", "dep:hex"]
+messenger-discord = []
+messenger-telegram = []
+messenger-matrix = []
 browser = ["dep:chromiumoxide"]
 # Publishable feature sets
 all-messengers = ["matrix"]
@@ -161,6 +165,12 @@ rpassword = "7"
 # WebAuthn/Passkey authentication
 webauthn-rs = "0.5"
 webauthn-rs-proto = "0.5"
+
+# Messenger integrations (optional features)
+hmac = { version = "0.12", optional = true }
+sha2 = { version = "0.10", optional = true }
+hex = { version = "0.4", optional = true }
+bytes = "1.5"
 
 # Patches for crypto compatibility
 [patch.crates-io]
