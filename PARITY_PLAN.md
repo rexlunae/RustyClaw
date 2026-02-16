@@ -186,14 +186,14 @@ RustyClaw serves as the reference implementation. Other projects are compared ag
 These features from competing projects could enhance RustyClaw:
 
 ### From OpenClaw (TypeScript)
-- ❌ **Voice features** — Voice Wake + Talk Mode with ElevenLabs
+- ✅ **Voice features** — Voice Wake + Talk Mode framework (providers pending) [Issue #41]
 - ❌ **Companion apps** — macOS/iOS/Android native apps
 - ❌ **Control UI / Web Dashboard** — Web-based management interface
 - ❌ **Canvas** — A2UI visual workspace (RustyClaw has stub)
 - ❌ **Additional messengers** — WhatsApp, Slack, Google Chat, iMessage, Teams (7 missing)
-- ❌ **Tailscale integration** — Auto-configured VPN/remote access
+- ✅ **Tailscale integration** — Auto-configured VPN/remote access [Issue #40]
 - ❌ **Gmail Pub/Sub** — Email webhook automation
-- ❌ **Remote Gateway** — Linux server deployment pattern
+- ✅ **Remote Gateway** — Linux server deployment with health monitoring [Issue #39]
 
 **Priority**: Low-Medium (UX/convenience features, not core functionality)
 
@@ -240,6 +240,9 @@ These features from competing projects could enhance RustyClaw:
 - ✅ **DM Pairing Security** — Unique to RustyClaw
 - ✅ **Presence/Typing Indicators** — Unique to RustyClaw
 - ✅ **Elevated Bash Toggle** — Matching OpenClaw/IronClaw
+- ✅ **Remote Gateway with Health Monitoring** — HTTP endpoints for status/metrics [Issue #39]
+- ✅ **Tailscale Integration** — Zero-config VPN with automated setup [Issue #40]
+- ⚠️ **Voice Features Framework** — Architecture complete, providers pending [Issue #41]
 
 ### High Priority (Security & Core)
 1. ⚠️ **Enhanced sandbox** — Landlock integration (partial)
@@ -249,23 +252,24 @@ These features from competing projects could enhance RustyClaw:
 ### Medium Priority (Platform Features)
 4. ❌ **Multi-provider voice** — ElevenLabs, Google, Azure TTS/STT
 5. ❌ **Vector search** — pgvector or Qdrant integration
-6. ❌ **Hierarchical memory** — Global + per-session + per-channel
-7. ❌ **Web dashboard** — Addresses Control UI gap
-8. ❌ **Cross-channel UI** — Unified messenger management
+6. ✅ **Remote Gateway with health monitoring** — HTTP endpoints for status/metrics [Issue #39, Commit 90ffe7b]
+7. ❌ **Hierarchical memory** — Global + per-session + per-channel
+8. ❌ **Web dashboard** — Addresses Control UI gap
+9. ❌ **Cross-channel UI** — Unified messenger management
 
 ### Low Priority (Nice-to-Have)
-9. ❌ **Event-triggered automation** — State-change actions
-10. ❌ **Cloud templates** — Deployment guides
-11. ❌ **mDNS discovery** — Node pairing
-12. ❌ **Tailscale integration** — Remote access
-13. ❌ **Gmail Pub/Sub** — Email automation
-14. ❌ **Additional messengers** — WhatsApp, Slack, etc.
+10. ❌ **Event-triggered automation** — State-change actions
+11. ❌ **Cloud templates** — Deployment guides
+12. ❌ **mDNS discovery** — Node pairing
+13. ✅ **Tailscale integration** — Remote access [Issue #40, Commit dab866f]
+14. ❌ **Gmail Pub/Sub** — Email automation
+15. ❌ **Additional messengers** — WhatsApp, Slack, etc.
 
 ### Very Low / Out of Scope
-15. ❌ **Voice Wake / Talk Mode** — Requires audio hardware
-16. ❌ **Companion apps** — Requires mobile development
-17. ❌ **Nix mode** — Niche use case
-18. ❌ **E2E encryption (MLS/Nostr)** — Complex, niche
+16. ⚠️ **Voice Wake / Talk Mode** — Framework implemented [Issue #41, Commit b02a490]
+17. ❌ **Companion apps** — Requires mobile development
+18. ❌ **Nix mode** — Niche use case
+19. ❌ **E2E encryption (MLS/Nostr)** — Complex, niche
 
 ---
 
