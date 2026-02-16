@@ -274,28 +274,52 @@ pub fn validate_path(path: &Path, policy: &SandboxPolicy) -> Result<(), String> 
 pub fn wrap_with_bwrap(command: &str, policy: &SandboxPolicy) -> (String, Vec<String>) {
     let mut args = Vec::new();
 
+    // Helper to check if a path should be denied for read access
+    let is_read_denied = |path: &Path| -> bool {
+        policy.deny_read.iter().any(|deny| {
+            path.starts_with(deny) || deny.starts_with(path)
+        })
+    };
+
+    // Helper to check if a path should be denied for write access
+    let is_write_denied = |path: &Path| -> bool {
+        policy.deny_write.iter().any(|deny| {
+            path.starts_with(deny) || deny.starts_with(path)
+        })
+    };
+
     // Basic namespace isolation
     args.push("--unshare-all".to_string());
     args.push("--share-net".to_string()); // Keep network for web_fetch etc
 
-    // Mount a minimal root
+    // Mount a minimal root - only if not in deny_read
     for dir in &["/usr", "/lib", "/lib64", "/bin", "/sbin"] {
-        if Path::new(dir).exists() {
+        let path = Path::new(dir);
+        if path.exists() && !is_read_denied(path) {
             args.push("--ro-bind".to_string());
             args.push(dir.to_string());
             args.push(dir.to_string());
         }
     }
 
-    // Read-only /etc (but filter out sensitive files)
-    args.push("--ro-bind".to_string());
-    args.push("/etc".to_string());
-    args.push("/etc".to_string());
+    // Read-only /etc - only if not in deny_read
+    let etc_path = Path::new("/etc");
+    if etc_path.exists() && !is_read_denied(etc_path) {
+        args.push("--ro-bind".to_string());
+        args.push("/etc".to_string());
+        args.push("/etc".to_string());
+    }
 
-    // Writable workspace
-    args.push("--bind".to_string());
-    args.push(policy.workspace.display().to_string());
-    args.push(policy.workspace.display().to_string());
+    // Workspace: read-only if in deny_write, writable otherwise, skip if in deny_read
+    if !is_read_denied(&policy.workspace) {
+        if is_write_denied(&policy.workspace) {
+            args.push("--ro-bind".to_string());
+        } else {
+            args.push("--bind".to_string());
+        }
+        args.push(policy.workspace.display().to_string());
+        args.push(policy.workspace.display().to_string());
+    }
 
     // Writable /tmp
     args.push("--tmpfs".to_string());
