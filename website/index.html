@@ -1,0 +1,1006 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RustyClaw — Secure AI Agent Runtime in Rust</title>
+    <meta name="description" content="A lightweight, secure agentic AI runtime written in Rust. Drop-in replacement for OpenClaw with better performance and built-in security.">
+    <meta name="theme-color" content="#b7410e">
+    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    
+    <!-- Open Graph -->
+    <meta property="og:title" content="RustyClaw — Secure AI Agent Runtime">
+    <meta property="og:description" content="A lightweight, secure agentic AI runtime written in Rust. 15MB memory, <50ms startup, built-in sandboxing.">
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://rustyclaw.dev">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --rust-orange: #b7410e;
+            --rust-light: #f9a825;
+            --bg-dark: #0d1117;
+            --bg-card: #161b22;
+            --bg-code: #1c2128;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --border: #30363d;
+            --green: #3fb950;
+            --yellow: #d29922;
+            --red: #f85149;
+            --blue: #58a6ff;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text-primary);
+            line-height: 1.6;
+        }
+        
+        code, pre, .mono {
+            font-family: 'JetBrains Mono', monospace;
+        }
+        
+        a {
+            color: var(--blue);
+            text-decoration: none;
+        }
+        
+        a:hover {
+            text-decoration: underline;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 24px;
+        }
+        
+        /* Header */
+        header {
+            padding: 24px 0;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .header-content {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+        
+        .logo-icon {
+            font-size: 2rem;
+        }
+        
+        .nav-links {
+            display: flex;
+            gap: 24px;
+        }
+        
+        .nav-links a {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .nav-links a:hover {
+            color: var(--text-primary);
+            text-decoration: none;
+        }
+        
+        /* Hero */
+        .hero {
+            padding: 80px 0;
+            text-align: center;
+        }
+        
+        .hero h1 {
+            font-size: 3.5rem;
+            font-weight: 700;
+            margin-bottom: 24px;
+            background: linear-gradient(135deg, var(--rust-orange), var(--rust-light));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .hero .tagline {
+            font-size: 1.5rem;
+            color: var(--text-secondary);
+            margin-bottom: 40px;
+            max-width: 700px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .cta-buttons {
+            display: flex;
+            gap: 16px;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 14px 28px;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s;
+            border: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn-primary {
+            background: var(--rust-orange);
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #d4500f;
+            text-decoration: none;
+        }
+        
+        .btn-secondary {
+            background: transparent;
+            color: var(--text-primary);
+            border: 1px solid var(--border);
+        }
+        
+        .btn-secondary:hover {
+            background: var(--bg-card);
+            text-decoration: none;
+        }
+        
+        /* Install snippet */
+        .install-snippet {
+            margin-top: 48px;
+            display: inline-block;
+        }
+        
+        .install-snippet pre {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 24px;
+            font-size: 1rem;
+            color: var(--text-primary);
+        }
+        
+        .install-snippet .command {
+            color: var(--green);
+        }
+        
+        /* Stats bar */
+        .stats-bar {
+            display: flex;
+            justify-content: center;
+            gap: 48px;
+            padding: 40px 0;
+            flex-wrap: wrap;
+        }
+        
+        .stat {
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: var(--rust-orange);
+        }
+        
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            margin-top: 4px;
+        }
+        
+        /* Comparison table */
+        .comparison {
+            padding: 80px 0;
+        }
+        
+        .section-title {
+            text-align: center;
+            font-size: 2rem;
+            margin-bottom: 16px;
+        }
+        
+        .section-subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 48px;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            background: var(--bg-card);
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        
+        .comparison-table th,
+        .comparison-table td {
+            padding: 16px 24px;
+            text-align: left;
+            border-bottom: 1px solid var(--border);
+        }
+        
+        .comparison-table th {
+            background: var(--bg-code);
+            font-weight: 600;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .comparison-table tr:last-child td {
+            border-bottom: none;
+        }
+        
+        .comparison-table .feature {
+            font-weight: 500;
+        }
+        
+        .comparison-table .rustyclaw {
+            color: var(--green);
+            font-weight: 600;
+        }
+        
+        .comparison-table .openclaw {
+            color: var(--text-secondary);
+        }
+        
+        /* Features grid */
+        .features {
+            padding: 80px 0;
+        }
+        
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 24px;
+        }
+        
+        .feature-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 32px;
+        }
+        
+        .feature-card .icon {
+            font-size: 2rem;
+            margin-bottom: 16px;
+        }
+        
+        .feature-card h3 {
+            font-size: 1.25rem;
+            margin-bottom: 12px;
+        }
+        
+        .feature-card p {
+            color: var(--text-secondary);
+            font-size: 0.95rem;
+        }
+        
+        /* Status section */
+        .status {
+            padding: 80px 0;
+            background: var(--bg-card);
+        }
+        
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 24px;
+        }
+        
+        .status-item {
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 24px;
+        }
+        
+        .status-item h4 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+        
+        .status-badge {
+            font-size: 0.75rem;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 600;
+        }
+        
+        .badge-complete {
+            background: rgba(63, 185, 80, 0.2);
+            color: var(--green);
+        }
+        
+        .badge-partial {
+            background: rgba(210, 153, 34, 0.2);
+            color: var(--yellow);
+        }
+        
+        .badge-wip {
+            background: rgba(88, 166, 255, 0.2);
+            color: var(--blue);
+        }
+        
+        .status-item p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        .progress-bar {
+            height: 6px;
+            background: var(--border);
+            border-radius: 3px;
+            margin-top: 12px;
+            overflow: hidden;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            border-radius: 3px;
+            transition: width 0.3s;
+        }
+        
+        .progress-green { background: var(--green); }
+        .progress-yellow { background: var(--yellow); }
+        .progress-blue { background: var(--blue); }
+        
+        /* Security section */
+        .security {
+            padding: 80px 0;
+        }
+        
+        .security-features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+        }
+        
+        .security-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 12px;
+            padding: 16px;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--border);
+        }
+        
+        .security-item .check {
+            color: var(--green);
+            font-size: 1.2rem;
+            flex-shrink: 0;
+        }
+        
+        .security-item strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+        
+        .security-item span {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+        
+        /* Code example */
+        .code-example {
+            padding: 80px 0;
+            background: var(--bg-card);
+        }
+        
+        .code-block {
+            background: var(--bg-code);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            overflow: hidden;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        
+        .code-header {
+            background: var(--bg-dark);
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .code-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+        }
+        
+        .code-dot.red { background: #ff5f57; }
+        .code-dot.yellow { background: #febc2e; }
+        .code-dot.green { background: #28c840; }
+        
+        .code-content {
+            padding: 24px;
+            overflow-x: auto;
+        }
+        
+        .code-content pre {
+            font-size: 0.9rem;
+            line-height: 1.7;
+        }
+        
+        .code-comment { color: var(--text-muted); }
+        .code-command { color: var(--green); }
+        .code-flag { color: var(--blue); }
+        .code-string { color: var(--rust-light); }
+        
+        /* Footer */
+        footer {
+            padding: 48px 0;
+            border-top: 1px solid var(--border);
+            text-align: center;
+        }
+        
+        .footer-links {
+            display: flex;
+            justify-content: center;
+            gap: 32px;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+        }
+        
+        .footer-links a {
+            color: var(--text-secondary);
+        }
+        
+        .footer-links a:hover {
+            color: var(--text-primary);
+        }
+        
+        .copyright {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+        
+        /* Responsive */
+        @media (max-width: 768px) {
+            .hero h1 {
+                font-size: 2.5rem;
+            }
+            
+            .hero .tagline {
+                font-size: 1.2rem;
+            }
+            
+            .stats-bar {
+                gap: 24px;
+            }
+            
+            .stat-value {
+                font-size: 2rem;
+            }
+            
+            .nav-links {
+                display: none;
+            }
+        }
+        
+        /* Honest disclaimer */
+        .disclaimer {
+            background: rgba(210, 153, 34, 0.1);
+            border: 1px solid rgba(210, 153, 34, 0.3);
+            border-radius: 8px;
+            padding: 16px 24px;
+            margin: 48px auto;
+            max-width: 700px;
+            text-align: center;
+        }
+        
+        .disclaimer p {
+            color: var(--yellow);
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container header-content">
+            <div class="logo">
+                <span class="logo-icon">🦀🦞</span>
+                <span>RustyClaw</span>
+            </div>
+            <nav class="nav-links">
+                <a href="https://github.com/rexlunae/RustyClaw">GitHub</a>
+                <a href="https://crates.io/crates/rustyclaw">crates.io</a>
+                <a href="https://github.com/rexlunae/RustyClaw#readme">Docs</a>
+                <a href="https://discord.com/invite/clawd">Discord</a>
+            </nav>
+        </div>
+    </header>
+    
+    <main>
+        <section class="hero">
+            <div class="container">
+                <h1>Secure AI Agents in Rust</h1>
+                <p class="tagline">
+                    A lightweight, security-first agentic AI runtime. 
+                    Drop-in replacement for OpenClaw with 10× less memory and built-in sandboxing.
+                </p>
+                <div class="cta-buttons">
+                    <a href="https://github.com/rexlunae/RustyClaw" class="btn btn-primary">
+                        ⭐ View on GitHub
+                    </a>
+                    <a href="https://crates.io/crates/rustyclaw" class="btn btn-secondary">
+                        📦 crates.io
+                    </a>
+                </div>
+                <div class="install-snippet">
+                    <pre><span class="command">cargo install rustyclaw</span></pre>
+                </div>
+            </div>
+        </section>
+        
+        <section class="stats-bar">
+            <div class="stat">
+                <div class="stat-value">~15 MB</div>
+                <div class="stat-label">Memory Usage</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">&lt;50 ms</div>
+                <div class="stat-label">Startup Time</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">30</div>
+                <div class="stat-label">Agentic Tools</div>
+            </div>
+            <div class="stat">
+                <div class="stat-value">v0.1.33</div>
+                <div class="stat-label">Latest Version</div>
+            </div>
+        </section>
+        
+        <div class="container">
+            <div class="disclaimer">
+                <p>
+                    ⚠️ <strong>Early Development</strong> — RustyClaw is actively developed and ~60% feature-complete 
+                    compared to OpenClaw. Core tools work great; some platform features are still in progress.
+                </p>
+            </div>
+        </div>
+        
+        <section class="comparison">
+            <div class="container">
+                <h2 class="section-title">Why RustyClaw?</h2>
+                <p class="section-subtitle">
+                    Same powerful agent ecosystem, reimagined in Rust with security as a first-class concern.
+                </p>
+                <table class="comparison-table">
+                    <thead>
+                        <tr>
+                            <th>Feature</th>
+                            <th>RustyClaw</th>
+                            <th>OpenClaw (Node.js)</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td class="feature">Memory usage</td>
+                            <td class="rustyclaw">~15 MB</td>
+                            <td class="openclaw">~150 MB</td>
+                        </tr>
+                        <tr>
+                            <td class="feature">Startup time</td>
+                            <td class="rustyclaw">&lt;50 ms</td>
+                            <td class="openclaw">~500 ms</td>
+                        </tr>
+                        <tr>
+                            <td class="feature">Binary size</td>
+                            <td class="rustyclaw">~8 MB</td>
+                            <td class="openclaw">~200 MB (with node)</td>
+                        </tr>
+                        <tr>
+                            <td class="feature">Sandbox isolation</td>
+                            <td class="rustyclaw">Built-in (Landlock/bwrap/macOS)</td>
+                            <td class="openclaw">External only</td>
+                        </tr>
+                        <tr>
+                            <td class="feature">Secrets vault</td>
+                            <td class="rustyclaw">AES-256 + TOTP 2FA</td>
+                            <td class="openclaw">External (1Password, etc.)</td>
+                        </tr>
+                        <tr>
+                            <td class="feature">Raspberry Pi</td>
+                            <td class="rustyclaw">Native ARM builds</td>
+                            <td class="openclaw">Works, but heavy</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+        
+        <section class="features">
+            <div class="container">
+                <h2 class="section-title">Built for Security</h2>
+                <p class="section-subtitle">
+                    AI agents are powerful but can't always be trusted. RustyClaw assumes adversarial behavior.
+                </p>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="icon">🔐</div>
+                        <h3>Encrypted Secrets Vault</h3>
+                        <p>AES-256 encryption for API keys and credentials. Optional TOTP 2FA with rate limiting and lockout protection.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">📦</div>
+                        <h3>Kernel Sandboxing</h3>
+                        <p>Landlock LSM (Linux 5.13+), Bubblewrap containers, or macOS sandbox-exec. Agent tools can't escape.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">🛡️</div>
+                        <h3>Credential Access Policies</h3>
+                        <p>Per-secret policies: Always, WithApproval, WithAuth, SkillOnly. You control what the agent can access.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">🚫</div>
+                        <h3>Protected Directories</h3>
+                        <p>Credentials directory is off-limits to agent tools. Path validation at multiple layers.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">🦀</div>
+                        <h3>Memory Safety</h3>
+                        <p>Written in Rust. No buffer overflows, use-after-free, or data races. Auditable codebase.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon">⚡</div>
+                        <h3>Feature-Gated Builds</h3>
+                        <p>Compile only what you need. Headless server? TUI only? Full desktop? You choose.</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section class="status">
+            <div class="container">
+                <h2 class="section-title">Project Status</h2>
+                <p class="section-subtitle">
+                    Transparent progress tracking. We believe in honest communication.
+                </p>
+                <div class="status-grid">
+                    <div class="status-item">
+                        <h4>
+                            Core Tools
+                            <span class="status-badge badge-complete">Complete</span>
+                        </h4>
+                        <p>30/30 agentic tools implemented with full OpenClaw parity.</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill progress-green" style="width: 100%"></div>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <h4>
+                            Security Model
+                            <span class="status-badge badge-complete">Complete</span>
+                        </h4>
+                        <p>Vault, policies, TOTP, sandboxing all functional.</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill progress-green" style="width: 95%"></div>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <h4>
+                            Providers
+                            <span class="status-badge badge-complete">Complete</span>
+                        </h4>
+                        <p>OpenAI, Anthropic, Google, xAI, Ollama, OpenRouter, custom.</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill progress-green" style="width: 100%"></div>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <h4>
+                            Messengers
+                            <span class="status-badge badge-partial">Partial</span>
+                        </h4>
+                        <p>Discord, Telegram, Signal, Matrix. Missing WhatsApp, Slack, iMessage.</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill progress-yellow" style="width: 38%"></div>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <h4>
+                            TUI & CLI
+                            <span class="status-badge badge-complete">Complete</span>
+                        </h4>
+                        <p>Full terminal interface with slash-commands and tab-completion.</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill progress-green" style="width: 100%"></div>
+                        </div>
+                    </div>
+                    <div class="status-item">
+                        <h4>
+                            Platform Features
+                            <span class="status-badge badge-wip">In Progress</span>
+                        </h4>
+                        <p>Voice, companion apps, web dashboard still to come.</p>
+                        <div class="progress-bar">
+                            <div class="progress-fill progress-blue" style="width: 40%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <section class="code-example">
+            <div class="container">
+                <h2 class="section-title">Get Started in 60 Seconds</h2>
+                <p class="section-subtitle">
+                    One-line install scripts handle prerequisites automatically.
+                </p>
+                
+                <!-- Tabs for OS -->
+                <div class="os-tabs">
+                    <button class="os-tab active" onclick="showTab('linux')">Linux / macOS</button>
+                    <button class="os-tab" onclick="showTab('windows')">Windows</button>
+                    <button class="os-tab" onclick="showTab('manual')">Manual</button>
+                </div>
+                
+                <div id="tab-linux" class="tab-content active">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-dot red"></span>
+                            <span class="code-dot yellow"></span>
+                            <span class="code-dot green"></span>
+                            <span style="margin-left: auto; color: var(--text-muted); font-size: 0.8rem;">bash</span>
+                        </div>
+                        <div class="code-content">
+                            <pre><span class="code-comment"># One-line install (installs Rust + dependencies + RustyClaw)</span>
+<span class="code-command">curl -fsSL https://rexlunae.github.io/RustyClaw/install.sh | bash</span>
+
+<span class="code-comment"># Or with all features (Matrix, browser automation)</span>
+<span class="code-command">curl -fsSL https://rexlunae.github.io/RustyClaw/install.sh | bash -s -- --full</span>
+
+<span class="code-comment"># Then configure and start</span>
+<span class="code-command">rustyclaw onboard</span>
+<span class="code-command">rustyclaw tui</span></pre>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="tab-windows" class="tab-content">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-dot red"></span>
+                            <span class="code-dot yellow"></span>
+                            <span class="code-dot green"></span>
+                            <span style="margin-left: auto; color: var(--text-muted); font-size: 0.8rem;">PowerShell (Admin)</span>
+                        </div>
+                        <div class="code-content">
+                            <pre><span class="code-comment"># One-line install (Run PowerShell as Administrator)</span>
+<span class="code-command">irm https://rexlunae.github.io/RustyClaw/install.ps1 | iex</span>
+
+<span class="code-comment"># Or with all features</span>
+<span class="code-command">irm https://rexlunae.github.io/RustyClaw/install.ps1 -OutFile install.ps1; .\install.ps1 -Full</span>
+
+<span class="code-comment"># Then configure and start</span>
+<span class="code-command">rustyclaw onboard</span>
+<span class="code-command">rustyclaw tui</span></pre>
+                        </div>
+                    </div>
+                    <p class="prereq-note">⚠️ Requires <a href="https://visualstudio.microsoft.com/visual-cpp-build-tools/">Visual Studio Build Tools</a> (the installer will guide you)</p>
+                </div>
+                
+                <div id="tab-manual" class="tab-content">
+                    <div class="code-block">
+                        <div class="code-header">
+                            <span class="code-dot red"></span>
+                            <span class="code-dot yellow"></span>
+                            <span class="code-dot green"></span>
+                            <span style="margin-left: auto; color: var(--text-muted); font-size: 0.8rem;">Manual install</span>
+                        </div>
+                        <div class="code-content">
+                            <pre><span class="code-comment"># 1. Install Rust (if not installed)</span>
+<span class="code-command">curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh</span>
+
+<span class="code-comment"># 2. Install build dependencies</span>
+<span class="code-comment"># Debian/Ubuntu:</span>
+<span class="code-command">sudo apt install build-essential pkg-config libssl-dev libdbus-1-dev</span>
+<span class="code-comment"># Fedora:</span>
+<span class="code-command">sudo dnf install gcc pkg-config openssl-devel dbus-devel</span>
+<span class="code-comment"># macOS:</span>
+<span class="code-command">brew install openssl pkg-config</span>
+
+<span class="code-comment"># 3. Install RustyClaw</span>
+<span class="code-command">cargo install rustyclaw</span>
+
+<span class="code-comment"># 4. Configure and start</span>
+<span class="code-command">rustyclaw onboard</span>
+<span class="code-command">rustyclaw tui</span></pre>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <style>
+            .os-tabs {
+                display: flex;
+                gap: 8px;
+                margin-bottom: 24px;
+                justify-content: center;
+            }
+            
+            .os-tab {
+                background: var(--bg-card);
+                border: 1px solid var(--border);
+                border-radius: 8px;
+                padding: 12px 24px;
+                color: var(--text-secondary);
+                font-weight: 500;
+                cursor: pointer;
+                transition: all 0.2s;
+            }
+            
+            .os-tab:hover {
+                color: var(--text-primary);
+                border-color: var(--text-muted);
+            }
+            
+            .os-tab.active {
+                background: var(--rust-orange);
+                border-color: var(--rust-orange);
+                color: white;
+            }
+            
+            .tab-content {
+                display: none;
+            }
+            
+            .tab-content.active {
+                display: block;
+            }
+            
+            .prereq-note {
+                text-align: center;
+                color: var(--yellow);
+                margin-top: 16px;
+                font-size: 0.9rem;
+            }
+            
+            .prereq-note a {
+                color: var(--yellow);
+                text-decoration: underline;
+            }
+        </style>
+        
+        <script>
+            function showTab(tab) {
+                // Hide all tabs
+                document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+                document.querySelectorAll('.os-tab').forEach(el => el.classList.remove('active'));
+                
+                // Show selected tab
+                document.getElementById('tab-' + tab).classList.add('active');
+                event.target.classList.add('active');
+            }
+        </script>
+        
+        <section class="security">
+            <div class="container">
+                <h2 class="section-title">Security Checklist</h2>
+                <p class="section-subtitle">
+                    What we've built to keep your system safe from rogue agents.
+                </p>
+                <div class="security-features">
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>Encrypted vault</strong>
+                            <span>AES-256-GCM for all stored secrets</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>TOTP two-factor</strong>
+                            <span>Optional 2FA for vault access</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>Landlock LSM</strong>
+                            <span>Kernel-enforced filesystem isolation</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>Bubblewrap sandbox</strong>
+                            <span>User namespace containers on Linux</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>macOS sandbox-exec</strong>
+                            <span>Seatbelt profiles on Apple Silicon</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>Path validation</strong>
+                            <span>Multi-layer credential protection</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>Access policies</strong>
+                            <span>Per-credential permission levels</span>
+                        </div>
+                    </div>
+                    <div class="security-item">
+                        <span class="check">✓</span>
+                        <div>
+                            <strong>Rate limiting</strong>
+                            <span>Brute-force protection with lockout</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+    
+    <footer>
+        <div class="container">
+            <div class="footer-links">
+                <a href="https://github.com/rexlunae/RustyClaw">GitHub</a>
+                <a href="https://crates.io/crates/rustyclaw">crates.io</a>
+                <a href="https://github.com/rexlunae/RustyClaw/blob/main/docs/SECURITY.md">Security</a>
+                <a href="https://github.com/rexlunae/RustyClaw/blob/main/PARITY_PLAN.md">Roadmap</a>
+                <a href="https://discord.com/invite/clawd">Discord</a>
+                <a href="https://github.com/openclaw/openclaw">OpenClaw</a>
+            </div>
+            <p class="copyright">
+                MIT Licensed · Built with 🦀 by the RustyClaw contributors
+            </p>
+        </div>
+    </footer>
+</body>
+</html>
