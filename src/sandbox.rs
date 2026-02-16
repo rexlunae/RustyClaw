@@ -288,14 +288,21 @@ pub fn wrap_with_bwrap(command: &str, policy: &SandboxPolicy) -> (String, Vec<St
         })
     };
 
+    // Helper to check if a path should be denied for execute access
+    let is_exec_denied = |path: &Path| -> bool {
+        policy.deny_exec.iter().any(|deny| {
+            path.starts_with(deny) || deny.starts_with(path)
+        })
+    };
+
     // Basic namespace isolation
     args.push("--unshare-all".to_string());
     args.push("--share-net".to_string()); // Keep network for web_fetch etc
 
-    // Mount a minimal root - only if not in deny_read
+    // Mount a minimal root - only if not in deny_read or deny_exec
     for dir in &["/usr", "/lib", "/lib64", "/bin", "/sbin"] {
         let path = Path::new(dir);
-        if path.exists() && !is_read_denied(path) {
+        if path.exists() && !is_read_denied(path) && !is_exec_denied(path) {
             args.push("--ro-bind".to_string());
             args.push(dir.to_string());
             args.push(dir.to_string());
@@ -402,10 +409,16 @@ fn generate_seatbelt_profile(policy: &SandboxPolicy) -> String {
             denied.display()
         ));
     }
-    
+    for denied in &policy.deny_exec {
+        profile.push_str(&format!(
+            "(deny process-exec (subpath \"{}\"))\n",
+            denied.display()
+        ));
+    }
+
     // Allow network (for web_fetch)
     profile.push_str("(allow network*)\n");
-    
+
     profile
 }
 
@@ -451,18 +464,36 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
         .create()
         .map_err(|e| format!("Failed to create Landlock ruleset (kernel may not support Landlock): {}", e))?;
 
-    // Add rules to DENY access to protected paths
-    // Note: Landlock works by restricting access, so we deny by not allowing
+    // Add rules to DENY read access to protected paths
     for deny_path in &policy.deny_read {
         if deny_path.exists() {
             // Open the path to get a file descriptor
             let file = File::open(deny_path)
                 .map_err(|e| format!("Failed to open path for Landlock rule {:?}: {}", deny_path, e))?;
 
-            // Deny both read and execute access to protected directories
+            // Deny read access to protected directories
             ruleset = ruleset
                 .add_rule(PathBeneath::new(&file, AccessFs::from_read(abi)))
-                .map_err(|e| format!("Failed to add Landlock deny rule for {:?}: {}", deny_path, e))?;
+                .map_err(|e| format!("Failed to add Landlock deny_read rule for {:?}: {}", deny_path, e))?;
+        } else {
+            eprintln!(
+                "[sandbox] Warning: Cannot apply Landlock to non-existent path: {:?}",
+                deny_path
+            );
+        }
+    }
+
+    // Add rules to DENY execute access to protected paths
+    for deny_path in &policy.deny_exec {
+        if deny_path.exists() {
+            // Open the path to get a file descriptor
+            let file = File::open(deny_path)
+                .map_err(|e| format!("Failed to open path for Landlock rule {:?}: {}", deny_path, e))?;
+
+            // Deny execute access to protected directories
+            ruleset = ruleset
+                .add_rule(PathBeneath::new(&file, AccessFs::Execute))
+                .map_err(|e| format!("Failed to add Landlock deny_exec rule for {:?}: {}", deny_path, e))?;
         } else {
             eprintln!(
                 "[sandbox] Warning: Cannot apply Landlock to non-existent path: {:?}",
@@ -477,8 +508,9 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
         .map_err(|e| format!("Failed to apply Landlock restrictions: {}", e))?;
 
     eprintln!(
-        "[sandbox] ✓ Landlock restrictions applied (kernel-enforced): denied {} path(s)",
-        policy.deny_read.len()
+        "[sandbox] ✓ Landlock restrictions applied (kernel-enforced): denied {} read, {} exec",
+        policy.deny_read.len(),
+        policy.deny_exec.len()
     );
 
     Ok(())
@@ -605,9 +637,31 @@ fn run_with_path_validation(command: &str, policy: &SandboxPolicy) -> Result<std
     // Extract explicit paths from command
     let paths = extract_paths_from_command(command);
 
-    // Validate each path against policy (fail-closed)
+    // Validate each path against policy for read access (fail-closed)
     for path in &paths {
         validate_path(path, policy)?;
+    }
+
+    // Check if command tries to execute from deny_exec paths
+    // Extract the first token (command name)
+    let first_token = command.split_whitespace().next().unwrap_or("");
+    if !first_token.is_empty() {
+        let cmd_path = Path::new(first_token);
+
+        // Only check if it looks like a path (absolute, ./, or ~/)
+        if first_token.starts_with('/') || first_token.starts_with("./") || first_token.starts_with("~/") {
+            // Check against deny_exec list
+            for denied in &policy.deny_exec {
+                if let (Ok(cmd_canon), Ok(denied_canon)) = (cmd_path.canonicalize(), denied.canonicalize()) {
+                    if cmd_canon.starts_with(&denied_canon) {
+                        return Err(format!(
+                            "Execution denied: {} is in protected area (deny_exec)",
+                            first_token
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     // Log warning if no paths detected (can't guarantee safety)
