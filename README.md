@@ -102,15 +102,16 @@ rustyclaw tui
 
 ## Recent Enhancements ✨
 
-**February 2026** — Major security and architecture improvements:
+**February 2026** — Major security, architecture, and planning improvements:
 
 - 🛡️ **Defense-in-Depth Sandboxing** — Combined Landlock+Bubblewrap mode for kernel-enforced + namespace isolation
 - 🐳 **Docker Container Support** — Cross-platform sandboxing with Alpine Linux, resource limits, and credential injection
-- 📋 **Development Roadmap** — 3-phase plan covering multi-provider failover, WASM sandboxing, hybrid search, and more
-- 🔧 **15 Feature Issues Created** — [View all planned features](https://github.com/aecs4u/RustyClaw/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement) (#51-#65)
+- 🎯 **Prioritized Development Roadmap** — Complexity-based prioritization of 44 features with ecosystem analysis
+- 🏆 **94 Feature Issues Created** — Comprehensive [issue tracker](https://github.com/aecs4u/RustyClaw/issues) with prior art and acceptance criteria
+- 📊 **Ecosystem Analysis** — Deep dive into 7 projects (OpenClaw, AutoGPT, PicoClaw, Moltis, MicroClaw, Carapace, IronClaw)
 - 💬 **Messenger Integrations** — Slack, Discord, Telegram, Matrix support with dedicated branches
 
-See [ROADMAP.md](docs/ROADMAP.md) for the complete development plan and feature analysis based on IronClaw review.
+See [ROADMAP_INDEX.md](ROADMAP_INDEX.md) for the complete prioritized development plan based on lowest complexity and highest implementation availability.
 
 ## Features
 
@@ -280,20 +281,30 @@ cargo test --test skill_execution
 
 ## Contributing
 
-Contributions welcome! We have a detailed roadmap and active development:
+Contributions welcome! We have a comprehensive prioritized roadmap based on ecosystem analysis:
 
-- 📋 **[Development Roadmap](docs/ROADMAP.md)** — 3-phase plan with 15+ planned features
-- 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — Bug reports, feature requests, and tasks
-- 🏷️ **Good First Issues** — Look for `p3-medium` and `quick-win` labels (#51-#65)
+- 🎯 **[Roadmap Index](ROADMAP_INDEX.md)** — Start here for navigation
+- 📋 **[Development Roadmap](DEVELOPMENT_ROADMAP.md)** — Complete analysis of 44 features (#51-#94)
+- ⚡ **[Quick Reference](ROADMAP_SUMMARY.md)** — Priority tiers and effort estimates
+- 📊 **[Prioritization Matrix](PRIORITIZATION_MATRIX.md)** — Complexity scoring and risk assessment
+- 🏃 **[Sprint Plan](SPRINT_PLAN.md)** — 16-week actionable implementation plan
+- 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — 94 tracked issues
 - 📖 **[Contributing Guide](docs/CONTRIBUTING.md)** — Development guidelines and PR process
 
-**High-priority features from the roadmap:**
-- Multi-provider failover (Phase 1) — #52
-- Safety layer consolidation (Phase 1) — #53
-- WASM sandbox (Phase 3) — #60
-- Hybrid search with BM25+Vector (Phase 2) — #56
+**P0 Quick Wins (Start Here):**
+- #86 — Secure credential memory with zeroize/secrecy (1 week)
+- #81 — Retry/backoff engine with exponential backoff (1-2 weeks)
+- #52 — Unified Safety Layer consolidation (1-2 weeks)
+- #70 — CSRF protection for gateway endpoints (1 week)
+- #83 — Config validation with suggestions (1-2 weeks)
 
-See individual issues for implementation details and acceptance criteria.
+**P1 High Value:**
+- #76 — Structured memory with auto-reflector (2-3 weeks)
+- #66 — Sub-agent spawning for parallel tasks (2-3 weeks)
+- #56 — Hybrid search with BM25+Vector (2-3 weeks)
+- #58 — MCP (Model Context Protocol) support (2-3 weeks)
+
+See [ROADMAP_SUMMARY.md](ROADMAP_SUMMARY.md) for complete prioritization and [individual issues](https://github.com/aecs4u/RustyClaw/issues) for implementation details.
 
 ## License
 
