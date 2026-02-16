@@ -174,6 +174,72 @@ impl HealthConfig {
     }
 }
 
+/// Voice features configuration (STT/TTS).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VoiceConfig {
+    /// Whether voice features are enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// STT provider to use (openai, google, azure, vosk)
+    #[serde(default = "VoiceConfig::default_stt_provider")]
+    pub stt_provider: String,
+    /// TTS provider to use (openai, elevenlabs, google, azure, coqui)
+    #[serde(default = "VoiceConfig::default_tts_provider")]
+    pub tts_provider: String,
+    /// Whether wake word detection is enabled
+    #[serde(default)]
+    pub wake_word_enabled: bool,
+    /// Wake word phrase
+    #[serde(default = "VoiceConfig::default_wake_word")]
+    pub wake_word: String,
+    /// Audio input device
+    #[serde(default = "VoiceConfig::default_device")]
+    pub input_device: String,
+    /// Audio output device
+    #[serde(default = "VoiceConfig::default_device")]
+    pub output_device: String,
+    /// Sample rate for audio capture
+    #[serde(default = "VoiceConfig::default_sample_rate")]
+    pub sample_rate: u32,
+}
+
+impl Default for VoiceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            stt_provider: Self::default_stt_provider(),
+            tts_provider: Self::default_tts_provider(),
+            wake_word_enabled: false,
+            wake_word: Self::default_wake_word(),
+            input_device: Self::default_device(),
+            output_device: Self::default_device(),
+            sample_rate: Self::default_sample_rate(),
+        }
+    }
+}
+
+impl VoiceConfig {
+    fn default_stt_provider() -> String {
+        "openai".to_string()
+    }
+
+    fn default_tts_provider() -> String {
+        "openai".to_string()
+    }
+
+    fn default_wake_word() -> String {
+        "hey rustyclaw".to_string()
+    }
+
+    fn default_device() -> String {
+        "default".to_string()
+    }
+
+    fn default_sample_rate() -> u32 {
+        16000
+    }
+}
+
 /// Lifecycle hooks configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HooksConfig {
@@ -347,6 +413,9 @@ pub struct Config {
     /// Health check endpoint configuration.
     #[serde(default)]
     pub health: HealthConfig,
+    /// Voice features configuration (STT/TTS).
+    #[serde(default)]
+    pub voice: VoiceConfig,
     /// Lifecycle hooks configuration.
     #[serde(default)]
     pub hooks: HooksConfig,
