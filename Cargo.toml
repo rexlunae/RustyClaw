@@ -158,6 +158,10 @@ indicatif = "0.18"
 unicode-width = "0.2"
 rpassword = "7"
 
+# WebAuthn/Passkey authentication
+webauthn-rs = "0.5"
+webauthn-rs-proto = "0.5"
+
 # Patches for crypto compatibility
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }

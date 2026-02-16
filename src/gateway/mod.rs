@@ -13,6 +13,7 @@ mod secrets_handler;
 mod skills_handler;
 mod tls;
 mod types;
+mod webauthn;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 use std::pin::Pin;

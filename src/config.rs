@@ -186,6 +186,40 @@ impl HooksConfig {
     }
 }
 
+/// WebAuthn/Passkey authentication configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebAuthnConfig {
+    /// Whether WebAuthn authentication is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// Relying Party ID (domain, e.g., "localhost" or "example.com")
+    #[serde(default = "WebAuthnConfig::default_rp_id")]
+    pub rp_id: String,
+    /// Relying Party origin (full URL, e.g., "https://localhost:8443")
+    #[serde(default = "WebAuthnConfig::default_rp_origin")]
+    pub rp_origin: String,
+}
+
+impl Default for WebAuthnConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            rp_id: Self::default_rp_id(),
+            rp_origin: Self::default_rp_origin(),
+        }
+    }
+}
+
+impl WebAuthnConfig {
+    fn default_rp_id() -> String {
+        "localhost".to_string()
+    }
+
+    fn default_rp_origin() -> String {
+        "https://localhost:8443".to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Root state directory (e.g. `~/.rustyclaw`).
@@ -249,6 +283,9 @@ pub struct Config {
     /// Lifecycle hooks configuration.
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// WebAuthn/Passkey authentication configuration.
+    #[serde(default)]
+    pub webauthn: WebAuthnConfig,
     /// ClawHub registry URL (default: `https://registry.clawhub.dev/api/v1`).
     #[serde(default)]
     pub clawhub_url: Option<String>,
@@ -336,6 +373,7 @@ impl Default for Config {
             tls: TlsConfig::default(),
             metrics: MetricsConfig::default(),
             hooks: HooksConfig::default(),
+            webauthn: WebAuthnConfig::default(),
             clawhub_url: None,
             clawhub_token: None,
             system_prompt: None,
