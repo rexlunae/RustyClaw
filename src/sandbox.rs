@@ -583,7 +583,7 @@ fn run_unsandboxed(command: &str) -> Result<std::process::Output, String> {
 ///
 /// Limitations: Cannot detect dynamic paths like `$(echo /path)` or command substitution.
 /// Those require kernel-level enforcement (Landlock/Bubblewrap).
-fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
+pub fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
     use std::path::PathBuf;
     let mut paths = Vec::new();
 
