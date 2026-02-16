@@ -692,6 +692,18 @@ pub fn sessions_list_params() -> Vec<ToolParam> {
             param_type: "integer".into(),
             required: false,
         },
+        ToolParam {
+            name: "includeArchived".into(),
+            description: "Include archived sessions from disk. Default: false.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "retentionDays".into(),
+            description: "Prune archived sessions older than N days before listing.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
     ]
 }
 
@@ -791,6 +803,12 @@ pub fn sessions_history_params() -> Vec<ToolParam> {
             param_type: "boolean".into(),
             required: false,
         },
+        ToolParam {
+            name: "includeArchived".into(),
+            description: "Look up archived session history when active session is not found. Default: true.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
     ]
 }
 
@@ -806,6 +824,30 @@ pub fn session_status_params() -> Vec<ToolParam> {
             name: "model".into(),
             description: "Set per-session model override. Use 'default' to reset.".into(),
             param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "archive".into(),
+            description: "Archive the specified sessionKey to disk (JSONL).".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "archiveCompleted".into(),
+            description: "Archive all non-active sessions.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "retentionDays".into(),
+            description: "Prune archived sessions older than N days.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "includeArchived".into(),
+            description: "Include archived sessions in status lookups and totals. Default: true.".into(),
+            param_type: "boolean".into(),
             required: false,
         },
     ]

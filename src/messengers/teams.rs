@@ -4,13 +4,50 @@
 //! - Incoming webhook mode (`webhook_url`)
 //! - Microsoft Graph API mode (`token` + `team_id` + `channel_id`)
 //!
-//! Inbound message polling is not implemented and returns an empty list.
+//! Message polling uses Microsoft Graph API to fetch recent channel messages.
 
 use crate::messengers::{Message, Messenger, SendOptions};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use serde::Deserialize;
+use std::collections::HashSet;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 
 const TEAMS_GRAPH_BASE: &str = "https://graph.microsoft.com/v1.0";
+
+/// Teams message from Graph API
+#[derive(Debug, Clone, Deserialize)]
+struct TeamsMessage {
+    id: String,
+    #[serde(default)]
+    body: Option<TeamsMessageBody>,
+    from: Option<TeamsMessageFrom>,
+    #[serde(rename = "createdDateTime")]
+    created_date_time: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TeamsMessageBody {
+    content: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TeamsMessageFrom {
+    user: Option<TeamsUser>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TeamsUser {
+    id: Option<String>,
+    #[serde(rename = "displayName")]
+    display_name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TeamsMessagesResponse {
+    value: Vec<TeamsMessage>,
+}
 
 #[derive(Debug, Clone)]
 pub struct TeamsConfig {
@@ -38,6 +75,7 @@ pub struct TeamsMessenger {
     config: TeamsConfig,
     http: reqwest::Client,
     connected: bool,
+    processed_ids: Arc<RwLock<HashSet<String>>>,
 }
 
 impl TeamsMessenger {
@@ -47,6 +85,7 @@ impl TeamsMessenger {
             config,
             http: reqwest::Client::new(),
             connected: false,
+            processed_ids: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -72,6 +111,39 @@ impl TeamsMessenger {
             .context("Teams requires channel_id (or recipient as team/channel)")?;
 
         Ok((team_id, channel_id))
+    }
+
+    /// Fetch recent messages from a Teams channel
+    async fn fetch_channel_messages(&self, team_id: &str, channel_id: &str) -> Result<Vec<TeamsMessage>> {
+        let token = self
+            .config
+            .token
+            .as_ref()
+            .context("Teams API requires token")?;
+
+        let url = format!(
+            "{}/teams/{}/channels/{}/messages?$top=20",
+            self.config.api_base, team_id, channel_id
+        );
+
+        let resp = self
+            .http
+            .get(&url)
+            .bearer_auth(token)
+            .send()
+            .await
+            .context("Failed to fetch Teams messages")?;
+
+        if !resp.status().is_success() {
+            anyhow::bail!("Teams fetch messages failed: {}", resp.status());
+        }
+
+        let response: TeamsMessagesResponse = resp
+            .json()
+            .await
+            .context("Failed to parse Teams messages response")?;
+
+        Ok(response.value)
     }
 }
 
@@ -185,7 +257,96 @@ impl Messenger for TeamsMessenger {
     }
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
-        Ok(Vec::new())
+        // Webhook mode doesn't support receiving messages
+        if self.config.webhook_url.is_some() || self.config.token.is_none() {
+            return Ok(Vec::new());
+        }
+
+        if !self.is_connected() {
+            return Ok(Vec::new());
+        }
+
+        // Get team and channel IDs
+        let team_id = match &self.config.team_id {
+            Some(id) => id.clone(),
+            None => return Ok(Vec::new()),
+        };
+
+        let channel_id = match &self.config.channel_id {
+            Some(id) => id.clone(),
+            None => return Ok(Vec::new()),
+        };
+
+        // Fetch recent messages
+        let teams_messages = match self.fetch_channel_messages(&team_id, &channel_id).await {
+            Ok(msgs) => msgs,
+            Err(e) => {
+                eprintln!("[teams] Failed to fetch messages: {}", e);
+                return Ok(Vec::new());
+            }
+        };
+
+        let mut new_messages = Vec::new();
+
+        for msg in teams_messages {
+            // Check if already processed
+            {
+                let mut processed = self.processed_ids.write().await;
+                if processed.contains(&msg.id) {
+                    continue;
+                }
+                processed.insert(msg.id.clone());
+
+                // Keep only last 1000 IDs
+                if processed.len() > 1000 {
+                    let to_remove: Vec<_> = processed.iter().take(100).cloned().collect();
+                    for id in to_remove {
+                        processed.remove(&id);
+                    }
+                }
+            }
+
+            // Parse content
+            let content = msg
+                .body
+                .as_ref()
+                .and_then(|b| b.content.as_ref())
+                .map(|c| c.clone())
+                .unwrap_or_default();
+
+            // Skip empty messages
+            if content.trim().is_empty() {
+                continue;
+            }
+
+            // Get sender info
+            let sender = msg
+                .from
+                .as_ref()
+                .and_then(|f| f.user.as_ref())
+                .and_then(|u| u.display_name.as_ref())
+                .map(|n| n.clone())
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            // Parse timestamp
+            let timestamp = chrono::DateTime::parse_from_rfc3339(&msg.created_date_time)
+                .map(|dt| dt.timestamp())
+                .unwrap_or_else(|_| chrono::Utc::now().timestamp());
+
+            new_messages.push(Message {
+                id: msg.id,
+                sender,
+                content,
+                timestamp,
+                channel: Some(format!("{}/{}", team_id, channel_id)),
+                reply_to: None,
+                media: None,
+            });
+        }
+
+        // Return newest first (reverse chronological)
+        new_messages.reverse();
+        Ok(new_messages)
     }
 
     fn is_connected(&self) -> bool {

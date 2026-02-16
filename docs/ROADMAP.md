@@ -75,13 +75,13 @@ pub struct FailoverProvider {
 
 ---
 
-### 1.2 Safety Layer Consolidation ⭐⭐⭐⭐⭐
-**Priority**: VERY HIGH | **Effort**: 1-2 weeks
+### 1.2 Safety Layer Consolidation ⭐⭐⭐⭐⭐ ✅
+**Priority**: VERY HIGH | **Effort**: 1-2 weeks | **Status**: COMPLETED
 
 **What**: Unified security defense with 4 components
 - Sanitizer: Pattern-based content cleaning
 - Validator: Input validation with rules
-- Policy engine: Warn/Block/Sanitize actions
+- Policy engine: Warn/Block/Sanitize/Ignore actions
 - Leak detector: Credential exfiltration prevention
 
 **Benefits**:
@@ -89,15 +89,15 @@ pub struct FailoverProvider {
 - Better maintainability (single layer)
 - Configurable sensitivity
 
-**Current State**: Separate SSRF + prompt guard modules
-**Target State**: Unified `SafetyLayer` struct
+**Current State**: ~~Separate SSRF + prompt guard modules~~ **COMPLETED**
+**Target State**: Unified `SafetyLayer` struct ✅
 
 **Acceptance Criteria**:
-- [ ] Consolidate existing SSRF and prompt guard
-- [ ] Add leak detector with credential patterns
-- [ ] Policy configuration via `config.toml`
-- [ ] Severity levels (info/warn/block)
-- [ ] Tests for all defense categories
+- [x] Consolidate existing SSRF and prompt guard
+- [x] Add leak detector with credential patterns (API keys, passwords, tokens, private keys, PII)
+- [x] Policy configuration via `config.toml`
+- [x] Severity levels (ignore/warn/block/sanitize)
+- [x] Tests for all defense categories (9 tests passing)
 
 ---
 

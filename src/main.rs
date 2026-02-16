@@ -342,6 +342,17 @@ struct StatusArgs {
 
 #[derive(Debug, Subcommand)]
 enum GatewayCommands {
+    /// Install gateway as a system service (systemd/launchd)
+    Install {
+        /// Enable and start the service immediately
+        #[arg(long)]
+        enable: bool,
+        /// Start the service after installation
+        #[arg(long)]
+        start: bool,
+    },
+    /// Uninstall gateway system service
+    Uninstall,
     /// Start the gateway (daemon/background)
     Start,
     /// Stop a running gateway
@@ -356,6 +367,15 @@ enum GatewayCommands {
     },
     /// Reload gateway configuration without restarting
     Reload,
+    /// Show gateway logs
+    Logs {
+        /// Number of lines to show (default: 50)
+        #[arg(short = 'n', long, default_value = "50")]
+        lines: usize,
+        /// Follow log output
+        #[arg(short = 'f', long)]
+        follow: bool,
+    },
     /// Run the gateway in the foreground (like `rustyclaw-gateway`)
     Run(GatewayRunArgs),
 }
@@ -620,6 +640,88 @@ async fn main() -> Result<()> {
         // ── Gateway sub-commands ────────────────────────────────
         Commands::Gateway(sub) => {
             match sub {
+                GatewayCommands::Install { enable, start } => {
+                    use rustyclaw::service;
+                    use rustyclaw::theme as t;
+
+                    let sp = t::spinner("Installing gateway service…");
+
+                    let (port, bind) = parse_gateway_defaults(&config);
+
+                    match service::install_service(&config.settings_dir, port, &bind, enable, start) {
+                        Ok(result) => {
+                            t::spinner_ok(&sp, "Service installed successfully");
+                            println!("\n{}", result.message);
+                        }
+                        Err(e) => {
+                            t::spinner_fail(&sp, &format!("Installation failed: {}", e));
+                        }
+                    }
+                }
+                GatewayCommands::Uninstall => {
+                    use rustyclaw::service;
+                    use rustyclaw::theme as t;
+
+                    let sp = t::spinner("Uninstalling gateway service…");
+
+                    match service::uninstall_service() {
+                        Ok(message) => {
+                            t::spinner_ok(&sp, &message);
+                        }
+                        Err(e) => {
+                            t::spinner_fail(&sp, &format!("Uninstall failed: {}", e));
+                        }
+                    }
+                }
+                GatewayCommands::Logs { lines, follow } => {
+                    use rustyclaw::service;
+                    use rustyclaw::theme as t;
+
+                    if follow {
+                        // Follow mode: use tail -f equivalent
+                        let log_path = rustyclaw::daemon::log_path(&config.settings_dir);
+                        if !log_path.exists() {
+                            eprintln!("{}", t::warn("No log file found"));
+                            return Ok(());
+                        }
+
+                        println!("{}", t::muted(&format!("Following logs from: {}", log_path.display())));
+                        println!("{}", t::muted("Press Ctrl+C to stop"));
+                        println!();
+
+                        // Use platform-specific tail command
+                        #[cfg(unix)]
+                        {
+                            let mut child = std::process::Command::new("tail")
+                                .arg("-f")
+                                .arg("-n")
+                                .arg(lines.to_string())
+                                .arg(&log_path)
+                                .spawn()
+                                .context("Failed to spawn tail command")?;
+
+                            let _ = child.wait();
+                        }
+
+                        #[cfg(not(unix))]
+                        {
+                            eprintln!("{}", t::warn("Follow mode is not supported on this platform"));
+                            eprintln!("{}", t::muted("Use: rustyclaw gateway logs -n <lines>"));
+                        }
+                    } else {
+                        // Show last N lines
+                        match service::read_log_lines(&config.settings_dir, lines) {
+                            Ok(log_lines) => {
+                                for line in log_lines {
+                                    println!("{}", line);
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("{}", t::warn(&format!("Failed to read logs: {}", e)));
+                            }
+                        }
+                    }
+                }
                 GatewayCommands::Start => {
                     use rustyclaw::daemon;
                     use rustyclaw::theme as t;

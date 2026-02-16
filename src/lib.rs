@@ -5,6 +5,7 @@ pub mod app;
 pub mod args;
 pub mod commands;
 pub mod config;
+pub mod context_compaction;
 pub mod cron;
 pub mod daemon;
 #[cfg(feature = "tui")]
@@ -29,10 +30,12 @@ pub mod sandbox;
 pub mod secret;
 pub mod secrets;
 pub mod security;
+pub mod service;
 pub mod sessions;
 pub mod skills;
 pub mod soul;
 pub mod streaming;
+pub mod structured_memory;
 pub mod theme;
 pub mod tools;
 #[cfg(feature = "tui")]

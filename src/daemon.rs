@@ -271,3 +271,87 @@ fn resolve_gateway_binary() -> Result<PathBuf> {
          Make sure it is installed or built (`cargo build`) and on your PATH."
     )
 }
+
+// ── Log rotation ────────────────────────────────────────────────────────────
+
+/// Rotate the gateway log file if it's too large or too old.
+///
+/// Rotation strategy:
+/// - If log file > 10MB, rotate immediately
+/// - Keep rotated logs for 30 days
+/// - Rotated files named: gateway.log.YYYYMMDD-HHMMSS
+pub fn rotate_logs(settings_dir: &Path) -> Result<()> {
+    let log_path = log_path(settings_dir);
+
+    if !log_path.exists() {
+        return Ok(());
+    }
+
+    // Check log file size
+    let metadata = fs::metadata(&log_path)?;
+    let file_size = metadata.len();
+    let max_size = 10 * 1024 * 1024; // 10 MB
+
+    if file_size < max_size {
+        // No rotation needed
+        return Ok(());
+    }
+
+    // Generate rotated filename with timestamp
+    let now = chrono::Utc::now();
+    let timestamp = now.format("%Y%m%d-%H%M%S");
+    let rotated_name = format!("gateway.log.{}", timestamp);
+    let rotated_path = log_path.with_file_name(rotated_name);
+
+    // Rename current log to rotated name
+    fs::rename(&log_path, &rotated_path)
+        .with_context(|| format!("Failed to rotate log file to {}", rotated_path.display()))?;
+
+    // Create new empty log file
+    fs::File::create(&log_path)
+        .with_context(|| format!("Failed to create new log file at {}", log_path.display()))?;
+
+    // Clean up old rotated logs (older than 30 days)
+    cleanup_old_logs(settings_dir, 30)?;
+
+    Ok(())
+}
+
+/// Remove rotated log files older than the specified number of days.
+fn cleanup_old_logs(settings_dir: &Path, retention_days: u64) -> Result<()> {
+    let log_dir = settings_dir.join("logs");
+
+    if !log_dir.exists() {
+        return Ok(());
+    }
+
+    let cutoff = std::time::SystemTime::now()
+        - std::time::Duration::from_secs(retention_days * 24 * 60 * 60);
+
+    let entries = fs::read_dir(&log_dir)
+        .with_context(|| format!("Failed to read log directory: {}", log_dir.display()))?;
+
+    for entry in entries {
+        let entry = entry?;
+        let path = entry.path();
+
+        // Only process rotated log files
+        if let Some(filename) = path.file_name().and_then(|n| n.to_str()) {
+            if filename.starts_with("gateway.log.") && filename != "gateway.log" {
+                // Check file modification time
+                if let Ok(metadata) = entry.metadata() {
+                    if let Ok(modified) = metadata.modified() {
+                        if modified < cutoff {
+                            // Remove old log file
+                            if let Err(e) = fs::remove_file(&path) {
+                                eprintln!("Warning: Failed to remove old log {}: {}", path.display(), e);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}

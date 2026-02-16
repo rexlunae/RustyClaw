@@ -12,6 +12,53 @@ pub struct ModelProvider {
     pub base_url: Option<String>,
 }
 
+/// Failover provider configuration for multi-provider LLM resilience.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailoverProvider {
+    /// Provider id (e.g. "anthropic", "openai", "google")
+    pub provider: String,
+    /// Model name for this provider
+    pub model: Option<String>,
+    /// API base URL (optional, uses provider default if not specified)
+    pub base_url: Option<String>,
+    /// Priority order (lower number = higher priority, default: 100)
+    #[serde(default = "FailoverProvider::default_priority")]
+    pub priority: u32,
+}
+
+impl FailoverProvider {
+    fn default_priority() -> u32 {
+        100
+    }
+}
+
+/// LLM failover configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct FailoverConfig {
+    /// Whether failover is enabled
+    #[serde(default)]
+    pub enabled: bool,
+    /// List of failover providers in priority order
+    #[serde(default)]
+    pub providers: Vec<FailoverProvider>,
+    /// Selection strategy: "priority" (default), "round-robin", "cost-optimized"
+    #[serde(default = "FailoverConfig::default_strategy")]
+    pub strategy: String,
+    /// Max retries per provider before failing over (default: 2)
+    #[serde(default = "FailoverConfig::default_max_retries")]
+    pub max_retries: u32,
+}
+
+impl FailoverConfig {
+    fn default_strategy() -> String {
+        "priority".to_string()
+    }
+
+    fn default_max_retries() -> u32 {
+        2
+    }
+}
+
 /// Sandbox configuration for agent isolation.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SandboxConfig {
@@ -399,6 +446,9 @@ pub struct Config {
     /// Selected model provider and default model
     #[serde(default)]
     pub model: Option<ModelProvider>,
+    /// LLM failover configuration for multi-provider resilience
+    #[serde(default)]
+    pub failover: FailoverConfig,
     /// Whether the secrets vault is encrypted with a user password
     /// (as opposed to an auto-generated key file).
     #[serde(default)]
@@ -466,6 +516,15 @@ pub struct Config {
     /// Messenger polling interval in milliseconds (default: 2000).
     #[serde(default)]
     pub messenger_poll_interval_ms: Option<u32>,
+    /// Context compaction configuration for long conversations.
+    #[serde(default)]
+    pub context_compaction: crate::context_compaction::CompactionConfig,
+    /// Structured memory configuration for persistent facts.
+    #[serde(default)]
+    pub structured_memory: crate::structured_memory::StructuredMemoryConfig,
+    /// Unified safety layer configuration (consolidates SSRF, prompt guard, leak detection).
+    #[serde(default)]
+    pub safety: crate::security::SafetyConfig,
 }
 
 /// Configuration for a messenger backend.
@@ -652,6 +711,7 @@ impl Default for Config {
             use_secrets: true,
             gateway_url: None,
             model: None,
+            failover: FailoverConfig::default(),
             secrets_password_protected: false,
             totp_enabled: false,
             agent_access: false,
@@ -673,6 +733,9 @@ impl Default for Config {
             clawhub_token: None,
             system_prompt: None,
             messenger_poll_interval_ms: None,
+            context_compaction: crate::context_compaction::CompactionConfig::default(),
+            structured_memory: crate::structured_memory::StructuredMemoryConfig::default(),
+            safety: crate::security::SafetyConfig::default(),
         }
     }
 }

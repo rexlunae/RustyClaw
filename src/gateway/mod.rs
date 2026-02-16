@@ -7,6 +7,7 @@
 
 mod auth;
 mod csrf;
+mod failover;
 mod heartbeat;
 mod health;
 mod helpers;

@@ -93,6 +93,7 @@ futures-util = "0.3"
 tokio-tungstenite = "0.28"
 # Note: 0.13+ renamed rustls-tls to rustls
 reqwest = { version = "0.13", features = ["json", "rustls", "stream", "blocking", "form"], default-features = false }
+rusqlite = { version = "0.32", features = ["bundled"] }
 url = "2.5"
 tui-input = { version = "0.15", optional = true }
 strum = { version = "0.27", features = ["derive"] }

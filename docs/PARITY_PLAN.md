@@ -52,8 +52,10 @@
 
 ### Platform Features
 - ✅ **Multi-Provider LLM** — OpenAI, Anthropic, Google, GitHub Copilot, xAI, OpenRouter, Ollama, custom (7+)
+- ✅ **Provider Failover** — Automatic multi-provider failover with 3 strategies (priority, round-robin, cost-optimized), error classification, cost tracking (vs OpenClaw ❌, PicoClaw ❌)
 - ✅ **Provider Streaming** — OpenAI SSE + Anthropic SSE
-- ✅ **Context Management** — Auto-compaction at 75%, token tracking
+- ✅ **Context Compaction** — Intelligent message history compaction with sliding window & importance scoring, enables indefinite conversations (vs OpenClaw ⚠️ basic, PicoClaw ❌)
+- ✅ **Structured Memory** — SQLite-based fact storage with auto-reflector, confidence scoring, deduplication; complements file-based memory (vs OpenClaw ⚠️ file-only, PicoClaw ❌)
 - ✅ **Conversation Memory** — Persistent cross-session, startup replay
 - ✅ **Skills System** — JSON/TOML/YAML, gating, prompt injection defense
 - ✅ **TUI Interface** — Full-featured with 12+ slash commands, tab completion
@@ -68,6 +70,7 @@
 - ✅ **Lifecycle Hooks** — Extensible startup/shutdown/tool hooks (vs OpenClaw ❌)
 - ✅ **Hot-Reload Config** — SIGHUP signal, zero-downtime (vs OpenClaw ⚠️, PicoClaw ❌)
 - ✅ **Gateway Daemon** — Spawn, PID tracking, restart, kill
+- ✅ **Gateway Service Lifecycle** — systemd/launchd install, log rotation (10MB, 30-day retention), user-level services with security hardening (vs OpenClaw ⚠️ manual, PicoClaw ❌)
 - ✅ **Config Migration** — Legacy layout migration
 - ✅ **Feature Gates** — Headless/TUI/full builds (unique to RustyClaw)
 

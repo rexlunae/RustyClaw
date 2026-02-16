@@ -1134,8 +1134,10 @@ mod tests {
     #[test]
     fn test_sessions_list_params_defined() {
         let params = sessions_list_params();
-        assert_eq!(params.len(), 4);
+        assert_eq!(params.len(), 6);
         assert!(params.iter().all(|p| !p.required));
+        assert!(params.iter().any(|p| p.name == "includeArchived"));
+        assert!(params.iter().any(|p| p.name == "retentionDays"));
     }
 
     // ── sessions_spawn ──────────────────────────────────────────────
@@ -1177,8 +1179,9 @@ mod tests {
     #[test]
     fn test_sessions_history_params_defined() {
         let params = sessions_history_params();
-        assert_eq!(params.len(), 3);
+        assert_eq!(params.len(), 4);
         assert!(params.iter().any(|p| p.name == "sessionKey" && p.required));
+        assert!(params.iter().any(|p| p.name == "includeArchived"));
     }
 
     // ── session_status ──────────────────────────────────────────────
@@ -1186,8 +1189,11 @@ mod tests {
     #[test]
     fn test_session_status_params_defined() {
         let params = session_status_params();
-        assert_eq!(params.len(), 2);
+        assert_eq!(params.len(), 6);
         assert!(params.iter().all(|p| !p.required));
+        assert!(params.iter().any(|p| p.name == "archive"));
+        assert!(params.iter().any(|p| p.name == "archiveCompleted"));
+        assert!(params.iter().any(|p| p.name == "includeArchived"));
     }
 
     #[test]
