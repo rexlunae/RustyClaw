@@ -8,7 +8,7 @@ The Feature Integration Plan addresses security and operational gaps identified 
 
 **Target Platform**: Raspberry Pi 3B+ (1GB RAM, 1.4GHz ARM)
 **Memory Budget**: < 200MB total
-**Status**: Sprint 2 in progress (5/7 phases complete)
+**Status**: Sprint 1-2 complete; Sprint 3 (WebAuthn gateway integration) pending
 
 ---
 
@@ -286,10 +286,10 @@ curl http://localhost:9090/metrics | grep rustyclaw_tool_calls_total
 
 ---
 
-## Sprint 3: Enhanced Authentication ✅ COMPLETE
+## Sprint 3: Enhanced Authentication 🔄 IN PROGRESS
 
-### Phase 3.1: WebAuthn/Passkey Support ✅ COMPLETE
-**Status**: Implemented and tested
+### Phase 3.1: WebAuthn/Passkey Support 🔄 IN PROGRESS
+**Status**: Core module implemented; gateway authentication flow integration pending
 **Completion Date**: 2026-02-16
 **Memory Impact**: ~5MB
 **Dependencies**: Phase 1.3 (WSS/TLS) ✅ Complete
@@ -297,10 +297,10 @@ curl http://localhost:9090/metrics | grep rustyclaw_tool_calls_total
 **Implementation**:
 - ✅ Created `src/gateway/webauthn.rs` with WebAuthn support (279 lines)
 - ✅ Added `WebAuthnConfig` to `src/config.rs`
-- ✅ Integrated WebAuthn authenticator with registration/authentication flows
-- ✅ Passkey credential storage support
-- ✅ Cross-device authentication support (via QR code flow possible)
-- ✅ TOTP maintained as fallback authentication method
+- ⏳ Integration into live gateway auth flow
+- ⏳ Passkey credential persistence wiring
+- ⏳ End-to-end cross-device authentication validation
+- ⏳ TOTP + WebAuthn runtime fallback policy validation
 - ✅ 4/4 WebAuthn tests passing
 
 **Dependencies Added**:
@@ -349,19 +349,19 @@ rustyclaw gateway start --tls-self-signed
 
 ## Progress Summary
 
-### Completed Phases: 7 / 7 (100%) 🎉
+### Completed Phases: 6 / 7 (86%)
 - ✅ Phase 1.1: SSRF Protection
 - ✅ Phase 1.2: Prompt Injection Defense
 - ✅ Phase 1.3: WSS/TLS Gateway
 - ✅ Phase 2.1: Prometheus Metrics
 - ✅ Phase 2.2: Configuration Hot-Reload
 - ✅ Phase 2.3: Lifecycle Hooks
-- ✅ Phase 3.1: WebAuthn/Passkeys ← **Just Completed!**
+- 🔄 Phase 3.1: WebAuthn/Passkeys (partial)
 
 ### Sprint Status
 - **Sprint 1 (Security)**: ✅ 100% Complete (3/3 phases)
 - **Sprint 2 (Operations)**: ✅ 100% Complete (3/3 phases)
-- **Sprint 3 (Auth)**: ✅ 100% Complete (1/1 phases) ← **ALL SPRINTS COMPLETE!** 🎉
+- **Sprint 3 (Auth)**: 🔄 In Progress (0/1 phases complete, module scaffolded)
 
 ### Memory Usage (Measured on Raspberry Pi 3B+)
 - Baseline RustyClaw: ~55MB
@@ -375,24 +375,24 @@ rustyclaw gateway start --tls-self-signed
 - **Current Total**: ~94MB (well under 200MB target ✅)
 
 ### Test Results
-- **Total Tests**: 223 passing (+4 WebAuthn tests)
+- **Total Tests**: 231 passing (library test suite)
 - **Security Tests**: 7 passing
 - **Hooks Tests**: 8 passing
 - **WebAuthn Tests**: 4 passing
-- **All Tests**: ✅ PASS
+- **Current Status**: ✅ `cargo test --lib` passing
 
 ---
 
 ## Next Steps
 
-### Future (Optional Enhancement)
+### Priority Work
 1. **Phase 3.1: WebAuthn/Passkey Support**
    - Requires Phase 1.3 (TLS) complete ✅
    - Modern passwordless authentication
    - Security key support (YubiKey, TouchID, Windows Hello)
    - Cross-device authentication flows
-   - Estimated effort: 10-14 days
-   - Memory impact: ~5MB
+   - Integrate with gateway runtime auth path
+   - Validate fallback interactions with TOTP
 
 ### Completed Work Summary
 All planned Sprint 1 and Sprint 2 phases are complete:
@@ -401,7 +401,7 @@ All planned Sprint 1 and Sprint 2 phases are complete:
 
 **Total implementation time**: ~4-5 weeks
 **Memory footprint**: 89MB (56% under 200MB target)
-**All tests passing**: 219/219
+**Core tests passing**: 231/231 (`cargo test --lib`)
 
 ---
 
@@ -409,9 +409,9 @@ All planned Sprint 1 and Sprint 2 phases are complete:
 
 ### Created Documentation
 - ✅ `docs/HOT_RELOAD.md` — Configuration hot-reload guide
-- ⏳ `docs/SECURITY.md` — Security features overview (TODO)
-- ⏳ `docs/METRICS.md` — Prometheus metrics guide (TODO)
-- ⏳ `docs/HOOKS.md` — Lifecycle hooks guide (TODO)
+- ✅ `docs/SECURITY.md` — Security features overview
+- ✅ `docs/METRICS.md` — Prometheus metrics guide
+- ✅ `docs/HOOKS.md` — Lifecycle hooks guide
 
 ### Test Scripts
 - ✅ `tests/test_hot_reload.sh` — Hot-reload functional test
@@ -449,10 +449,10 @@ All planned Sprint 1 and Sprint 2 phases are complete:
 - [x] All existing tests pass with security features enabled
 - [x] Documentation updated
 
-### Sprint 2 🔄 IN PROGRESS
+### Sprint 2 ✅ ACHIEVED
 - [x] Prometheus metrics endpoint functional
 - [x] Hot-reload tested without crashes
-- [ ] Lifecycle hooks demonstrated with audit logging
+- [x] Lifecycle hooks demonstrated with audit logging
 
 ### Sprint 3 ⏳ PLANNED
 - [ ] WebAuthn registration tested on 3+ authenticators
@@ -462,5 +462,5 @@ All planned Sprint 1 and Sprint 2 phases are complete:
 ---
 
 **Last Updated**: 2026-02-16
-**Current Phase**: 2.3 (Lifecycle Hooks)
-**Overall Progress**: 71% (5/7 phases complete)
+**Current Phase**: 3.1 (WebAuthn integration)
+**Overall Progress**: 86% (6/7 phases complete)

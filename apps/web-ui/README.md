@@ -28,14 +28,14 @@ The gateway should be listening on `ws://localhost:8080` by default.
 Use any static file server. For example, with Python:
 
 ```bash
-cd web-ui
+cd apps/web-ui
 python3 -m http.server 8000
 ```
 
 Or with Node.js:
 
 ```bash
-npx serve .
+npx serve apps/web-ui
 ```
 
 ### 3. Open in Browser

@@ -35,7 +35,7 @@ A modern Qt-based desktop GUI for RustyClaw, inspired by AutoGPT frontend patter
 
 ```bash
 # Navigate to GUI directory
-cd gui
+cd apps/gui
 
 # Install dependencies
 pip install -r requirements.txt
@@ -51,7 +51,7 @@ pip install -r requirements.txt
 ### Basic Launch
 
 ```bash
-# From the gui directory
+# From the apps/gui directory
 python rustyclaw_gui.py
 
 # Or make it executable

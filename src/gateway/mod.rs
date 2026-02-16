@@ -16,9 +16,9 @@ mod tls;
 mod types;
 mod webauthn;
 
-use tokio::io::{AsyncRead, AsyncWrite};
 use std::pin::Pin;
 use std::task::{Context as TaskContext, Poll};
+use tokio::io::{AsyncRead, AsyncWrite};
 
 /// Stream type that can be either plain TCP or TLS-wrapped
 pub enum MaybeTlsStream {
@@ -74,29 +74,30 @@ pub use types::{
 
 // Re-export messenger handler types
 pub use messenger_handler::{
-    create_messenger_manager, run_messenger_loop, SharedMessengerManager, SharedPairingManager,
+    SharedMessengerManager, SharedPairingManager, create_messenger_manager, run_messenger_loop,
 };
 
 // Re-export health types
 pub use health::{HealthStats, SharedHealthStats};
 
 use crate::config::Config;
+use crate::hooks::HookAction;
 use crate::providers as crate_providers;
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
 use crate::tools;
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use dirs;
 use futures_util::stream::SplitSink;
 use futures_util::{SinkExt, StreamExt};
 use serde_json::json;
 use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::tungstenite::Message;
 use tokio_util::sync::CancellationToken;
 
 /// Shared flag for cancelling the tool loop from another task.
@@ -161,7 +162,10 @@ fn try_import_openclaw_token(vault: &mut SecretsManager) -> Option<CopilotSessio
         return None;
     }
 
-    eprintln!("  ✓ Auto-imported fresh token from OpenClaw (~{}h remaining)", remaining / 3600);
+    eprintln!(
+        "  ✓ Auto-imported fresh token from OpenClaw (~{}h remaining)",
+        remaining / 3600
+    );
 
     // Store in our vault for next time
     let session_data = serde_json::json!({
@@ -172,7 +176,10 @@ fn try_import_openclaw_token(vault: &mut SecretsManager) -> Option<CopilotSessio
         eprintln!("    ⚠ Failed to cache in vault: {}", e);
     }
 
-    Some(CopilotSession::from_session_token(token.to_string(), expires_at))
+    Some(CopilotSession::from_session_token(
+        token.to_string(),
+        expires_at,
+    ))
 }
 
 /// Run the gateway WebSocket server.
@@ -251,7 +258,7 @@ pub async fn run_gateway(
         // First check for imported session token in our vault
         let mut vault_guard = vault.lock().await;
         let session_result = vault_guard.get_secret("GITHUB_COPILOT_SESSION", true);
-        
+
         let mut session_from_import = match &session_result {
             Ok(Some(json_str)) => {
                 eprintln!("  ✓ Found GITHUB_COPILOT_SESSION in vault");
@@ -260,15 +267,15 @@ pub async fn run_gateway(
                     .and_then(|json| {
                         let token = json.get("session_token")?.as_str()?.to_string();
                         let expires_at = json.get("expires_at")?.as_i64()?;
-                        
+
                         let now = std::time::SystemTime::now()
                             .duration_since(std::time::UNIX_EPOCH)
                             .unwrap_or_default()
                             .as_secs() as i64;
-                        
+
                         let remaining = expires_at - now;
                         eprintln!("    Session expires in {}s", remaining);
-                        
+
                         if remaining > 60 {
                             Some(CopilotSession::from_session_token(token, expires_at))
                         } else {
@@ -365,7 +372,9 @@ pub async fn run_gateway(
                         messenger_skills,
                         messenger_pairing,
                         messenger_cancel,
-                    ).await {
+                    )
+                    .await
+                    {
                         eprintln!("[gateway] Messenger loop error: {}", e);
                     }
                 });
@@ -390,7 +399,9 @@ pub async fn run_gateway(
         let health_stats_clone = health_stats.clone();
         let health_cancel = cancel.clone();
         tokio::spawn(async move {
-            if let Err(e) = health::start_health_server(&health_addr, health_stats_clone, health_cancel).await {
+            if let Err(e) =
+                health::start_health_server(&health_addr, health_stats_clone, health_cancel).await
+            {
                 eprintln!("[health] Health check server error: {}", e);
             }
         });
@@ -455,8 +466,19 @@ pub async fn run_gateway(
     let startup_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::Startup)
         .with_metadata("gateway_url", serde_json::json!(addr.to_string()))
         .with_metadata("tls_enabled", serde_json::json!(config.tls.enabled));
-    if let Err(e) = hook_registry.invoke(&startup_ctx).await {
-        eprintln!("[gateway] Error invoking startup hook: {}", e);
+    match hook_registry.invoke(&startup_ctx).await {
+        Ok(HookAction::Continue) => {}
+        Ok(HookAction::ModifyContext(_)) => {
+            eprintln!(
+                "[gateway] Startup hook requested context modification; ignoring (not supported for startup event)"
+            );
+        }
+        Ok(HookAction::Abort(reason)) => {
+            return Err(anyhow!("Gateway startup aborted by hook: {}", reason));
+        }
+        Err(e) => {
+            eprintln!("[gateway] Error invoking startup hook: {}", e);
+        }
     }
 
     // Get config path for reloading
@@ -466,12 +488,15 @@ pub async fn run_gateway(
     // Create a future that either listens for SIGHUP (Unix) or never completes (non-Unix)
     #[cfg(unix)]
     let mut sighup_receiver = {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         signal(SignalKind::hangup()).expect("Failed to setup SIGHUP handler")
     };
 
     #[cfg(unix)]
-    eprintln!("[gateway] Hot-reload enabled: Send SIGHUP (kill -HUP {}) to reload config", std::process::id());
+    eprintln!(
+        "[gateway] Hot-reload enabled: Send SIGHUP (kill -HUP {}) to reload config",
+        std::process::id()
+    );
 
     #[cfg(not(unix))]
     eprintln!("[gateway] Hot-reload not available on this platform");
@@ -618,8 +643,24 @@ async fn handle_connection(
     let conn_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::Connection)
         .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
         .with_metadata("peer_ip", serde_json::json!(peer_ip.to_string()));
-    if let Err(e) = hook_registry.invoke(&conn_ctx).await {
-        eprintln!("[hooks] Error invoking connection hook: {}", e);
+    match hook_registry.invoke(&conn_ctx).await {
+        Ok(HookAction::Continue) => {}
+        Ok(HookAction::ModifyContext(_)) => {
+            eprintln!("[hooks] Connection hook requested context modification; ignoring");
+        }
+        Ok(HookAction::Abort(reason)) => {
+            let frame = json!({
+                "type": "error",
+                "ok": false,
+                "message": format!("Connection aborted by hook: {}", reason),
+            });
+            writer.send(Message::Text(frame.to_string().into())).await?;
+            writer.send(Message::Close(None)).await?;
+            return Ok(());
+        }
+        Err(e) => {
+            eprintln!("[hooks] Error invoking connection hook: {}", e);
+        }
     }
 
     // Snapshot config and model context for this connection.
@@ -646,7 +687,9 @@ async fn handle_connection(
 
         // Send challenge.
         let challenge = json!({ "type": "auth_challenge", "method": "totp" });
-        writer.send(Message::Text(challenge.to_string().into())).await
+        writer
+            .send(Message::Text(challenge.to_string().into()))
+            .await
             .context("Failed to send auth_challenge")?;
 
         // Allow up to 3 attempts before closing the connection.
@@ -671,11 +714,30 @@ async fn handle_connection(
                         auth::clear_rate_limit(&rate_limiter, peer_ip).await;
 
                         // Invoke AuthSuccess hook
-                        let auth_success_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::AuthSuccess)
-                            .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
-                            .with_metadata("method", "totp");
-                        if let Err(e) = hook_registry.invoke(&auth_success_ctx).await {
-                            eprintln!("[hooks] Error invoking auth success hook: {}", e);
+                        let auth_success_ctx =
+                            crate::hooks::HookContext::new(crate::hooks::HookEvent::AuthSuccess)
+                                .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
+                                .with_metadata("method", "totp");
+                        match hook_registry.invoke(&auth_success_ctx).await {
+                            Ok(HookAction::Continue) => {}
+                            Ok(HookAction::ModifyContext(_)) => {
+                                eprintln!(
+                                    "[hooks] AuthSuccess hook requested context modification; ignoring"
+                                );
+                            }
+                            Ok(HookAction::Abort(reason)) => {
+                                let fail = json!({
+                                    "type": "auth_result",
+                                    "ok": false,
+                                    "message": format!("Authentication rejected by hook: {}", reason),
+                                });
+                                writer.send(Message::Text(fail.to_string().into())).await?;
+                                writer.send(Message::Close(None)).await?;
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                eprintln!("[hooks] Error invoking auth success hook: {}", e);
+                            }
                         }
 
                         let ok = json!({ "type": "auth_result", "ok": true });
@@ -686,13 +748,32 @@ async fn handle_connection(
                         let locked_out = auth::record_totp_failure(&rate_limiter, peer_ip).await;
 
                         // Invoke AuthFailure hook
-                        let auth_failure_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::AuthFailure)
-                            .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
-                            .with_metadata("method", "totp")
-                            .with_metadata("attempts", serde_json::json!(attempts))
-                            .with_metadata("locked_out", serde_json::json!(locked_out));
-                        if let Err(e) = hook_registry.invoke(&auth_failure_ctx).await {
-                            eprintln!("[hooks] Error invoking auth failure hook: {}", e);
+                        let auth_failure_ctx =
+                            crate::hooks::HookContext::new(crate::hooks::HookEvent::AuthFailure)
+                                .with_metadata("peer_addr", serde_json::json!(peer.to_string()))
+                                .with_metadata("method", "totp")
+                                .with_metadata("attempts", serde_json::json!(attempts))
+                                .with_metadata("locked_out", serde_json::json!(locked_out));
+                        match hook_registry.invoke(&auth_failure_ctx).await {
+                            Ok(HookAction::Continue) => {}
+                            Ok(HookAction::ModifyContext(_)) => {
+                                eprintln!(
+                                    "[hooks] AuthFailure hook requested context modification; ignoring"
+                                );
+                            }
+                            Ok(HookAction::Abort(reason)) => {
+                                let fail = json!({
+                                    "type": "auth_result",
+                                    "ok": false,
+                                    "message": format!("Authentication aborted by hook: {}", reason),
+                                });
+                                writer.send(Message::Text(fail.to_string().into())).await?;
+                                writer.send(Message::Close(None)).await?;
+                                return Ok(());
+                            }
+                            Err(e) => {
+                                eprintln!("[hooks] Error invoking auth failure hook: {}", e);
+                            }
                         }
 
                         if locked_out {
@@ -700,13 +781,15 @@ async fn handle_connection(
                                 "Invalid code. Too many failures — locked out for {}s.",
                                 TOTP_LOCKOUT_SECS,
                             );
-                            let fail = json!({ "type": "auth_result", "ok": false, "message": msg });
+                            let fail =
+                                json!({ "type": "auth_result", "ok": false, "message": msg });
                             writer.send(Message::Text(fail.to_string().into())).await?;
                             writer.send(Message::Close(None)).await?;
                             return Ok(());
                         } else if attempts >= MAX_TOTP_ATTEMPTS {
                             let msg = "Invalid code. Maximum attempts exceeded.";
-                            let fail = json!({ "type": "auth_result", "ok": false, "message": msg });
+                            let fail =
+                                json!({ "type": "auth_result", "ok": false, "message": msg });
                             writer.send(Message::Text(fail.to_string().into())).await?;
                             writer.send(Message::Close(None)).await?;
                             return Ok(());
@@ -771,8 +854,11 @@ async fn handle_connection(
     if vault_is_locked {
         writer
             .send(Message::Text(
-                helpers::status_frame("vault_locked", "Secrets vault is locked — provide password to unlock")
-                    .into(),
+                helpers::status_frame(
+                    "vault_locked",
+                    "Secrets vault is locked — provide password to unlock",
+                )
+                .into(),
             ))
             .await
             .context("Failed to send vault_locked status")?;
@@ -798,8 +884,11 @@ async fn handle_connection(
             if ctx.api_key.is_some() {
                 writer
                     .send(Message::Text(
-                        helpers::status_frame("credentials_loaded", &format!("{} API key loaded", display))
-                            .into(),
+                        helpers::status_frame(
+                            "credentials_loaded",
+                            &format!("{} API key loaded", display),
+                        )
+                        .into(),
                     ))
                     .await
                     .context("Failed to send credentials_loaded status")?;
@@ -842,13 +931,22 @@ async fn handle_connection(
 
             writer
                 .send(Message::Text(
-                    helpers::status_frame("model_connecting", &format!("Probing {} …", ctx.base_url))
-                        .into(),
+                    helpers::status_frame(
+                        "model_connecting",
+                        &format!("Probing {} …", ctx.base_url),
+                    )
+                    .into(),
                 ))
                 .await
                 .context("Failed to send model_connecting status")?;
 
-            match providers::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref()).await {
+            match providers::validate_model_connection(
+                &http,
+                &probe_ctx,
+                copilot_session.as_deref(),
+            )
+            .await
+            {
                 ProbeResult::Ready => {
                     writer
                         .send(Message::Text(
@@ -869,7 +967,10 @@ async fn handle_connection(
                         .send(Message::Text(
                             helpers::status_frame(
                                 "model_ready",
-                                &format!("{} / {} connected (probe: {})", display, ctx.model, warning),
+                                &format!(
+                                    "{} / {} connected (probe: {})",
+                                    display, ctx.model, warning
+                                ),
                             )
                             .into(),
                         ))
@@ -1567,13 +1668,7 @@ async fn dispatch_text_message(
         let estimated = helpers::estimate_tokens(&resolved.messages);
         let threshold = (context_limit as f64 * COMPACTION_THRESHOLD) as usize;
         if estimated > threshold {
-            match providers::compact_conversation(
-                http,
-                &mut resolved,
-                context_limit,
-                writer,
-            )
-            .await
+            match providers::compact_conversation(http, &mut resolved, context_limit, writer).await
             {
                 Ok(()) => {} // compacted in-place
                 Err(err) => {
@@ -1625,7 +1720,10 @@ async fn dispatch_text_message(
             model_resp.tool_calls.len()
         );
         if !model_resp.text.is_empty() && resolved.provider != "anthropic" {
-            eprintln!("[Gateway] Sending chunk to TUI: {} chars", model_resp.text.len());
+            eprintln!(
+                "[Gateway] Sending chunk to TUI: {} chars",
+                model_resp.text.len()
+            );
             providers::send_chunk(writer, &model_resp.text).await?;
         }
 
@@ -1651,9 +1749,8 @@ async fn dispatch_text_message(
                     "First, let me ",
                     "First let me ",
                 ];
-                let text_suggests_action = INTENT_PATTERNS
-                    .iter()
-                    .any(|p| model_resp.text.contains(p));
+                let text_suggests_action =
+                    INTENT_PATTERNS.iter().any(|p| model_resp.text.contains(p));
 
                 // Also trigger continuation if response ends with colon (about to list/show something)
                 let ends_with_continuation = model_resp.text.trim_end().ends_with(':');
@@ -1677,7 +1774,9 @@ async fn dispatch_text_message(
                     }
 
                     // Append assistant message and continuation prompt
-                    resolved.messages.push(ChatMessage::text("assistant", &model_resp.text));
+                    resolved
+                        .messages
+                        .push(ChatMessage::text("assistant", &model_resp.text));
                     resolved.messages.push(ChatMessage::text(
                         "user",
                         "Continue. Execute the action you described.",
@@ -1754,32 +1853,81 @@ async fn dispatch_text_message(
                 // Inject elevated_mode for execute_command
                 let args = if tc.name == "execute_command" {
                     let mut args_map = tc.arguments.as_object().cloned().unwrap_or_default();
-                    args_map.insert("elevated_mode".to_string(), json!(elevated_mode.load(Ordering::Relaxed)));
+                    args_map.insert(
+                        "elevated_mode".to_string(),
+                        json!(elevated_mode.load(Ordering::Relaxed)),
+                    );
                     serde_json::Value::Object(args_map)
                 } else {
                     tc.arguments.clone()
                 };
 
                 // Invoke BeforeToolCall hook
-                let before_tool_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::BeforeToolCall)
-                    .with_metadata("tool_name", serde_json::json!(tc.name.clone()))
-                    .with_metadata("tool_id", serde_json::json!(tc.id.clone()));
-                if let Err(e) = hook_registry.invoke(&before_tool_ctx).await {
-                    eprintln!("[hooks] Error invoking before tool call hook: {}", e);
-                }
+                let before_tool_ctx =
+                    crate::hooks::HookContext::new(crate::hooks::HookEvent::BeforeToolCall)
+                        .with_metadata("tool_name", serde_json::json!(tc.name.clone()))
+                        .with_metadata("tool_id", serde_json::json!(tc.id.clone()));
+                let before_hook_action = match hook_registry.invoke(&before_tool_ctx).await {
+                    Ok(action) => action,
+                    Err(e) => {
+                        eprintln!("[hooks] Error invoking before tool call hook: {}", e);
+                        HookAction::Continue
+                    }
+                };
 
-                let result = match tools::execute_tool(&tc.name, &args, workspace_dir) {
-                    Ok(text) => (text, false),
-                    Err(err) => (err, true),
+                let result = match before_hook_action {
+                    HookAction::Continue => {
+                        match tools::execute_tool(&tc.name, &args, workspace_dir) {
+                            Ok(text) => (text, false),
+                            Err(err) => (err, true),
+                        }
+                    }
+                    HookAction::ModifyContext(_ctx) => {
+                        eprintln!(
+                            "[hooks] BeforeToolCall hook requested context modification for '{}'; ignoring",
+                            tc.name
+                        );
+                        match tools::execute_tool(&tc.name, &args, workspace_dir) {
+                            Ok(text) => (text, false),
+                            Err(err) => (err, true),
+                        }
+                    }
+                    HookAction::Abort(reason) => (
+                        format!("Tool '{}' aborted by hook: {}", tc.name, reason),
+                        true,
+                    ),
                 };
 
                 // Invoke AfterToolCall hook
-                let after_tool_ctx = crate::hooks::HookContext::new(crate::hooks::HookEvent::AfterToolCall)
-                    .with_metadata("tool_name", serde_json::json!(tc.name.clone()))
-                    .with_metadata("tool_id", serde_json::json!(tc.id.clone()))
-                    .with_metadata("success", serde_json::json!(!result.1));
-                if let Err(e) = hook_registry.invoke(&after_tool_ctx).await {
-                    eprintln!("[hooks] Error invoking after tool call hook: {}", e);
+                let after_tool_ctx =
+                    crate::hooks::HookContext::new(crate::hooks::HookEvent::AfterToolCall)
+                        .with_metadata("tool_name", serde_json::json!(tc.name.clone()))
+                        .with_metadata("tool_id", serde_json::json!(tc.id.clone()))
+                        .with_metadata("success", serde_json::json!(!result.1));
+                match hook_registry.invoke(&after_tool_ctx).await {
+                    Ok(HookAction::Continue) => {}
+                    Ok(HookAction::ModifyContext(_)) => {
+                        eprintln!(
+                            "[hooks] AfterToolCall hook requested context modification for '{}'; ignoring",
+                            tc.name
+                        );
+                    }
+                    Ok(HookAction::Abort(reason)) => {
+                        let frame = json!({
+                            "type": "error",
+                            "ok": false,
+                            "message": format!("Execution aborted by hook after tool '{}': {}", tc.name, reason),
+                        });
+                        writer
+                            .send(Message::Text(frame.to_string().into()))
+                            .await
+                            .context("Failed to send hook abort frame")?;
+                        providers::send_response_done(writer).await?;
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        eprintln!("[hooks] Error invoking after tool call hook: {}", e);
+                    }
                 }
 
                 result

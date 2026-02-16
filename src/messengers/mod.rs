@@ -161,6 +161,12 @@ mod discord;
 mod telegram;
 mod gmail;
 mod slack;
+mod whatsapp;
+mod google_chat;
+mod teams;
+mod mattermost;
+mod irc;
+mod xmpp;
 
 pub use webhook::WebhookMessenger;
 pub use console::ConsoleMessenger;
@@ -168,6 +174,12 @@ pub use discord::DiscordMessenger;
 pub use telegram::TelegramMessenger;
 pub use gmail::{GmailMessenger, GmailConfig};
 pub use slack::{SlackMessenger, SlackConfig};
+pub use whatsapp::{WhatsAppConfig, WhatsAppMessenger};
+pub use google_chat::{GoogleChatConfig, GoogleChatMessenger};
+pub use teams::{TeamsConfig, TeamsMessenger};
+pub use mattermost::{MattermostConfig, MattermostMessenger};
+pub use irc::{IrcConfig, IrcMessenger};
+pub use xmpp::{XmppConfig, XmppMessenger};
 
 // ── Optional messengers (feature-gated) ─────────────────────────────────────
 

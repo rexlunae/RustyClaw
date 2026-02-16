@@ -445,7 +445,8 @@ pub struct MessengerConfig {
     /// Display name for this messenger instance.
     #[serde(default)]
     pub name: String,
-    /// Messenger type: telegram, discord, signal, matrix, webhook.
+    /// Messenger type: telegram, discord, slack, whatsapp, google-chat,
+    /// teams, mattermost, irc, xmpp, signal, matrix, webhook, gmail.
     #[serde(default)]
     pub messenger_type: String,
     /// Whether this messenger is enabled.
@@ -460,6 +461,27 @@ pub struct MessengerConfig {
     /// Webhook URL (for webhook messenger).
     #[serde(default)]
     pub webhook_url: Option<String>,
+    /// Optional API base URL for messenger adapters.
+    #[serde(default)]
+    pub base_url: Option<String>,
+    /// Optional API version (for APIs like WhatsApp Cloud).
+    #[serde(default)]
+    pub api_version: Option<String>,
+    /// Default channel/space/room identifier.
+    #[serde(default)]
+    pub channel_id: Option<String>,
+    /// Team/workspace identifier (Teams).
+    #[serde(default)]
+    pub team_id: Option<String>,
+    /// WhatsApp Cloud API phone number ID.
+    #[serde(default)]
+    pub phone_number_id: Option<String>,
+    /// Google Chat space id/name (e.g., spaces/AAAA...).
+    #[serde(default)]
+    pub space: Option<String>,
+    /// Generic sender id/JID (XMPP bridge mode).
+    #[serde(default)]
+    pub from: Option<String>,
     /// Matrix homeserver URL.
     #[serde(default)]
     pub homeserver: Option<String>,
@@ -475,6 +497,24 @@ pub struct MessengerConfig {
     /// Phone number (Signal).
     #[serde(default)]
     pub phone: Option<String>,
+    /// IRC server hostname.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// IRC server port.
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// IRC nickname.
+    #[serde(default)]
+    pub nickname: Option<String>,
+    /// IRC username.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// IRC real name.
+    #[serde(default)]
+    pub realname: Option<String>,
+    /// Default recipient/JID/channel for adapters.
+    #[serde(default)]
+    pub default_recipient: Option<String>,
     /// Gmail client ID (OAuth2).
     #[serde(default)]
     pub client_id: Option<String>,

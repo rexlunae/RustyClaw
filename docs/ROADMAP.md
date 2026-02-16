@@ -22,7 +22,7 @@ Transform RustyClaw into a best-in-class agentic AI runtime with:
 - Landlock+Bubblewrap combined sandbox (defense-in-depth)
 - Docker container sandboxing (cross-platform)
 - Basic memory search (keyword-based)
-- Single LLM provider support
+- Multi-provider support (no automatic failover yet)
 - SSRF and prompt injection defense (basic)
 - Browser automation with CDP
 - Multiple messenger channels (6+)

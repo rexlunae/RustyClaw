@@ -79,8 +79,14 @@ impl PairingManager {
         let allowlist = if allowlist_path.exists() {
             let content = std::fs::read_to_string(&allowlist_path)
                 .with_context(|| format!("Failed to read allowlist from {:?}", allowlist_path))?;
-            serde_json::from_str(&content)
-                .with_context(|| format!("Failed to parse allowlist from {:?}", allowlist_path))?
+            if content.trim().is_empty() {
+                // Treat empty files as an empty allowlist.
+                HashMap::new()
+            } else {
+                serde_json::from_str(&content).with_context(|| {
+                    format!("Failed to parse allowlist from {:?}", allowlist_path)
+                })?
+            }
         } else {
             HashMap::new()
         };
@@ -122,13 +128,24 @@ impl PairingManager {
         let expires_at = SystemTime::now() + self.code_expiry;
 
         let mut pending = self.pending.write().await;
-        pending.insert(key, PendingCode { code: code.clone(), expires_at });
+        pending.insert(
+            key,
+            PendingCode {
+                code: code.clone(),
+                expires_at,
+            },
+        );
 
         code
     }
 
     /// Verify a pairing code submitted by a sender
-    pub async fn verify_code(&self, messenger_type: &str, sender_id: &str, submitted_code: &str) -> bool {
+    pub async fn verify_code(
+        &self,
+        messenger_type: &str,
+        sender_id: &str,
+        submitted_code: &str,
+    ) -> bool {
         let key = format!("{}:{}", messenger_type, sender_id);
 
         let pending = self.pending.read().await;
@@ -143,7 +160,12 @@ impl PairingManager {
     }
 
     /// Approve a sender and add to allowlist (admin action)
-    pub async fn approve_sender(&self, messenger_type: &str, sender_id: &str, name: String) -> Result<()> {
+    pub async fn approve_sender(
+        &self,
+        messenger_type: &str,
+        sender_id: &str,
+        name: String,
+    ) -> Result<()> {
         let key = format!("{}:{}", messenger_type, sender_id);
 
         let paired_at = SystemTime::now()
@@ -194,7 +216,8 @@ impl PairingManager {
     /// List all authorized senders
     pub async fn list_authorized(&self) -> Vec<(String, AllowlistEntry)> {
         let allowlist = self.allowlist.read().await;
-        allowlist.iter()
+        allowlist
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     }
@@ -204,7 +227,8 @@ impl PairingManager {
         self.cleanup_expired_codes().await;
 
         let pending = self.pending.read().await;
-        pending.iter()
+        pending
+            .iter()
             .map(|(k, v)| (k.clone(), v.code.clone(), v.expires_at))
             .collect()
     }
@@ -219,8 +243,8 @@ impl PairingManager {
     /// Save allowlist to disk
     async fn save_allowlist(&self) -> Result<()> {
         let allowlist = self.allowlist.read().await;
-        let json = serde_json::to_string_pretty(&*allowlist)
-            .context("Failed to serialize allowlist")?;
+        let json =
+            serde_json::to_string_pretty(&*allowlist).context("Failed to serialize allowlist")?;
 
         // Ensure parent directory exists
         if let Some(parent) = self.allowlist_path.parent() {
@@ -276,16 +300,28 @@ mod tests {
         assert!(manager.verify_code("telegram", "user123", &code).await);
 
         // Wrong code should fail
-        assert!(!manager.verify_code("telegram", "user123", "WRONGCODE").await);
+        assert!(
+            !manager
+                .verify_code("telegram", "user123", "WRONGCODE")
+                .await
+        );
 
         // Approve sender
-        manager.approve_sender("telegram", "user123", "John Doe".to_string()).await.unwrap();
+        manager
+            .approve_sender("telegram", "user123", "John Doe".to_string())
+            .await
+            .unwrap();
 
         // Now should be authorized
         assert!(manager.is_authorized("telegram", "user123").await);
 
         // Code should be removed from pending
-        assert!(manager.get_pending_code("telegram", "user123").await.is_none());
+        assert!(
+            manager
+                .get_pending_code("telegram", "user123")
+                .await
+                .is_none()
+        );
     }
 
     #[tokio::test]
@@ -294,7 +330,10 @@ mod tests {
         let manager = PairingManager::new(temp.path()).unwrap();
 
         // Approve sender
-        manager.approve_sender("discord", "user456", "Jane Doe".to_string()).await.unwrap();
+        manager
+            .approve_sender("discord", "user456", "Jane Doe".to_string())
+            .await
+            .unwrap();
         assert!(manager.is_authorized("discord", "user456").await);
 
         // Revoke
@@ -310,7 +349,10 @@ mod tests {
 
         {
             let manager = PairingManager::new(&path).unwrap();
-            manager.approve_sender("telegram", "user789", "Test User".to_string()).await.unwrap();
+            manager
+                .approve_sender("telegram", "user789", "Test User".to_string())
+                .await
+                .unwrap();
         }
 
         // Create new manager instance - should load from disk
@@ -324,5 +366,14 @@ mod tests {
         assert_eq!(code.len(), 8);
         assert!(code.chars().all(|c| c.is_ascii_alphanumeric()));
         assert!(code.chars().all(|c| c.is_uppercase() || c.is_ascii_digit()));
+    }
+
+    #[tokio::test]
+    async fn test_empty_allowlist_file_is_accepted() {
+        let temp = NamedTempFile::new().unwrap();
+        std::fs::write(temp.path(), "").unwrap();
+
+        let manager = PairingManager::new(temp.path()).unwrap();
+        assert!(!manager.is_authorized("telegram", "user-empty").await);
     }
 }

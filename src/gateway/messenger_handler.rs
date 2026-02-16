@@ -6,8 +6,11 @@
 
 use crate::config::{Config, MessengerConfig};
 use crate::messengers::{
-    DiscordMessenger, GmailConfig, GmailMessenger, MediaAttachment, Message, Messenger,
-    MessengerManager, SendOptions, TelegramMessenger, WebhookMessenger,
+    DiscordMessenger, GmailConfig, GmailMessenger, GoogleChatConfig, GoogleChatMessenger,
+    IrcConfig, IrcMessenger, MattermostConfig, MattermostMessenger, MediaAttachment, Message,
+    Messenger, MessengerManager, SendOptions, SlackConfig, SlackMessenger, TeamsConfig,
+    TeamsMessenger, TelegramMessenger, WebhookMessenger, WhatsAppConfig, WhatsAppMessenger,
+    XmppConfig, XmppMessenger,
 };
 use crate::pairing::PairingManager;
 use crate::tools;
@@ -105,6 +108,220 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok())
                 .context("Discord requires 'token' or DISCORD_BOT_TOKEN env var")?;
             Box::new(DiscordMessenger::new(name, token))
+        }
+        "slack" => {
+            let token = config
+                .token
+                .clone()
+                .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok())
+                .context("Slack requires 'token' or SLACK_BOT_TOKEN env var")?;
+
+            let slack_config = SlackConfig {
+                token,
+                channel: config.channel_id.clone(),
+                poll_interval: 5,
+            };
+
+            let messenger = SlackMessenger::new(name, slack_config)
+                .context("Failed to create Slack messenger")?;
+            Box::new(messenger)
+        }
+        "whatsapp" => {
+            let token = config
+                .token
+                .clone()
+                .or_else(|| std::env::var("WHATSAPP_ACCESS_TOKEN").ok())
+                .context("WhatsApp requires 'token' or WHATSAPP_ACCESS_TOKEN env var")?;
+            let phone_number_id = config
+                .phone_number_id
+                .clone()
+                .or_else(|| std::env::var("WHATSAPP_PHONE_NUMBER_ID").ok())
+                .context(
+                    "WhatsApp requires 'phone_number_id' or WHATSAPP_PHONE_NUMBER_ID env var",
+                )?;
+            let api_version = config
+                .api_version
+                .clone()
+                .or_else(|| std::env::var("WHATSAPP_API_VERSION").ok())
+                .unwrap_or_else(|| "v20.0".to_string());
+
+            let wa_config = WhatsAppConfig {
+                token,
+                phone_number_id,
+                api_version,
+            };
+
+            Box::new(WhatsAppMessenger::new(name, wa_config))
+        }
+        "google-chat" => {
+            let webhook_url = config
+                .webhook_url
+                .clone()
+                .or_else(|| std::env::var("GOOGLE_CHAT_WEBHOOK_URL").ok());
+            let token = config
+                .token
+                .clone()
+                .or_else(|| std::env::var("GOOGLE_CHAT_TOKEN").ok())
+                .or_else(|| std::env::var("GOOGLE_CHAT_BOT_TOKEN").ok());
+            let space = config
+                .space
+                .clone()
+                .or_else(|| config.channel_id.clone())
+                .or_else(|| std::env::var("GOOGLE_CHAT_SPACE").ok());
+
+            if webhook_url.is_none() && (token.is_none() || space.is_none()) {
+                anyhow::bail!(
+                    "Google Chat requires webhook_url OR token + space (config or env vars)"
+                );
+            }
+
+            let gc_config = GoogleChatConfig {
+                token,
+                webhook_url,
+                space,
+                api_base: config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://chat.googleapis.com/v1".to_string()),
+            };
+
+            Box::new(GoogleChatMessenger::new(name, gc_config))
+        }
+        "teams" => {
+            let teams_config = TeamsConfig {
+                token: config
+                    .token
+                    .clone()
+                    .or_else(|| std::env::var("TEAMS_BOT_TOKEN").ok())
+                    .or_else(|| std::env::var("MICROSOFT_TEAMS_TOKEN").ok()),
+                webhook_url: config
+                    .webhook_url
+                    .clone()
+                    .or_else(|| std::env::var("TEAMS_WEBHOOK_URL").ok()),
+                team_id: config
+                    .team_id
+                    .clone()
+                    .or_else(|| std::env::var("TEAMS_TEAM_ID").ok()),
+                channel_id: config
+                    .channel_id
+                    .clone()
+                    .or_else(|| std::env::var("TEAMS_CHANNEL_ID").ok()),
+                api_base: config
+                    .base_url
+                    .clone()
+                    .unwrap_or_else(|| "https://graph.microsoft.com/v1.0".to_string()),
+            };
+
+            if teams_config.webhook_url.is_none() && teams_config.token.is_none() {
+                anyhow::bail!("Teams requires webhook_url OR token (config or env vars)");
+            }
+
+            Box::new(TeamsMessenger::new(name, teams_config))
+        }
+        "mattermost" => {
+            let mattermost_config = MattermostConfig {
+                token: config
+                    .token
+                    .clone()
+                    .or_else(|| std::env::var("MATTERMOST_TOKEN").ok()),
+                webhook_url: config
+                    .webhook_url
+                    .clone()
+                    .or_else(|| std::env::var("MATTERMOST_WEBHOOK_URL").ok()),
+                base_url: config
+                    .base_url
+                    .clone()
+                    .or_else(|| std::env::var("MATTERMOST_BASE_URL").ok())
+                    .unwrap_or_else(|| "http://localhost:8065".to_string()),
+                default_channel: config
+                    .channel_id
+                    .clone()
+                    .or_else(|| config.default_recipient.clone())
+                    .or_else(|| std::env::var("MATTERMOST_CHANNEL_ID").ok()),
+            };
+
+            if mattermost_config.webhook_url.is_none() && mattermost_config.token.is_none() {
+                anyhow::bail!("Mattermost requires webhook_url OR token (config or env vars)");
+            }
+
+            Box::new(MattermostMessenger::new(name, mattermost_config))
+        }
+        "irc" => {
+            let port = config
+                .port
+                .or_else(|| std::env::var("IRC_PORT").ok().and_then(|v| v.parse().ok()))
+                .unwrap_or(6667);
+            let irc_config = IrcConfig {
+                server: config
+                    .server
+                    .clone()
+                    .or_else(|| std::env::var("IRC_SERVER").ok())
+                    .unwrap_or_else(|| "irc.libera.chat".to_string()),
+                port,
+                nickname: config
+                    .nickname
+                    .clone()
+                    .or_else(|| std::env::var("IRC_NICK").ok())
+                    .unwrap_or_else(|| "rustyclaw".to_string()),
+                username: config
+                    .username
+                    .clone()
+                    .or_else(|| std::env::var("IRC_USERNAME").ok())
+                    .unwrap_or_else(|| "rustyclaw".to_string()),
+                realname: config
+                    .realname
+                    .clone()
+                    .or_else(|| std::env::var("IRC_REALNAME").ok())
+                    .unwrap_or_else(|| "RustyClaw".to_string()),
+                password: config
+                    .password
+                    .clone()
+                    .or_else(|| std::env::var("IRC_PASSWORD").ok()),
+                channel: config
+                    .channel_id
+                    .clone()
+                    .or_else(|| config.default_recipient.clone())
+                    .or_else(|| std::env::var("IRC_CHANNEL").ok()),
+            };
+
+            Box::new(IrcMessenger::new(name, irc_config))
+        }
+        "xmpp" => {
+            let webhook_url = config
+                .webhook_url
+                .clone()
+                .or_else(|| std::env::var("XMPP_WEBHOOK_URL").ok());
+            let api_url = config
+                .base_url
+                .clone()
+                .or_else(|| std::env::var("XMPP_API_URL").ok());
+            let token = config
+                .token
+                .clone()
+                .or_else(|| std::env::var("XMPP_TOKEN").ok());
+            let default_recipient = config
+                .default_recipient
+                .clone()
+                .or_else(|| config.channel_id.clone())
+                .or_else(|| std::env::var("XMPP_TO").ok());
+            let from = config
+                .from
+                .clone()
+                .or_else(|| std::env::var("XMPP_FROM").ok());
+
+            if webhook_url.is_none() && (api_url.is_none() || token.is_none()) {
+                anyhow::bail!("XMPP requires webhook_url OR api_url + token");
+            }
+
+            let xmpp_config = XmppConfig {
+                webhook_url,
+                api_url,
+                token,
+                from,
+                default_recipient,
+            };
+
+            Box::new(XmppMessenger::new(name, xmpp_config))
         }
         "webhook" => {
             let url = config

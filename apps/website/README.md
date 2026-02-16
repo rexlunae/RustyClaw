@@ -5,7 +5,7 @@ Simple static landing page for RustyClaw.
 ## Preview Locally
 
 ```bash
-cd website
+cd apps/website
 python3 -m http.server 8080
 # Open http://localhost:8080
 ```
@@ -16,16 +16,16 @@ This is a single HTML file with embedded CSS. Deploy anywhere:
 
 ### GitHub Pages
 1. Push to `gh-pages` branch, or
-2. Enable Pages in repo settings → Source: `/website` folder
+2. Enable Pages in repo settings → Source: `/apps/website` folder
 
 ### Cloudflare Pages
 1. Connect repo
 2. Build command: (none needed)
-3. Output directory: `website`
+3. Output directory: `apps/website`
 
 ### Netlify
 1. Drag and drop the `website` folder, or
-2. Connect repo with publish directory: `website`
+2. Connect repo with publish directory: `apps/website`
 
 ### Any Static Host
 Just upload `index.html` — it's self-contained.
