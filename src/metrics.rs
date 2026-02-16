@@ -13,6 +13,7 @@ use prometheus::{
     HistogramVec, TextEncoder,
 };
 use std::net::SocketAddr;
+use std::time::Duration;
 use warp::Filter;
 
 lazy_static! {
@@ -77,6 +78,23 @@ lazy_static! {
         "rustyclaw_ssrf_blocked_total",
         "Total number of SSRF attempts blocked",
         &["reason"]  // "private_ip", "cloud_metadata", etc.
+    )
+    .unwrap();
+
+    /// Retry attempts for transient outbound failures.
+    pub static ref RETRY_ATTEMPTS_TOTAL: CounterVec = register_counter_vec!(
+        "rustyclaw_retry_attempts_total",
+        "Total number of outbound retry attempts",
+        &["provider", "reason"]
+    )
+    .unwrap();
+
+    /// Retry delay histogram (seconds).
+    pub static ref RETRY_DELAY_SECONDS: HistogramVec = register_histogram_vec!(
+        "rustyclaw_retry_delay_seconds",
+        "Delay applied before retrying outbound requests",
+        &["provider", "reason"],
+        vec![0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 30.0]
     )
     .unwrap();
 }
@@ -181,6 +199,16 @@ pub fn record_ssrf_blocked(reason: &str) {
     SSRF_BLOCKED_TOTAL.with_label_values(&[reason]).inc();
 }
 
+/// Helper to record outbound retry behavior.
+pub fn record_retry(provider: &str, reason: &str, delay: Duration) {
+    RETRY_ATTEMPTS_TOTAL
+        .with_label_values(&[provider, reason])
+        .inc();
+    RETRY_DELAY_SECONDS
+        .with_label_values(&[provider, reason])
+        .observe(delay.as_secs_f64());
+}
+
 /// Timer for request duration tracking
 pub struct RequestTimer {
     request_type: String,
@@ -221,6 +249,8 @@ mod tests {
         let _ = &*TOKENS_TOTAL;
         let _ = &*PROMPT_INJECTION_DETECTED;
         let _ = &*SSRF_BLOCKED_TOTAL;
+        let _ = &*RETRY_ATTEMPTS_TOTAL;
+        let _ = &*RETRY_DELAY_SECONDS;
     }
 
     #[test]

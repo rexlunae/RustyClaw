@@ -3,6 +3,8 @@ use futures_util::SinkExt;
 use serde_json::json;
 use tokio_tungstenite::tungstenite::Message;
 
+use crate::metrics;
+use crate::retry::{RetryAttempt, RetryPolicy, classify_reqwest_result, retry_with_backoff};
 use crate::secret::{ExposeSecret, SecretString};
 use super::types::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProviderRequest,
@@ -18,49 +20,65 @@ use crate::tools;
 ///
 /// On the first attempt, uses the provided client (which tries both IPv4
 /// and IPv6 per OS defaults).  If that fails with a connection error
-/// (e.g. IPv6 unreachable), retries once with an IPv4-only client.
-///
-/// This avoids hardcoding an IPv4 preference while still recovering from
-/// broken IPv6 connectivity — a common issue with some providers.
+/// (e.g. IPv6 unreachable), retries with exponential backoff and jitter.
+/// If it still fails with a connect error, attempts one final IPv4-only
+/// fallback request.
 pub async fn send_with_retry(
     builder: reqwest::RequestBuilder,
+    provider: &str,
 ) -> Result<reqwest::Response> {
-    match builder.try_clone() {
-        Some(cloned) => {
-            match builder.send().await {
-                Ok(resp) => Ok(resp),
-                Err(e) if e.is_connect() => {
-                    eprintln!(
-                        "[Gateway] Connection failed ({}), retrying with IPv4-only…",
-                        e
-                    );
-                    // Build an IPv4-only client for the retry
-                    let ipv4_client = reqwest::Client::builder()
-                        .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
-                        .build()
-                        .context("Failed to build IPv4 client")?;
-                    // Re-issue the request through the IPv4 client.
-                    // try_clone gave us a copy of the original request builder,
-                    // but it's bound to the original client.  We need to
-                    // rebuild from the cloned builder's inner request.
-                    // Unfortunately RequestBuilder::try_clone clones the
-                    // builder but keeps the same client.  So we send via
-                    // the clone which still uses the default client — not
-                    // helpful.  Instead, we extract the Request and execute
-                    // it on the new client.
-                    let request = cloned.build().context("Failed to rebuild request")?;
-                    ipv4_client
-                        .execute(request)
-                        .await
-                        .context("IPv4 retry also failed")
-                }
-                Err(e) => Err(e).context("HTTP request failed"),
-            }
+    let Some(template) = builder.try_clone() else {
+        // Request body is not cloneable (streaming) — can't safely retry.
+        return builder.send().await.context("HTTP request failed");
+    };
+
+    let policy = RetryPolicy::http_default();
+
+    let result = retry_with_backoff(
+        &policy,
+        |_attempt| {
+            let req = template
+                .try_clone()
+                .expect("retry template should remain cloneable");
+            async move { req.send().await }
+        },
+        classify_reqwest_result,
+        |RetryAttempt {
+             attempt,
+             delay,
+             reason,
+         }| {
+            eprintln!(
+                "[Gateway] transient provider error ({}) on attempt {}, retrying in {:?}",
+                reason.as_str(),
+                attempt,
+                delay,
+            );
+            metrics::record_retry(provider, reason.as_str(), delay);
+        },
+    )
+    .await;
+
+    match result {
+        Ok(resp) => Ok(resp),
+        Err(err) if err.is_connect() => {
+            eprintln!(
+                "[Gateway] connection failed after retries ({}), trying IPv4-only fallback…",
+                err
+            );
+            let ipv4_client = reqwest::Client::builder()
+                .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
+                .build()
+                .context("Failed to build IPv4 client")?;
+            let request = template
+                .build()
+                .context("Failed to rebuild request for IPv4 fallback")?;
+            ipv4_client
+                .execute(request)
+                .await
+                .context("IPv4 fallback failed")
         }
-        None => {
-            // Request body is not cloneable (streaming) — can't retry
-            builder.send().await.context("HTTP request failed")
-        }
+        Err(err) => Err(err).context("HTTP request failed after retries"),
     }
 }
 
@@ -510,7 +528,7 @@ pub async fn validate_model_connection(
             )
             .header("anthropic-version", "2023-06-01")
             .json(&body);
-        send_with_retry(builder).await
+        send_with_retry(builder, &ctx.provider).await
     } else if ctx.provider == "google" {
         // Google: check the model metadata endpoint (no chat needed).
         let key = ctx
@@ -524,7 +542,7 @@ pub async fn validate_model_connection(
             ctx.model,
             key,
         );
-        send_with_retry(http.get(&url)).await
+        send_with_retry(http.get(&url), &ctx.provider).await
     } else {
         // OpenAI-compatible: GET /models — lightweight auth check.
         let url = format!("{}/models", ctx.base_url.trim_end_matches('/'));
@@ -533,7 +551,7 @@ pub async fn validate_model_connection(
             builder = builder.bearer_auth(key);
         }
         builder = apply_copilot_headers(builder, &ctx.provider, &[]);
-        send_with_retry(builder).await
+        send_with_retry(builder, &ctx.provider).await
     };
 
     match result {
@@ -939,7 +957,7 @@ pub async fn call_openai_with_tools(
     }
     builder = apply_copilot_headers(builder, &req.provider, &req.messages);
 
-    let resp = send_with_retry(builder).await?;
+    let resp = send_with_retry(builder, &req.provider).await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -1101,7 +1119,7 @@ pub async fn call_anthropic_with_tools(
         .header("x-api-key", api_key)
         .header("anthropic-version", "2023-06-01")
         .json(&body);
-    let resp = send_with_retry(builder).await?;
+    let resp = send_with_retry(builder, &req.provider).await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
@@ -1387,7 +1405,7 @@ pub async fn call_google_with_tools(
     let builder = http
         .post(&url)
         .json(&body);
-    let resp = send_with_retry(builder).await?;
+    let resp = send_with_retry(builder, &req.provider).await?;
 
     if !resp.status().is_success() {
         let status = resp.status();
