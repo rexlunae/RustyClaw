@@ -1,0 +1,282 @@
+name: DORA Metrics
+
+on:
+  schedule:
+    # Run daily at 00:00 UTC
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+  issues: read
+  pull-requests: read
+
+jobs:
+  calculate-dora-metrics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Full history for accurate lead time calculation
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Calculate Deployment Frequency
+        id: deployment-frequency
+        run: |
+          # Count releases in last 7 days
+          SEVEN_DAYS_AGO=$(date -d '7 days ago' +%Y-%m-%d)
+          DEPLOYMENTS=$(git tag --sort=-creatordate --format='%(creatordate:short)' | \
+            awk -v date="$SEVEN_DAYS_AGO" '$1 >= date' | wc -l)
+          FREQ=$(echo "scale=2; $DEPLOYMENTS / 7" | bc)
+          echo "frequency=$FREQ" >> $GITHUB_OUTPUT
+          echo "count=$DEPLOYMENTS" >> $GITHUB_OUTPUT
+
+      - name: Calculate Lead Time for Changes
+        id: lead-time
+        run: |
+          # Calculate average time from commit to release for last 5 releases
+          LEAD_TIMES=$(git for-each-ref --sort=-creatordate --count=5 --format='%(refname:short)' refs/tags | \
+            while read tag; do
+              # Get tag creation time
+              TAG_DATE=$(git log -1 --format=%ct $tag)
+              # Get commit time for the tagged commit
+              COMMIT=$(git rev-list -n 1 $tag)
+              COMMIT_DATE=$(git log -1 --format=%ct $COMMIT)
+              # Lead time is difference between tag and commit
+              DIFF=$((TAG_DATE - COMMIT_DATE))
+              # Only output if positive (tag should be after commit)
+              if [ $DIFF -gt 0 ]; then
+                echo $DIFF
+              fi
+            done)
+
+          if [ -z "$LEAD_TIMES" ]; then
+            AVG_LEAD_TIME=0
+            HOURS=0
+          else
+            AVG_LEAD_TIME=$(echo "$LEAD_TIMES" | awk '{sum+=$1; count+=1} END {if (count > 0) print int(sum/count); else print 0}')
+            HOURS=$(echo "scale=1; $AVG_LEAD_TIME / 3600" | bc)
+          fi
+          echo "seconds=$AVG_LEAD_TIME" >> $GITHUB_OUTPUT
+          echo "hours=$HOURS" >> $GITHUB_OUTPUT
+
+      - name: Calculate Change Failure Rate
+        id: change-failure-rate
+        run: |
+          # Count releases vs hotfixes/reverts in last 30 days
+          THIRTY_DAYS_AGO=$(date -d '30 days ago' +%Y-%m-%d)
+          TOTAL=$(git tag --sort=-creatordate --format='%(creatordate:short)' | \
+            awk -v date="$THIRTY_DAYS_AGO" '$1 >= date' | wc -l)
+
+          # Count commits with hotfix/rollback/revert in message since 30 days ago
+          FAILURES=$(git log --since="$THIRTY_DAYS_AGO" --grep="hotfix\|rollback\|revert" --oneline | wc -l)
+
+          if [ "$TOTAL" -eq 0 ]; then
+            CFR="0"
+          else
+            CFR=$(echo "scale=1; ($FAILURES / $TOTAL) * 100" | bc)
+          fi
+          echo "rate=$CFR" >> $GITHUB_OUTPUT
+          echo "failures=$FAILURES" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+
+      - name: Calculate MTTR
+        id: mttr
+        run: |
+          # Calculate average time to close incident-labeled issues
+          # Use gh CLI to fetch issues
+          set +e  # Don't fail if no incidents found
+          INCIDENTS_JSON=$(gh issue list --label incident --state closed --limit 20 --json number,createdAt,closedAt 2>/dev/null)
+
+          if [ -z "$INCIDENTS_JSON" ] || [ "$INCIDENTS_JSON" = "[]" ]; then
+            echo "hours=0" >> $GITHUB_OUTPUT
+            echo "count=0" >> $GITHUB_OUTPUT
+          else
+            # Calculate average resolution time in hours
+            MTTR=$(echo "$INCIDENTS_JSON" | jq -r '
+              map(select(.closedAt != null)) |
+              map(((.closedAt | fromdateiso8601) - (.createdAt | fromdateiso8601)) / 3600) |
+              if length > 0 then (add / length) else 0 end
+            ')
+            COUNT=$(echo "$INCIDENTS_JSON" | jq 'length')
+            echo "hours=$(printf "%.1f" $MTTR)" >> $GITHUB_OUTPUT
+            echo "count=$COUNT" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Generate DORA Report
+        run: |
+          # Helper function to determine performance level
+          get_df_level() {
+            if (( $(echo "$1 >= 1" | bc -l) )); then echo "Elite ✅"
+            elif (( $(echo "$1 >= 0.14" | bc -l) )); then echo "High 🟢"
+            elif (( $(echo "$1 >= 0.03" | bc -l) )); then echo "Medium 🟡"
+            else echo "Low 🔴"; fi
+          }
+
+          get_lt_level() {
+            if (( $(echo "$1 <= 24" | bc -l) )); then echo "Elite ✅"
+            elif (( $(echo "$1 <= 168" | bc -l) )); then echo "High 🟢"
+            elif (( $(echo "$1 <= 720" | bc -l) )); then echo "Medium 🟡"
+            else echo "Low 🔴"; fi
+          }
+
+          get_cfr_level() {
+            if (( $(echo "$1 <= 15" | bc -l) )); then echo "Elite/High ✅"
+            elif (( $(echo "$1 <= 30" | bc -l) )); then echo "Medium 🟡"
+            else echo "Low 🔴"; fi
+          }
+
+          get_mttr_level() {
+            if (( $(echo "$1 <= 1" | bc -l) )); then echo "Elite ✅"
+            elif (( $(echo "$1 <= 24" | bc -l) )); then echo "High 🟢"
+            elif (( $(echo "$1 <= 168" | bc -l) )); then echo "Medium 🟡"
+            else echo "Low 🔴"; fi
+          }
+
+          cat << EOF >> $GITHUB_STEP_SUMMARY
+          # 📊 DORA Metrics Report
+
+          **Generated**: $(date -u +"%Y-%m-%d %H:%M UTC")
+          **Repository**: ${{ github.repository }}
+
+          ## Four Key Metrics
+
+          | Metric | Value | Performance Level |
+          |--------|-------|-------------------|
+          | **Deployment Frequency** | ${{ steps.deployment-frequency.outputs.frequency }}/day (${{ steps.deployment-frequency.outputs.count }} in 7d) | $(get_df_level ${{ steps.deployment-frequency.outputs.frequency }}) |
+          | **Lead Time for Changes** | ${{ steps.lead-time.outputs.hours }}h | $(get_lt_level ${{ steps.lead-time.outputs.hours }}) |
+          | **Change Failure Rate** | ${{ steps.change-failure-rate.outputs.rate }}% (${{ steps.change-failure-rate.outputs.failures }}/${{ steps.change-failure-rate.outputs.total }}) | $(get_cfr_level ${{ steps.change-failure-rate.outputs.rate }}) |
+          | **Mean Time to Recovery** | ${{ steps.mttr.outputs.hours }}h (${{ steps.mttr.outputs.count }} incidents) | $(get_mttr_level ${{ steps.mttr.outputs.hours }}) |
+
+          ## 📈 Performance Benchmarks (DORA 2023)
+
+          | Level | Deployment Frequency | Lead Time | Change Failure Rate | MTTR |
+          |-------|---------------------|-----------|-------------------|------|
+          | **Elite** | Multiple/day | <1 day | <15% | <1 hour |
+          | **High** | Weekly-Monthly | 1-7 days | <15% | <1 day |
+          | **Medium** | Monthly-Biannually | 1-4 weeks | 15-30% | 1-7 days |
+          | **Low** | <Biannually | >4 weeks | >30% | >7 days |
+
+          ## 🎯 Recommendations
+
+          EOF
+
+          # Add specific recommendations based on metrics
+          if (( $(echo "${{ steps.deployment-frequency.outputs.frequency }} < 0.14" | bc -l) )); then
+            echo "- ⚠️ **Increase deployment frequency**: Consider CD pipeline improvements or feature flagging" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if (( $(echo "${{ steps.lead-time.outputs.hours }} > 168" | bc -l) )); then
+            echo "- ⚠️ **Reduce lead time**: Streamline PR review process and automate testing" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if (( $(echo "${{ steps.change-failure-rate.outputs.rate }} > 15" | bc -l) )); then
+            echo "- ⚠️ **Improve change quality**: Enhance test coverage and pre-deployment validation" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          if (( $(echo "${{ steps.mttr.outputs.hours }} > 24" | bc -l) )); then
+            echo "- ⚠️ **Accelerate recovery**: Improve monitoring, alerting, and rollback procedures" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "*DORA metrics track software delivery performance. Learn more at [dora.dev](https://dora.dev/)*" >> $GITHUB_STEP_SUMMARY
+
+      - name: Create metrics badge JSON
+        run: |
+          mkdir -p .dora
+
+          # Helper function to get badge color
+          get_df_color() {
+            if (( $(echo "$1 >= 1" | bc -l) )); then echo "brightgreen"
+            elif (( $(echo "$1 >= 0.14" | bc -l) )); then echo "green"
+            elif (( $(echo "$1 >= 0.03" | bc -l) )); then echo "yellow"
+            else echo "red"; fi
+          }
+
+          get_lt_color() {
+            if (( $(echo "$1 <= 24" | bc -l) )); then echo "brightgreen"
+            elif (( $(echo "$1 <= 168" | bc -l) )); then echo "green"
+            elif (( $(echo "$1 <= 720" | bc -l) )); then echo "yellow"
+            else echo "red"; fi
+          }
+
+          get_cfr_color() {
+            if (( $(echo "$1 <= 15" | bc -l) )); then echo "brightgreen"
+            elif (( $(echo "$1 <= 30" | bc -l) )); then echo "yellow"
+            else echo "red"; fi
+          }
+
+          get_mttr_color() {
+            if (( $(echo "$1 <= 1" | bc -l) )); then echo "brightgreen"
+            elif (( $(echo "$1 <= 24" | bc -l) )); then echo "green"
+            elif (( $(echo "$1 <= 168" | bc -l) )); then echo "yellow"
+            else echo "red"; fi
+          }
+
+          # Deployment Frequency badge
+          cat << EOF > .dora/deployment-frequency.json
+          {
+            "schemaVersion": 1,
+            "label": "Deployment Frequency",
+            "message": "${{ steps.deployment-frequency.outputs.frequency }}/day",
+            "color": "$(get_df_color ${{ steps.deployment-frequency.outputs.frequency }})"
+          }
+          EOF
+
+          # Lead Time badge
+          cat << EOF > .dora/lead-time.json
+          {
+            "schemaVersion": 1,
+            "label": "Lead Time",
+            "message": "${{ steps.lead-time.outputs.hours }}h",
+            "color": "$(get_lt_color ${{ steps.lead-time.outputs.hours }})"
+          }
+          EOF
+
+          # Change Failure Rate badge
+          cat << EOF > .dora/change-failure-rate.json
+          {
+            "schemaVersion": 1,
+            "label": "Change Failure Rate",
+            "message": "${{ steps.change-failure-rate.outputs.rate }}%",
+            "color": "$(get_cfr_color ${{ steps.change-failure-rate.outputs.rate }})"
+          }
+          EOF
+
+          # MTTR badge
+          cat << EOF > .dora/mttr.json
+          {
+            "schemaVersion": 1,
+            "label": "MTTR",
+            "message": "${{ steps.mttr.outputs.hours }}h",
+            "color": "$(get_mttr_color ${{ steps.mttr.outputs.hours }})"
+          }
+          EOF
+
+      - name: Commit and push badge data
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .dora/
+
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Update DORA metrics badges [skip ci]
+
+            Deployment Frequency: ${{ steps.deployment-frequency.outputs.frequency }}/day
+            Lead Time: ${{ steps.lead-time.outputs.hours }}h
+            Change Failure Rate: ${{ steps.change-failure-rate.outputs.rate }}%
+            MTTR: ${{ steps.mttr.outputs.hours }}h"
+
+            # Push to main branch (will fail gracefully on tag builds)
+            git push origin HEAD:main || echo "Push skipped (expected on tag/fork builds)"
+          fi

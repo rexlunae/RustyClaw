@@ -13,6 +13,14 @@
   <a href="https://discord.com/invite/clawd"><img src="https://img.shields.io/discord/1234567890?label=discord" alt="Discord"></a>
 </p>
 
+<p align="center">
+  <strong>DORA Metrics</strong><br>
+  <a href="https://github.com/aecs4u/RustyClaw/actions/workflows/dora-metrics.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/aecs4u/RustyClaw/main/.dora/deployment-frequency.json" alt="Deployment Frequency"></a>
+  <a href="https://github.com/aecs4u/RustyClaw/actions/workflows/dora-metrics.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/aecs4u/RustyClaw/main/.dora/lead-time.json" alt="Lead Time"></a>
+  <a href="https://github.com/aecs4u/RustyClaw/actions/workflows/dora-metrics.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/aecs4u/RustyClaw/main/.dora/change-failure-rate.json" alt="Change Failure Rate"></a>
+  <a href="https://github.com/aecs4u/RustyClaw/actions/workflows/dora-metrics.yml"><img src="https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/aecs4u/RustyClaw/main/.dora/mttr.json" alt="MTTR"></a>
+</p>
+
 RustyClaw is a drop-in Rust implementation of [OpenClaw](https://github.com/openclaw/openclaw) — the agentic AI assistant that lives in your terminal. It brings the same powerful 30-tool ecosystem with improved security, lower memory footprint, and native performance.
 
 ## Why RustyClaw?
