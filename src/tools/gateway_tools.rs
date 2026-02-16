@@ -2,9 +2,9 @@
 
 use super::helpers::resolve_path;
 use serde_json::Value;
-use std::path::Path;
 use std::fs;
 use std::io::Write;
+use std::path::{Path, PathBuf};
 
 /// Gateway management.
 pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> Result<String, String> {
@@ -130,11 +130,60 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> Result<String, String
                 .to_string(),
         ),
 
+        "audit.query" => {
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n.clamp(1, 1000) as usize)
+                .unwrap_or(100);
+            let event = args.get("event").and_then(|v| v.as_str());
+
+            let log_path = resolve_audit_log_path(args, workspace_dir, &config_path);
+            let entries = crate::hooks::builtin::query_audit_log(&log_path, event, limit)
+                .map_err(|e| format!("Failed to query audit log {}: {}", log_path.display(), e))?;
+
+            Ok(serde_json::json!({
+                "path": log_path.display().to_string(),
+                "exists": log_path.exists(),
+                "event": event,
+                "limit": limit,
+                "count": entries.len(),
+                "entries": entries,
+            })
+            .to_string())
+        }
+
         _ => Err(format!(
-            "Unknown action: {}. Valid: restart, config.get, config.schema, config.apply, config.patch, update.run",
+            "Unknown action: {}. Valid: restart, config.get, config.schema, config.apply, config.patch, update.run, audit.query",
             action
         )),
     }
+}
+
+fn resolve_audit_log_path(args: &Value, workspace_dir: &Path, config_path: &Path) -> PathBuf {
+    if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
+        return resolve_path(workspace_dir, path);
+    }
+
+    if let Some(path) = configured_audit_log_path(config_path) {
+        return resolve_path(workspace_dir, &path);
+    }
+
+    workspace_dir.join(".rustyclaw").join("logs").join("audit.log")
+}
+
+fn configured_audit_log_path(config_path: &Path) -> Option<String> {
+    if !config_path.exists() {
+        return None;
+    }
+
+    let content = std::fs::read_to_string(config_path).ok()?;
+    let parsed: Value = serde_json::from_str(&content).ok()?;
+    parsed
+        .get("hooks")
+        .and_then(|h| h.get("audit_log_path"))
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
 }
 
 /// Recursively merge two JSON values (patch semantics).

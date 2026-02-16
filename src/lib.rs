@@ -10,6 +10,7 @@ pub mod cron;
 pub mod daemon;
 #[cfg(feature = "tui")]
 pub mod dialogs;
+pub mod embeddings;
 pub mod gateway;
 pub mod hooks;
 pub mod memory;

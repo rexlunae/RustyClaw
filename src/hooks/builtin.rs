@@ -4,9 +4,20 @@ use super::{HookAction, HookContext, HookEvent, LifecycleHook};
 use crate::metrics;
 use anyhow::Result;
 use async_trait::async_trait;
+use chrono::Utc;
+use serde_json::{Map, Value};
+use std::collections::VecDeque;
+use std::fs;
 use std::fs::OpenOptions;
+use std::io::BufRead;
+use std::io::BufReader;
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, SyncSender, TrySendError};
+
+const AUDIT_ROTATE_BYTES: u64 = 50 * 1024 * 1024;
+const AUDIT_QUEUE_CAPACITY: usize = 1024;
 
 /// Metrics hook - Updates Prometheus metrics on lifecycle events
 pub struct MetricsHook;
@@ -132,39 +143,145 @@ impl LifecycleHook for MetricsHook {
 
 /// Audit log hook - Logs security-relevant events to file
 pub struct AuditLogHook {
-    log_path: PathBuf,
+    sender: SyncSender<String>,
+    queue_warned: AtomicBool,
 }
 
 impl AuditLogHook {
     pub fn new(log_path: PathBuf) -> Self {
-        // Ensure parent directory exists
+        // Ensure parent directory exists before starting writer thread.
         if let Some(parent) = log_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
+            let _ = fs::create_dir_all(parent);
         }
 
-        Self { log_path }
-    }
+        let (sender, receiver) = mpsc::sync_channel::<String>(AUDIT_QUEUE_CAPACITY);
+        let writer_path = log_path.clone();
+        std::thread::Builder::new()
+            .name("rustyclaw-audit-log".to_string())
+            .spawn(move || run_audit_writer(writer_path, receiver))
+            .expect("failed to spawn audit log writer thread");
 
-    fn write_log_entry(&self, ctx: &HookContext) -> Result<()> {
-        let mut file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.log_path)?;
-
-        let timestamp = ctx.timestamp.format("%Y-%m-%d %H:%M:%S%.3f");
-        let event = ctx.event.as_str();
-
-        // Build log line
-        let mut log_line = format!("[{}] {}", timestamp, event);
-
-        // Add relevant metadata
-        for (key, value) in &ctx.metadata {
-            log_line.push_str(&format!(" {}={}", key, value));
+        Self {
+            sender,
+            queue_warned: AtomicBool::new(false),
         }
-
-        writeln!(file, "{}", log_line)?;
-        Ok(())
     }
+
+    fn enqueue_log_entry(&self, ctx: &HookContext) {
+        let entry = build_log_entry(ctx);
+        match self.sender.try_send(entry) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                // Avoid flooding stderr if queue is persistently full.
+                if !self.queue_warned.swap(true, Ordering::Relaxed) {
+                    eprintln!("[audit_log] Queue full; dropping audit events");
+                }
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                eprintln!("[audit_log] Writer disconnected; dropping audit event");
+            }
+        }
+    }
+}
+
+fn run_audit_writer(log_path: PathBuf, receiver: mpsc::Receiver<String>) {
+    while let Ok(entry) = receiver.recv() {
+        if let Err(e) = write_log_entry_with_rotation(&log_path, &entry) {
+            eprintln!("[audit_log] Failed to write log entry: {}", e);
+        }
+    }
+}
+
+fn build_log_entry(ctx: &HookContext) -> String {
+    let mut metadata = Map::new();
+    for (key, value) in &ctx.metadata {
+        metadata.insert(key.clone(), value.clone());
+    }
+
+    let record = serde_json::json!({
+        "timestamp": ctx.timestamp.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "event": ctx.event.as_str(),
+        "metadata": metadata,
+    });
+
+    // Serialization failures are extremely unlikely; preserve a valid JSON line either way.
+    serde_json::to_string(&record).unwrap_or_else(|_| {
+        serde_json::json!({
+            "timestamp": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "event": "AuditSerializationError",
+            "metadata": {"error": "failed_to_serialize_entry"}
+        })
+        .to_string()
+    })
+}
+
+fn write_log_entry_with_rotation(log_path: &Path, entry: &str) -> Result<()> {
+    rotate_if_needed(log_path, entry.as_bytes().len() as u64 + 1)?;
+
+    let mut file = OpenOptions::new().create(true).append(true).open(log_path)?;
+    writeln!(file, "{}", entry)?;
+    Ok(())
+}
+
+fn rotate_if_needed(log_path: &Path, incoming_bytes: u64) -> Result<()> {
+    let current_size = match fs::metadata(log_path) {
+        Ok(meta) => meta.len(),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(e.into()),
+    };
+
+    if current_size.saturating_add(incoming_bytes) <= AUDIT_ROTATE_BYTES {
+        return Ok(());
+    }
+
+    let timestamp = Utc::now().format("%Y%m%d%H%M%S");
+    let stem = log_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("audit");
+    let ext = log_path.extension().and_then(|e| e.to_str()).unwrap_or("log");
+    let rotated = log_path.with_file_name(format!("{}.{}.{}", stem, timestamp, ext));
+    fs::rename(log_path, rotated)?;
+    Ok(())
+}
+
+pub fn query_audit_log(
+    log_path: &Path,
+    event_filter: Option<&str>,
+    limit: usize,
+) -> Result<Vec<Value>> {
+    if limit == 0 {
+        return Ok(Vec::new());
+    }
+    let file = match fs::File::open(log_path) {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e.into()),
+    };
+
+    let mut recent = VecDeque::with_capacity(limit);
+    for line in BufReader::new(file).lines() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value = match serde_json::from_str::<Value>(&line) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        if let Some(filter) = event_filter {
+            let event = value.get("event").and_then(|v| v.as_str()).unwrap_or("");
+            if event != filter {
+                continue;
+            }
+        }
+        if recent.len() == limit {
+            recent.pop_front();
+        }
+        recent.push_back(value);
+    }
+
+    Ok(recent.into_iter().collect())
 }
 
 #[async_trait]
@@ -184,16 +301,12 @@ impl LifecycleHook for AuditLogHook {
     }
 
     async fn on_auth_success(&self, ctx: &HookContext) -> Result<HookAction> {
-        if let Err(e) = self.write_log_entry(ctx) {
-            eprintln!("[audit_log] Failed to write log entry: {}", e);
-        }
+        self.enqueue_log_entry(ctx);
         Ok(HookAction::Continue)
     }
 
     async fn on_auth_failure(&self, ctx: &HookContext) -> Result<HookAction> {
-        if let Err(e) = self.write_log_entry(ctx) {
-            eprintln!("[audit_log] Failed to write log entry: {}", e);
-        }
+        self.enqueue_log_entry(ctx);
         Ok(HookAction::Continue)
     }
 
@@ -205,9 +318,7 @@ impl LifecycleHook for AuditLogHook {
                     name,
                     "execute_command" | "secrets_get" | "secrets_store" | "gateway"
                 ) {
-                    if let Err(e) = self.write_log_entry(ctx) {
-                        eprintln!("[audit_log] Failed to write log entry: {}", e);
-                    }
+                    self.enqueue_log_entry(ctx);
                 }
             }
         }
@@ -215,16 +326,12 @@ impl LifecycleHook for AuditLogHook {
     }
 
     async fn on_security_event(&self, ctx: &HookContext) -> Result<HookAction> {
-        if let Err(e) = self.write_log_entry(ctx) {
-            eprintln!("[audit_log] Failed to write log entry: {}", e);
-        }
+        self.enqueue_log_entry(ctx);
         Ok(HookAction::Continue)
     }
 
     async fn on_config_reload(&self, ctx: &HookContext) -> Result<HookAction> {
-        if let Err(e) = self.write_log_entry(ctx) {
-            eprintln!("[audit_log] Failed to write log entry: {}", e);
-        }
+        self.enqueue_log_entry(ctx);
         Ok(HookAction::Continue)
     }
 }
@@ -232,7 +339,21 @@ impl LifecycleHook for AuditLogHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+    use tempfile::tempdir;
+    use std::time::{Duration, Instant};
+
+    fn wait_for_log(path: &Path, needle: &str) {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(content) = std::fs::read_to_string(path) {
+                if content.contains(needle) {
+                    return;
+                }
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for {}", needle);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
 
     #[tokio::test]
     async fn test_metrics_hook_connection() {
@@ -248,8 +369,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_audit_log_hook_writes_entry() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let log_path = temp_file.path().to_path_buf();
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("audit.log");
 
         let hook = AuditLogHook::new(log_path.clone());
 
@@ -263,17 +384,17 @@ mod tests {
             _ => panic!("Expected Continue action"),
         }
 
-        // Verify log file was written
+        wait_for_log(&log_path, "AuthSuccess");
         let log_content = std::fs::read_to_string(&log_path).unwrap();
-        assert!(log_content.contains("AuthSuccess"));
-        assert!(log_content.contains("user="));
-        assert!(log_content.contains("method="));
+        assert!(log_content.contains("\"event\":\"AuthSuccess\""));
+        assert!(log_content.contains("\"user\":\"test_user\""));
+        assert!(log_content.contains("\"method\":\"totp\""));
     }
 
     #[tokio::test]
     async fn test_audit_log_hook_filters_tools() {
-        let temp_file = NamedTempFile::new().unwrap();
-        let log_path = temp_file.path().to_path_buf();
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("audit.log");
 
         let hook = AuditLogHook::new(log_path.clone());
 
@@ -289,8 +410,57 @@ mod tests {
 
         hook.on_before_tool_call(&ctx2).await.unwrap();
 
+        wait_for_log(&log_path, "execute_command");
         let log_content = std::fs::read_to_string(&log_path).unwrap();
         assert!(log_content.contains("execute_command"));
         assert!(!log_content.contains("read_file"));
+    }
+
+    #[test]
+    fn test_query_audit_log_filters_and_limits() {
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("audit.log");
+        let lines = [
+            serde_json::json!({"timestamp":"2026-01-01T00:00:00.000Z","event":"AuthSuccess","metadata":{"user":"a"}}).to_string(),
+            serde_json::json!({"timestamp":"2026-01-01T00:01:00.000Z","event":"SecurityEvent","metadata":{"action":"block"}}).to_string(),
+            serde_json::json!({"timestamp":"2026-01-01T00:02:00.000Z","event":"AuthSuccess","metadata":{"user":"b"}}).to_string(),
+        ];
+        std::fs::write(&log_path, format!("{}\n{}\n{}\n", lines[0], lines[1], lines[2])).unwrap();
+
+        let filtered = query_audit_log(&log_path, Some("AuthSuccess"), 10).unwrap();
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0]["metadata"]["user"], "a");
+        assert_eq!(filtered[1]["metadata"]["user"], "b");
+
+        let limited = query_audit_log(&log_path, None, 2).unwrap();
+        assert_eq!(limited.len(), 2);
+        assert_eq!(limited[0]["event"], "SecurityEvent");
+        assert_eq!(limited[1]["event"], "AuthSuccess");
+    }
+
+    #[test]
+    fn test_rotation_when_size_exceeded() {
+        let dir = tempdir().unwrap();
+        let log_path = dir.path().join("audit.log");
+        std::fs::write(&log_path, vec![b'x'; (AUDIT_ROTATE_BYTES as usize) + 64]).unwrap();
+
+        write_log_entry_with_rotation(&log_path, "{\"event\":\"AuthSuccess\"}").unwrap();
+
+        let entries: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .collect();
+        assert!(
+            entries.iter().any(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("audit.") && n.ends_with(".log"))
+                    .unwrap_or(false)
+            }),
+            "expected a rotated audit file"
+        );
+        let current = std::fs::read_to_string(&log_path).unwrap();
+        assert!(current.contains("AuthSuccess"));
     }
 }

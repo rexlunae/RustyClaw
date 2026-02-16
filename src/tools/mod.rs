@@ -358,7 +358,7 @@ pub static GATEWAY: ToolDef = ToolDef {
     description: "Manage the gateway daemon. Actions: restart (restart gateway), \
                   config.get (get current config), config.schema (get config schema), \
                   config.apply (replace entire config), config.patch (partial config update), \
-                  update.run (update gateway).",
+                  update.run (update gateway), audit.query (query structured audit logs).",
     parameters: vec![],
     execute: exec_gateway,
 };
@@ -1307,8 +1307,11 @@ mod tests {
     #[test]
     fn test_gateway_params_defined() {
         let params = gateway_params();
-        assert_eq!(params.len(), 5);
+        assert_eq!(params.len(), 8);
         assert!(params.iter().any(|p| p.name == "action" && p.required));
+        assert!(params.iter().any(|p| p.name == "event" && !p.required));
+        assert!(params.iter().any(|p| p.name == "limit" && !p.required));
+        assert!(params.iter().any(|p| p.name == "path" && !p.required));
     }
 
     #[test]
@@ -1325,6 +1328,42 @@ mod tests {
         let result = exec_gateway(&args, ws());
         assert!(result.is_ok());
         assert!(result.unwrap().contains("properties"));
+    }
+
+    #[test]
+    fn test_gateway_audit_query() {
+        let dir = std::env::temp_dir().join("rustyclaw_test_gateway_audit_query");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let log_path = dir.join("audit.log");
+        let content = format!(
+            "{}\n{}\n",
+            serde_json::json!({
+                "timestamp": "2026-01-01T00:00:00.000Z",
+                "event": "AuthSuccess",
+                "metadata": {"user": "alice"}
+            }),
+            serde_json::json!({
+                "timestamp": "2026-01-01T00:01:00.000Z",
+                "event": "SecurityEvent",
+                "metadata": {"action": "block"}
+            }),
+        );
+        std::fs::write(&log_path, content).unwrap();
+
+        let args = json!({
+            "action": "audit.query",
+            "path": log_path.display().to_string(),
+            "event": "AuthSuccess",
+            "limit": 10
+        });
+        let result = exec_gateway(&args, &dir);
+        assert!(result.is_ok());
+
+        let parsed: serde_json::Value = serde_json::from_str(&result.unwrap()).unwrap();
+        assert_eq!(parsed["count"], 1);
+        assert_eq!(parsed["entries"][0]["event"], "AuthSuccess");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ── message ─────────────────────────────────────────────────────

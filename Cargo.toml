@@ -33,9 +33,10 @@ messenger-slack = ["dep:hmac", "dep:sha2", "dep:hex"]
 messenger-discord = ["dep:urlencoding"]
 messenger-telegram = []
 messenger-matrix = []
+local-embeddings = ["dep:fastembed"]
 # Publishable feature sets
 all-messengers = ["matrix", "messenger-slack", "messenger-discord", "messenger-telegram", "messenger-matrix"]
-full = ["tui", "web-tools", "matrix", "browser"]
+full = ["tui", "web-tools", "matrix", "browser", "local-embeddings"]
 
 # Signal support is temporarily disabled for crates.io publishing.
 # presage and presage-store-sqlite require building from git source.
@@ -177,6 +178,9 @@ sha2 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
 urlencoding = { version = "2.1", optional = true }
 bytes = "1.5"
+
+# Local embeddings (optional)
+fastembed = { version = "5.9", optional = true, default-features = false, features = ["ort-download-binaries", "hf-hub"] }
 
 # Patches for crypto compatibility
 [patch.crates-io]

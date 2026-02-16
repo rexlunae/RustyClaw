@@ -378,7 +378,7 @@ pub fn gateway_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "action".into(),
-            description: "Action: 'restart', 'config.get', 'config.schema', 'config.apply', 'config.patch', 'update.run'.".into(),
+            description: "Action: 'restart', 'config.get', 'config.schema', 'config.apply', 'config.patch', 'update.run', 'audit.query'.".into(),
             param_type: "string".into(),
             required: true,
         },
@@ -404,6 +404,24 @@ pub fn gateway_params() -> Vec<ToolParam> {
             name: "delayMs".into(),
             description: "Delay before restart in milliseconds. Default: 2000.".into(),
             param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "event".into(),
+            description: "For audit.query: filter by event type (e.g., 'AuthSuccess', 'SecurityEvent').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "limit".into(),
+            description: "For audit.query: max entries to return (1-1000, default: 100).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "path".into(),
+            description: "For audit.query: explicit audit log path (optional).".into(),
+            param_type: "string".into(),
             required: false,
         },
     ]

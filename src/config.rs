@@ -525,6 +525,9 @@ pub struct Config {
     /// Unified safety layer configuration (consolidates SSRF, prompt guard, leak detection).
     #[serde(default)]
     pub safety: crate::security::SafetyConfig,
+    /// Embedding generation configuration (local/OpenAI/fallback).
+    #[serde(default)]
+    pub embeddings: crate::embeddings::EmbeddingsConfig,
 }
 
 /// Configuration for a messenger backend.
@@ -736,6 +739,7 @@ impl Default for Config {
             context_compaction: crate::context_compaction::CompactionConfig::default(),
             structured_memory: crate::structured_memory::StructuredMemoryConfig::default(),
             safety: crate::security::SafetyConfig::default(),
+            embeddings: crate::embeddings::EmbeddingsConfig::default(),
         }
     }
 }
