@@ -299,9 +299,40 @@ See individual issues for implementation details and acceptance criteria.
 
 MIT License — See [LICENSE](LICENSE) for details.
 
+## Ecosystem
+
+RustyClaw is part of a growing ecosystem of agentic AI assistants. We actively study and borrow ideas from sibling projects to deliver the best possible experience.
+
+| Project | Language | Stars | Contributors | Commits | Source LOC | Channels | License |
+|---------|----------|------:|:------------:|--------:|-----------:|---------:|---------|
+| [**OpenClaw**](https://github.com/openclaw/openclaw) | TypeScript | 200k+ | 638 | 10,835 | ~219k | 18+ | MIT |
+| [**AutoGPT**](https://github.com/Significant-Gravitas/AutoGPT) | Python+TS | 182k+ | 818 | 7,877 | ~84k | — | Polyform Shield / MIT |
+| [**PicoClaw**](https://github.com/sipeed/picoclaw) | Go | 13k+ | 55 | 250 | ~25k | 10+ | MIT |
+| [**Moltis**](https://github.com/moltis-org/moltis) | Rust | 981 | 7 | 1,182 | ~140k | 2 | MIT |
+| [**MicroClaw**](https://github.com/microclaw/microclaw) | Rust | 168 | 5 | 232 | ~31k | 5 | MIT |
+| [**Carapace**](https://github.com/puremachinery/carapace) | Rust | 32 | 3 | 266 | ~114k | 6 | Apache-2.0 |
+| [**RustyClaw**](https://github.com/aecs4u/RustyClaw) | Rust | 2 | 5 | 286 | ~40k | 6 | MIT |
+
+### What each project does best
+
+- **[OpenClaw](https://github.com/openclaw/openclaw)** — The reference implementation. Most feature-complete with 51 skills, 18+ messenger channels (WhatsApp, iMessage, Teams, LINE, IRC, Twitch, Nostr...), browser automation, canvas workspace, iOS/Android companion apps, and macOS menu bar integration.
+
+- **[AutoGPT](https://github.com/Significant-Gravitas/AutoGPT)** — Visual agent platform with graph-based workflow execution, 260+ integration blocks, and a marketplace for sharing agents. Pioneered autonomous agent loops with Prometheus monitoring, webhook triggers, nested agent composition, and 35+ SaaS integrations.
+
+- **[PicoClaw](https://github.com/sipeed/picoclaw)** — Ultra-lightweight Go implementation. Runs on $10 hardware with <10MB RAM. Unique hardware tool support (I2C, SPI, USB hotplug) for embedded/IoT use cases. Largest community (13k+ stars, 112 issues).
+
+- **[Moltis](https://github.com/moltis-org/moltis)** — Production-grade Rust gateway with 27 specialized crates. Best-in-class MCP support (stdio + HTTP/SSE + OAuth 2.1), 5+ TTS and 8+ STT providers, container sandboxing (Docker/Podman/OrbStack/Apple Container), extensible hook system with 13 event types.
+
+- **[MicroClaw](https://github.com/microclaw/microclaw)** — Lean Rust implementation with channel-agnostic core. Two-layer memory system with auto-reflector that extracts durable facts from conversations. Clean MCP integration, per-chat working directory isolation, and embedded React web UI.
+
+- **[Carapace](https://github.com/puremachinery/carapace)** — Security-hardened Rust gateway. WASM plugin system with Ed25519 signatures, capability-based sandboxing, mTLS, mDNS discovery, LLM-based prompt injection classifier, CSRF protection, and structured audit logging.
+
+- **[RustyClaw](https://github.com/aecs4u/RustyClaw)** — Security-first Rust implementation with 6 sandbox modes (Landlock+bwrap, Docker, macOS Seatbelt), AES-256-GCM encrypted vault with TOTP/WebAuthn, beautiful TUI, and unique Gmail/Matrix integrations.
+
 ## Acknowledgments
 
 - [OpenClaw](https://github.com/openclaw/openclaw) — The original project and inspiration
+- [AutoGPT](https://github.com/Significant-Gravitas/AutoGPT), [Carapace](https://github.com/puremachinery/carapace), [Moltis](https://github.com/moltis-org/moltis), [PicoClaw](https://github.com/sipeed/picoclaw), [MicroClaw](https://github.com/microclaw/microclaw) — Sibling implementations we learn from
 - The Rust community for excellent crates
 
 ---
