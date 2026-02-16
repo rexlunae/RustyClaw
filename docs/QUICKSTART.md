@@ -208,10 +208,10 @@ cp config.example.toml ~/.rustyclaw/config.toml
 
 ## Next Steps
 
-- Read the [README.md](README.md) for detailed documentation
-- Check [ARCHITECTURE.md](ARCHITECTURE.md) to understand the design
-- See [CONTRIBUTING.md](CONTRIBUTING.md) if you want to contribute
-- Review [SECURITY.md](SECURITY.md) for security considerations
+- Read the [README.md](../README.md) for detailed documentation
+- Check [ARCHITECTURE.md](./ARCHITECTURE.md) to understand the design
+- See [CONTRIBUTING.md](./CONTRIBUTING.md) if you want to contribute
+- Review [SECURITY.md](./SECURITY.md) for security considerations
 
 ## Getting Help
 

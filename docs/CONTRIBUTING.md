@@ -83,7 +83,7 @@ We use [Conventional Commits](https://www.conventionalcommits.org/):
 
 - Never log secrets
 - Use the sandbox for command execution
-- Report security issues privately (see [SECURITY.md](docs/SECURITY.md))
+- Report security issues privately (see [SECURITY.md](./SECURITY.md))
 
 ## Questions?
 

@@ -3,7 +3,7 @@
 **A lightweight, secure agentic AI runtime written in Rust.**
 
 <p align="center">
-  <img src="logo.svg" alt="RustyClaw Logo" width="200"/>
+  <img src="docs/logo.svg" alt="RustyClaw Logo" width="200"/>
 </p>
 
 <p align="center">
@@ -78,7 +78,7 @@ cargo install rustyclaw --features browser
 cargo install rustyclaw --features full
 ```
 
-> 📝 **Signal messenger** requires building from source. See [BUILDING.md](BUILDING.md).
+> 📝 **Signal messenger** requires building from source. See [BUILDING.md](docs/BUILDING.md).
 
 ### Or build from source
 
@@ -110,7 +110,7 @@ rustyclaw tui
 - 🔧 **15 Feature Issues Created** — [View all planned features](https://github.com/aecs4u/RustyClaw/issues?q=is%3Aissue+is%3Aopen+label%3Aenhancement) (#51-#65)
 - 💬 **Messenger Integrations** — Slack, Discord, Telegram, Matrix support with dedicated branches
 
-See [ROADMAP.md](ROADMAP.md) for the complete development plan and feature analysis based on IronClaw review.
+See [ROADMAP.md](docs/ROADMAP.md) for the complete development plan and feature analysis based on IronClaw review.
 
 ## Features
 
@@ -243,14 +243,14 @@ See [docs/SANDBOX.md](docs/SANDBOX.md) for detailed sandbox configuration option
 ## Documentation
 
 ### Getting Started
-- **[Building](BUILDING.md)** — Feature flags, Signal support, cross-compilation
+- **[Building](docs/BUILDING.md)** — Feature flags, Signal support, cross-compilation
 - **[Getting Started](docs/getting-started.md)** — Installation and first run
 - **[Configuration](docs/configuration.md)** — Settings and environment setup
 
 ### Security & Architecture
 - **[Security Model](docs/SECURITY.md)** — Comprehensive security architecture
 - **[Sandbox Modes](docs/SANDBOX.md)** — 6 sandbox isolation strategies explained
-- **[Development Roadmap](ROADMAP.md)** — 3-phase feature plan with 15+ enhancements
+- **[Development Roadmap](docs/ROADMAP.md)** — 3-phase feature plan with 15+ enhancements
 
 ### Features & Integration
 - **[Tools Reference](docs/tools.md)** — All 30 agentic tools explained
@@ -282,10 +282,10 @@ cargo test --test skill_execution
 
 Contributions welcome! We have a detailed roadmap and active development:
 
-- 📋 **[Development Roadmap](ROADMAP.md)** — 3-phase plan with 15+ planned features
+- 📋 **[Development Roadmap](docs/ROADMAP.md)** — 3-phase plan with 15+ planned features
 - 🐛 **[Open Issues](https://github.com/aecs4u/RustyClaw/issues)** — Bug reports, feature requests, and tasks
 - 🏷️ **Good First Issues** — Look for `p3-medium` and `quick-win` labels (#51-#65)
-- 📖 **[Contributing Guide](CONTRIBUTING.md)** — Development guidelines and PR process
+- 📖 **[Contributing Guide](docs/CONTRIBUTING.md)** — Development guidelines and PR process
 
 **High-priority features from the roadmap:**
 - Multi-provider failover (Phase 1) — #52

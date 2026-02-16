@@ -330,7 +330,7 @@ class CustomAgentCard(AgentCard):
 
 - [PySide6 Documentation](https://doc.qt.io/qtforpython/)
 - [AutoGPT Project](https://github.com/Significant-Gravitas/AutoGPT)
-- [RustyClaw Main Documentation](../README.md)
+- [RustyClaw Main Documentation](../../README.md)
 - [GUI README](./README.md)
 
 ---
