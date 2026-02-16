@@ -27,6 +27,13 @@ pub fn init_sandbox(mode: SandboxMode, workspace: PathBuf, credentials_dir: Path
         policy = policy.deny_read(path.clone()).deny_write(path);
     }
     let sandbox = Sandbox::with_mode(mode, policy);
+
+    // Apply process-wide restrictions (Landlock on Linux)
+    if let Err(e) = sandbox.init() {
+        eprintln!("[sandbox] Warning: Failed to initialize sandbox: {}", e);
+        eprintln!("[sandbox] Continuing with degraded sandbox mode");
+    }
+
     let _ = SANDBOX.set(sandbox);
 }
 
