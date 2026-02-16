@@ -651,6 +651,9 @@ async fn handle_connection(
         }
     });
 
+    // Per-session elevated mode state (controlled via WebSocket messages)
+    let elevated_mode = Arc::new(AtomicBool::new(false));
+
     // Main message handling loop — receives from channel
     loop {
         tokio::select! {
@@ -999,6 +1002,19 @@ async fn handle_connection(
                                     }
                                     continue;
                                 }
+                                Some("set_elevated") => {
+                                    // ── Set elevated (sudo) mode for execute_command ────
+                                    if let Some(enabled) = val.get("enabled").and_then(|v| v.as_bool()) {
+                                        elevated_mode.store(enabled, Ordering::Relaxed);
+                                        let status = if enabled { "enabled" } else { "disabled" };
+                                        let resp = json!({
+                                            "type": "info",
+                                            "message": format!("Elevated mode {}", status),
+                                        });
+                                        let _ = writer.send(Message::Text(resp.to_string().into())).await;
+                                    }
+                                    continue;
+                                }
                                 _ => {
                                     // Not a control message — fall through to dispatch
                                 }
@@ -1019,6 +1035,7 @@ async fn handle_connection(
                             &vault,
                             &skill_mgr,
                             &tool_cancel,
+                            &elevated_mode,
                         )
                         .await
                         {
@@ -1081,6 +1098,7 @@ async fn dispatch_text_message(
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
     tool_cancel: &ToolCancelFlag,
+    elevated_mode: &Arc<AtomicBool>,
 ) -> Result<()> {
     // Try to parse as a structured JSON request.
     let req = match serde_json::from_str::<ChatRequest>(text) {
@@ -1380,7 +1398,16 @@ async fn dispatch_text_message(
                     Err(err) => (err, true),
                 }
             } else {
-                match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir) {
+                // Inject elevated_mode for execute_command
+                let args = if tc.name == "execute_command" {
+                    let mut args_map = tc.arguments.as_object().cloned().unwrap_or_default();
+                    args_map.insert("elevated_mode".to_string(), json!(elevated_mode.load(Ordering::Relaxed)));
+                    serde_json::Value::Object(args_map)
+                } else {
+                    tc.arguments.clone()
+                };
+
+                match tools::execute_tool(&tc.name, &args, workspace_dir) {
                     Ok(text) => (text, false),
                     Err(err) => (err, true),
                 }

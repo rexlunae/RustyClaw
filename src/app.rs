@@ -1690,6 +1690,12 @@ impl App {
                     for msg in response.messages {
                         self.state.messages.push(DisplayMessage::info(msg));
                     }
+                    // Send elevated mode state to gateway
+                    let frame = serde_json::json!({
+                        "type": "set_elevated",
+                        "enabled": enabled,
+                    });
+                    return Ok(Some(Action::SendToGateway(frame.to_string())));
                 }
                 CommandAction::None => {
                     for msg in response.messages {

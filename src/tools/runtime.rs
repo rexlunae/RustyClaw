@@ -12,10 +12,11 @@ use std::time::{Duration, Instant};
 
 /// Execute a shell command with background support and optional sandboxing.
 pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let command = args
+    let mut command = args
         .get("command")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing required parameter: command".to_string())?;
+        .ok_or_else(|| "Missing required parameter: command".to_string())?
+        .to_string();
     let working_dir = args.get("working_dir").and_then(|v| v.as_str());
     let timeout_secs = args
         .get("timeout_secs")
@@ -32,13 +33,24 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
         .and_then(|v| v.as_u64())
         .unwrap_or(10000); // Default 10 seconds before auto-background
 
+    // Elevated (sudo) mode support
+    let elevated_mode = args
+        .get("elevated_mode")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    // Prepend sudo if elevated mode is enabled
+    if elevated_mode {
+        command = format!("sudo {}", command);
+    }
+
     let cwd = match working_dir {
         Some(p) => resolve_path(workspace_dir, p),
         None => workspace_dir.to_path_buf(),
     };
 
     // Block commands that reference the credentials directory.
-    if command_references_credentials(command) {
+    if command_references_credentials(&command) {
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
     if is_protected_path(&cwd) {
@@ -48,7 +60,7 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
     // If background requested immediately, spawn and return session ID
     // Apply sandbox wrapper before spawning (Bubblewrap/macOS only; Landlock is process-wide)
     if background {
-        let (sandbox_cmd, sandbox_args) = prepare_sandboxed_spawn(command, &cwd);
+        let (sandbox_cmd, sandbox_args) = prepare_sandboxed_spawn(&command, &cwd);
 
         // Construct the wrapped command string for process manager
         let mut wrapped_command = sandbox_cmd.clone();
@@ -81,14 +93,14 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
 
     // For foreground execution with no yield (immediate), use sandbox
     if yield_ms == 0 {
-        let output = run_sandboxed_command(command, &cwd)?;
+        let output = run_sandboxed_command(&command, &cwd)?;
         return format_output(output, timeout_secs);
     }
 
     // For commands with yield support, we need to spawn directly so we can
     // transfer the child to the process manager if it takes too long.
     // Apply sandbox wrapper before spawning (Bubblewrap/macOS only; Landlock is process-wide)
-    let (sandbox_cmd, sandbox_args) = prepare_sandboxed_spawn(command, &cwd);
+    let (sandbox_cmd, sandbox_args) = prepare_sandboxed_spawn(&command, &cwd);
 
     let mut child = std::process::Command::new(&sandbox_cmd)
         .args(&sandbox_args)
