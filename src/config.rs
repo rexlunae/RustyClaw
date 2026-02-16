@@ -289,6 +289,15 @@ pub struct Config {
     /// Slack messenger configuration.
     #[serde(default)]
     pub slack: Option<crate::gateway::messengers::slack::SlackConfig>,
+    /// Discord messenger configuration.
+    #[serde(default)]
+    pub discord: Option<crate::gateway::messengers::discord::DiscordConfig>,
+    /// Telegram messenger configuration.
+    #[serde(default)]
+    pub telegram: Option<crate::gateway::messengers::telegram::TelegramConfig>,
+    /// Matrix messenger configuration.
+    #[serde(default)]
+    pub matrix_messenger: Option<crate::gateway::messengers::matrix::MatrixConfig>,
     /// ClawHub registry URL (default: `https://registry.clawhub.dev/api/v1`).
     #[serde(default)]
     pub clawhub_url: Option<String>,
@@ -378,6 +387,9 @@ impl Default for Config {
             hooks: HooksConfig::default(),
             webauthn: WebAuthnConfig::default(),
             slack: None,
+            discord: None,
+            telegram: None,
+            matrix_messenger: None,
             clawhub_url: None,
             clawhub_token: None,
             system_prompt: None,

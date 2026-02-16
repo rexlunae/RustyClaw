@@ -28,13 +28,13 @@ default = ["tui", "web-tools"]
 tui = ["dep:ratatui", "dep:crossterm", "dep:tui-markdown", "dep:tui-input"]
 web-tools = ["dep:scraper", "dep:html2md"]
 matrix = ["dep:matrix-sdk"]
+browser = ["dep:chromiumoxide"]
 messenger-slack = ["dep:hmac", "dep:sha2", "dep:hex"]
-messenger-discord = []
+messenger-discord = ["dep:urlencoding"]
 messenger-telegram = []
 messenger-matrix = []
-browser = ["dep:chromiumoxide"]
 # Publishable feature sets
-all-messengers = ["matrix"]
+all-messengers = ["matrix", "messenger-slack", "messenger-discord", "messenger-telegram", "messenger-matrix"]
 full = ["tui", "web-tools", "matrix", "browser"]
 
 # Signal support is temporarily disabled for crates.io publishing.
@@ -170,6 +170,7 @@ webauthn-rs-proto = "0.5"
 hmac = { version = "0.12", optional = true }
 sha2 = { version = "0.10", optional = true }
 hex = { version = "0.4", optional = true }
+urlencoding = { version = "2.1", optional = true }
 bytes = "1.5"
 
 # Patches for crypto compatibility
