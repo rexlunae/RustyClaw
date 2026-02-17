@@ -149,6 +149,11 @@ curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag 
 
 [dev-dependencies]
 tempfile = "3"
+# Integration test dependencies
+tokio-tungstenite = "0.26"
+futures-util = "0.3"
+which = "7.0"
+axum = "0.8"
 
 [profile.release]
 lto = true
