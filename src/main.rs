@@ -198,6 +198,9 @@ struct OnboardArgs {
     /// OpenRouter API key
     #[arg(long, value_name = "KEY", env = "OPENROUTER_API_KEY")]
     openrouter_api_key: Option<String>,
+    /// OpenCode Zen API key
+    #[arg(long, value_name = "KEY", env = "OPENCODE_API_KEY")]
+    opencode_api_key: Option<String>,
     /// Gemini API key
     #[arg(long, value_name = "KEY", env = "GEMINI_API_KEY")]
     gemini_api_key: Option<String>,
@@ -1449,6 +1452,7 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
             ("anthropic.key", "Anthropic"),
             ("openai.key", "OpenAI"),
             ("openrouter.key", "OpenRouter"),
+            ("opencode.key", "OpenCode Zen"),
             ("gemini.key", "Gemini"),
             ("xai.key", "xAI"),
         ];
@@ -1598,6 +1602,7 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                     ("anthropic.key", "ANTHROPIC_API_KEY"),
                     ("openai.key", "OPENAI_API_KEY"),
                     ("openrouter.key", "OPENROUTER_API_KEY"),
+                    ("opencode.key", "OPENCODE_API_KEY"),
                     ("gemini.key", "GEMINI_API_KEY"),
                     ("xai.key", "XAI_API_KEY"),
                 ];

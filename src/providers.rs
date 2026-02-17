@@ -196,6 +196,54 @@ pub const PROVIDERS: &[ProviderDef] = &[
         help_text: Some("No key needed — exo cluster. Default port 52415. Install: github.com/exo-explore/exo"),
     },
     ProviderDef {
+        id: "opencode",
+        display: "OpenCode Zen",
+        auth_method: AuthMethod::ApiKey,
+        secret_key: Some("OPENCODE_API_KEY"),
+        device_flow: None,
+        // OpenAI-compatible chat/completions endpoint for most models.
+        // Claude models also work here via OpenCode's OpenAI-compatible layer.
+        base_url: Some("https://opencode.ai/zen/v1"),
+        models: &[
+            // Free models
+            "big-pickle",
+            "minimax-m2.5-free",
+            "kimi-k2.5-free",
+            // Claude models (via OpenAI-compatible API)
+            "claude-opus-4-6",
+            "claude-opus-4-5",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4",
+            "claude-haiku-4-5",
+            "claude-3-5-haiku",
+            // GPT models
+            "gpt-5.2",
+            "gpt-5.2-codex",
+            "gpt-5.1",
+            "gpt-5.1-codex",
+            "gpt-5.1-codex-max",
+            "gpt-5.1-codex-mini",
+            "gpt-5",
+            "gpt-5-codex",
+            "gpt-5-nano",
+            // Gemini models
+            "gemini-3-pro",
+            "gemini-3-flash",
+            // Other models
+            "minimax-m2.5",
+            "minimax-m2.1",
+            "glm-5",
+            "glm-4.7",
+            "glm-4.6",
+            "kimi-k2.5",
+            "kimi-k2-thinking",
+            "kimi-k2",
+            "qwen3-coder",
+        ],
+        help_url: Some("https://opencode.ai/auth"),
+        help_text: Some("Get a key at opencode.ai/auth — includes free models (Big Pickle, MiniMax, Kimi)"),
+    },
+    ProviderDef {
         id: "custom",
         display: "Custom / OpenAI-compatible endpoint",
         auth_method: AuthMethod::ApiKey,
