@@ -145,6 +145,173 @@ fn fix_bare_code_fences(content: &str) -> String {
     result
 }
 
+/// Format markdown tables as properly aligned ASCII tables.
+/// tui-markdown doesn't handle tables well, so we preprocess them.
+fn format_markdown_tables(content: &str) -> String {
+    // Fast path: if no table indicators, return as-is
+    if !content.contains('|') {
+        return content.to_string();
+    }
+    
+    let mut result = String::with_capacity(content.len() + 256);
+    let mut table_lines: Vec<&str> = Vec::new();
+    let mut in_code_block = false;
+    
+    for line in content.lines() {
+        let trimmed = line.trim();
+        
+        // Track code blocks to avoid processing tables inside them
+        if trimmed.starts_with("```") {
+            in_code_block = !in_code_block;
+            // Flush any pending table
+            if !table_lines.is_empty() {
+                result.push_str(&render_table(&table_lines));
+                table_lines.clear();
+            }
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        
+        if in_code_block {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        
+        // Detect table rows (lines containing | that aren't just |---|)
+        let is_table_line = trimmed.starts_with('|') || 
+            (trimmed.contains('|') && !trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace()));
+        let is_separator = trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace()) 
+            && trimmed.contains('-');
+        
+        if is_table_line || (is_separator && !table_lines.is_empty()) {
+            table_lines.push(line);
+        } else {
+            // Not a table line - flush any pending table
+            if !table_lines.is_empty() {
+                result.push_str(&render_table(&table_lines));
+                table_lines.clear();
+            }
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    
+    // Flush any remaining table
+    if !table_lines.is_empty() {
+        result.push_str(&render_table(&table_lines));
+    }
+    
+    // Remove trailing newline if original didn't have one
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    
+    result
+}
+
+/// Render a markdown table as a formatted ASCII table with box characters.
+fn render_table(lines: &[&str]) -> String {
+    // Parse cells from each row
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut separator_idx: Option<usize> = None;
+    
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        
+        // Check if this is a separator line (|---|---|)
+        if trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace()) 
+            && trimmed.contains('-') {
+            separator_idx = Some(i);
+            continue;
+        }
+        
+        // Parse cells
+        let cells: Vec<String> = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(|c| c.trim().to_string())
+            .collect();
+        
+        if !cells.is_empty() && !cells.iter().all(|c| c.is_empty()) {
+            rows.push(cells);
+        }
+    }
+    
+    if rows.is_empty() {
+        return lines.join("\n") + "\n";
+    }
+    
+    // Calculate column widths
+    let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(0);
+    let mut col_widths: Vec<usize> = vec![0; num_cols];
+    
+    for row in &rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < num_cols {
+                col_widths[i] = col_widths[i].max(cell.chars().count());
+            }
+        }
+    }
+    
+    // Ensure minimum width
+    for w in &mut col_widths {
+        *w = (*w).max(3);
+    }
+    
+    let mut output = String::new();
+    
+    // Box drawing characters
+    let h = "─";
+    let v = "│";
+    let tl = "┌"; let tm = "┬"; let tr = "┐";
+    let ml = "├"; let mm = "┼"; let mr = "┤";
+    let bl = "└"; let bm = "┴"; let br = "┘";
+    
+    // Top border
+    output.push_str(tl);
+    for (i, &w) in col_widths.iter().enumerate() {
+        output.push_str(&h.repeat(w + 2));
+        output.push_str(if i < num_cols - 1 { tm } else { tr });
+    }
+    output.push('\n');
+    
+    // Rows
+    for (row_idx, row) in rows.iter().enumerate() {
+        output.push_str(v);
+        for (i, w) in col_widths.iter().enumerate() {
+            let cell = row.get(i).map(|s| s.as_str()).unwrap_or("");
+            let padding = w - cell.chars().count();
+            output.push(' ');
+            output.push_str(cell);
+            output.push_str(&" ".repeat(padding + 1));
+            output.push_str(v);
+        }
+        output.push('\n');
+        
+        // Separator after header (first row) or if explicitly marked
+        if row_idx == 0 && (separator_idx.is_some() || rows.len() > 1) {
+            output.push_str(ml);
+            for (i, &w) in col_widths.iter().enumerate() {
+                output.push_str(&h.repeat(w + 2));
+                output.push_str(if i < num_cols - 1 { mm } else { mr });
+            }
+            output.push('\n');
+        }
+    }
+    
+    // Bottom border
+    output.push_str(bl);
+    for (i, &w) in col_widths.iter().enumerate() {
+        output.push_str(&h.repeat(w + 2));
+        output.push_str(if i < num_cols - 1 { bm } else { br });
+    }
+    output.push('\n');
+    
+    output
+}
+
 /// A single message in the chat / log pane.
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -217,6 +384,9 @@ impl DisplayMessage {
         // Fix bare code fences (```) to have a language tag (```text)
         // This prevents tui-markdown from warning about missing syntax definitions
         let content = fix_bare_code_fences(&content);
+        
+        // Format markdown tables as ASCII box tables for proper display
+        let content = format_markdown_tables(&content);
 
         let color = match role {
             MessageRole::User => tp::ACCENT_BRIGHT,
