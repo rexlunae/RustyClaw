@@ -134,13 +134,27 @@ pub async fn wait_for_auth_response(
                 }
                 // Ignore non-auth frames during the handshake.
             }
+            Ok(Message::Binary(data)) => {
+                // Handle binary frames (JSON sent as binary)
+                if let Ok(text) = String::from_utf8(data.to_vec()) {
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
+                        if val.get("type").and_then(|t| t.as_str()) == Some("auth_response") {
+                            if let Some(code) = val.get("code").and_then(|c| c.as_str()) {
+                                return Ok(code.to_string());
+                            }
+                            anyhow::bail!("auth_response missing 'code' field");
+                        }
+                    }
+                }
+                // Ignore non-auth frames during the handshake.
+            }
             Ok(Message::Close(_)) => {
                 anyhow::bail!("Client disconnected during authentication");
             }
             Err(e) => {
                 anyhow::bail!("WebSocket error during authentication: {}", e);
             }
-            _ => {} // Ignore ping/pong/binary during auth
+            _ => {} // Ignore ping/pong during auth
         }
     }
     anyhow::bail!("Connection closed before authentication completed")
