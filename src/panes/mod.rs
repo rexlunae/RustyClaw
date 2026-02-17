@@ -371,7 +371,8 @@ fn render_table(lines: &[&str]) -> String {
     }
     output.push('\n');
     
-    output
+    // Wrap in a code block so tui-markdown preserves newlines
+    format!("```text\n{}\n```\n", output.trim_end())
 }
 
 /// A single message in the chat / log pane.
