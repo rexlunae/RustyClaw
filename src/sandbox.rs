@@ -709,7 +709,7 @@ pub fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
     // Pattern 2: Home paths - ~/path/to/file
     // Match word boundaries, handle quotes
 
-    let mut chars = command.chars().peekable();
+    let chars = command.chars().peekable();
     let mut current_token = String::new();
     let mut in_quotes = false;
     let mut quote_char = ' ';
