@@ -108,6 +108,10 @@ zip = "8.0"
 # Base64 encoding for image data
 base64 = "0.22"
 
+# Security validation
+regex = "1.10"
+ipnetwork = "0.20"
+
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"
 

@@ -23,6 +23,7 @@ pub mod providers;
 pub mod retry;
 pub mod sandbox;
 pub mod secrets;
+pub mod security;
 pub mod sessions;
 pub mod skills;
 pub mod soul;
