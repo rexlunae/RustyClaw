@@ -96,6 +96,55 @@ impl MessageRole {
     }
 }
 
+/// Fix bare code fences (```) to have a language tag (```text).
+/// This prevents tui-markdown from warning about missing syntax definitions.
+fn fix_bare_code_fences(content: &str) -> String {
+    use std::borrow::Cow;
+    
+    // Fast path: if no code fences at all, return as-is
+    if !content.contains("```") {
+        return content.to_string();
+    }
+    
+    let mut result = String::with_capacity(content.len() + 32);
+    let mut in_code_block = false;
+    
+    for line in content.lines() {
+        let trimmed = line.trim_start();
+        
+        if trimmed.starts_with("```") {
+            if !in_code_block {
+                // Opening fence - check if it has a language
+                let after_fence = &trimmed[3..];
+                if after_fence.is_empty() || after_fence.chars().next().map(|c| c.is_whitespace()).unwrap_or(true) {
+                    // Bare fence or fence followed by whitespace - add "text" language
+                    let prefix = &line[..line.len() - trimmed.len()]; // preserve leading whitespace
+                    result.push_str(prefix);
+                    result.push_str("```text");
+                    result.push_str(after_fence); // preserve anything after (unlikely but safe)
+                    result.push('\n');
+                    in_code_block = true;
+                    continue;
+                }
+                in_code_block = true;
+            } else {
+                // Closing fence
+                in_code_block = false;
+            }
+        }
+        
+        result.push_str(line);
+        result.push('\n');
+    }
+    
+    // Remove trailing newline if original didn't have one
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    
+    result
+}
+
 /// A single message in the chat / log pane.
 #[derive(Debug, Clone)]
 pub struct DisplayMessage {
@@ -164,6 +213,10 @@ impl DisplayMessage {
         } else {
             content.to_string()
         };
+
+        // Fix bare code fences (```) to have a language tag (```text)
+        // This prevents tui-markdown from warning about missing syntax definitions
+        let content = fix_bare_code_fences(&content);
 
         let color = match role {
             MessageRole::User => tp::ACCENT_BRIGHT,
