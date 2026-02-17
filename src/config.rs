@@ -528,6 +528,9 @@ pub struct Config {
     /// Embedding generation configuration (local/OpenAI/fallback).
     #[serde(default)]
     pub embeddings: crate::embeddings::EmbeddingsConfig,
+    /// Routines engine configuration for scheduled automation.
+    #[serde(default)]
+    pub routines: crate::routines::RoutinesConfig,
 }
 
 /// Configuration for a messenger backend.
@@ -740,6 +743,7 @@ impl Default for Config {
             structured_memory: crate::structured_memory::StructuredMemoryConfig::default(),
             safety: crate::security::SafetyConfig::default(),
             embeddings: crate::embeddings::EmbeddingsConfig::default(),
+            routines: crate::routines::RoutinesConfig::default(),
         }
     }
 }

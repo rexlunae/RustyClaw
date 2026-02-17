@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://crates.io/crates/rustyclaw"><img src="https://img.shields.io/crates/v/rustyclaw.svg" alt="crates.io"></a>
-  <a href="https://github.com/rexlunae/RustyClaw/actions"><img src="https://github.com/rexlunae/RustyClaw/workflows/CI/badge.svg" alt="CI"></a>
+  <a href="https://github.com/aecs4u/RustyClaw/actions"><img src="https://github.com/aecs4u/RustyClaw/workflows/CI/badge.svg" alt="CI"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <a href="https://discord.com/invite/clawd"><img src="https://img.shields.io/discord/1234567890?label=discord" alt="Discord"></a>
 </p>
@@ -91,7 +91,7 @@ cargo install rustyclaw --features full
 ### Or build from source
 
 ```bash
-git clone https://github.com/rexlunae/RustyClaw.git
+git clone https://github.com/aecs4u/RustyClaw.git
 cd RustyClaw
 cargo build --release
 ```
@@ -372,7 +372,7 @@ cargo test --test skill_execution
 ## Community
 
 - 💬 [Discord](https://discord.com/invite/clawd) — Join the OpenClaw community
-- 🐛 [Issues](https://github.com/rexlunae/RustyClaw/issues) — Bug reports and feature requests
+- 🐛 [Issues](https://github.com/aecs4u/RustyClaw/issues) — Bug reports and feature requests
 - 🔧 [ClawhHub](https://clawhub.com) — Find and share skills
 
 ## Contributing

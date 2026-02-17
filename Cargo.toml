@@ -2,13 +2,13 @@
 name = "rustyclaw"
 version = "0.1.33"
 edition = "2024"
-authors = ["Erica Stith <erica@example.com>"]
+authors = ["aecs4u <dev@aecs4u.it>"]
 description = "A lightweight, secure agentic AI assistant runtime with OpenClaw compatibility"
 license = "MIT"
 readme = "README.md"
-homepage = "https://github.com/rexlunae/RustyClaw"
-repository = "https://github.com/rexlunae/RustyClaw"
-documentation = "https://github.com/rexlunae/RustyClaw#readme"
+homepage = "https://github.com/aecs4u/RustyClaw"
+repository = "https://github.com/aecs4u/RustyClaw"
+documentation = "https://github.com/aecs4u/RustyClaw#readme"
 keywords = ["ai", "agent", "llm", "openclaw", "automation"]
 categories = ["command-line-utilities", "development-tools", "text-processing"]
 default-run = "rustyclaw"
@@ -110,6 +110,7 @@ urlencoding = "2.1"
 
 # Time handling
 chrono = "0.4"
+cron = "0.15"  # Cron expression parsing for routines engine
 zip = "8.0"
 
 # Base64 encoding for image data
