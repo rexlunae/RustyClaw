@@ -149,19 +149,8 @@ impl App {
 
     pub async fn send_to_gateway(&mut self, text: String) {
         if let Some(ref mut sink) = self.ws_sink {
-            let json_value: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|_| {
-                serde_json::json!({ "type": "chat", "messages": [], "content": text })
-            });
-            let bytes = match serde_json::to_vec(&json_value) {
-                Ok(b) => b,
-                Err(err) => {
-                    self.chat_loading_tick = None;
-                    self.state.loading_line = None;
-                    self.state.messages.push(DisplayMessage::error(format!("Serialization failed: {}", err)));
-                    return;
-                }
-            };
-            match sink.send(Message::Binary(bytes.into())).await {
+            // Send as text frame (JSON)
+            match sink.send(Message::Text(text.into())).await {
                 Ok(()) => {}
                 Err(err) => {
                     self.chat_loading_tick = None;
