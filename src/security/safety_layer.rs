@@ -19,6 +19,8 @@
 //! ## Usage
 //!
 //! ```rust
+//! use rustyclaw::security::{SafetyConfig, SafetyLayer, PolicyAction};
+//!
 //! let config = SafetyConfig {
 //!     prompt_injection_policy: PolicyAction::Block,
 //!     ssrf_policy: PolicyAction::Block,
