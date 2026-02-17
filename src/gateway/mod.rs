@@ -6,6 +6,7 @@
 //! for incoming messages and routes them through the model.
 
 mod auth;
+pub mod health;
 mod helpers;
 mod messenger_handler;
 mod providers;
