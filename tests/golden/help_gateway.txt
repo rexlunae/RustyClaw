@@ -3,16 +3,13 @@ Gateway management (start / stop / restart / status)
 Usage: rustyclaw gateway [OPTIONS] <COMMAND>
 
 Commands:
-  install    Install gateway as a system service (systemd/launchd)
-  uninstall  Uninstall gateway system service
-  start      Start the gateway (daemon/background)
-  stop       Stop a running gateway
-  restart    Restart the gateway
-  status     Show gateway status
-  reload     Reload gateway configuration without restarting
-  logs       Show gateway logs
-  run        Run the gateway in the foreground (like `rustyclaw-gateway`)
-  help       Print this message or the help of the given subcommand(s)
+  start    Start the gateway (daemon/background)
+  stop     Stop a running gateway
+  restart  Restart the gateway
+  status   Show gateway status
+  reload   Reload gateway configuration without restarting
+  run      Run the gateway in the foreground (like `rustyclaw-gateway`)
+  help     Print this message or the help of the given subcommand(s)
 
 Options:
   -c, --config <PATH>       Path to a config.toml file [env: RUSTYCLAW_CONFIG=]
