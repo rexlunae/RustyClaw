@@ -115,9 +115,6 @@ ipnetwork = "0.20"
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"
 
-# Random number generation (for CSRF tokens)
-rand = "0.9"
-
 # Terminal styling
 colored = "3.1"
 indicatif = "0.18"
