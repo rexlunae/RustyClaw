@@ -15,22 +15,24 @@ pub struct CronScheduler {
 impl CronScheduler {
     /// Create a new cron scheduler from an expression.
     ///
-    /// Accepts standard cron syntax:
+    /// Accepts 7-field cron syntax (with seconds and year):
     /// ```text
-    /// ┌───────────── minute (0 - 59)
-    /// │ ┌───────────── hour (0 - 23)
-    /// │ │ ┌───────────── day of month (1 - 31)
-    /// │ │ │ ┌───────────── month (1 - 12)
-    /// │ │ │ │ ┌───────────── day of week (0 - 6, Sunday = 0)
-    /// │ │ │ │ │
-    /// * * * * *
+    /// ┌───────────── second (0 - 59)
+    /// │ ┌───────────── minute (0 - 59)
+    /// │ │ ┌───────────── hour (0 - 23)
+    /// │ │ │ ┌───────────── day of month (1 - 31)
+    /// │ │ │ │ ┌───────────── month (1 - 12)
+    /// │ │ │ │ │ ┌───────────── day of week (0 - 6, Sunday = 0)
+    /// │ │ │ │ │ │ ┌───────────── year (optional)
+    /// │ │ │ │ │ │ │
+    /// * * * * * * *
     /// ```
     ///
     /// Examples:
-    /// - `"0 9 * * *"` - Every day at 9:00 AM
-    /// - `"0 9 * * MON-FRI"` - Weekdays at 9:00 AM
-    /// - `"*/15 * * * *"` - Every 15 minutes
-    /// - `"0 0 1 * *"` - First day of every month at midnight
+    /// - `"0 0 9 * * * *"` - Every day at 9:00 AM
+    /// - `"0 0 9 * * MON-FRI *"` - Weekdays at 9:00 AM
+    /// - `"0 */15 * * * * *"` - Every 15 minutes
+    /// - `"0 0 0 1 * * *"` - First day of every month at midnight
     pub fn new(expression: &str) -> Result<Self> {
         let schedule = Schedule::from_str(expression)
             .with_context(|| format!("Invalid cron expression: {}", expression))?;
@@ -79,11 +81,11 @@ impl CronScheduler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeZone;
+    use chrono::{Datelike, Timelike, TimeZone};
 
     #[test]
     fn test_daily_schedule() {
-        let scheduler = CronScheduler::new("0 9 * * *").unwrap();
+        let scheduler = CronScheduler::new("0 0 9 * * * *").unwrap();
 
         // Get next execution from a specific time
         let now = Utc.with_ymd_and_hms(2026, 2, 17, 8, 0, 0).unwrap();
@@ -95,7 +97,7 @@ mod tests {
 
     #[test]
     fn test_weekday_schedule() {
-        let scheduler = CronScheduler::new("0 9 * * MON-FRI").unwrap();
+        let scheduler = CronScheduler::new("0 0 9 * * MON-FRI *").unwrap();
 
         // Monday 2026-02-17
         let monday = Utc.with_ymd_and_hms(2026, 2, 17, 8, 0, 0).unwrap();
@@ -110,7 +112,7 @@ mod tests {
 
     #[test]
     fn test_every_15_minutes() {
-        let scheduler = CronScheduler::new("*/15 * * * *").unwrap();
+        let scheduler = CronScheduler::new("0 */15 * * * * *").unwrap();
 
         let now = Utc.with_ymd_and_hms(2026, 2, 17, 10, 7, 0).unwrap();
         let next = scheduler.next_execution(now).unwrap();
@@ -128,15 +130,15 @@ mod tests {
 
     #[test]
     fn test_validation() {
-        assert!(CronScheduler::validate("0 9 * * *").is_ok());
-        assert!(CronScheduler::validate("*/5 * * * *").is_ok());
+        assert!(CronScheduler::validate("0 0 9 * * * *").is_ok());
+        assert!(CronScheduler::validate("0 */5 * * * * *").is_ok());
         assert!(CronScheduler::validate("invalid").is_err());
     }
 
     #[test]
     fn test_should_run_now() {
         // Create a schedule that runs every minute
-        let scheduler = CronScheduler::new("* * * * *").unwrap();
+        let scheduler = CronScheduler::new("0 * * * * * *").unwrap();
 
         // Should always be ready to run (within next 60 seconds)
         assert!(scheduler.should_run_now());
@@ -144,7 +146,7 @@ mod tests {
 
     #[test]
     fn test_expression_display() {
-        let scheduler = CronScheduler::new("0 9 * * MON-FRI").unwrap();
+        let scheduler = CronScheduler::new("0 0 9 * * MON-FRI *").unwrap();
         let expr = scheduler.expression();
         assert!(expr.contains("9") || expr.contains("MON") || expr.contains("0 9"));
     }
