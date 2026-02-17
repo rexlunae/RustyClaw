@@ -57,6 +57,9 @@ toml = "0.9"
 anyhow = "1.0"
 thiserror = "2.0"
 
+# Random number generation (for retry jitter)
+rand = "0.9"
+
 # Secrets management (encrypted on-disk vault)
 securestore = "0.100.0"
 
