@@ -105,10 +105,8 @@ urlencoding = "2.1"
 chrono = "0.4"
 zip = "8.0"
 
-# Tracing for structured logging
+# Tracing for structured logging (used by app.rs, tui-markdown)
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tracing-appender = "0.2"
 
 # Base64 encoding for image data
 base64 = "0.22"

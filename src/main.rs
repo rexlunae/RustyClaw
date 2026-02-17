@@ -13,7 +13,6 @@ use rustyclaw::secrets::SecretsManager;
 use rustyclaw::skills::SkillManager;
 use std::path::PathBuf;
 use tokio_tungstenite::tungstenite::Message;
-use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use url::Url;
 
 // ── Top-level CLI ───────────────────────────────────────────────────────────
@@ -408,39 +407,6 @@ async fn main() -> Result<()> {
 
     // Initialise colour output (respects --no-color / NO_COLOR).
     rustyclaw::theme::init_color(cli.common.no_color);
-
-    // Check if we're launching TUI mode (either explicit or default)
-    let is_tui_mode = matches!(cli.command, None | Some(Commands::Tui(_)));
-
-    // Initialize tracing for structured logging
-    // In TUI mode, redirect to a file to avoid corrupting terminal display
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new(if is_tui_mode { "warn" } else { "info" }));
-
-    if is_tui_mode {
-        // TUI mode: log to file to avoid terminal corruption from tui-markdown etc.
-        let log_dir = dirs::cache_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-            .join("rustyclaw");
-        let _ = std::fs::create_dir_all(&log_dir);
-
-        let file_appender = tracing_appender::rolling::daily(&log_dir, "tui.log");
-        let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
-
-        tracing_subscriber::registry()
-            .with(filter)
-            .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
-            .init();
-
-        // Keep _guard alive for the duration of main - store it
-        // Note: _guard is moved into the async block implicitly
-    } else {
-        // Non-TUI mode: log to stderr as usual
-        tracing_subscriber::registry()
-            .with(fmt::layer().with_target(true).with_thread_ids(true))
-            .with(filter)
-            .init();
-    }
 
     let config_path = cli.common.config_path();
     let mut config = Config::load(config_path)?;
