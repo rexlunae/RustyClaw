@@ -16,8 +16,13 @@ use crate::tui::Frame;
 
 static TAB_WIDTH: AtomicU16 = AtomicU16::new(5);
 
+/// Width of the left border stripe (1 char + 1 space padding)
+const BORDER_WIDTH: u16 = 2;
+
 pub struct MessagesPane {
     focused: bool,
+    /// Index of the currently focused message (for selection/navigation)
+    focused_message: Option<usize>,
     /// Vertical scroll offset in visual (wrapped) lines from the bottom.
     /// `usize::MAX` = pinned to the newest content (auto-scroll).
     scroll_offset: usize,
@@ -27,6 +32,7 @@ impl MessagesPane {
     pub fn new(focused: bool, _focused_border_style: Style) -> Self {
         Self {
             focused,
+            focused_message: None,
             scroll_offset: usize::MAX,
         }
     }
@@ -55,6 +61,41 @@ impl MessagesPane {
             MessageRole::ToolCall => Some(tp::BG_CODE),
             MessageRole::ToolResult => Some(tp::BG_CODE),
             _ => None,
+        }
+    }
+
+    /// Get the left border character and style for a message role.
+    /// Returns (border_char, border_style, use_border).
+    fn role_border(role: &MessageRole, is_focused: bool) -> (&'static str, Style, bool) {
+        match role {
+            MessageRole::User => {
+                if is_focused {
+                    (tp::BORDER_THICK, tp::bubble::user_focused(), true)
+                } else {
+                    (tp::BORDER_THIN, tp::bubble::user_blurred(), true)
+                }
+            }
+            MessageRole::Assistant => {
+                if is_focused {
+                    (tp::BORDER_THICK, tp::bubble::assistant_focused(), true)
+                } else {
+                    // No border when blurred, just padding
+                    ("", tp::bubble::assistant_blurred(), false)
+                }
+            }
+            MessageRole::ToolCall | MessageRole::ToolResult => {
+                if is_focused {
+                    (tp::BORDER_THICK, tp::bubble::tool_focused(), true)
+                } else {
+                    (tp::BORDER_THIN, tp::bubble::tool_blurred(), true)
+                }
+            }
+            MessageRole::Error => {
+                (tp::BORDER_THICK, tp::bubble::error(), true)
+            }
+            MessageRole::System | MessageRole::Info | MessageRole::Success | MessageRole::Warning => {
+                (tp::BORDER_THIN, tp::bubble::system(), true)
+            }
         }
     }
 
@@ -271,11 +312,21 @@ impl Pane for MessagesPane {
             /// All rendered lines for this entry (may be many for multi-line messages).
             text: Text<'a>,
             bg: Option<Color>,
+            /// Left border character (empty string = no border, just padding)
+            border_char: &'static str,
+            /// Style for the left border
+            border_style: Style,
+            /// Whether to show the border (false = just padding)
+            show_border: bool,
             /// Total visual rows after wrapping.
             height: u16,
+            /// Original message index (None for spacing/loading entries)
+            msg_index: Option<usize>,
         }
 
         let spacing = state.config.message_spacing;
+        // Account for border width when calculating text width
+        let text_width = width.saturating_sub(BORDER_WIDTH);
 
         let mut entries: Vec<Entry<'_>> = Vec::new();
         for (i, msg) in state.messages.iter().enumerate() {
@@ -284,15 +335,29 @@ impl Pane for MessagesPane {
                 entries.push(Entry {
                     text: Text::from(""),
                     bg: None,
+                    border_char: "",
+                    border_style: Style::default(),
+                    show_border: false,
                     height: spacing,
+                    msg_index: None,
                 });
             }
             let lines = Self::get_lines(msg);
-            let h = Self::visual_lines_count(lines, width) as u16;
+            // Use text_width for wrapping calculation to account for border
+            let h = Self::visual_lines_count(lines, text_width) as u16;
+            
+            // Determine if this message is focused
+            let is_focused = self.focused_message == Some(i);
+            let (border_char, border_style, show_border) = Self::role_border(&msg.role, is_focused);
+            
             entries.push(Entry {
                 text: Text::from(lines.clone()),
                 bg: Self::role_bg(&msg.role),
+                border_char,
+                border_style,
+                show_border,
                 height: h,
+                msg_index: Some(i),
             });
         }
 
@@ -302,11 +367,15 @@ impl Pane for MessagesPane {
                 format!(" {}", loading),
                 Style::default().fg(tp::ACCENT_BRIGHT),
             ));
-            let h = Self::visual_lines_count(&[line.clone()], width) as u16;
+            let h = Self::visual_lines_count(&[line.clone()], text_width) as u16;
             entries.push(Entry {
                 text: Text::from(line),
                 bg: None,
+                border_char: tp::BORDER_THIN,
+                border_style: tp::tool_pending(),
+                show_border: true,
                 height: h,
+                msg_index: None,
             });
         }
 
@@ -373,7 +442,24 @@ impl Pane for MessagesPane {
                 }
             }
 
-            // Render the wrapped text
+            // Render the left border stripe (Crush/OpenCode style)
+            if entry.show_border && !entry.border_char.is_empty() {
+                for row in y..y + visible_h {
+                    let border_span = Span::styled(
+                        format!("{} ", entry.border_char),
+                        entry.border_style,
+                    );
+                    frame.render_widget(
+                        Paragraph::new(Line::from(border_span)),
+                        Rect::new(area.x, row, BORDER_WIDTH, 1),
+                    );
+                }
+            }
+
+            // Render the wrapped text (offset by border width)
+            let text_x = if entry.show_border { area.x + BORDER_WIDTH } else { area.x + BORDER_WIDTH };
+            let text_w = area.width.saturating_sub(BORDER_WIDTH);
+            
             let mut para = Paragraph::new(entry.text.clone())
                 .wrap(Wrap { trim: false })
                 .scroll((skip, 0));
@@ -382,7 +468,7 @@ impl Pane for MessagesPane {
                 para = para.style(Style::default().bg(bg));
             }
 
-            frame.render_widget(para, Rect::new(area.x, y, area.width, visible_h));
+            frame.render_widget(para, Rect::new(text_x, y, text_w, visible_h));
 
             y += visible_h;
             remaining -= visible_h;

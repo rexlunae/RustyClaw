@@ -282,6 +282,11 @@ mod tests {
 //
 // Pre-built `ratatui::style::Color` and `Style` values derived from the
 // lobster palette, for use in TUI pane rendering.
+//
+// Design inspiration: Crush/OpenCode TUI (charmbracelet/crush)
+// - Left border highlights ("bubble stripes") for message focus
+// - Rich 12-step grayscale surface system
+// - Clear visual hierarchy through borders and spacing
 
 #[cfg(feature = "tui")]
 pub mod tui_palette {
@@ -294,6 +299,29 @@ pub mod tui_palette {
         Color::Rgb(c.0, c.1, c.2)
     }
 
+    // ── Border Characters (à la Crush/OpenCode) ─────────────────────
+    //
+    // Used for message bubble "stripes" - the colored left border
+    // that indicates role and focus state.
+
+    /// Thin left border for blurred/inactive items
+    pub const BORDER_THIN: &str = "│";
+    /// Thick left border for focused/active items  
+    pub const BORDER_THICK: &str = "▌";
+    /// Section separator line
+    pub const SECTION_SEP: &str = "─";
+
+    // ── Status Icons ────────────────────────────────────────────────
+
+    /// Pending operation (tool call in progress)
+    pub const ICON_PENDING: &str = "●";
+    /// Success / completed
+    pub const ICON_SUCCESS: &str = "✓";
+    /// Error / failed
+    pub const ICON_ERROR: &str = "×";
+    /// Cancelled operation
+    pub const ICON_CANCELLED: &str = "○";
+
     // ── Colours ─────────────────────────────────────────────
 
     pub const ACCENT: Color = rgb(palette::ACCENT);
@@ -305,7 +333,7 @@ pub mod tui_palette {
     pub const ERROR: Color = rgb(palette::ERROR);
     pub const MUTED: Color = rgb(palette::MUTED);
 
-    // Extra neutrals for the TUI - 12-step grayscale like opencode
+    // Extra neutrals for the TUI - 12-step grayscale like Crush/OpenCode
     pub const SURFACE_1: Color = Color::Rgb(0x0A, 0x0A, 0x0A); // deepest background
     pub const SURFACE_2: Color = Color::Rgb(0x14, 0x14, 0x14); // panel background
     pub const SURFACE_3: Color = Color::Rgb(0x1E, 0x1E, 0x1E); // element background
@@ -329,6 +357,7 @@ pub mod tui_palette {
     pub const BG_USER: Color = Color::Rgb(0x1A, 0x1A, 0x1A); // dark for user input
     pub const BG_ASSISTANT: Color = Color::Rgb(0x14, 0x14, 0x14); // slightly lighter for bot
     pub const BG_CODE: Color = Color::Rgb(0x1E, 0x1E, 0x22); // subtle blue tint for code
+    pub const BG_THINKING: Color = Color::Rgb(0x18, 0x16, 0x14); // warm tint for thinking
 
     // ── Pre-built styles ────────────────────────────────────
 
@@ -416,6 +445,89 @@ pub mod tui_palette {
     /// Style for gateway response messages.
     pub const fn gateway_message() -> Style {
         Style::new().fg(TEXT)
+    }
+
+    // ── Message Bubble Styles (Crush/OpenCode inspired) ────────────
+    //
+    // These styles use left border "stripes" to indicate message role
+    // and focus state. Use with the BORDER_THIN/BORDER_THICK chars.
+
+    /// Message bubble border colors by role
+    pub mod bubble {
+        use super::*;
+
+        /// User message border color (lobster accent)
+        pub const USER_BORDER: Color = ACCENT_BRIGHT;
+        /// Assistant message border color (success green for active)
+        pub const ASSISTANT_BORDER: Color = SUCCESS;
+        /// Tool call border color (muted)
+        pub const TOOL_BORDER: Color = SURFACE_7;
+        /// System/info border color
+        pub const SYSTEM_BORDER: Color = INFO;
+        /// Error border color
+        pub const ERROR_BORDER: Color = ERROR;
+
+        /// User message: focused state (thick border, bright accent)
+        pub const fn user_focused() -> Style {
+            Style::new().fg(USER_BORDER)
+        }
+
+        /// User message: blurred state (thin border, dimmer)
+        pub const fn user_blurred() -> Style {
+            Style::new().fg(ACCENT_DIM)
+        }
+
+        /// Assistant message: focused state (thick border, green)
+        pub const fn assistant_focused() -> Style {
+            Style::new().fg(ASSISTANT_BORDER)
+        }
+
+        /// Assistant message: blurred state (no border, just padding)
+        pub const fn assistant_blurred() -> Style {
+            Style::new().fg(SURFACE_6)
+        }
+
+        /// Tool call: focused state
+        pub const fn tool_focused() -> Style {
+            Style::new().fg(ASSISTANT_BORDER)
+        }
+
+        /// Tool call: blurred state
+        pub const fn tool_blurred() -> Style {
+            Style::new().fg(TOOL_BORDER)
+        }
+
+        /// Error message border
+        pub const fn error() -> Style {
+            Style::new().fg(ERROR_BORDER)
+        }
+
+        /// System message border
+        pub const fn system() -> Style {
+            Style::new().fg(SYSTEM_BORDER)
+        }
+    }
+
+    // ── Tool Status Styles ─────────────────────────────────────────
+
+    /// Pending tool operation (greenish, in progress)
+    pub const fn tool_pending() -> Style {
+        Style::new().fg(Color::Rgb(0x2F, 0x8F, 0x51)) // darker green
+    }
+
+    /// Successful tool operation
+    pub const fn tool_success() -> Style {
+        Style::new().fg(SUCCESS)
+    }
+
+    /// Failed tool operation
+    pub const fn tool_error() -> Style {
+        Style::new().fg(ERROR)
+    }
+
+    /// Cancelled tool operation
+    pub const fn tool_cancelled() -> Style {
+        Style::new().fg(MUTED)
     }
 
     // ── Diff colors ────────────────────────────────────────────────
