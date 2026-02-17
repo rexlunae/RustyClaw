@@ -23,7 +23,7 @@ pub use protocol::{
     FrameAction, server_frame_to_action,
 };
 
-// Re-export public types
+// Re-export public types (includes protocol types via types module)
 pub use types::{
     ChatMessage, ChatRequest, CopilotSession, GatewayOptions, MediaRef, ModelContext,
     ModelResponse, ParsedToolCall, ProbeResult, ProviderRequest, ToolCallResult,

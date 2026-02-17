@@ -17,9 +17,13 @@
 pub mod client;
 pub mod frames;
 pub mod server;
+pub mod types;
 
 pub use client::{server_frame_to_action, FrameAction};
 pub use frames::{
     ClientFrame, ClientFrameType, ClientPayload, SecretEntryDto, ServerFrame, ServerFrameType,
     ServerPayload, StatusType, deserialize_frame, serialize_frame,
+};
+pub use types::{
+    ChatMessage, MediaRef, ModelResponse, ParsedToolCall, ToolCallResult,
 };
