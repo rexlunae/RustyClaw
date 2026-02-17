@@ -145,8 +145,43 @@ fn fix_bare_code_fences(content: &str) -> String {
     result
 }
 
+/// Check if a line looks like a markdown table row (starts and ends with |, has multiple columns)
+fn is_markdown_table_row(line: &str) -> bool {
+    let trimmed = line.trim();
+    // Must start and end with |
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return false;
+    }
+    // Must have at least 2 | characters (header | cell |)
+    if trimmed.matches('|').count() < 3 {
+        return false;
+    }
+    // Should have actual content, not just pipes and dashes
+    let inner = &trimmed[1..trimmed.len()-1];
+    inner.chars().any(|c| c.is_alphanumeric())
+}
+
+/// Check if a line is a markdown table separator (|---|---|)
+fn is_markdown_table_separator(line: &str) -> bool {
+    let trimmed = line.trim();
+    if !trimmed.starts_with('|') || !trimmed.ends_with('|') {
+        return false;
+    }
+    // Must contain dashes
+    if !trimmed.contains('-') {
+        return false;
+    }
+    // Should only contain |, -, :, and whitespace
+    trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace())
+}
+
 /// Format markdown tables as properly aligned ASCII tables.
 /// tui-markdown doesn't handle tables well, so we preprocess them.
+/// 
+/// Only processes strict markdown tables that:
+/// - Have rows starting and ending with |
+/// - Have a separator row like |---|---|
+/// - Have at least 2 columns
 fn format_markdown_tables(content: &str) -> String {
     // Fast path: if no table indicators, return as-is
     if !content.contains('|') {
@@ -155,6 +190,7 @@ fn format_markdown_tables(content: &str) -> String {
     
     let mut result = String::with_capacity(content.len() + 256);
     let mut table_lines: Vec<&str> = Vec::new();
+    let mut has_separator = false;
     let mut in_code_block = false;
     
     for line in content.lines() {
@@ -165,8 +201,17 @@ fn format_markdown_tables(content: &str) -> String {
             in_code_block = !in_code_block;
             // Flush any pending table
             if !table_lines.is_empty() {
-                result.push_str(&render_table(&table_lines));
+                if has_separator && table_lines.len() >= 2 {
+                    result.push_str(&render_table(&table_lines));
+                } else {
+                    // Not a valid table, output as-is
+                    for tl in &table_lines {
+                        result.push_str(tl);
+                        result.push('\n');
+                    }
+                }
                 table_lines.clear();
+                has_separator = false;
             }
             result.push_str(line);
             result.push('\n');
@@ -179,19 +224,29 @@ fn format_markdown_tables(content: &str) -> String {
             continue;
         }
         
-        // Detect table rows (lines containing | that aren't just |---|)
-        let is_table_line = trimmed.starts_with('|') || 
-            (trimmed.contains('|') && !trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace()));
-        let is_separator = trimmed.chars().all(|c| c == '|' || c == '-' || c == ':' || c.is_whitespace()) 
-            && trimmed.contains('-');
+        // Strict table detection
+        let is_table_row = is_markdown_table_row(line);
+        let is_separator = is_markdown_table_separator(line);
         
-        if is_table_line || (is_separator && !table_lines.is_empty()) {
+        if is_table_row || (is_separator && !table_lines.is_empty()) {
             table_lines.push(line);
+            if is_separator {
+                has_separator = true;
+            }
         } else {
             // Not a table line - flush any pending table
             if !table_lines.is_empty() {
-                result.push_str(&render_table(&table_lines));
+                if has_separator && table_lines.len() >= 2 {
+                    result.push_str(&render_table(&table_lines));
+                } else {
+                    // Not a valid table, output as-is
+                    for tl in &table_lines {
+                        result.push_str(tl);
+                        result.push('\n');
+                    }
+                }
                 table_lines.clear();
+                has_separator = false;
             }
             result.push_str(line);
             result.push('\n');
@@ -200,7 +255,14 @@ fn format_markdown_tables(content: &str) -> String {
     
     // Flush any remaining table
     if !table_lines.is_empty() {
-        result.push_str(&render_table(&table_lines));
+        if has_separator && table_lines.len() >= 2 {
+            result.push_str(&render_table(&table_lines));
+        } else {
+            for tl in &table_lines {
+                result.push_str(tl);
+                result.push('\n');
+            }
+        }
     }
     
     // Remove trailing newline if original didn't have one
