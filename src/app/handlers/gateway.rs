@@ -3,7 +3,8 @@ use crate::app::App;
 use crate::config::Config;
 use crate::daemon;
 use crate::dialogs::{FetchModelsLoading, SecretViewerState, SPINNER_FRAMES};
-use crate::gateway::{ChatMessage, ClientFrame, serialize_frame, ServerFrame, deserialize_frame};
+use crate::gateway::{ServerFrame, ServerFrameType};
+use crate::gateway::ChatMessage;
 use crate::pages::Page;
 use crate::panes::DisplayMessage;
 use crate::providers;
@@ -15,7 +16,7 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
-use tracing::{debug, warn};
+use tracing::debug;
 
 pub type WsSink = SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>;
 
@@ -515,395 +516,26 @@ impl App {
     }
 
     pub async fn handle_gateway_message(&mut self, text: &str) -> Result<Option<Action>> {
+        let frame: Option<ServerFrame> = text.as_bytes().first()
+            .and_then(|first_byte| {
+                if *first_byte <= ServerFrameType::ResponseDone as u8 {
+                    crate::gateway::deserialize_frame(text.as_bytes()).ok()
+                } else {
+                    None
+                }
+            });
+
+        if let Some(frame) = frame {
+            let frame_action = crate::gateway::server_frame_to_action(&frame);
+            return self.process_frame_action(frame_action).await;
+        }
+
         let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
         let frame_type = parsed
             .as_ref()
             .and_then(|v| v.get("type").and_then(|t| t.as_str()));
 
-        debug!(frame_type = ?frame_type, len = text.len(), "Received frame");
-
-        if frame_type == Some("status") {
-            let status = parsed
-                .as_ref()
-                .and_then(|v| v.get("status").and_then(|s| s.as_str()))
-                .unwrap_or("");
-            let detail = parsed
-                .as_ref()
-                .and_then(|v| v.get("detail").and_then(|d| d.as_str()))
-                .unwrap_or("");
-
-            match status {
-                "model_configured" => {
-                    self.state
-                        .messages
-                        .push(DisplayMessage::info(format!("Model: {}", detail)));
-                }
-                "credentials_loaded" => {
-                    self.state.messages.push(DisplayMessage::info(detail));
-                }
-                "credentials_missing" => {
-                    self.state.gateway_status = crate::panes::GatewayStatus::ModelError;
-                    self.state.messages.push(DisplayMessage::warning(detail));
-                }
-                "model_connecting" => {
-                    self.state.messages.push(DisplayMessage::info(detail));
-                }
-                "model_ready" => {
-                    self.state.gateway_status = crate::panes::GatewayStatus::ModelReady;
-                    self.state.messages.push(DisplayMessage::success(detail));
-                }
-                "model_error" => {
-                    self.state.gateway_status = crate::panes::GatewayStatus::ModelError;
-                    self.state.messages.push(DisplayMessage::error(detail));
-                }
-                "no_model" => {
-                    self.state.messages.push(DisplayMessage::warning(detail));
-                }
-                "vault_locked" => {
-                    if let Some(pw) = self.deferred_vault_password.take() {
-                        return Ok(Some(Action::GatewayUnlockVault(pw)));
-                    }
-                    self.state.gateway_status = crate::panes::GatewayStatus::VaultLocked;
-                    self.state.messages.push(DisplayMessage::warning(
-                        "Gateway vault is locked — enter password to unlock.",
-                    ));
-                    return Ok(Some(Action::GatewayVaultLocked));
-                }
-                _ => {
-                    self.state
-                        .messages
-                        .push(DisplayMessage::system(format!("[{}] {}", status, detail)));
-                }
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("auth_challenge") {
-            self.state.gateway_status = crate::panes::GatewayStatus::AuthRequired;
-            self.state
-                .messages
-                .push(DisplayMessage::warning("Gateway requires 2FA authentication."));
-            return Ok(Some(Action::GatewayAuthChallenge));
-        }
-
-        if frame_type == Some("auth_result") {
-            let ok = parsed
-                .as_ref()
-                .and_then(|v| v.get("ok").and_then(|o| o.as_bool()))
-                .unwrap_or(false);
-            let retry = parsed
-                .as_ref()
-                .and_then(|v| v.get("retry").and_then(|r| r.as_bool()))
-                .unwrap_or(false);
-
-            if ok {
-                self.state
-                    .messages
-                    .push(DisplayMessage::success("Authenticated with gateway."));
-                self.state.gateway_status = crate::panes::GatewayStatus::Connected;
-                self.request_secrets_list().await;
-            } else if retry {
-                let msg = parsed
-                    .as_ref()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-                    .unwrap_or("Invalid code. Try again.");
-                self.state.messages.push(DisplayMessage::warning(msg));
-                return Ok(Some(Action::GatewayAuthChallenge));
-            } else {
-                let msg = parsed
-                    .as_ref()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-                    .unwrap_or("Authentication failed.");
-                self.state.messages.push(DisplayMessage::error(msg));
-                self.state.gateway_status = crate::panes::GatewayStatus::Error;
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("auth_locked") {
-            let msg = parsed
-                .as_ref()
-                .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-                .unwrap_or("Too many failed attempts.");
-            self.state.messages.push(DisplayMessage::error(msg));
-            self.state.gateway_status = crate::panes::GatewayStatus::Error;
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("vault_unlocked") {
-            let ok = parsed
-                .as_ref()
-                .and_then(|v| v.get("ok").and_then(|o| o.as_bool()))
-                .unwrap_or(false);
-            if ok {
-                self.state
-                    .messages
-                    .push(DisplayMessage::success("Gateway vault unlocked."));
-                self.state.gateway_status = crate::panes::GatewayStatus::Connected;
-            } else {
-                let msg = parsed
-                    .as_ref()
-                    .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-                    .unwrap_or("Failed to unlock vault.");
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("reload_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok")).and_then(|o| o.as_bool()).unwrap_or(false);
-            if ok {
-                let provider = parsed.as_ref().and_then(|v| v.get("provider")).and_then(|p| p.as_str()).unwrap_or("?");
-                let model = parsed.as_ref().and_then(|v| v.get("model")).and_then(|m| m.as_str()).unwrap_or("?");
-                self.state.messages.push(DisplayMessage::success(format!(
-                    "Gateway config reloaded: {} / {}", provider, model
-                )));
-            } else {
-                let msg = parsed.as_ref().and_then(|v| v.get("message")).and_then(|m| m.as_str()).unwrap_or("Unknown error");
-                self.state.messages.push(DisplayMessage::error(format!(
-                    "Reload failed: {}", msg
-                )));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_list_result") {
-            let entries = parsed
-                .as_ref()
-                .and_then(|v| v.get("entries"))
-                .and_then(|e| e.as_array())
-                .cloned()
-                .unwrap_or_default();
-            self.cached_secrets = entries;
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_store_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("");
-            if ok {
-                self.state.messages.push(DisplayMessage::success(msg));
-            } else {
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            self.request_secrets_list().await;
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_get_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            let key = parsed.as_ref().and_then(|v| v.get("key").and_then(|k| k.as_str())).unwrap_or("").to_string();
-            let value = parsed.as_ref().and_then(|v| v.get("value").and_then(|val| val.as_str())).map(|s| s.to_string());
-            if self.pending_secret_key.as_deref() == Some(&key) {
-                self.pending_secret_key = None;
-                if ok && value.is_some() {
-                    return Ok(Some(Action::FetchModels(key)));
-                } else {
-                    return Ok(Some(Action::PromptApiKey(key)));
-                }
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_peek_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            let name = parsed.as_ref().and_then(|v| v.get("name").and_then(|n| n.as_str())).unwrap_or("").to_string();
-            if ok {
-                let fields: Vec<(String, String)> = parsed.as_ref()
-                    .and_then(|v| v.get("fields"))
-                    .and_then(|f| f.as_array())
-                    .map(|arr| arr.iter().filter_map(|item| {
-                        let pair = item.as_array()?;
-                        Some((pair.get(0)?.as_str()?.to_string(), pair.get(1)?.as_str()?.to_string()))
-                    }).collect())
-                    .unwrap_or_default();
-                self.secret_viewer = Some(SecretViewerState {
-                    name,
-                    fields,
-                    revealed: false,
-                    selected: 0,
-                    scroll_offset: 0,
-                    status: None,
-                });
-            } else {
-                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed to peek");
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_set_policy_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str()));
-            if ok {
-                self.state.messages.push(DisplayMessage::success("Policy updated."));
-            } else {
-                self.state.messages.push(DisplayMessage::error(msg.unwrap_or("Failed to set policy.")));
-            }
-            self.request_secrets_list().await;
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_set_disabled_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            if ok {
-                self.state.messages.push(DisplayMessage::success("Credential updated."));
-            } else {
-                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed");
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            self.request_secrets_list().await;
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_delete_result") || frame_type == Some("secrets_delete_credential_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            if ok {
-                self.state.messages.push(DisplayMessage::success("Credential deleted."));
-            } else {
-                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed");
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            self.request_secrets_list().await;
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_has_totp_result") {
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_setup_totp_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            if ok {
-                let uri = parsed.as_ref().and_then(|v| v.get("uri").and_then(|u| u.as_str())).unwrap_or("").to_string();
-                self.totp_dialog = Some(crate::dialogs::TotpDialogState {
-                    phase: crate::dialogs::TotpDialogPhase::ShowUri {
-                        uri,
-                        input: String::new(),
-                    },
-                });
-            } else {
-                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed to set up 2FA");
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_verify_totp_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            if ok {
-                self.state.config.totp_enabled = true;
-                let _ = self.state.config.save(None);
-                self.state.messages.push(DisplayMessage::success("2FA configured successfully."));
-                self.totp_dialog = Some(crate::dialogs::TotpDialogState {
-                    phase: crate::dialogs::TotpDialogPhase::Verified,
-                });
-            } else {
-                if let Some(ref mut dlg) = self.totp_dialog {
-                    if let crate::dialogs::TotpDialogPhase::ShowUri { ref uri, .. } = dlg.phase {
-                        let saved_uri = uri.clone();
-                        dlg.phase = crate::dialogs::TotpDialogPhase::Failed {
-                            uri: saved_uri,
-                            input: String::new(),
-                        };
-                    }
-                }
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("secrets_remove_totp_result") {
-            let ok = parsed.as_ref().and_then(|v| v.get("ok").and_then(|o| o.as_bool())).unwrap_or(false);
-            if ok {
-                self.state.config.totp_enabled = false;
-                let _ = self.state.config.save(None);
-                self.state.messages.push(DisplayMessage::info("2FA has been removed."));
-            } else {
-                let msg = parsed.as_ref().and_then(|v| v.get("message").and_then(|m| m.as_str())).unwrap_or("Failed to remove 2FA");
-                self.state.messages.push(DisplayMessage::error(msg));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("tool_call") {
-            let name = parsed
-                .as_ref()
-                .and_then(|v| v.get("name").and_then(|n| n.as_str()))
-                .unwrap_or("unknown");
-            let arguments = parsed
-                .as_ref()
-                .and_then(|v| v.get("arguments").and_then(|a| a.as_str()))
-                .unwrap_or("{}");
-            self.state
-                .messages
-                .push(DisplayMessage::tool_call(format!("{name}({arguments})")));
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("tool_result") {
-            let name = parsed
-                .as_ref()
-                .and_then(|v| v.get("name").and_then(|n| n.as_str()))
-                .unwrap_or("unknown");
-            let result = parsed
-                .as_ref()
-                .and_then(|v| v.get("result").and_then(|r| r.as_str()))
-                .unwrap_or("");
-            let is_error = parsed
-                .as_ref()
-                .and_then(|v| v.get("is_error").and_then(|e| e.as_bool()))
-                .unwrap_or(false);
-            let prefix = if is_error { "⚠ " } else { "" };
-            let display_result = if result.len() > 2000 {
-                format!("{}{}…({} bytes)", prefix, &result[..2000], result.len())
-            } else {
-                format!("{prefix}{result}")
-            };
-            self.state
-                .messages
-                .push(DisplayMessage::tool_result(format!("{name}: {display_result}")));
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("debug") {
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("info") {
-            let message = parsed
-                .as_ref()
-                .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-                .unwrap_or("");
-            if !message.is_empty() {
-                self.state.messages.push(DisplayMessage::info(message));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("stream_start") {
-            self.state.loading_line = Some("⏳ Waiting for response...".to_string());
-            self.state.streaming_started = Some(std::time::Instant::now());
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("thinking_start") {
-            self.state.loading_line = Some("🤔 Thinking...".to_string());
-            self.state.streaming_started = Some(std::time::Instant::now());
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("thinking_delta") {
-            if let Some(started) = self.state.streaming_started {
-                let elapsed = started.elapsed().as_secs();
-                self.state.loading_line = Some(format!("🤔 Thinking... ({}s)", elapsed));
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("thinking_end") {
-            self.state.loading_line = None;
-            return Ok(Some(Action::Update));
-        }
+        debug!(frame_type = ?frame_type, len = text.len(), "Received JSON frame (fallback)");
 
         if frame_type == Some("chunk") {
             let delta = parsed
@@ -932,56 +564,299 @@ impl App {
                         last.update_content(buf.clone());
                         debug!(content_len = last.content.len(), "Updated last message");
                     } else {
-                        warn!("No last message to update!");
+                        tracing::warn!("No last message to update!");
                     }
-                } else {
-                    debug!("Hatching mode - not updating messages");
                 }
             }
 
             return Ok(Some(Action::Update));
         }
 
-        if frame_type == Some("response_done") {
-            self.chat_loading_tick = None;
-            self.state.loading_line = None;
-            self.state.streaming_started = None;
+        self.handle_json_fallback(text, parsed.as_ref()).await
+    }
 
-            if let Some(buf) = self.streaming_response.take() {
-                debug!(buf_len = buf.len(), showing_hatching = self.showing_hatching, "Response done");
+    async fn process_frame_action(&mut self, frame_action: crate::gateway::FrameAction) -> Result<Option<Action>> {
 
-                if self.showing_hatching {
-                    if !buf.is_empty() {
-                        if let Some(ref mut hatching) = self.hatching_page {
-                            let mut ps = self.state.pane_state();
-                            let _ = hatching.update(Action::HatchingResponse(buf), &mut ps);
+        if let Some(action) = frame_action.action {
+            return self.handle_action(action).await;
+        }
+
+        Ok(Some(Action::Update))
+    }
+
+    async fn handle_action(&mut self, action: Action) -> Result<Option<Action>> {
+        match action {
+            Action::Info(msg) => {
+                self.state.messages.push(DisplayMessage::info(&msg));
+            }
+            Action::Success(msg) => {
+                self.state.messages.push(DisplayMessage::success(&msg));
+            }
+            Action::Warning(msg) => {
+                self.state.messages.push(DisplayMessage::warning(&msg));
+            }
+            Action::Error(msg) => {
+                self.state.messages.push(DisplayMessage::error(&msg));
+            }
+            Action::GatewayStreamStart => {
+                self.state.loading_line = Some("⏳ Waiting for response...".to_string());
+                self.state.streaming_started = Some(std::time::Instant::now());
+            }
+            Action::GatewayThinkingStart => {
+                self.state.loading_line = Some("🤔 Thinking...".to_string());
+                self.state.streaming_started = Some(std::time::Instant::now());
+            }
+            Action::GatewayThinkingDelta => {
+                if let Some(started) = self.state.streaming_started {
+                    let elapsed = started.elapsed().as_secs();
+                    self.state.loading_line = Some(format!("🤔 Thinking... ({}s)", elapsed));
+                }
+            }
+            Action::GatewayThinkingEnd => {
+                self.state.loading_line = None;
+            }
+            Action::GatewayChunk(delta) => {
+                debug!(delta_len = delta.len(), delta_preview = &delta[..delta.len().min(50)], "Received chunk");
+
+                if self.streaming_response.is_none() {
+                    debug!("First chunk - initializing streaming response");
+                    self.state.loading_line = None;
+                    self.streaming_response = Some(String::new());
+                    self.state.streaming_started = Some(std::time::Instant::now());
+                    if !self.showing_hatching {
+                        self.state.messages.push(DisplayMessage::assistant(""));
+                    }
+                }
+
+                if let Some(ref mut buf) = self.streaming_response {
+                    buf.push_str(&delta);
+                    debug!(buf_len = buf.len(), "Buffer update");
+
+                    if !self.showing_hatching {
+                        if let Some(last) = self.state.messages.last_mut() {
+                            last.update_content(buf.clone());
+                            debug!(content_len = last.content.len(), "Updated last message");
+                        } else {
+                            tracing::warn!("No last message to update!");
                         }
                     }
-                    return Ok(Some(Action::Update));
                 }
+            }
+            Action::GatewayResponseDone => {
+                self.chat_loading_tick = None;
+                self.state.loading_line = None;
+                self.state.streaming_started = None;
 
-                let trimmed = buf.trim_end().to_string();
-                debug!(trimmed_len = trimmed.len(), messages_count = self.state.messages.len(), "Response done");
+                if let Some(buf) = self.streaming_response.take() {
+                    debug!(buf_len = buf.len(), showing_hatching = self.showing_hatching, "Response done");
 
-                if let Some(last) = self.state.messages.last_mut() {
-                    debug!(role = ?last.role, "Response done - last message role");
-                    if matches!(last.role, crate::panes::MessageRole::Assistant) {
-                        last.content = trimmed.clone();
-                        debug!(content_len = trimmed.len(), "Response done - set content");
+                    if self.showing_hatching {
+                        if !buf.is_empty() {
+                            if let Some(ref mut hatching) = self.hatching_page {
+                                let mut ps = self.state.pane_state();
+                                let _ = hatching.update(Action::HatchingResponse(buf), &mut ps);
+                            }
+                        }
+                        return Ok(Some(Action::Update));
+                    }
+
+                    let trimmed = buf.trim_end().to_string();
+                    debug!(trimmed_len = trimmed.len(), messages_count = self.state.messages.len(), "Response done");
+
+                    if let Some(last) = self.state.messages.last_mut() {
+                        debug!(role = ?last.role, "Response done - last message role");
+                        if matches!(last.role, crate::panes::MessageRole::Assistant) {
+                            last.content = trimmed.clone();
+                            debug!(content_len = trimmed.len(), "Response done - set content");
+                        }
+                    }
+
+                    if !trimmed.is_empty() {
+                        self.state.conversation_history.push(ChatMessage::text("assistant", &trimmed));
+                        self.save_history();
+                    }
+                } else {
+                    tracing::warn!("Response done: no streaming_response buffer!");
+                }
+            }
+            Action::GatewayToolCall { name, arguments, .. } => {
+                let args_str = arguments.to_string();
+                self.state.messages.push(DisplayMessage::tool_call(format!("{name}({args_str})")));
+            }
+            Action::GatewayToolResult { name, result, is_error, .. } => {
+                let prefix = if is_error { "⚠ " } else { "" };
+                let display_result = if result.len() > 2000 {
+                    format!("{}{}…({} bytes)", prefix, &result[..2000], result.len())
+                } else {
+                    format!("{prefix}{result}")
+                };
+                self.state.messages.push(DisplayMessage::tool_result(format!("{name}: {display_result}")));
+            }
+            Action::GatewayAuthenticated => {
+                self.state.messages.push(DisplayMessage::success("Authenticated with gateway."));
+                self.state.gateway_status = crate::panes::GatewayStatus::Connected;
+                self.request_secrets_list().await;
+            }
+            Action::GatewayVaultUnlocked => {
+                self.state.messages.push(DisplayMessage::success("Gateway vault unlocked."));
+                self.state.gateway_status = crate::panes::GatewayStatus::Connected;
+            }
+            Action::GatewayAuthChallenge => {
+                self.state.gateway_status = crate::panes::GatewayStatus::AuthRequired;
+                self.state.messages.push(DisplayMessage::warning("Gateway requires 2FA authentication."));
+                return Ok(Some(Action::GatewayAuthChallenge));
+            }
+            Action::GatewayVaultLocked => {
+                if let Some(pw) = self.deferred_vault_password.take() {
+                    return Ok(Some(Action::GatewayUnlockVault(pw)));
+                }
+                self.state.gateway_status = crate::panes::GatewayStatus::VaultLocked;
+                self.state.messages.push(DisplayMessage::warning(
+                    "Gateway vault is locked — enter password to unlock.",
+                ));
+                return Ok(Some(Action::GatewayVaultLocked));
+            }
+            Action::SecretsListResult { entries } => {
+                self.cached_secrets = entries;
+            }
+            Action::SecretsGetResult { key, value } => {
+                if self.pending_secret_key.as_deref() == Some(&key) {
+                    self.pending_secret_key = None;
+                    if value.is_some() {
+                        return Ok(Some(Action::FetchModels(key)));
+                    } else {
+                        return Ok(Some(Action::PromptApiKey(key)));
                     }
                 }
-
-                if !trimmed.is_empty() {
-                    self.state.conversation_history.push(ChatMessage::text("assistant", &trimmed));
-                    self.save_history();
-                }
-            } else {
-                warn!("Response done: no streaming_response buffer!");
             }
+            Action::SecretsStoreResult { ok, message } => {
+                if ok {
+                    self.state.messages.push(DisplayMessage::success(&message));
+                } else {
+                    self.state.messages.push(DisplayMessage::error(&message));
+                }
+                self.request_secrets_list().await;
+            }
+            Action::SecretsPeekResult { ok, fields, message, .. } => {
+                if ok {
+                    self.secret_viewer = Some(SecretViewerState {
+                        name: String::new(),
+                        fields,
+                        revealed: false,
+                        selected: 0,
+                        scroll_offset: 0,
+                        status: None,
+                    });
+                } else {
+                    let msg = message.unwrap_or_else(|| "Failed to peek".into());
+                    self.state.messages.push(DisplayMessage::error(&msg));
+                }
+            }
+            Action::SecretsSetPolicyResult { ok, message } => {
+                if ok {
+                    self.state.messages.push(DisplayMessage::success("Policy updated."));
+                } else {
+                    let msg = message.unwrap_or_else(|| "Failed to set policy.".into());
+                    self.state.messages.push(DisplayMessage::error(&msg));
+                }
+                self.request_secrets_list().await;
+            }
+            Action::SecretsSetDisabledResult { .. } => {
+                self.state.messages.push(DisplayMessage::success("Credential updated."));
+                self.request_secrets_list().await;
+            }
+            Action::SecretsDeleteCredentialResult { .. } => {
+                self.state.messages.push(DisplayMessage::success("Credential deleted."));
+                self.request_secrets_list().await;
+            }
+            Action::SecretsHasTotpResult { .. } => {}
+            Action::SecretsSetupTotpResult { ok, uri, message } => {
+                if ok {
+                    self.totp_dialog = Some(crate::dialogs::TotpDialogState {
+                        phase: crate::dialogs::TotpDialogPhase::ShowUri {
+                            uri: uri.unwrap_or_default(),
+                            input: String::new(),
+                        },
+                    });
+                } else {
+                    let msg = message.unwrap_or_else(|| "Failed to set up 2FA".into());
+                    self.state.messages.push(DisplayMessage::error(&msg));
+                }
+            }
+            Action::SecretsVerifyTotpResult { ok } => {
+                if ok {
+                    self.state.config.totp_enabled = true;
+                    let _ = self.state.config.save(None);
+                    self.state.messages.push(DisplayMessage::success("2FA configured successfully."));
+                    self.totp_dialog = Some(crate::dialogs::TotpDialogState {
+                        phase: crate::dialogs::TotpDialogPhase::Verified,
+                    });
+                } else {
+                    if let Some(ref mut dlg) = self.totp_dialog {
+                        if let crate::dialogs::TotpDialogPhase::ShowUri { ref uri, .. } = dlg.phase {
+                            let saved_uri = uri.clone();
+                            dlg.phase = crate::dialogs::TotpDialogPhase::Failed {
+                                uri: saved_uri,
+                                input: String::new(),
+                            };
+                        }
+                    }
+                }
+            }
+            Action::SecretsRemoveTotpResult { ok } => {
+                if ok {
+                    self.state.config.totp_enabled = false;
+                    let _ = self.state.config.save(None);
+                    self.state.messages.push(DisplayMessage::info("2FA has been removed."));
+                } else {
+                    self.state.messages.push(DisplayMessage::error("Failed to remove 2FA"));
+                }
+            }
+            _ => {}
+        }
+
+        Ok(Some(Action::Update))
+    }
+
+    async fn handle_json_fallback(&mut self, text: &str, parsed: Option<&serde_json::Value>) -> Result<Option<Action>> {
+        let frame_type = parsed
+            .and_then(|v| v.get("type").and_then(|t| t.as_str()));
+
+        if frame_type == Some("chunk") {
+            let delta = parsed
+                .and_then(|v| v.get("delta").and_then(|d| d.as_str()))
+                .unwrap_or("");
+
+            debug!(delta_len = delta.len(), delta_preview = &delta[..delta.len().min(50)], "Received chunk");
+
+            if self.streaming_response.is_none() {
+                debug!("First chunk - initializing streaming response");
+                self.state.loading_line = None;
+                self.streaming_response = Some(String::new());
+                self.state.streaming_started = Some(std::time::Instant::now());
+                if !self.showing_hatching {
+                    self.state.messages.push(DisplayMessage::assistant(""));
+                }
+            }
+
+            if let Some(ref mut buf) = self.streaming_response {
+                buf.push_str(delta);
+                debug!(buf_len = buf.len(), "Buffer update");
+
+                if !self.showing_hatching {
+                    if let Some(last) = self.state.messages.last_mut() {
+                        last.update_content(buf.clone());
+                        debug!(content_len = last.content.len(), "Updated last message");
+                    } else {
+                        tracing::warn!("No last message to update!");
+                    }
+                }
+            }
+
             return Ok(Some(Action::Update));
         }
 
-        let payload = parsed.as_ref().and_then(|v| {
+        let payload = parsed.and_then(|v| {
             if v.get("type").and_then(|t| t.as_str()) == Some("response") {
                 v.get("received").and_then(|r| r.as_str()).map(String::from)
             } else {
@@ -992,7 +867,6 @@ impl App {
         let is_error_frame = frame_type == Some("error");
         let error_message = if is_error_frame {
             parsed
-                .as_ref()
                 .and_then(|v| v.get("message").and_then(|m| m.as_str()))
                 .map(String::from)
         } else {

@@ -367,3 +367,230 @@ macro_rules! parse_binary_client_frame {
             .map_err(|e| anyhow::anyhow!("Failed to parse client frame: {}", e))
     }};
 }
+
+// ============================================================================
+// Action Conversion - converts ServerFrame to TUI Actions
+// ============================================================================
+
+use crate::action::Action;
+
+/// Result of processing a server frame - includes optional action and whether to update UI.
+pub struct FrameAction {
+    pub action: Option<Action>,
+    pub update_ui: bool,
+}
+
+impl FrameAction {
+    pub fn none() -> Self {
+        Self {
+            action: None,
+            update_ui: false,
+        }
+    }
+    pub fn update(action: Action) -> Self {
+        Self {
+            action: Some(action),
+            update_ui: true,
+        }
+    }
+    pub fn just_action(action: Action) -> Self {
+        Self {
+            action: Some(action),
+            update_ui: false,
+        }
+    }
+}
+
+/// Convert a server frame into TUI actions.
+/// This encapsulates all the protocol parsing logic in one place.
+pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
+    use ServerPayload;
+
+    match &frame.payload {
+        ServerPayload::Hello { .. } => {
+            FrameAction::just_action(Action::Info("Gateway connected.".into()))
+        }
+        ServerPayload::Status { status, detail } => {
+            use StatusType::*;
+            match status {
+                ModelConfigured => {
+                    FrameAction::just_action(Action::Info(format!("Model: {detail}")))
+                }
+                CredentialsLoaded => FrameAction::just_action(Action::Info(detail.clone())),
+                CredentialsMissing => FrameAction::just_action(Action::Warning(detail.clone())),
+                ModelConnecting => FrameAction::just_action(Action::Info(detail.clone())),
+                ModelReady => FrameAction::just_action(Action::Success(detail.clone())),
+                ModelError => FrameAction::just_action(Action::Error(detail.clone())),
+                NoModel => FrameAction::just_action(Action::Warning(detail.clone())),
+                VaultLocked => FrameAction::just_action(Action::GatewayVaultLocked),
+            }
+        }
+        ServerPayload::AuthChallenge { .. } => {
+            FrameAction::just_action(Action::GatewayAuthChallenge)
+        }
+        ServerPayload::AuthResult { ok, message, retry } => {
+            if *ok {
+                FrameAction::update(Action::GatewayAuthenticated)
+            } else if retry.unwrap_or(false) {
+                FrameAction::just_action(Action::Warning(
+                    message
+                        .clone()
+                        .unwrap_or_else(|| "Invalid code. Try again.".into()),
+                ))
+            } else {
+                FrameAction::just_action(Action::Error(
+                    message
+                        .clone()
+                        .unwrap_or_else(|| "Authentication failed.".into()),
+                ))
+            }
+        }
+        ServerPayload::AuthLocked { message, .. } => {
+            FrameAction::just_action(Action::Error(message.clone()))
+        }
+        ServerPayload::VaultUnlocked { ok, message } => {
+            if *ok {
+                FrameAction::update(Action::GatewayVaultUnlocked)
+            } else {
+                FrameAction::just_action(Action::Error(
+                    message
+                        .clone()
+                        .unwrap_or_else(|| "Failed to unlock vault.".into()),
+                ))
+            }
+        }
+        ServerPayload::ReloadResult {
+            ok,
+            provider,
+            model,
+            message,
+        } => {
+            if *ok {
+                FrameAction::just_action(Action::Success(format!(
+                    "Gateway config reloaded: {} / {}",
+                    provider, model
+                )))
+            } else {
+                FrameAction::just_action(Action::Error(format!(
+                    "Reload failed: {}",
+                    message.as_deref().unwrap_or("Unknown error")
+                )))
+            }
+        }
+        ServerPayload::SecretsListResult { ok, entries } => {
+            let entries: Vec<serde_json::Value> = entries
+                .iter()
+                .map(|e| {
+                    serde_json::json!({
+                        "name": e.name,
+                        "label": e.label,
+                        "kind": e.kind,
+                        "policy": e.policy,
+                        "disabled": e.disabled,
+                    })
+                })
+                .collect();
+            FrameAction::just_action(Action::SecretsListResult { entries })
+        }
+        ServerPayload::SecretsStoreResult { ok, message } => {
+            FrameAction::just_action(Action::SecretsStoreResult {
+                ok: *ok,
+                message: message.clone(),
+            })
+        }
+        ServerPayload::SecretsGetResult { ok, key, value, .. } => {
+            FrameAction::just_action(Action::SecretsGetResult {
+                key: key.clone(),
+                value: value.clone(),
+            })
+        }
+        ServerPayload::SecretsPeekResult {
+            ok,
+            fields,
+            message,
+        } => FrameAction::just_action(Action::SecretsPeekResult {
+            name: String::new(),
+            ok: *ok,
+            fields: fields.clone(),
+            message: message.clone(),
+        }),
+        ServerPayload::SecretsSetPolicyResult { ok, message } => {
+            FrameAction::just_action(Action::SecretsSetPolicyResult {
+                ok: *ok,
+                message: message.clone(),
+            })
+        }
+        ServerPayload::SecretsSetDisabledResult { ok, message, .. } => {
+            FrameAction::just_action(Action::SecretsSetDisabledResult {
+                ok: *ok,
+                cred_name: String::new(),
+                disabled: false,
+            })
+        }
+        ServerPayload::SecretsDeleteResult { ok, .. } => {
+            FrameAction::just_action(Action::SecretsDeleteCredentialResult {
+                ok: *ok,
+                cred_name: String::new(),
+            })
+        }
+        ServerPayload::SecretsDeleteCredentialResult { ok, .. } => {
+            FrameAction::just_action(Action::SecretsDeleteCredentialResult {
+                ok: *ok,
+                cred_name: String::new(),
+            })
+        }
+        ServerPayload::SecretsHasTotpResult { has_totp } => {
+            FrameAction::just_action(Action::SecretsHasTotpResult {
+                has_totp: *has_totp,
+            })
+        }
+        ServerPayload::SecretsSetupTotpResult { ok, uri, message } => {
+            FrameAction::just_action(Action::SecretsSetupTotpResult {
+                ok: *ok,
+                uri: uri.clone(),
+                message: message.clone(),
+            })
+        }
+        ServerPayload::SecretsVerifyTotpResult { ok, .. } => {
+            FrameAction::just_action(Action::SecretsVerifyTotpResult { ok: *ok })
+        }
+        ServerPayload::SecretsRemoveTotpResult { ok, .. } => {
+            FrameAction::just_action(Action::SecretsRemoveTotpResult { ok: *ok })
+        }
+        ServerPayload::StreamStart => FrameAction::just_action(Action::GatewayStreamStart),
+        ServerPayload::ThinkingStart => FrameAction::just_action(Action::GatewayThinkingStart),
+        ServerPayload::ThinkingDelta { .. } => {
+            FrameAction::just_action(Action::GatewayThinkingDelta)
+        }
+        ServerPayload::ThinkingEnd => FrameAction::just_action(Action::GatewayThinkingEnd),
+        ServerPayload::Chunk { delta } => {
+            FrameAction::just_action(Action::GatewayChunk(delta.clone()))
+        }
+        ServerPayload::ResponseDone { .. } => FrameAction::just_action(Action::GatewayResponseDone),
+        ServerPayload::ToolCall {
+            id,
+            name,
+            arguments,
+        } => FrameAction::just_action(Action::GatewayToolCall {
+            id: id.clone(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+        }),
+        ServerPayload::ToolResult {
+            id,
+            name,
+            result,
+            is_error,
+        } => FrameAction::just_action(Action::GatewayToolResult {
+            id: id.clone(),
+            name: name.clone(),
+            result: result.clone(),
+            is_error: *is_error,
+        }),
+        ServerPayload::Error { message, .. } => {
+            FrameAction::just_action(Action::Error(message.clone()))
+        }
+        ServerPayload::Info { message } => FrameAction::just_action(Action::Info(message.clone())),
+        ServerPayload::Empty => FrameAction::none(),
+    }
+}

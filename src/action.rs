@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 use strum::Display;
 
 /// Actions that drive the application, inspired by openapi-tui.
-#[derive(Debug, Clone, PartialEq, Serialize, Display, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Display)]
+#[strum(serialize_all = "snake_case")]
 pub enum Action {
     Tick,
     Render,
@@ -51,23 +52,39 @@ pub enum Action {
     /// Open the API-key input dialog for the given provider
     PromptApiKey(String),
     /// The user entered an API key in the dialog — proceed to store confirmation
-    ConfirmStoreSecret { provider: String, key: String },
+    ConfirmStoreSecret {
+        provider: String,
+        key: String,
+    },
     /// Fetch models from the provider API, then open the model selector
     FetchModels(String),
     /// The model fetch failed
     FetchModelsFailed(String),
     /// Open the model-selection dialog with a fetched list
-    ShowModelSelector { provider: String, models: Vec<String> },
+    ShowModelSelector {
+        provider: String,
+        models: Vec<String>,
+    },
     /// Begin OAuth device flow authentication for the given provider
     StartDeviceFlow(String),
     /// Device flow: verification URL and user code are ready for display
-    DeviceFlowCodeReady { url: String, code: String },
+    DeviceFlowCodeReady {
+        url: String,
+        code: String,
+    },
     /// Device flow authentication succeeded — store the token and proceed
-    DeviceFlowAuthenticated { provider: String, token: String },
+    DeviceFlowAuthenticated {
+        provider: String,
+        token: String,
+    },
     /// Device flow authentication failed
     DeviceFlowFailed(String),
     /// Open the credential-management dialog for a secret
-    ShowCredentialDialog { name: String, disabled: bool, policy: String },
+    ShowCredentialDialog {
+        name: String,
+        disabled: bool,
+        policy: String,
+    },
     /// Open the 2FA (TOTP) setup / management dialog
     ShowTotpSetup,
     /// Gateway sent an auth_challenge — prompt user for TOTP code
@@ -87,26 +104,94 @@ pub enum Action {
     /// The hatching exchange is complete — save SOUL.md and close
     FinishHatching(String),
     /// Gateway returned the secrets list
-    SecretsListResult { entries: Vec<serde_json::Value> },
+    SecretsListResult {
+        entries: Vec<serde_json::Value>,
+    },
     /// Gateway returned a secret value (for provider probing, device flow, etc.)
-    SecretsGetResult { key: String, value: Option<String> },
+    SecretsGetResult {
+        key: String,
+        value: Option<String>,
+    },
     /// Gateway stored a secret successfully
-    SecretsStoreResult { ok: bool, message: String },
+    SecretsStoreResult {
+        ok: bool,
+        message: String,
+    },
     /// Gateway returned peek result (for secret viewer)
-    SecretsPeekResult { name: String, ok: bool, fields: Vec<(String, String)>, message: Option<String> },
+    SecretsPeekResult {
+        name: String,
+        ok: bool,
+        fields: Vec<(String, String)>,
+        message: Option<String>,
+    },
     /// Gateway set policy result
-    SecretsSetPolicyResult { ok: bool, message: Option<String> },
+    SecretsSetPolicyResult {
+        ok: bool,
+        message: Option<String>,
+    },
     /// Gateway set disabled result
-    SecretsSetDisabledResult { ok: bool, cred_name: String, disabled: bool },
+    SecretsSetDisabledResult {
+        ok: bool,
+        cred_name: String,
+        disabled: bool,
+    },
     /// Gateway deleted credential result
-    SecretsDeleteCredentialResult { ok: bool, cred_name: String },
+    SecretsDeleteCredentialResult {
+        ok: bool,
+        cred_name: String,
+    },
     /// Gateway returned TOTP status
-    SecretsHasTotpResult { has_totp: bool },
+    SecretsHasTotpResult {
+        has_totp: bool,
+    },
     /// Gateway returned TOTP setup URI
-    SecretsSetupTotpResult { ok: bool, uri: Option<String>, message: Option<String> },
+    SecretsSetupTotpResult {
+        ok: bool,
+        uri: Option<String>,
+        message: Option<String>,
+    },
     /// Gateway returned TOTP verification result
-    SecretsVerifyTotpResult { ok: bool },
+    SecretsVerifyTotpResult {
+        ok: bool,
+    },
     /// Gateway returned TOTP removal result
-    SecretsRemoveTotpResult { ok: bool },
+    SecretsRemoveTotpResult {
+        ok: bool,
+    },
+    /// Gateway stream started (API connected, waiting for response)
+    GatewayStreamStart,
+    /// Gateway extended thinking started
+    GatewayThinkingStart,
+    /// Gateway extended thinking delta (update loading indicator)
+    GatewayThinkingDelta,
+    /// Gateway extended thinking ended
+    GatewayThinkingEnd,
+    /// Gateway sent a text chunk
+    GatewayChunk(String),
+    /// Gateway response is complete
+    GatewayResponseDone,
+    /// Gateway sent a tool call from the model
+    GatewayToolCall {
+        id: String,
+        name: String,
+        arguments: serde_json::Value,
+    },
+    /// Gateway sent a tool result from execution
+    GatewayToolResult {
+        id: String,
+        name: String,
+        result: String,
+        is_error: bool,
+    },
+    /// Gateway authenticated successfully
+    GatewayAuthenticated,
+    /// Gateway vault unlocked successfully
+    GatewayVaultUnlocked,
+    /// Info message
+    Info(String),
+    /// Success message
+    Success(String),
+    /// Warning message
+    Warning(String),
     Noop,
 }
