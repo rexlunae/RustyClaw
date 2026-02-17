@@ -8,7 +8,7 @@ use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
 
-use super::CopilotSession;
+use super::{CopilotSession, ClientFrame, ClientFrameType, ClientPayload, deserialize_frame};
 use crate::providers;
 
 /// Maximum consecutive TOTP failures before lockout.
@@ -116,37 +116,32 @@ pub async fn resolve_bearer_token(
 
 /// Wait for an `auth_response` frame from the client.
 ///
-/// Reads WebSocket messages until we get a JSON frame with
-/// `{"type": "auth_response", "code": "..."}` or the connection drops.
+/// Reads WebSocket messages until we get a binary frame with
+/// `ClientFrameType::AuthResponse` or the connection drops.
 pub async fn wait_for_auth_response(
     reader: &mut futures_util::stream::SplitStream<WebSocketStream<tokio::net::TcpStream>>,
 ) -> Result<String> {
     while let Some(msg) = reader.next().await {
         match msg {
-            Ok(Message::Text(text)) => {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
-                    if val.get("type").and_then(|t| t.as_str()) == Some("auth_response") {
-                        if let Some(code) = val.get("code").and_then(|c| c.as_str()) {
-                            return Ok(code.to_string());
-                        }
-                        anyhow::bail!("auth_response missing 'code' field");
-                    }
-                }
-                // Ignore non-auth frames during the handshake.
-            }
             Ok(Message::Binary(data)) => {
-                // Handle binary frames (JSON sent as binary)
-                if let Ok(text) = String::from_utf8(data.to_vec()) {
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&text) {
-                        if val.get("type").and_then(|t| t.as_str()) == Some("auth_response") {
-                            if let Some(code) = val.get("code").and_then(|c| c.as_str()) {
-                                return Ok(code.to_string());
+                // Deserialize bincode frame
+                match deserialize_frame::<ClientFrame>(&data) {
+                    Ok(frame) => {
+                        if frame.frame_type == ClientFrameType::AuthResponse {
+                            if let ClientPayload::AuthResponse { code } = frame.payload {
+                                return Ok(code);
                             }
-                            anyhow::bail!("auth_response missing 'code' field");
+                            anyhow::bail!("AuthResponse frame has wrong payload type");
                         }
+                        // Ignore non-auth frames during the handshake.
+                    }
+                    Err(_) => {
+                        // Continue waiting for valid frame
                     }
                 }
-                // Ignore non-auth frames during the handshake.
+            }
+            Ok(Message::Text(_)) => {
+                // Ignore text frames during auth
             }
             Ok(Message::Close(_)) => {
                 anyhow::bail!("Client disconnected during authentication");
@@ -154,7 +149,9 @@ pub async fn wait_for_auth_response(
             Err(e) => {
                 anyhow::bail!("WebSocket error during authentication: {}", e);
             }
-            _ => {} // Ignore ping/pong during auth
+            _ => {
+                // Ignore ping/pong
+            }
         }
     }
     anyhow::bail!("Connection closed before authentication completed")

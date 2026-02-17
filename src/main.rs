@@ -800,7 +800,7 @@ async fn main() -> Result<()> {
 
                     // Resolve model context from the vault.
                     let model_ctx = {
-                        let mut v = shared_vault.blocking_lock();
+                        let mut v = shared_vault.lock().await;
                         match ModelContext::resolve(&config, &mut v) {
                             Ok(ctx) => {
                                 println!(

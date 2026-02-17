@@ -6,7 +6,7 @@ use crate::dialogs::{
     FetchModelsLoading, ModelSelectorState, PolicyPickerState, ProviderSelectorState,
     SecretViewerState, TotpDialogPhase, TotpDialogState, VaultUnlockPromptState, SPINNER_FRAMES,
 };
-use crate::gateway::ChatMessage;
+use crate::gateway::{ChatMessage, ClientFrame, ClientFrameType, ClientPayload};
 use crate::pages::hatching::Hatching;
 use crate::pages::home::Home;
 use crate::pages::Page;
@@ -473,11 +473,11 @@ impl App {
                 return Ok(Some(Action::Update));
             }
             Action::GatewayAuthResponse(code) => {
-                let frame = serde_json::json!({
-                    "type": "auth_response",
-                    "code": code,
-                });
-                self.send_to_gateway(frame.to_string()).await;
+                let frame = ClientFrame {
+                    frame_type: ClientFrameType::AuthResponse,
+                    payload: ClientPayload::AuthResponse { code: code.clone() },
+                };
+                self.send_frame(frame).await;
                 self.state
                     .messages
                     .push(DisplayMessage::info("Sent authentication code…"));

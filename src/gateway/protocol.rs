@@ -155,7 +155,6 @@ pub struct ClientFrame {
 
 /// Payload variants for client frames.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
 pub enum ClientPayload {
     Empty,
     AuthResponse {
@@ -203,7 +202,6 @@ pub struct ServerFrame {
 
 /// Payload variants for server frames.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "type", content = "data")]
 pub enum ServerPayload {
     Empty,
     Hello {

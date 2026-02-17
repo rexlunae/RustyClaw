@@ -3,7 +3,7 @@ use crate::app::App;
 use crate::config::Config;
 use crate::daemon;
 use crate::dialogs::{FetchModelsLoading, SecretViewerState, SPINNER_FRAMES};
-use crate::gateway::ChatMessage;
+use crate::gateway::{ChatMessage, ClientFrame, serialize_frame, ServerFrame, deserialize_frame};
 use crate::pages::Page;
 use crate::panes::DisplayMessage;
 use crate::providers;
@@ -128,8 +128,53 @@ impl App {
                     let _ = tx.send(Action::GatewayMessage(text.to_string()));
                 }
                 Ok(Message::Binary(data)) => {
-                    let text = String::from_utf8_lossy(&data).to_string();
-                    let _ = tx.send(Action::GatewayMessage(text));
+                    // Deserialize binary ServerFrame
+                    match deserialize_frame::<ServerFrame>(&data) {
+                        Ok(frame) => {
+                            // Convert ServerFrame to JSON for legacy handler
+                            // TODO: handle ServerFrame directly without JSON conversion
+                            let json = match &frame.payload {
+                                crate::gateway::ServerPayload::Chunk { delta } => {
+                                    serde_json::json!({ "type": "chunk", "delta": delta })
+                                }
+                                crate::gateway::ServerPayload::StreamStart => {
+                                    serde_json::json!({ "type": "stream_start" })
+                                }
+                                crate::gateway::ServerPayload::ResponseDone { ok } => {
+                                    serde_json::json!({ "type": "response_done", "ok": ok })
+                                }
+                                crate::gateway::ServerPayload::ThinkingStart => {
+                                    serde_json::json!({ "type": "thinking_start" })
+                                }
+                                crate::gateway::ServerPayload::ThinkingDelta { delta } => {
+                                    serde_json::json!({ "type": "thinking_delta", "delta": delta })
+                                }
+                                crate::gateway::ServerPayload::ThinkingEnd => {
+                                    serde_json::json!({ "type": "thinking_end" })
+                                }
+                                crate::gateway::ServerPayload::ToolCall { id, name, arguments } => {
+                                    serde_json::json!({ "type": "tool_call", "id": id, "name": name, "arguments": arguments })
+                                }
+                                crate::gateway::ServerPayload::ToolResult { id, name, result, is_error } => {
+                                    serde_json::json!({ "type": "tool_result", "id": id, "name": name, "result": result, "is_error": is_error })
+                                }
+                                crate::gateway::ServerPayload::Error { ok, message } => {
+                                    serde_json::json!({ "type": "error", "ok": ok, "message": message })
+                                }
+                                crate::gateway::ServerPayload::Info { message } => {
+                                    serde_json::json!({ "type": "info", "message": message })
+                                }
+                                _ => {
+                                    // For other frame types, skip or log
+                                    continue;
+                                }
+                            };
+                            let _ = tx.send(Action::GatewayMessage(json.to_string()));
+                        }
+                        Err(_) => {
+                            // Silently ignore malformed binary frames
+                        }
+                    }
                 }
                 Ok(Message::Close(_)) => {
                     let _ = tx.send(Action::GatewayDisconnected(
@@ -151,6 +196,41 @@ impl App {
         if let Some(ref mut sink) = self.ws_sink {
             // Send as text frame (JSON)
             match sink.send(Message::Text(text.into())).await {
+                Ok(()) => {}
+                Err(err) => {
+                    self.chat_loading_tick = None;
+                    self.state.loading_line = None;
+                    self.streaming_response = None;
+                    self.state.streaming_started = None;
+                    self.state
+                        .messages
+                        .push(DisplayMessage::error(format!("Send failed: {}", err)));
+                    self.state.gateway_status = crate::panes::GatewayStatus::Error;
+                    self.ws_sink = None;
+                }
+            }
+        } else {
+            self.state
+                .messages
+                .push(DisplayMessage::warning("Cannot send: gateway not connected."));
+        }
+    }
+
+    /// Send a typed frame to the gateway using bincode serialization.
+    pub async fn send_frame(&mut self, frame: ClientFrame) {
+        if let Some(ref mut sink) = self.ws_sink {
+            let bytes = match serialize_frame(&frame) {
+                Ok(b) => {
+                    b
+                }
+                Err(err) => {
+                    self.state.messages.push(DisplayMessage::error(format!(
+                        "Failed to serialize frame: {}", err
+                    )));
+                    return;
+                }
+            };
+            match sink.send(Message::Binary(bytes.into())).await {
                 Ok(()) => {}
                 Err(err) => {
                     self.chat_loading_tick = None;

@@ -19,7 +19,7 @@ mod types;
 // Re-export protocol types
 pub use protocol::{
     ClientFrameType, ServerFrameType, StatusType, ServerFrame, ClientFrame,
-    serialize_frame, deserialize_frame, ServerPayload,
+    serialize_frame, deserialize_frame, ServerPayload, ClientPayload,
 };
 
 // Re-export public types
