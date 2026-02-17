@@ -551,6 +551,27 @@ async fn main() -> Result<()> {
         Commands::Tui(_args) => {
             #[cfg(feature = "tui")]
             {
+                // Redirect tracing logs to a file to avoid corrupting TUI display.
+                // tui-markdown and other deps use tracing internally.
+                use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+                
+                let log_dir = dirs::cache_dir()
+                    .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
+                    .join("rustyclaw");
+                let _ = std::fs::create_dir_all(&log_dir);
+                
+                let file_appender = tracing_appender::rolling::daily(&log_dir, "tui.log");
+                let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+                
+                // Only log WARN and above to the file, suppress most noise
+                let filter = EnvFilter::try_from_default_env()
+                    .unwrap_or_else(|_| EnvFilter::new("warn"));
+                
+                tracing_subscriber::registry()
+                    .with(filter)
+                    .with(fmt::layer().with_writer(non_blocking).with_ansi(false))
+                    .init();
+                
                 // Apply TUI-specific overrides.
                 if let Some(url) = &_args.url {
                     config.gateway_url = Some(url.clone());
