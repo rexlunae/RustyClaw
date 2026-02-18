@@ -16,7 +16,7 @@ mod file_tools {
             "offset": 1,
             "limit": 100
         });
-        
+
         assert!(args["path"].is_string());
         assert!(args["offset"].is_number());
         assert!(args["limit"].is_number());
@@ -28,7 +28,7 @@ mod file_tools {
             "path": "/tmp/output.txt",
             "content": "Hello, world!"
         });
-        
+
         assert!(args["path"].is_string());
         assert!(args["content"].is_string());
     }
@@ -40,7 +40,7 @@ mod file_tools {
             "old_string": "old text",
             "new_string": "new text"
         });
-        
+
         assert!(args["old_string"].is_string());
         assert!(args["new_string"].is_string());
     }
@@ -52,7 +52,7 @@ mod file_tools {
             "all": true,
             "long": false
         });
-        
+
         assert!(args["path"].is_string());
     }
 
@@ -63,7 +63,7 @@ mod file_tools {
             "path": ".",
             "case_insensitive": true
         });
-        
+
         assert!(args["pattern"].is_string());
     }
 
@@ -74,7 +74,7 @@ mod file_tools {
             "path": "src",
             "type": "file"
         });
-        
+
         assert!(args["pattern"].is_string());
     }
 }
@@ -92,7 +92,7 @@ mod runtime_tools {
             "background": false,
             "workdir": "/tmp"
         });
-        
+
         assert!(args["command"].is_string());
         assert!(args["timeout"].is_number());
     }
@@ -102,7 +102,7 @@ mod runtime_tools {
         let args = json!({
             "action": "list"
         });
-        
+
         assert_eq!(args["action"], "list");
     }
 
@@ -112,7 +112,7 @@ mod runtime_tools {
             "action": "poll",
             "sessionId": "warm-rook"
         });
-        
+
         assert_eq!(args["action"], "poll");
         assert!(args["sessionId"].is_string());
     }
@@ -123,7 +123,7 @@ mod runtime_tools {
             "action": "kill",
             "sessionId": "warm-rook"
         });
-        
+
         assert_eq!(args["action"], "kill");
     }
 }
@@ -140,7 +140,7 @@ mod web_tools {
             "extractMode": "markdown",
             "maxChars": 50000
         });
-        
+
         assert!(args["url"].is_string());
         assert_eq!(args["extractMode"], "markdown");
     }
@@ -152,7 +152,7 @@ mod web_tools {
             "count": 10,
             "country": "US"
         });
-        
+
         assert!(args["query"].is_string());
         assert!(args["count"].is_number());
     }
@@ -170,7 +170,7 @@ mod memory_tools {
             "maxResults": 10,
             "minScore": 0.5
         });
-        
+
         assert!(args["query"].is_string());
     }
 
@@ -181,7 +181,7 @@ mod memory_tools {
             "from": 10,
             "lines": 20
         });
-        
+
         assert!(args["path"].is_string());
     }
 }
@@ -196,7 +196,7 @@ mod cron_tool {
         let args = json!({
             "action": "status"
         });
-        
+
         assert_eq!(args["action"], "status");
     }
 
@@ -217,7 +217,7 @@ mod cron_tool {
                 "sessionTarget": "main"
             }
         });
-        
+
         assert_eq!(args["action"], "add");
         assert!(args["job"].is_object());
     }
@@ -239,7 +239,7 @@ mod cron_tool {
                 "sessionTarget": "main"
             }
         });
-        
+
         let schedule = &args["job"]["schedule"];
         assert_eq!(schedule["kind"], "every");
         assert_eq!(schedule["everyMs"], 3600000);
@@ -263,7 +263,7 @@ mod cron_tool {
                 "sessionTarget": "isolated"
             }
         });
-        
+
         let schedule = &args["job"]["schedule"];
         assert_eq!(schedule["kind"], "cron");
         assert_eq!(schedule["expr"], "0 9 * * *");
@@ -282,7 +282,7 @@ mod session_tools {
             "activeMinutes": 30,
             "limit": 10
         });
-        
+
         assert!(args["kinds"].is_array());
     }
 
@@ -294,7 +294,7 @@ mod session_tools {
             "timeoutSeconds": 300,
             "cleanup": "delete"
         });
-        
+
         assert!(args["task"].is_string());
     }
 
@@ -304,7 +304,7 @@ mod session_tools {
             "sessionKey": "subagent-abc123",
             "message": "Status update?"
         });
-        
+
         assert!(args["sessionKey"].is_string());
         assert!(args["message"].is_string());
     }
@@ -316,7 +316,7 @@ mod session_tools {
             "limit": 50,
             "includeTools": true
         });
-        
+
         assert!(args["sessionKey"].is_string());
     }
 
@@ -325,7 +325,7 @@ mod session_tools {
         let args = json!({
             "sessionKey": "current"
         });
-        
+
         // session_status can be called with no args for current session
         assert!(args.is_object());
     }
@@ -333,7 +333,7 @@ mod session_tools {
     #[test]
     fn test_agents_list_args() {
         let args = json!({});
-        
+
         // agents_list takes no required args
         assert!(args.is_object());
     }
@@ -349,7 +349,7 @@ mod editing_tools {
         let args = json!({
             "patch": "--- a/file.txt\n+++ b/file.txt\n@@ -1,3 +1,3 @@\n line1\n-old\n+new\n line3"
         });
-        
+
         assert!(args["patch"].is_string());
     }
 }
@@ -364,7 +364,7 @@ mod secrets_tools {
         let args = json!({
             "type": "api_key"
         });
-        
+
         // Optional type filter
         assert!(args.is_object());
     }
@@ -374,7 +374,7 @@ mod secrets_tools {
         let args = json!({
             "key": "OPENAI_API_KEY"
         });
-        
+
         assert!(args["key"].is_string());
     }
 
@@ -385,7 +385,7 @@ mod secrets_tools {
             "value": "secret-value-123",
             "type": "api_key"
         });
-        
+
         assert!(args["key"].is_string());
         assert!(args["value"].is_string());
     }
@@ -401,7 +401,7 @@ mod system_tools {
         let args = json!({
             "action": "config.get"
         });
-        
+
         assert_eq!(args["action"], "config.get");
     }
 
@@ -411,7 +411,7 @@ mod system_tools {
             "action": "config.patch",
             "raw": "{\"model\": \"gpt-4-turbo\"}"
         });
-        
+
         assert_eq!(args["action"], "config.patch");
     }
 
@@ -421,7 +421,7 @@ mod system_tools {
             "action": "restart",
             "reason": "Config update"
         });
-        
+
         assert_eq!(args["action"], "restart");
     }
 
@@ -433,7 +433,7 @@ mod system_tools {
             "target": "user123",
             "message": "Hello!"
         });
-        
+
         assert_eq!(args["action"], "send");
     }
 
@@ -443,7 +443,7 @@ mod system_tools {
             "text": "Hello, this is a test.",
             "channel": "telegram"
         });
-        
+
         assert!(args["text"].is_string());
     }
 }
@@ -459,7 +459,7 @@ mod media_tools {
             "image": "https://example.com/photo.jpg",
             "prompt": "What's in this image?"
         });
-        
+
         assert!(args["image"].is_string());
     }
 
@@ -469,7 +469,7 @@ mod media_tools {
             "image": "/path/to/local/image.png",
             "prompt": "Describe the image"
         });
-        
+
         assert!(args["image"].is_string());
     }
 }
@@ -484,7 +484,7 @@ mod device_tools {
         let args = json!({
             "action": "status"
         });
-        
+
         assert_eq!(args["action"], "status");
     }
 
@@ -495,7 +495,7 @@ mod device_tools {
             "node": "iphone",
             "facing": "back"
         });
-        
+
         assert_eq!(args["action"], "camera_snap");
     }
 
@@ -506,7 +506,7 @@ mod device_tools {
             "node": "build-server",
             "command": ["cargo", "build", "--release"]
         });
-        
+
         assert!(args["command"].is_array());
     }
 }
@@ -522,7 +522,7 @@ mod browser_tools {
             "action": "status",
             "profile": "openclaw"
         });
-        
+
         assert_eq!(args["action"], "status");
     }
 
@@ -533,7 +533,7 @@ mod browser_tools {
             "targetUrl": "https://example.com",
             "profile": "openclaw"
         });
-        
+
         assert_eq!(args["action"], "open");
     }
 
@@ -543,7 +543,7 @@ mod browser_tools {
             "action": "snapshot",
             "targetId": "tab-123"
         });
-        
+
         assert_eq!(args["action"], "snapshot");
     }
 
@@ -556,7 +556,7 @@ mod browser_tools {
                 "ref": "button[Submit]"
             }
         });
-        
+
         assert_eq!(args["action"], "act");
         assert_eq!(args["request"]["kind"], "click");
     }
@@ -571,7 +571,7 @@ mod browser_tools {
                 "text": "user@example.com"
             }
         });
-        
+
         assert_eq!(args["request"]["kind"], "type");
     }
 }
@@ -589,7 +589,7 @@ mod canvas_tools {
             "width": 1024,
             "height": 768
         });
-        
+
         assert_eq!(args["action"], "present");
     }
 
@@ -599,7 +599,7 @@ mod canvas_tools {
             "action": "eval",
             "javaScript": "document.title"
         });
-        
+
         assert_eq!(args["action"], "eval");
     }
 
@@ -609,7 +609,7 @@ mod canvas_tools {
             "action": "snapshot",
             "node": "ipad"
         });
-        
+
         assert_eq!(args["action"], "snapshot");
     }
 }
@@ -618,7 +618,7 @@ mod canvas_tools {
 
 #[test]
 fn test_all_30_tools_have_tests() {
-    // This test documents all 30 tools and verifies we have test coverage
+    // This test documents all 48 tools and verifies we have test coverage
     let tools = [
         // File (6)
         "read_file", "write_file", "edit_file", "list_directory", "search_files", "find_files",
@@ -646,7 +646,13 @@ fn test_all_30_tools_have_tests() {
         "browser",
         // Canvas (1)
         "canvas",
+        // Skills (6)
+        "skill_list", "skill_search", "skill_install", "skill_info", "skill_enable", "skill_link_secret",
+        // System tools (12)
+        "disk_usage", "classify_files", "system_monitor", "battery_health",
+        "app_index", "cloud_browse", "browser_cache", "screenshot",
+        "clipboard", "audit_sensitive", "secure_delete", "summarize_file",
     ];
-    
-    assert_eq!(tools.len(), 30, "Should have exactly 30 tools");
+
+    assert_eq!(tools.len(), 48, "Should have exactly 48 tools");
 }

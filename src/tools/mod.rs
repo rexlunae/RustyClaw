@@ -18,6 +18,7 @@ mod devices;
 mod browser;
 mod skills_tools;
 mod secrets_tools;
+mod system_tools;
 mod params;
 
 // Re-export helpers for external use
@@ -64,6 +65,14 @@ use skills_tools::{exec_skill_list, exec_skill_search, exec_skill_install, exec_
 
 // Secrets operations
 use secrets_tools::exec_secrets_stub;
+
+// System tools
+use system_tools::{
+    exec_disk_usage, exec_classify_files, exec_system_monitor,
+    exec_battery_health, exec_app_index, exec_cloud_browse,
+    exec_browser_cache, exec_screenshot, exec_clipboard,
+    exec_audit_sensitive, exec_secure_delete, exec_summarize_file,
+};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -187,6 +196,18 @@ pub fn tool_summary(name: &str) -> &'static str {
         "skill_info" => "View skill details",
         "skill_enable" => "Enable or disable skills",
         "skill_link_secret" => "Link vault secrets to skills",
+        "disk_usage" => "Scan disk usage by folder",
+        "classify_files" => "Categorize files as docs, caches, etc.",
+        "system_monitor" => "View CPU, memory & process info",
+        "battery_health" => "Check battery status & health",
+        "app_index" => "List installed apps by size",
+        "cloud_browse" => "Browse local cloud storage folders",
+        "browser_cache" => "Audit or clean browser caches",
+        "screenshot" => "Capture a screenshot",
+        "clipboard" => "Read or write the clipboard",
+        "audit_sensitive" => "Scan files for exposed secrets",
+        "secure_delete" => "Securely overwrite & delete files",
+        "summarize_file" => "Preview-summarize any file type",
         _ => "Unknown tool",
     }
 }
@@ -255,6 +276,18 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SKILL_INFO,
         &SKILL_ENABLE,
         &SKILL_LINK_SECRET,
+        &DISK_USAGE,
+        &CLASSIFY_FILES,
+        &SYSTEM_MONITOR,
+        &BATTERY_HEALTH,
+        &APP_INDEX,
+        &CLOUD_BROWSE,
+        &BROWSER_CACHE,
+        &SCREENSHOT,
+        &CLIPBOARD,
+        &AUDIT_SENSITIVE,
+        &SECURE_DELETE,
+        &SUMMARIZE_FILE,
     ]
 }
 
@@ -589,6 +622,115 @@ pub static SKILL_LINK_SECRET: ToolDef = ToolDef {
 };
 
 
+// ── System tools ────────────────────────────────────────────────────────────
+
+pub static DISK_USAGE: ToolDef = ToolDef {
+    name: "disk_usage",
+    description: "Scan disk usage for a directory tree. Returns the largest entries \
+                  sorted by size. Defaults to the home directory. Use `depth` to \
+                  control how deep to scan and `top` to limit results.",
+    parameters: vec![],
+    execute: exec_disk_usage,
+};
+
+pub static CLASSIFY_FILES: ToolDef = ToolDef {
+    name: "classify_files",
+    description: "Classify files in a directory as user documents, caches, logs, \
+                  build artifacts, cloud storage, images, video, audio, archives, \
+                  installers, or app config. Useful for understanding what's in a folder.",
+    parameters: vec![],
+    execute: exec_classify_files,
+};
+
+pub static SYSTEM_MONITOR: ToolDef = ToolDef {
+    name: "system_monitor",
+    description: "Return current system resource usage: CPU load, memory, disk space, \
+                  network, and top processes. Use `metric` to query a specific area \
+                  or 'all' for everything.",
+    parameters: vec![],
+    execute: exec_system_monitor,
+};
+
+pub static BATTERY_HEALTH: ToolDef = ToolDef {
+    name: "battery_health",
+    description: "Report battery status including charge level, cycle count, capacity, \
+                  temperature, and charging state. Works on macOS and Linux laptops.",
+    parameters: vec![],
+    execute: exec_battery_health,
+};
+
+pub static APP_INDEX: ToolDef = ToolDef {
+    name: "app_index",
+    description: "List installed applications with their size, version, and source \
+                  (native or Homebrew). Sort by size or name. Filter by substring.",
+    parameters: vec![],
+    execute: exec_app_index,
+};
+
+pub static CLOUD_BROWSE: ToolDef = ToolDef {
+    name: "cloud_browse",
+    description: "Detect and browse local cloud storage sync folders (Google Drive, \
+                  Dropbox, OneDrive, iCloud). Use 'detect' to find them or 'list' \
+                  to browse files in a specific cloud folder.",
+    parameters: vec![],
+    execute: exec_cloud_browse,
+};
+
+pub static BROWSER_CACHE: ToolDef = ToolDef {
+    name: "browser_cache",
+    description: "Audit or clean browser cache and download folders. Supports Chrome, \
+                  Firefox, Safari, Edge, and Arc. Use 'scan' to see sizes or 'clean' \
+                  to remove cache data.",
+    parameters: vec![],
+    execute: exec_browser_cache,
+};
+
+pub static SCREENSHOT: ToolDef = ToolDef {
+    name: "screenshot",
+    description: "Capture a screenshot of the full screen or a specific region. \
+                  Supports optional delay. Saves as PNG. Uses screencapture on macOS \
+                  or imagemagick on Linux.",
+    parameters: vec![],
+    execute: exec_screenshot,
+};
+
+pub static CLIPBOARD: ToolDef = ToolDef {
+    name: "clipboard",
+    description: "Read from or write to the system clipboard. Uses pbcopy/pbpaste \
+                  on macOS or xclip/xsel on Linux.",
+    parameters: vec![],
+    execute: exec_clipboard,
+};
+
+pub static AUDIT_SENSITIVE: ToolDef = ToolDef {
+    name: "audit_sensitive",
+    description: "Scan source files for potentially sensitive data: AWS keys, private \
+                  keys, GitHub tokens, API keys, passwords, JWTs, Slack tokens. \
+                  Matches are redacted in output. Use for security reviews.",
+    parameters: vec![],
+    execute: exec_audit_sensitive,
+};
+
+pub static SECURE_DELETE: ToolDef = ToolDef {
+    name: "secure_delete",
+    description: "Securely overwrite and delete a file or directory. Overwrites with \
+                  random data multiple passes before unlinking. Requires confirm=true \
+                  to proceed (first call returns file info for review). Refuses \
+                  critical system paths.",
+    parameters: vec![],
+    execute: exec_secure_delete,
+};
+
+pub static SUMMARIZE_FILE: ToolDef = ToolDef {
+    name: "summarize_file",
+    description: "Generate a preview summary of any file: text files get head/tail and \
+                  definition extraction; PDFs get page count and text preview; images \
+                  get dimensions; media gets duration and codecs; archives get content \
+                  listing. Returns structured metadata.",
+    parameters: vec![],
+    execute: exec_summarize_file,
+};
+
 // Re-export parameter functions from params module
 pub use params::*;
 
@@ -661,6 +803,18 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "skill_info" => skill_info_params(),
         "skill_enable" => skill_enable_params(),
         "skill_link_secret" => skill_link_secret_params(),
+        "disk_usage" => disk_usage_params(),
+        "classify_files" => classify_files_params(),
+        "system_monitor" => system_monitor_params(),
+        "battery_health" => battery_health_params(),
+        "app_index" => app_index_params(),
+        "cloud_browse" => cloud_browse_params(),
+        "browser_cache" => browser_cache_params(),
+        "screenshot" => screenshot_params(),
+        "clipboard" => clipboard_params(),
+        "audit_sensitive" => audit_sensitive_params(),
+        "secure_delete" => secure_delete_params(),
+        "summarize_file" => summarize_file_params(),
         _ => vec![],
     }
 }
@@ -1027,7 +1181,7 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 48);
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -1036,7 +1190,7 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 48);
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -1044,7 +1198,7 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert_eq!(tools.len(), 36);
+        assert_eq!(tools.len(), 48);
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -1679,5 +1833,295 @@ mod tests {
         assert!(is_skill_tool("skill_link_secret"));
         assert!(!is_skill_tool("read_file"));
         assert!(!is_skill_tool("secrets_list"));
+    }
+
+    // ── disk_usage ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_disk_usage_params_defined() {
+        let params = disk_usage_params();
+        assert_eq!(params.len(), 3);
+        assert!(params.iter().all(|p| !p.required));
+    }
+
+    #[test]
+    fn test_disk_usage_workspace() {
+        let args = json!({ "path": ".", "depth": 1, "top": 5 });
+        let result = exec_disk_usage(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("entries"));
+    }
+
+    #[test]
+    fn test_disk_usage_nonexistent() {
+        let args = json!({ "path": "/nonexistent_path_xyz" });
+        let result = exec_disk_usage(&args, ws());
+        assert!(result.is_err());
+    }
+
+    // ── classify_files ──────────────────────────────────────────────
+
+    #[test]
+    fn test_classify_files_params_defined() {
+        let params = classify_files_params();
+        assert_eq!(params.len(), 1);
+        assert!(params[0].required);
+    }
+
+    #[test]
+    fn test_classify_files_workspace() {
+        let args = json!({ "path": "." });
+        let result = exec_classify_files(&args, ws());
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        assert!(text.contains("path"));
+    }
+
+    #[test]
+    fn test_classify_files_missing_path() {
+        let args = json!({});
+        let result = exec_classify_files(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    // ── system_monitor ──────────────────────────────────────────────
+
+    #[test]
+    fn test_system_monitor_params_defined() {
+        let params = system_monitor_params();
+        assert_eq!(params.len(), 1);
+        assert!(!params[0].required);
+    }
+
+    #[test]
+    fn test_system_monitor_all() {
+        let args = json!({});
+        let result = exec_system_monitor(&args, ws());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_system_monitor_cpu() {
+        let args = json!({ "metric": "cpu" });
+        let result = exec_system_monitor(&args, ws());
+        assert!(result.is_ok());
+    }
+
+    // ── battery_health ──────────────────────────────────────────────
+
+    #[test]
+    fn test_battery_health_params_defined() {
+        let params = battery_health_params();
+        assert_eq!(params.len(), 0);
+    }
+
+    #[test]
+    fn test_battery_health_runs() {
+        let args = json!({});
+        let result = exec_battery_health(&args, ws());
+        assert!(result.is_ok());
+    }
+
+    // ── app_index ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_app_index_params_defined() {
+        let params = app_index_params();
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().all(|p| !p.required));
+    }
+
+    #[test]
+    fn test_app_index_runs() {
+        let args = json!({ "filter": "nonexistent_app_xyz" });
+        let result = exec_app_index(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("apps"));
+    }
+
+    // ── cloud_browse ────────────────────────────────────────────────
+
+    #[test]
+    fn test_cloud_browse_params_defined() {
+        let params = cloud_browse_params();
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().all(|p| !p.required));
+    }
+
+    #[test]
+    fn test_cloud_browse_detect() {
+        let args = json!({ "action": "detect" });
+        let result = exec_cloud_browse(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("cloud_folders"));
+    }
+
+    #[test]
+    fn test_cloud_browse_invalid_action() {
+        let args = json!({ "action": "invalid" });
+        let result = exec_cloud_browse(&args, ws());
+        assert!(result.is_err());
+    }
+
+    // ── browser_cache ───────────────────────────────────────────────
+
+    #[test]
+    fn test_browser_cache_params_defined() {
+        let params = browser_cache_params();
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().all(|p| !p.required));
+    }
+
+    #[test]
+    fn test_browser_cache_scan() {
+        let args = json!({ "action": "scan" });
+        let result = exec_browser_cache(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("caches"));
+    }
+
+    // ── screenshot ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_screenshot_params_defined() {
+        let params = screenshot_params();
+        assert_eq!(params.len(), 3);
+        assert!(params.iter().all(|p| !p.required));
+    }
+
+    // ── clipboard ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_clipboard_params_defined() {
+        let params = clipboard_params();
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().any(|p| p.name == "action" && p.required));
+    }
+
+    #[test]
+    fn test_clipboard_missing_action() {
+        let args = json!({});
+        let result = exec_clipboard(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_clipboard_invalid_action() {
+        let args = json!({ "action": "invalid" });
+        let result = exec_clipboard(&args, ws());
+        assert!(result.is_err());
+    }
+
+    // ── audit_sensitive ─────────────────────────────────────────────
+
+    #[test]
+    fn test_audit_sensitive_params_defined() {
+        let params = audit_sensitive_params();
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().all(|p| !p.required));
+    }
+
+    #[test]
+    fn test_audit_sensitive_runs() {
+        let dir = std::env::temp_dir().join("rustyclaw_test_audit");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("safe.txt"), "nothing sensitive here").unwrap();
+        let args = json!({ "path": ".", "max_files": 10 });
+        let result = exec_audit_sensitive(&args, &dir);
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("scanned_files"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── secure_delete ───────────────────────────────────────────────
+
+    #[test]
+    fn test_secure_delete_params_defined() {
+        let params = secure_delete_params();
+        assert_eq!(params.len(), 3);
+        assert!(params.iter().any(|p| p.name == "path" && p.required));
+    }
+
+    #[test]
+    fn test_secure_delete_missing_path() {
+        let args = json!({});
+        let result = exec_secure_delete(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_secure_delete_nonexistent() {
+        let args = json!({ "path": "/tmp/nonexistent_rustyclaw_xyz" });
+        let result = exec_secure_delete(&args, ws());
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_secure_delete_requires_confirm() {
+        let dir = std::env::temp_dir().join("rustyclaw_test_secdelete");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("victim.txt"), "data").unwrap();
+        let args = json!({ "path": dir.join("victim.txt").display().to_string() });
+        let result = exec_secure_delete(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("confirm_required"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_secure_delete_with_confirm() {
+        let dir = std::env::temp_dir().join("rustyclaw_test_secdelete2");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let victim = dir.join("victim.txt");
+        std::fs::write(&victim, "secret data").unwrap();
+        let args = json!({
+            "path": victim.display().to_string(),
+            "confirm": true,
+        });
+        let result = exec_secure_delete(&args, ws());
+        assert!(result.is_ok());
+        assert!(result.unwrap().contains("deleted"));
+        assert!(!victim.exists());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── summarize_file ──────────────────────────────────────────────
+
+    #[test]
+    fn test_summarize_file_params_defined() {
+        let params = summarize_file_params();
+        assert_eq!(params.len(), 2);
+        assert!(params.iter().any(|p| p.name == "path" && p.required));
+    }
+
+    #[test]
+    fn test_summarize_file_missing_path() {
+        let args = json!({});
+        let result = exec_summarize_file(&args, ws());
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Missing required parameter"));
+    }
+
+    #[test]
+    fn test_summarize_file_this_file() {
+        let args = json!({ "path": file!(), "max_lines": 10 });
+        let result = exec_summarize_file(&args, ws());
+        assert!(result.is_ok());
+        let text = result.unwrap();
+        assert!(text.contains("text"));
+        assert!(text.contains("total_lines"));
+    }
+
+    #[test]
+    fn test_summarize_file_nonexistent() {
+        let args = json!({ "path": "/nonexistent/file.txt" });
+        let result = exec_summarize_file(&args, ws());
+        assert!(result.is_err());
     }
 }

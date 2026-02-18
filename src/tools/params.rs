@@ -914,3 +914,198 @@ pub fn skill_link_secret_params() -> Vec<ToolParam> {
         },
     ]
 }
+
+// ── System tools ────────────────────────────────────────────────────────────
+
+pub fn disk_usage_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "path".into(),
+            description: "Directory to scan. Defaults to '~'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "depth".into(),
+            description: "Max depth to traverse (default 1).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "top".into(),
+            description: "Number of largest entries to return (default 20).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn classify_files_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "path".into(),
+        description: "Directory whose contents should be classified.".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
+pub fn system_monitor_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "metric".into(),
+        description: "Which metric to query: 'cpu', 'memory', 'disk', 'network', or 'all' (default 'all').".into(),
+        param_type: "string".into(),
+        required: false,
+    }]
+}
+
+pub fn battery_health_params() -> Vec<ToolParam> {
+    vec![]
+}
+
+pub fn app_index_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "filter".into(),
+            description: "Optional substring filter for app names.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "sort".into(),
+            description: "Sort order: 'size' (default) or 'name'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn cloud_browse_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action: 'detect' (find cloud folders, default) or 'list' (list files in a cloud folder).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "path".into(),
+            description: "Path to list (required when action='list').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn browser_cache_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action: 'scan' (default) to report sizes or 'clean' to remove cache data.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "browser".into(),
+            description: "Browser to target: 'chrome', 'firefox', 'safari', 'edge', 'arc', or 'all' (default).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn screenshot_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "path".into(),
+            description: "Output file path (default 'screenshot.png').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "region".into(),
+            description: "Capture region as 'x,y,width,height'. Omit for full screen.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "delay".into(),
+            description: "Seconds to wait before capturing (default 0).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn clipboard_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action: 'read' to get clipboard contents, 'write' to set them.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "content".into(),
+            description: "Text to write to clipboard (required when action='write').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn audit_sensitive_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "path".into(),
+            description: "Directory to scan for sensitive data (default '.').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "max_files".into(),
+            description: "Maximum number of files to scan (default 500).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn secure_delete_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "path".into(),
+            description: "Path to the file or directory to securely delete.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "passes".into(),
+            description: "Number of overwrite passes (default 3).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "confirm".into(),
+            description: "Must be true to proceed. First call without confirm returns file info.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn summarize_file_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "path".into(),
+            description: "Path to the file to summarize.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "max_lines".into(),
+            description: "Maximum lines for the head preview (default 50).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
