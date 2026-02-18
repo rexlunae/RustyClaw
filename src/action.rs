@@ -35,8 +35,6 @@ pub enum Action {
     RestartGateway,
     /// Send a text message to the gateway (prompt from the input bar)
     SendToGateway(String),
-    /// A message received from the gateway
-    GatewayMessage(String),
     /// The gateway reader detected a connection drop
     GatewayDisconnected(String),
     /// Toggle the skills dialog overlay

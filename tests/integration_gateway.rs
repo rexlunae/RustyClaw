@@ -24,17 +24,17 @@ fn find_port() -> u16 {
 /// Find the rustyclaw binary
 fn find_binary() -> Option<PathBuf> {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap_or_else(|_| ".".to_string());
-    
+
     let debug = PathBuf::from(&manifest_dir).join("target/debug/rustyclaw");
     if debug.exists() {
         return Some(debug);
     }
-    
+
     let release = PathBuf::from(&manifest_dir).join("target/release/rustyclaw");
     if release.exists() {
         return Some(release);
     }
-    
+
     which::which("rustyclaw").ok()
 }
 
@@ -50,9 +50,9 @@ impl TestGateway {
         let binary = find_binary()?;
         let port = find_port();
         let workspace = std::env::temp_dir().join(format!("rustyclaw-test-{}-{}", std::process::id(), port));
-        
+
         std::fs::create_dir_all(&workspace).ok()?;
-        
+
         // Write minimal config
         let config_path = workspace.join("config.toml");
         std::fs::write(&config_path, format!(r#"
@@ -63,7 +63,7 @@ host = "127.0.0.1"
 [provider]
 kind = "mock"
 "#)).ok()?;
-        
+
         let process = Command::new(&binary)
             .arg("gateway")
             .arg("run")
@@ -74,9 +74,9 @@ kind = "mock"
             .stderr(Stdio::null())
             .spawn()
             .ok()?;
-        
+
         let gateway = Self { process, port, workspace };
-        
+
         // Wait for gateway to start
         for _ in 0..50 {
             if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
@@ -84,10 +84,10 @@ kind = "mock"
             }
             sleep(Duration::from_millis(100)).await;
         }
-        
+
         None
     }
-    
+
     fn ws_url(&self) -> String {
         format!("ws://127.0.0.1:{}", self.port)
     }
@@ -109,12 +109,12 @@ async fn test_gateway_websocket_connect() {
         eprintln!("Skipping: could not start gateway");
         return;
     };
-    
+
     let result = timeout(
         Duration::from_secs(5),
         tokio_tungstenite::connect_async(&gateway.ws_url())
     ).await;
-    
+
     assert!(result.is_ok(), "Should connect within timeout");
     let (ws, _) = result.unwrap().expect("Should connect successfully");
     drop(ws);
@@ -128,11 +128,11 @@ async fn test_gateway_chat_message() {
         eprintln!("Skipping: could not start gateway");
         return;
     };
-    
+
     let (mut ws, _) = tokio_tungstenite::connect_async(&gateway.ws_url())
         .await
         .expect("Should connect");
-    
+
     // Send a chat message
     let msg = serde_json::json!({
         "type": "chat",
@@ -140,7 +140,7 @@ async fn test_gateway_chat_message() {
     });
     use tokio_tungstenite::tungstenite::{Utf8Bytes, Bytes};
     ws.send(Message::Text(Utf8Bytes::from(msg.to_string()))).await.expect("Should send");
-    
+
     // Wait for any response
     let response = timeout(Duration::from_secs(10), ws.next()).await;
     assert!(response.is_ok(), "Should receive response within timeout");
@@ -154,19 +154,19 @@ async fn test_gateway_ping_pong() {
         eprintln!("Skipping: could not start gateway");
         return;
     };
-    
+
     let (mut ws, _) = tokio_tungstenite::connect_async(&gateway.ws_url())
         .await
         .expect("Should connect");
-    
+
     // Send ping
     use tokio_tungstenite::tungstenite::Bytes;
     ws.send(Message::Ping(Bytes::from(vec![1, 2, 3]))).await.expect("Should send ping");
-    
+
     // Wait for pong
     let response = timeout(Duration::from_secs(5), ws.next()).await;
     assert!(response.is_ok(), "Should receive pong");
-    
+
     if let Ok(Some(Ok(msg))) = response {
         assert!(matches!(msg, Message::Pong(_)), "Should be pong");
     }
@@ -180,14 +180,14 @@ async fn test_gateway_graceful_close() {
         eprintln!("Skipping: could not start gateway");
         return;
     };
-    
+
     let (mut ws, _) = tokio_tungstenite::connect_async(&gateway.ws_url())
         .await
         .expect("Should connect");
-    
+
     // Send close
     ws.send(Message::Close(None)).await.expect("Should send close");
-    
+
     // Should receive close back
     let response = timeout(Duration::from_secs(5), ws.next()).await;
     if let Ok(Some(Ok(msg))) = response {
@@ -203,9 +203,9 @@ async fn test_gateway_concurrent_connections() {
         eprintln!("Skipping: could not start gateway");
         return;
     };
-    
+
     let url = gateway.ws_url();
-    
+
     // Open 5 concurrent connections
     let mut handles = vec![];
     for _ in 0..5 {
@@ -214,9 +214,9 @@ async fn test_gateway_concurrent_connections() {
             tokio_tungstenite::connect_async(&url).await.is_ok()
         }));
     }
-    
+
     let results: Vec<_> = futures_util::future::join_all(handles).await;
     let successes = results.iter().filter(|r| matches!(r, Ok(true))).count();
-    
+
     assert!(successes >= 3, "At least 3 connections should succeed");
 }

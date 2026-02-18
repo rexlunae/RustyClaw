@@ -127,18 +127,6 @@ impl App {
     ) {
         while let Some(result) = stream.next().await {
             match result {
-                Ok(Message::Text(text)) => {
-                    // Handle text frames as JSON
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_str()) {
-                        let frame_type = val.get("type").and_then(|t| t.as_str());
-                        if frame_type == Some("auth_challenge") {
-                            let _ = tx.send(Action::GatewayAuthChallenge);
-                            continue;
-                        }
-                        // Fall through to generic message handling for other text frames
-                    }
-                    let _ = tx.send(Action::GatewayMessage(text.to_string()));
-                }
                 Ok(Message::Binary(data)) => {
                     // Deserialize binary ServerFrame and dispatch directly
                     match deserialize_frame::<ServerFrame>(&data) {
@@ -611,74 +599,7 @@ impl App {
         Ok(None)
     }
 
-    pub async fn handle_gateway_message(&mut self, text: &str) -> Result<Option<Action>> {
-        let frame: Option<ServerFrame> = text.as_bytes().first()
-            .and_then(|first_byte| {
-                if *first_byte <= ServerFrameType::ResponseDone as u8 {
-                    crate::gateway::deserialize_frame(text.as_bytes()).ok()
-                } else {
-                    None
-                }
-            });
 
-        if let Some(frame) = frame {
-            let frame_action = crate::gateway::server_frame_to_action(&frame);
-            return self.process_frame_action(frame_action).await;
-        }
-
-        let parsed = serde_json::from_str::<serde_json::Value>(text).ok();
-        let frame_type = parsed
-            .as_ref()
-            .and_then(|v| v.get("type").and_then(|t| t.as_str()));
-
-        debug!(frame_type = ?frame_type, len = text.len(), "Received JSON frame (fallback)");
-
-        if frame_type == Some("chunk") {
-            let delta = parsed
-                .as_ref()
-                .and_then(|v| v.get("delta").and_then(|d| d.as_str()))
-                .unwrap_or("");
-
-            debug!(delta_len = delta.len(), delta_preview = &delta[..delta.len().min(50)], "Received chunk");
-
-            if self.streaming_response.is_none() {
-                debug!("First chunk - initializing streaming response");
-                self.state.loading_line = None;
-                self.streaming_response = Some(String::new());
-                self.state.streaming_started = Some(std::time::Instant::now());
-                if !self.showing_hatching {
-                    self.state.messages.push(DisplayMessage::assistant(""));
-                }
-            }
-
-            if let Some(ref mut buf) = self.streaming_response {
-                buf.push_str(delta);
-                debug!(buf_len = buf.len(), "Buffer update");
-
-                if !self.showing_hatching {
-                    if let Some(last) = self.state.messages.last_mut() {
-                        last.update_content(buf.clone());
-                        debug!(content_len = last.content.len(), "Updated last message");
-                    } else {
-                        tracing::warn!("No last message to update!");
-                    }
-                }
-            }
-
-            return Ok(Some(Action::Update));
-        }
-
-        self.handle_json_fallback(text, parsed.as_ref()).await
-    }
-
-    async fn process_frame_action(&mut self, frame_action: crate::gateway::FrameAction) -> Result<Option<Action>> {
-
-        if let Some(action) = frame_action.action {
-            return self.handle_action(action).await;
-        }
-
-        Ok(Some(Action::Update))
-    }
 
     pub async fn handle_action(&mut self, action: Action) -> Result<Option<Action>> {
         match action {
@@ -911,94 +832,6 @@ impl App {
             _ => {}
         }
 
-        Ok(Some(Action::Update))
-    }
-
-    async fn handle_json_fallback(&mut self, text: &str, parsed: Option<&serde_json::Value>) -> Result<Option<Action>> {
-        let frame_type = parsed
-            .and_then(|v| v.get("type").and_then(|t| t.as_str()));
-
-        if frame_type == Some("chunk") {
-            let delta = parsed
-                .and_then(|v| v.get("delta").and_then(|d| d.as_str()))
-                .unwrap_or("");
-
-            debug!(delta_len = delta.len(), delta_preview = &delta[..delta.len().min(50)], "Received chunk");
-
-            if self.streaming_response.is_none() {
-                debug!("First chunk - initializing streaming response");
-                self.state.loading_line = None;
-                self.streaming_response = Some(String::new());
-                self.state.streaming_started = Some(std::time::Instant::now());
-                if !self.showing_hatching {
-                    self.state.messages.push(DisplayMessage::assistant(""));
-                }
-            }
-
-            if let Some(ref mut buf) = self.streaming_response {
-                buf.push_str(delta);
-                debug!(buf_len = buf.len(), "Buffer update");
-
-                if !self.showing_hatching {
-                    if let Some(last) = self.state.messages.last_mut() {
-                        last.update_content(buf.clone());
-                        debug!(content_len = last.content.len(), "Updated last message");
-                    } else {
-                        tracing::warn!("No last message to update!");
-                    }
-                }
-            }
-
-            return Ok(Some(Action::Update));
-        }
-
-        if frame_type == Some("auth_challenge") {
-            return Ok(Some(Action::GatewayAuthChallenge));
-        }
-
-        let payload = parsed.and_then(|v| {
-            if v.get("type").and_then(|t| t.as_str()) == Some("response") {
-                v.get("received").and_then(|r| r.as_str()).map(String::from)
-            } else {
-                None
-            }
-        });
-
-        let is_error_frame = frame_type == Some("error");
-        let error_message = if is_error_frame {
-            parsed
-                .and_then(|v| v.get("message").and_then(|m| m.as_str()))
-                .map(String::from)
-        } else {
-            None
-        };
-
-        if is_error_frame {
-            self.chat_loading_tick = None;
-            self.state.loading_line = None;
-            self.streaming_response = None;
-            self.state.streaming_started = None;
-            let msg = error_message.unwrap_or_else(|| "Unknown gateway error".to_string());
-            self.state.messages.push(DisplayMessage::error(msg));
-            return Ok(Some(Action::Update));
-        }
-
-        if self.showing_hatching {
-            if let Some(content) = payload {
-                if let Some(ref mut hatching) = self.hatching_page {
-                    let mut ps = self.state.pane_state();
-                    let _ = hatching.update(Action::HatchingResponse(content), &mut ps);
-                }
-            }
-            return Ok(Some(Action::Update));
-        }
-
-        let display = payload.as_deref().unwrap_or(text);
-
-        self.chat_loading_tick = None;
-        self.state.loading_line = None;
-
-        self.state.messages.push(DisplayMessage::assistant(display));
         Ok(Some(Action::Update))
     }
 }

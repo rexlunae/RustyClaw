@@ -462,9 +462,6 @@ impl App {
                 self.send_to_gateway(text.clone()).await;
                 return Ok(None);
             }
-            Action::GatewayMessage(text) => {
-                return self.handle_gateway_message(text).await;
-            }
             Action::GatewayAuthChallenge => {
                 self.auth_prompt = Some(AuthPromptState {
                     input: String::new(),

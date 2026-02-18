@@ -8,11 +8,7 @@
 //!
 //! Frames are serialized using bincode and sent as WebSocket Binary messages.
 //! Each frame has a type enum as the first field to allow dispatch.
-//!
-//! ## Backwards Compatibility
-//!
-//! The protocol supports receiving JSON text frames for backwards compatibility
-//! with older versions. The receiver detects the format and handles accordingly.
+//! Text frames are not supported and will be rejected.
 
 pub mod client;
 pub mod frames;

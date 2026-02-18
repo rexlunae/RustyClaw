@@ -246,10 +246,10 @@ fn format_assistant_message(provider: &str, model_resp: &ModelResponse) -> Strin
 
             json!({
                 "role": "assistant",
-                "content": if model_resp.text.trim().is_empty() { 
-                    serde_json::Value::Null 
-                } else { 
-                    json!(model_resp.text) 
+                "content": if model_resp.text.trim().is_empty() {
+                    serde_json::Value::Null
+                } else {
+                    json!(model_resp.text)
                 },
                 "tool_calls": tc_array,
             })
@@ -714,7 +714,7 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
 
         let chunk = chunk_result.context("SSE stream read error")?;
         let chunk_str = String::from_utf8_lossy(&chunk);
-        
+
         buffer.push_str(&chunk_str);
 
         // Process complete SSE events (terminated by double newline)
@@ -936,7 +936,7 @@ pub async fn call_openai_with_tools(
     } else {
         // Normal JSON response — but check if it actually looks like SSE
         let text = resp.text().await.context("Failed to read response body")?;
-        
+
         if text.trim_start().starts_with("data:") {
             // Looks like SSE despite content-type — parse it
             consume_sse_text(&text)?
@@ -967,12 +967,12 @@ pub async fn call_openai_with_tools(
         for tc in tc_array {
             let id = tc["id"].as_str().unwrap_or("").to_string();
             let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-            
+
             // Skip tool calls with missing id or name
             if id.is_empty() || name.is_empty() {
                 continue;
             }
-            
+
             let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
             let arguments = serde_json::from_str(args_str).unwrap_or(json!({}));
             result.tool_calls.push(ParsedToolCall {
@@ -993,7 +993,7 @@ pub async fn call_openai_with_tools(
 }
 
 /// Call the Anthropic Messages API with tool definitions.
-/// 
+///
 /// When `writer` is provided, streams thinking and text deltas to the TUI
 /// in real-time. When `None`, operates in batch mode (for internal calls
 /// like context compaction).
@@ -1039,7 +1039,7 @@ pub async fn call_anthropic_with_tools(
 
     // Use streaming when we have a writer to forward chunks to
     let use_streaming = writer.is_some();
-    
+
     // Increase max_tokens when streaming to allow for longer responses
     let max_tokens = if use_streaming { 16384 } else { 4096 };
 
@@ -1049,7 +1049,7 @@ pub async fn call_anthropic_with_tools(
         "messages": messages,
         "stream": use_streaming,
     });
-    
+
     if !system.is_empty() {
         body["system"] = serde_json::Value::String(system);
     }
@@ -1085,10 +1085,10 @@ pub async fn call_anthropic_with_tools(
 
     // Streaming path — parse SSE and forward to TUI
     let writer = writer.unwrap();
-    
+
     let mut stream = resp.bytes_stream();
     let mut buffer = String::new();
-    
+
     // Accumulated response
     let mut result = ModelResponse::default();
     let mut current_tool_index = 0;
@@ -1143,7 +1143,7 @@ pub async fn call_anthropic_with_tools(
                                     let id = block["id"].as_str().unwrap_or("").to_string();
                                     let name = block["name"].as_str().unwrap_or("").to_string();
                                     current_tool_index = json["index"].as_u64().unwrap_or(0) as usize;
-                                    
+
                                     // Initialize tool call
                                     result.tool_calls.push(ParsedToolCall {
                                         id,
@@ -1205,7 +1205,7 @@ pub async fn call_anthropic_with_tools(
                             };
                             let _ = send_thinking_end(writer, summary).await;
                         }
-                        
+
                         // Finalize tool call arguments
                         let block_index = json["index"].as_u64().unwrap_or(0) as usize;
                         if let Some(args_str) = tool_args_buffer.remove(&block_index) {

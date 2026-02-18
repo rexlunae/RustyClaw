@@ -399,16 +399,16 @@ pub fn wrap_with_bwrap(_command: &str, _policy: &SandboxPolicy) -> (String, Vec<
 #[cfg(target_os = "macos")]
 fn generate_seatbelt_profile(policy: &SandboxPolicy) -> String {
     let mut profile = String::from("(version 1)\n");
-    
+
     // Start with deny-all
     profile.push_str("(deny default)\n");
-    
+
     // Allow basic process operations
     profile.push_str("(allow process-fork)\n");
     profile.push_str("(allow process-exec)\n");
     profile.push_str("(allow signal)\n");
     profile.push_str("(allow sysctl-read)\n");
-    
+
     // Allow reading system files
     profile.push_str("(allow file-read* (subpath \"/usr\"))\n");
     profile.push_str("(allow file-read* (subpath \"/bin\"))\n");
@@ -417,17 +417,17 @@ fn generate_seatbelt_profile(policy: &SandboxPolicy) -> String {
     profile.push_str("(allow file-read* (subpath \"/System\"))\n");
     profile.push_str("(allow file-read* (subpath \"/private/etc\"))\n");
     profile.push_str("(allow file-read* (subpath \"/private/var/db\"))\n");
-    
+
     // Allow workspace access
     profile.push_str(&format!(
         "(allow file-read* file-write* (subpath \"{}\"))\n",
         policy.workspace.display()
     ));
-    
+
     // Allow /tmp
     profile.push_str("(allow file-read* file-write* (subpath \"/private/tmp\"))\n");
     profile.push_str("(allow file-read* file-write* (subpath \"/tmp\"))\n");
-    
+
     // Deny access to protected paths
     for denied in &policy.deny_read {
         profile.push_str(&format!(
@@ -458,7 +458,7 @@ fn generate_seatbelt_profile(policy: &SandboxPolicy) -> String {
 #[cfg(target_os = "macos")]
 pub fn wrap_with_macos_sandbox(command: &str, policy: &SandboxPolicy) -> (String, Vec<String>) {
     let profile = generate_seatbelt_profile(policy);
-    
+
     let args = vec![
         "-p".to_string(),
         profile,
@@ -466,7 +466,7 @@ pub fn wrap_with_macos_sandbox(command: &str, policy: &SandboxPolicy) -> (String
         "-c".to_string(),
         command.to_string(),
     ];
-    
+
     ("sandbox-exec".to_string(), args)
 }
 
@@ -796,10 +796,10 @@ fn run_with_path_validation(command: &str, policy: &SandboxPolicy) -> Result<std
 #[cfg(target_os = "linux")]
 fn run_with_bubblewrap(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
     let (cmd, args) = wrap_with_bwrap(command, policy);
-    
+
     let mut proc = std::process::Command::new(&cmd);
     proc.args(&args);
-    
+
     // Inherit environment selectively
     proc.env_clear();
     for (key, value) in std::env::vars() {
@@ -813,7 +813,7 @@ fn run_with_bubblewrap(command: &str, policy: &SandboxPolicy) -> Result<std::pro
             proc.env(&key, &value);
         }
     }
-    
+
     proc.output()
         .map_err(|e| format!("Sandboxed command failed: {}", e))
 }
@@ -826,7 +826,7 @@ fn run_with_bubblewrap(_command: &str, _policy: &SandboxPolicy) -> Result<std::p
 #[cfg(target_os = "macos")]
 fn run_with_macos_sandbox(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
     let (cmd, args) = wrap_with_macos_sandbox(command, policy);
-    
+
     std::process::Command::new(&cmd)
         .args(&args)
         .output()
@@ -1293,4 +1293,3 @@ mod tests {
         }
     }
 }
-
