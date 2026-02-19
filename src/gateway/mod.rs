@@ -1412,41 +1412,78 @@ async fn dispatch_text_message(
                 // but returns finish_reason=stop without making a tool call.
                 // This is common with large contexts or certain API proxies.
                 // Detect this and prompt the model to continue.
-                const INTENT_PATTERNS: &[&str] = &[
-                    "Let me ",
-                    "I'll ",
-                    "I will ",
-                    "Now let me ",
-                    "Let's ",
-                    "Now I'll ",
-                    "I need to ",
-                    "First, let me ",
-                    "First let me ",
-                ];
-                let text_suggests_action = INTENT_PATTERNS
-                    .iter()
-                    .any(|p| model_resp.text.contains(p));
+                //
+                // Guard: only trigger for SHORT responses (< 500 chars).
+                // Long responses (e.g., a capabilities listing) are always
+                // complete answers and must never be auto-continued.
+                let consider_continuation = model_resp.text.len() < 500
+                    && consecutive_continues < MAX_AUTO_CONTINUES;
 
-                // Also trigger continuation if response ends with colon (about to list/show something)
-                let ends_with_continuation = model_resp.text.trim_end().ends_with(':');
+                let should_continue = if consider_continuation {
+                    // Check only the tail of the response for intent patterns.
+                    let tail = if model_resp.text.len() > 200 {
+                        &model_resp.text[model_resp.text.len() - 200..]
+                    } else {
+                        &model_resp.text
+                    };
 
-                if (text_suggests_action || ends_with_continuation)
-                    && consecutive_continues < MAX_AUTO_CONTINUES
-                {
+                    const INTENT_PATTERNS: &[&str] = &[
+                        "Let me ",
+                        "I'll ",
+                        "I will ",
+                        "Now let me ",
+                        "Let's ",
+                        "Now I'll ",
+                        "I need to ",
+                        "First, let me ",
+                        "First let me ",
+                    ];
+
+                    // Phrases that look like intent but are actually polite
+                    // closers or conversational filler — never action intent.
+                    let text_lower = model_resp.text.to_lowercase();
+                    const NON_ACTION_PHRASES: &[&str] = &[
+                        "let me know",
+                        "i'll help",
+                        "i'll guide",
+                        "i'll be happy",
+                        "i'll be glad",
+                        "i'll do my best",
+                        "i'll try my best",
+                        "i'll assist",
+                        "let's get started",
+                        "let's begin",
+                        "let me help",
+                    ];
+
+                    let has_exclusion = NON_ACTION_PHRASES
+                        .iter()
+                        .any(|p| text_lower.contains(p));
+
+                    let text_suggests_action = !has_exclusion
+                        && INTENT_PATTERNS.iter().any(|p| tail.contains(p));
+
+                    // Also trigger if response ends with colon (about to list/show)
+                    let ends_with_continuation = tail.trim_end().ends_with(':');
+
+                    text_suggests_action || ends_with_continuation
+                } else {
+                    false
+                };
+
+                if should_continue {
                     consecutive_continues += 1;
-                    // Model said it would act but didn't — prompt continuation
                     eprintln!(
-                        "[Gateway] Detected incomplete intent ({} chars text, no tool calls, ends_colon={}, attempt {}/{}), prompting continuation",
+                        "[Gateway] Detected incomplete intent ({} chars text, no tool calls, attempt {}/{}), prompting continuation",
                         model_resp.text.len(),
-                        ends_with_continuation,
                         consecutive_continues,
                         MAX_AUTO_CONTINUES
                     );
 
-                    // Send the partial text to the client so they see it (with newline for visual separation)
-                    if !model_resp.text.is_empty() && resolved.provider != "anthropic" {
-                        providers::send_chunk(writer, &format!("{}\n", model_resp.text)).await?;
-                    }
+                    // NOTE: do NOT re-send the text here — for non-Anthropic
+                    // providers it was already sent above; for Anthropic it was
+                    // already streamed via the SSE handler.  Re-sending would
+                    // cause the TUI to show the same text twice.
 
                     // Append assistant message and continuation prompt
                     resolved.messages.push(ChatMessage::text("assistant", &model_resp.text));
