@@ -12,6 +12,7 @@ pub mod dialogs;
 pub mod error;
 pub mod gateway;
 pub mod memory;
+pub mod memory_flush;
 pub mod messengers;
 #[cfg(feature = "tui")]
 pub mod onboard;
@@ -33,6 +34,7 @@ pub mod theme;
 pub mod tools;
 #[cfg(feature = "tui")]
 pub mod tui;
+pub mod workspace_context;
 
 // Re-export messenger types at crate root for convenience
 pub use messengers::{Message, Messenger, MessengerManager, SendOptions};

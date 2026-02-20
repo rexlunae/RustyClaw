@@ -1324,6 +1324,14 @@ async fn dispatch_text_message(
     let context_limit = helpers::context_window_for_model(&resolved.model);
     let mut consecutive_continues: usize = 0;
 
+    // Memory flush controller - tracks whether we've flushed this conversation
+    use crate::memory_flush::MemoryFlush;
+    let flush_config = {
+        let cfg = shared_config.read().await;
+        cfg.memory_flush.clone()
+    };
+    let mut memory_flush = MemoryFlush::new(flush_config);
+
     for _round in 0..MAX_TOOL_ROUNDS {
         // ── Check for cancellation ──────────────────────────────────
         if tool_cancel.load(Ordering::Relaxed) {
@@ -1349,9 +1357,31 @@ async fn dispatch_text_message(
             }
         }
 
-        // ── Auto-compact if context is getting large ────────────────
+        // ── Pre-compaction memory flush ─────────────────────────────
+        // Check if we should trigger a memory flush before compaction
         let estimated = helpers::estimate_tokens(&resolved.messages);
         let threshold = (context_limit as f64 * COMPACTION_THRESHOLD) as usize;
+        
+        if memory_flush.should_flush(estimated, context_limit, COMPACTION_THRESHOLD) {
+            let (system_msg, user_msg) = memory_flush.build_flush_messages();
+            
+            // Inject memory flush prompt
+            // The agent will process this and can use tools to write to memory files
+            resolved.messages.push(ChatMessage::text("system", &system_msg));
+            resolved.messages.push(ChatMessage::text("user", &user_msg));
+            
+            // Mark as flushed to prevent repeated injections
+            memory_flush.mark_flushed();
+            
+            // Notify the TUI about the memory flush
+            let _ = protocol::server::send_info(
+                writer,
+                "💾 Memory flush triggered before compaction"
+            ).await;
+        }
+        
+        // ── Auto-compact if context is getting large ────────────────
+        // Proceed with compaction if over threshold
         if estimated > threshold {
             match providers::compact_conversation(
                 http,

@@ -474,14 +474,40 @@ async fn process_incoming_message(
     Ok(())
 }
 
-/// Build system prompt with messenger context.
+/// Build system prompt with messenger context and workspace files.
 fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Message) -> String {
+    use crate::workspace_context::{SessionType, WorkspaceContext};
+
     let base_prompt = config.system_prompt.clone().unwrap_or_else(|| {
         "You are a helpful AI assistant.".to_string()
     });
 
-    format!(
-        "{}\n\n## Messaging Context\n\
+    // Determine session type based on messenger context
+    // Direct messages are treated as main session, channels/groups as group session
+    let session_type = if msg.channel.is_some() {
+        // Channel/group messages have restricted access
+        SessionType::Group
+    } else {
+        // Direct messages have full access
+        SessionType::Main
+    };
+
+    // Build workspace context
+    let workspace_ctx = WorkspaceContext::with_config(
+        config.workspace_dir(),
+        config.workspace_context.clone(),
+    );
+    let workspace_prompt = workspace_ctx.build_context(session_type);
+
+    // Combine base prompt, workspace context, and messaging context
+    let mut parts = vec![base_prompt];
+
+    if !workspace_prompt.is_empty() {
+        parts.push(workspace_prompt);
+    }
+
+    parts.push(format!(
+        "## Messaging Context\n\
         - Channel: {}\n\
         - Sender: {}\n\
         - Platform: {}\n\
@@ -490,11 +516,12 @@ fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Me
         - Be concise and appropriate for chat\n\
         - You have access to tools — use them when helpful\n\
         - If you have nothing to say, reply with: NO_REPLY",
-        base_prompt,
         msg.channel.as_deref().unwrap_or("direct"),
         msg.sender,
         messenger_type
-    )
+    ));
+
+    parts.join("\n\n")
 }
 
 // ── Image Handling ──────────────────────────────────────────────────────────

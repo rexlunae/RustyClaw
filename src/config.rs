@@ -3,6 +3,9 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::memory_flush::MemoryFlushConfig;
+use crate::workspace_context::WorkspaceContextConfig;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelProvider {
     /// Provider id (e.g. "anthropic", "openai", "google", "ollama", "custom")
@@ -96,6 +99,12 @@ pub struct Config {
     /// Path to TLS private key file (PEM) for WSS gateway connections.
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
+    /// Pre-compaction memory flush configuration.
+    #[serde(default)]
+    pub memory_flush: MemoryFlushConfig,
+    /// Workspace context injection configuration.
+    #[serde(default)]
+    pub workspace_context: WorkspaceContextConfig,
 }
 
 /// Configuration for a messenger backend.
@@ -173,6 +182,8 @@ impl Default for Config {
             tool_permissions: HashMap::new(),
             tls_cert: None,
             tls_key: None,
+            memory_flush: MemoryFlushConfig::default(),
+            workspace_context: WorkspaceContextConfig::default(),
         }
     }
 }
