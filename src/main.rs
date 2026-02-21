@@ -1763,6 +1763,63 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                 }
             }
 
+            // Import skills/ directory (recursive)
+            let src_skills = source_workspace.join("skills");
+            let dst_skills = target_workspace.join("skills");
+            if src_skills.exists() && src_skills.is_dir() {
+                if !args.dry_run {
+                    fs::create_dir_all(&dst_skills)?;
+                }
+
+                let mut skills_count = 0;
+                fn copy_dir_recursive(
+                    src: &std::path::Path,
+                    dst: &std::path::Path,
+                    dry_run: bool,
+                    force: bool,
+                    count: &mut usize,
+                    skipped: &mut usize,
+                ) -> Result<()> {
+                    if !dry_run {
+                        fs::create_dir_all(dst)?;
+                    }
+                    for entry in fs::read_dir(src)? {
+                        let entry = entry?;
+                        let path = entry.path();
+                        let file_name = path.file_name().unwrap();
+                        let dst_path = dst.join(file_name);
+
+                        if path.is_dir() {
+                            copy_dir_recursive(&path, &dst_path, dry_run, force, count, skipped)?;
+                        } else {
+                            if dst_path.exists() && !force {
+                                *skipped += 1;
+                            } else {
+                                if !dry_run {
+                                    fs::copy(&path, &dst_path)?;
+                                }
+                                *count += 1;
+                            }
+                        }
+                    }
+                    Ok(())
+                }
+
+                copy_dir_recursive(
+                    &src_skills,
+                    &dst_skills,
+                    args.dry_run,
+                    args.force,
+                    &mut skills_count,
+                    &mut skipped_count,
+                )?;
+
+                if skills_count > 0 {
+                    println!("  {} skills/ ({} files)", "✓".green(), skills_count);
+                    imported_count += skills_count;
+                }
+            }
+
             // Extract agent name from IDENTITY.md as default, then prompt
             let mut default_name = String::new();
             let identity_path = source_workspace.join("IDENTITY.md");
