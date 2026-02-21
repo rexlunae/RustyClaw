@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde_json::json;
-use tokio_tungstenite::tungstenite::Message;
+use tracing::{debug, trace, warn};
 
 use super::protocol::server;
 use super::types::{
@@ -29,10 +29,7 @@ pub async fn send_with_retry(
             match builder.send().await {
                 Ok(resp) => Ok(resp),
                 Err(e) if e.is_connect() => {
-                    eprintln!(
-                        "[Gateway] Connection failed ({}), retrying with IPv4-only…",
-                        e
-                    );
+                    debug!(error = %e, "Connection failed, retrying with IPv4-only");
                     // Build an IPv4-only client for the retry
                     let ipv4_client = reqwest::Client::builder()
                         .local_address(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED))
@@ -642,10 +639,10 @@ fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
 
     // Log if we filtered any tool calls (for debugging stall issues)
     if incomplete_count > 0 {
-        eprintln!(
-            "[SSE] Filtered {} incomplete tool calls (text), {} remaining",
-            incomplete_count,
-            tool_calls.len()
+        debug!(
+            incomplete = incomplete_count,
+            remaining = tool_calls.len(),
+            "Filtered incomplete tool calls"
         );
     }
 
@@ -702,12 +699,12 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
         let chunk_result = match timeout(chunk_timeout, stream.next()).await {
             Ok(Some(result)) => result,
             Ok(None) => {
-                eprintln!("[SSE] Stream ended normally (None)");
+                trace!("SSE stream ended normally");
                 break 'outer;
             }
             Err(_) => {
                 // Timeout — stream stalled, return what we have
-                eprintln!("[SSE] Stream timeout after {}s", chunk_timeout.as_secs());
+                warn!(timeout_secs = chunk_timeout.as_secs(), "SSE stream timeout");
                 break 'outer;
             }
         };
@@ -726,7 +723,7 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                 if let Some(data) = line.strip_prefix("data: ") {
                     if data.trim() == "[DONE]" {
                         // Stream complete — exit all loops
-                        eprintln!("[SSE] Received [DONE], content len={}, tool_calls={}", content.len(), tool_calls.len());
+                        trace!(content_len = content.len(), tool_calls = tool_calls.len(), "SSE received [DONE]");
                         break 'outer;
                     }
 
@@ -796,9 +793,11 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                                     finish_reason = Some(fr.to_string());
                                     // Terminal reasons mean the model is done
                                     if fr == "stop" || fr == "tool_calls" || fr == "tool_use" || fr == "length" || fr == "end_turn" {
-                                        eprintln!(
-                                            "[SSE] finish_reason='{}', content len={}, tool_calls={}",
-                                            fr, content.len(), tool_calls.len()
+                                        trace!(
+                                            finish_reason = fr,
+                                            content_len = content.len(),
+                                            tool_calls = tool_calls.len(),
+                                            "SSE stream completed"
                                         );
                                         should_exit = true;
                                     }
@@ -835,10 +834,10 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
 
     // Log if we filtered any tool calls (for debugging stall issues)
     if incomplete_count > 0 {
-        eprintln!(
-            "[SSE] Filtered {} incomplete tool calls (stream), {} remaining",
-            incomplete_count,
-            tool_calls.len()
+        debug!(
+            incomplete = incomplete_count,
+            remaining = tool_calls.len(),
+            "Filtered incomplete tool calls from stream"
         );
     }
 
@@ -1116,7 +1115,7 @@ pub async fn call_anthropic_with_tools(
             }
 
             // Debug: log event types we receive
-            eprintln!("[Anthropic SSE] event_type='{}', data_len={}", event_type, event_data.len());
+            trace!(event_type = %event_type, data_len = event_data.len(), "Anthropic SSE event");
 
             if event_data.is_empty() {
                 continue;
@@ -1238,7 +1237,7 @@ pub async fn call_anthropic_with_tools(
                         anyhow::bail!("Anthropic stream error: {}", msg);
                     }
                     _ => {
-                        eprintln!("[Anthropic SSE] Unhandled event type: '{}'", event_type);
+                        trace!(event_type = %event_type, "Unhandled Anthropic SSE event type");
                     }
                 }
             }
@@ -1246,11 +1245,11 @@ pub async fn call_anthropic_with_tools(
     }
 
     // Debug: log final result
-    eprintln!(
-        "[Anthropic SSE] Stream complete: text_len={}, tool_calls={}, finish_reason={:?}",
-        result.text.len(),
-        result.tool_calls.len(),
-        result.finish_reason
+    trace!(
+        text_len = result.text.len(),
+        tool_calls = result.tool_calls.len(),
+        finish_reason = ?result.finish_reason,
+        "Anthropic SSE stream complete"
     );
 
     Ok(result)
