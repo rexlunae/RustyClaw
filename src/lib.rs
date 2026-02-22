@@ -28,6 +28,10 @@ pub mod sandbox;
 pub mod secrets;
 pub mod security;
 pub mod sessions;
+
+// Imported from ZeroClaw (MIT OR Apache-2.0 licensed)
+pub mod observability;
+pub mod runtime;
 pub mod skills;
 pub mod soul;
 pub mod streaming;
