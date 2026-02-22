@@ -4,6 +4,7 @@ use crate::process_manager::{ProcessManager, SharedProcessManager};
 use crate::sandbox::{Sandbox, SandboxMode, SandboxPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
+use tracing::{debug, warn};
 
 // ── Global process manager ──────────────────────────────────────────────────
 
@@ -22,6 +23,7 @@ static SANDBOX: OnceLock<Sandbox> = OnceLock::new();
 
 /// Called once from the gateway to initialize the sandbox.
 pub fn init_sandbox(mode: SandboxMode, workspace: PathBuf, credentials_dir: PathBuf, deny_paths: Vec<PathBuf>) {
+    debug!(?mode, ?workspace, "Initializing sandbox");
     let mut policy = SandboxPolicy::protect_credentials(&credentials_dir, &workspace);
     for path in deny_paths {
         policy = policy.deny_read(path.clone()).deny_write(path);
@@ -38,11 +40,13 @@ pub fn sandbox() -> Option<&'static Sandbox> {
 /// Run a command through the sandbox (or unsandboxed if not initialized).
 pub fn run_sandboxed_command(command: &str, cwd: &Path) -> Result<std::process::Output, String> {
     if let Some(sb) = SANDBOX.get() {
+        debug!(mode = ?sb.mode, cwd = %cwd.display(), "Running sandboxed command");
         // Update policy workspace to the actual cwd for this command
         let mut policy = sb.policy.clone();
         policy.workspace = cwd.to_path_buf();
         crate::sandbox::run_sandboxed(command, &policy, sb.mode)
     } else {
+        debug!(cwd = %cwd.display(), "Running unsandboxed command (no sandbox configured)");
         // No sandbox configured, run directly
         std::process::Command::new("sh")
             .arg("-c")
@@ -214,6 +218,7 @@ pub fn sanitize_tool_output(output: String) -> String {
     if is_likely_garbage(&output) {
         let preview_len = output.len().min(500);
         let preview: String = output.chars().take(preview_len).collect();
+        warn!(bytes = output.len(), "Tool returned HTML/binary content");
         return format!(
             "[Warning: Tool returned HTML/binary content ({} bytes) — likely not useful]\n\nPreview:\n{}...",
             output.len(),
@@ -223,6 +228,7 @@ pub fn sanitize_tool_output(output: String) -> String {
     
     // Truncate if too large
     if output.len() > MAX_TOOL_OUTPUT_BYTES {
+        debug!(bytes = output.len(), max = MAX_TOOL_OUTPUT_BYTES, "Truncating large tool output");
         let truncated: String = output.chars().take(MAX_TOOL_OUTPUT_BYTES).collect();
         format!(
             "{}...\n\n[Truncated: {} bytes total, showing first {}]",

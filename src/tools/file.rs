@@ -4,6 +4,7 @@ use super::helpers::{resolve_path, expand_tilde, is_protected_path, display_path
 use serde_json::Value;
 use std::path::Path;
 use std::process::Stdio;
+use tracing::{debug, warn, instrument};
 
 /// Extensions that `textutil` (macOS) can convert to plain text.
 const TEXTUTIL_EXTENSIONS: &[&str] = &[
@@ -12,6 +13,7 @@ const TEXTUTIL_EXTENSIONS: &[&str] = &[
 
 /// Try to extract plain text from a rich document using macOS `textutil`.
 fn textutil_to_text(path: &Path) -> Option<String> {
+    debug!(path = %path.display(), "Attempting textutil conversion");
     let output = std::process::Command::new("textutil")
         .args(["-convert", "txt", "-stdout"])
         .arg(path)
@@ -22,15 +24,19 @@ fn textutil_to_text(path: &Path) -> Option<String> {
     if output.status.success() {
         let text = String::from_utf8_lossy(&output.stdout).to_string();
         if text.trim().is_empty() {
+            debug!(path = %path.display(), "textutil returned empty text");
             None
         } else {
+            debug!(path = %path.display(), len = text.len(), "textutil conversion successful");
             Some(text)
         }
     } else {
+        debug!(path = %path.display(), "textutil conversion failed");
         None
     }
 }
 
+#[instrument(skip(args, workspace_dir))]
 pub fn exec_read_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let path_str = args
         .get("path")
@@ -40,8 +46,11 @@ pub fn exec_read_file(args: &Value, workspace_dir: &Path) -> Result<String, Stri
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
+        warn!(path = %path.display(), "Attempted access to protected path");
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
+
+    debug!(path = %path.display(), "Reading file");
 
     // First, try reading as UTF-8 plain text.
     let content = match std::fs::read_to_string(&path) {
@@ -147,9 +156,11 @@ pub fn exec_read_file(args: &Value, workspace_dir: &Path) -> Result<String, Stri
         .map(|(i, line)| format!("{:>4} │ {}", start + i + 1, line))
         .collect();
 
+    debug!(path = %path.display(), lines_read = numbered.len(), "File read complete");
     Ok(numbered.join("\n"))
 }
 
+#[instrument(skip(args, workspace_dir))]
 pub fn exec_write_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let path_str = args
         .get("path")
@@ -163,8 +174,11 @@ pub fn exec_write_file(args: &Value, workspace_dir: &Path) -> Result<String, Str
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
+        warn!(path = %path.display(), "Attempted write to protected path");
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
+
+    debug!(path = %path.display(), bytes = content.len(), "Writing file");
 
     // Always create parent directories.
     if let Some(parent) = path.parent() {
@@ -175,6 +189,7 @@ pub fn exec_write_file(args: &Value, workspace_dir: &Path) -> Result<String, Str
     std::fs::write(&path, content)
         .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
 
+    debug!(path = %path.display(), "File written successfully");
     Ok(format!(
         "Successfully wrote {} bytes to {}",
         content.len(),
@@ -182,6 +197,7 @@ pub fn exec_write_file(args: &Value, workspace_dir: &Path) -> Result<String, Str
     ))
 }
 
+#[instrument(skip(args, workspace_dir))]
 pub fn exec_edit_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let path_str = args
         .get("path")
@@ -199,20 +215,25 @@ pub fn exec_edit_file(args: &Value, workspace_dir: &Path) -> Result<String, Stri
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
+        warn!(path = %path.display(), "Attempted edit to protected path");
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
+
+    debug!(path = %path.display(), "Editing file");
 
     let content = std::fs::read_to_string(&path)
         .map_err(|e| format!("Failed to read file '{}': {}", path.display(), e))?;
 
     let count = content.matches(old_string).count();
     if count == 0 {
+        debug!(path = %path.display(), "old_string not found");
         return Err(format!(
             "old_string not found in {}",
             path.display()
         ));
     }
     if count > 1 {
+        debug!(path = %path.display(), count, "old_string found multiple times");
         return Err(format!(
             "old_string found {} times in {} — must match exactly once. \
              Add more surrounding context to make the match unique.",
@@ -225,9 +246,11 @@ pub fn exec_edit_file(args: &Value, workspace_dir: &Path) -> Result<String, Stri
     std::fs::write(&path, &new_content)
         .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
 
+    debug!(path = %path.display(), "File edited successfully");
     Ok(format!("Successfully edited {}", path.display()))
 }
 
+#[instrument(skip(args, workspace_dir))]
 pub fn exec_list_directory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let path_str = args
         .get("path")
@@ -237,8 +260,11 @@ pub fn exec_list_directory(args: &Value, workspace_dir: &Path) -> Result<String,
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
+        warn!(path = %path.display(), "Attempted list of protected path");
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
+
+    debug!(path = %path.display(), "Listing directory");
 
     let entries = std::fs::read_dir(&path)
         .map_err(|e| format!("Failed to read directory '{}': {}", path.display(), e))?;
@@ -260,9 +286,11 @@ pub fn exec_list_directory(args: &Value, workspace_dir: &Path) -> Result<String,
     }
 
     items.sort();
+    debug!(path = %path.display(), count = items.len(), "Directory listing complete");
     Ok(items.join("\n"))
 }
 
+#[instrument(skip(args, workspace_dir))]
 pub fn exec_search_files(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let pattern = args
         .get("pattern")
@@ -287,6 +315,8 @@ pub fn exec_search_files(args: &Value, workspace_dir: &Path) -> Result<String, S
 
     // Case-insensitive content search.
     let pattern_lower = pattern.to_lowercase();
+
+    debug!(pattern, base = %base.display(), "Searching files for pattern");
 
     let mut results = Vec::new();
     let max_results: usize = 100;
@@ -336,9 +366,11 @@ pub fn exec_search_files(args: &Value, workspace_dir: &Path) -> Result<String, S
     }
 
     if results.is_empty() {
+        debug!(pattern, "No matches found");
         Ok("No matches found.".to_string())
     } else {
         let count = results.len();
+        debug!(pattern, count, "Search complete");
         let mut output = results.join("\n");
         if count >= max_results {
             output.push_str(&format!(
@@ -355,6 +387,7 @@ fn is_glob_pattern(s: &str) -> bool {
     s.contains('*') || s.contains('?') || s.contains('[')
 }
 
+#[instrument(skip(args, workspace_dir))]
 pub fn exec_find_files(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let pattern = args
         .get("pattern")
@@ -369,6 +402,8 @@ pub fn exec_find_files(args: &Value, workspace_dir: &Path) -> Result<String, Str
     };
 
     let max_results: usize = 200;
+
+    debug!(pattern, base = %base.display(), is_glob = is_glob_pattern(pattern), "Finding files");
 
     if is_glob_pattern(pattern) {
         // ── Glob mode ───────────────────────────────────────────────
@@ -438,9 +473,11 @@ pub fn exec_find_files(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
 fn format_find_results(results: Vec<String>, max_results: usize) -> Result<String, String> {
     if results.is_empty() {
+        debug!("No files found");
         Ok("No files found.".to_string())
     } else {
         let count = results.len();
+        debug!(count, "Find complete");
         let has_absolute = results.iter().any(|p| p.starts_with('/'));
         let mut output = String::new();
         if has_absolute {

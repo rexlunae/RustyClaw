@@ -2,8 +2,10 @@
 
 use serde_json::Value;
 use std::path::Path;
+use tracing::{debug, warn, instrument};
 
 /// Cron job management.
+#[instrument(skip(args, workspace_dir), fields(action))]
 pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     use crate::cron::*;
 
@@ -11,6 +13,9 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         .get("action")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    tracing::Span::current().record("action", action);
+    debug!("Executing cron tool");
 
     let cron_dir = workspace_dir.join(".cron");
     let mut store = CronStore::new(&cron_dir)?;
@@ -20,6 +25,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             let jobs = store.list(false);
             let enabled_count = jobs.len();
             let all_count = store.list(true).len();
+            debug!(enabled = enabled_count, total = all_count, "Cron status");
             Ok(format!(
                 "Cron scheduler status:\n- Enabled jobs: {}\n- Total jobs: {}\n- Store: {:?}",
                 enabled_count, all_count, cron_dir
@@ -33,6 +39,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .unwrap_or(false);
 
             let jobs = store.list(include_disabled);
+            debug!(count = jobs.len(), include_disabled, "Listing cron jobs");
             if jobs.is_empty() {
                 return Ok("No cron jobs configured.".to_string());
             }
@@ -69,6 +76,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .map_err(|e| format!("Invalid job definition: {}", e))?;
 
             let id = store.add(job)?;
+            debug!(job_id = %id, "Created cron job");
             Ok(format!("Created job: {}", id))
         }
 
@@ -84,6 +92,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .map_err(|e| format!("Invalid patch: {}", e))?;
 
             store.update(job_id, patch)?;
+            debug!(job_id, "Updated cron job");
             Ok(format!("Updated job: {}", job_id))
         }
 
@@ -94,6 +103,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .ok_or("Missing jobId for remove")?;
 
             store.remove(job_id)?;
+            debug!(job_id, "Removed cron job");
             Ok(format!("Removed job: {}", job_id))
         }
 
@@ -107,6 +117,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .get(job_id)
                 .ok_or_else(|| format!("Job not found: {}", job_id))?;
 
+            debug!(job_id, "Manual run requested");
             Ok(format!(
                 "Would run job '{}' ({}). Note: actual execution requires gateway integration.",
                 job.name.as_deref().unwrap_or("unnamed"),
@@ -121,6 +132,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .ok_or("Missing jobId for runs")?;
 
             let runs = store.get_runs(job_id, 10)?;
+            debug!(job_id, run_count = runs.len(), "Fetching run history");
             if runs.is_empty() {
                 return Ok(format!("No run history for job: {}", job_id));
             }
@@ -139,9 +151,12 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             Ok(output)
         }
 
-        _ => Err(format!(
-            "Unknown action: {}. Valid: status, list, add, update, remove, run, runs",
-            action
-        )),
+        _ => {
+            warn!(action, "Unknown cron action");
+            Err(format!(
+                "Unknown action: {}. Valid: status, list, add, update, remove, run, runs",
+                action
+            ))
+        }
     }
 }
