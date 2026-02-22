@@ -9,7 +9,7 @@ use rustyclaw::config::Config;
 #[cfg(feature = "tui")]
 use rustyclaw::onboard::run_onboard_wizard;
 use rustyclaw::gateway::{
-    deserialize_frame, send_frame, serialize_frame, ClientFrame, ClientFrameType, ClientPayload,
+    deserialize_frame, serialize_frame, ClientFrame, ClientFrameType, ClientPayload,
     ServerFrame, ServerFrameType, ServerPayload,
 };
 use rustyclaw::providers;
@@ -535,6 +535,12 @@ async fn main() -> Result<()> {
                 {
                     let mut secrets = open_secrets(&config)?;
                     run_onboard_wizard(&mut config, &mut secrets, false)?;
+                    // Optional agent setup step
+                    let ws_dir = config.workspace_dir();
+                    match rustyclaw::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                        Ok(msg) => println!("{}", rustyclaw::theme::icon_ok(&msg)),
+                        Err(e) => println!("{}", rustyclaw::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                    }
                 }
                 #[cfg(not(feature = "tui"))]
                 {
@@ -551,6 +557,12 @@ async fn main() -> Result<()> {
                 println!("{}", rustyclaw::theme::icon_ok(
                     &format!("Initialised config + workspace at {}", rustyclaw::theme::info(&config.settings_dir.display().to_string()))
                 ));
+                // Optional agent setup step
+                let ws_dir = config.workspace_dir();
+                match rustyclaw::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                    Ok(msg) => println!("{}", rustyclaw::theme::icon_ok(&msg)),
+                    Err(e) => println!("{}", rustyclaw::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                }
             }
         }
 
@@ -560,6 +572,12 @@ async fn main() -> Result<()> {
             {
                 let mut secrets = open_secrets(&config)?;
                 run_onboard_wizard(&mut config, &mut secrets, _args.reset)?;
+                // Optional agent setup step
+                let ws_dir = config.workspace_dir();
+                match rustyclaw::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                    Ok(msg) => println!("{}", rustyclaw::theme::icon_ok(&msg)),
+                    Err(e) => println!("{}", rustyclaw::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                }
             }
             #[cfg(not(feature = "tui"))]
             {
@@ -571,6 +589,12 @@ async fn main() -> Result<()> {
         // ── Import ──────────────────────────────────────────────
         Commands::Import(args) => {
             run_import(&args, &mut config)?;
+            // Optional agent setup step
+            let ws_dir = config.workspace_dir();
+            match rustyclaw::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                Ok(msg) => println!("{}", rustyclaw::theme::icon_ok(&msg)),
+                Err(e) => println!("{}", rustyclaw::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+            }
         }
 
         // ── RefreshToken ────────────────────────────────────────
@@ -2381,8 +2405,8 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
     }
 
     // Wait for hello frame
-    let mut result_provider = String::new();
-    let mut result_model = String::new();
+    let mut _result_provider = String::new();
+    let mut _result_model = String::new();
     loop {
         match reader.next().await {
             Some(Ok(Message::Binary(data))) => {
@@ -2390,8 +2414,8 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                     match frame.frame_type {
                         ServerFrameType::Hello => {
                             if let ServerPayload::Hello { provider, model, .. } = frame.payload {
-                                result_provider = provider.unwrap_or_default();
-                                result_model = model.unwrap_or_default();
+                                _result_provider = provider.unwrap_or_default();
+                                _result_model = model.unwrap_or_default();
                                 break;
                             }
                         }
@@ -2434,8 +2458,8 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                         }
                         let provider = val.get("provider").and_then(|p| p.as_str()).unwrap_or("").to_string();
                         let model = val.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
-                        result_provider = provider;
-                        result_model = model;
+                        _result_provider = provider;
+                        _result_model = model;
                         break;
                     }
                 }

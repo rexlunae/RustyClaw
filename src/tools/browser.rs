@@ -571,6 +571,7 @@ mod lite {
     use std::time::Duration;
 
     /// A lightweight "tab" backed by reqwest.
+    #[allow(dead_code)]
     struct LiteTab {
         url: String,
         title: String,

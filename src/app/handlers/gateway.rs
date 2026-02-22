@@ -5,7 +5,7 @@ use crate::daemon;
 use crate::dialogs::{FetchModelsLoading, SecretViewerState, SPINNER_FRAMES};
 use crate::gateway::{
     ClientFrame, ClientFrameType, ClientPayload, ChatMessage, deserialize_frame, serialize_frame,
-    ServerFrame, ServerFrameType,
+    ServerFrame,
 };
 use crate::pages::Page;
 use crate::panes::DisplayMessage;

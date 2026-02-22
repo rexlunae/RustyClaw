@@ -18,6 +18,7 @@ pub struct SsrfValidator {
     /// List of blocked IP ranges (CIDR notation)
     blocked_ranges: Vec<IpNetwork>,
     /// Whether to allow private IPs (override for trusted environments)
+    #[allow(dead_code)]
     allow_private_ips: bool,
 }
 

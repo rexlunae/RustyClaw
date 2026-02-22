@@ -5,7 +5,7 @@
 //! for recency weighting. Embeddings can be added later for true semantic search.
 
 use chrono::{NaiveDate, Utc};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
@@ -329,6 +329,7 @@ impl MemoryIndex {
 }
 
 /// Files that should never be decayed (evergreen).
+#[allow(dead_code)]
 const EVERGREEN_FILES: &[&str] = &["MEMORY.md"];
 
 impl Default for MemoryIndex {

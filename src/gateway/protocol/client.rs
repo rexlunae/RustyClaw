@@ -3,7 +3,7 @@
 //! This module provides helpers for the TUI client to convert server frames
 //! into application actions.
 
-use super::frames::{SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload, StatusType};
+use super::frames::{ServerFrame, ServerPayload, StatusType};
 use crate::action::Action;
 
 /// Result of processing a server frame - includes optional action and whether to update UI.

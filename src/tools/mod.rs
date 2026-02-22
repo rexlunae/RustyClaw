@@ -1,9 +1,10 @@
-//! Agent tool system for RustyClaw.
-//!
-//! Provides a registry of tools that the language model can invoke, and
-//! formatters that serialise the tool definitions into each provider's
-//! native schema (OpenAI function-calling, Anthropic tool-use, Google
-//! function declarations).
+pub mod agent_setup;
+// Agent tool system for RustyClaw.
+//
+// Provides a registry of tools that the language model can invoke, and
+// formatters that serialise the tool definitions into each provider's
+// native schema (OpenAI function-calling, Anthropic tool-use, Google
+// function declarations).
 
 use tracing::{debug, warn, instrument};
 
@@ -22,6 +23,14 @@ mod skills_tools;
 mod secrets_tools;
 mod system_tools;
 mod sysadmin;
+pub mod exo_ai;
+pub mod ollama;
+pub mod uv;
+// UV tool
+use uv::exec_uv_manage;
+
+// Agent setup orchestrator
+use agent_setup::exec_agent_setup;
 mod params;
 
 // Re-export helpers for external use
@@ -82,6 +91,12 @@ use sysadmin::{
     exec_pkg_manage, exec_net_info, exec_net_scan,
     exec_service_manage, exec_user_manage, exec_firewall,
 };
+
+// Exo AI tools
+use exo_ai::exec_exo_manage;
+
+// Ollama tools
+use ollama::exec_ollama_manage;
 
 /// Stub executor for the `ask_user` tool — never called directly.
 /// Execution is intercepted by the gateway, which forwards the prompt
@@ -226,6 +241,10 @@ pub fn tool_summary(name: &str) -> &'static str {
         "secure_delete" => "Securely overwrite & delete files",
         "summarize_file" => "Preview-summarize any file type",
         "ask_user" => "Ask the user structured questions",
+        "ollama_manage" => "Administer the Ollama model server",
+        "exo_manage" => "Administer the Exo distributed AI cluster",
+        "uv_manage" => "Manage Python envs & packages via uv",
+        "agent_setup" => "Set up local model infrastructure",
         _ => "Unknown tool",
     }
 }
@@ -313,6 +332,10 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SERVICE_MANAGE,
         &USER_MANAGE,
         &FIREWALL,
+        &OLLAMA_MANAGE,
+        &EXO_MANAGE,
+        &UV_MANAGE,
+        &AGENT_SETUP,
         &ASK_USER,
     ]
 }
@@ -826,6 +849,53 @@ pub static FIREWALL: ToolDef = ToolDef {
     execute: exec_firewall,
 };
 
+// ── Local model & environment tools ────────────────────────────────────────
+
+pub static OLLAMA_MANAGE: ToolDef = ToolDef {
+    name: "ollama_manage",
+    description: "Administer the Ollama local model server. Actions: setup (install \
+                  ollama), serve/start, stop, status, pull/add (download a model), \
+                  rm/remove (delete a model), list (show downloaded models), \
+                  show/info (model details), ps/running (loaded models), \
+                  load/warm (preload into VRAM), unload/evict (free VRAM), \
+                  copy/cp (duplicate a model tag).",
+    parameters: vec![],
+    execute: exec_ollama_manage,
+};
+
+pub static EXO_MANAGE: ToolDef = ToolDef {
+    name: "exo_manage",
+    description: "Administer the Exo distributed AI inference cluster. Actions: \
+                  setup (install exo via pip/uv), start/run (launch a cluster node), \
+                  stop, status (installation & topology), topology/peers (view \
+                  cluster members), models/list (available models), download/pull \
+                  (pre-download a model), remove/rm (delete cached model).",
+    parameters: vec![],
+    execute: exec_exo_manage,
+};
+
+pub static UV_MANAGE: ToolDef = ToolDef {
+    name: "uv_manage",
+    description: "Manage Python environments and packages via uv (ultra-fast package \
+                  manager). Actions: setup (install uv), version, venv (create virtualenv), \
+                  pip-install/add (install packages), pip-uninstall/remove (uninstall), \
+                  pip-list/list (show installed), pip-freeze/freeze (export requirements), \
+                  sync (install from requirements), run (execute in env), python \
+                  (install a Python version), init (create new project).",
+    parameters: vec![],
+    execute: exec_uv_manage,
+};
+
+pub static AGENT_SETUP: ToolDef = ToolDef {
+    name: "agent_setup",
+    description: "Set up the local model infrastructure in one command. Installs and \
+                  verifies uv (Python package manager), exo (distributed AI cluster), \
+                  and ollama (local model server). Use the optional 'components' \
+                  parameter to set up only specific tools (e.g. ['ollama','uv']).",
+    parameters: vec![],
+    execute: exec_agent_setup,
+};
+
 // ── Interactive prompt tool ────────────────────────────────────────────────
 
 pub static ASK_USER: ToolDef = ToolDef {
@@ -932,6 +1002,10 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "service_manage" => service_manage_params(),
         "user_manage" => user_manage_params(),
         "firewall" => firewall_params(),
+        "ollama_manage" => ollama_manage_params(),
+        "exo_manage" => exo_manage_params(),
+        "uv_manage" => uv_manage_params(),
+        "agent_setup" => agent_setup_params(),
         _ => vec![],
     }
 }

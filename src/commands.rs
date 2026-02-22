@@ -92,6 +92,10 @@ pub fn command_names() -> Vec<String> {
         "clawhub unstar".into(),
         "clawhub install".into(),
         "clawhub publish".into(),
+        "agent setup".into(),
+        "ollama".into(),
+        "exo".into(),
+        "uv".into(),
         "quit".into(),
     ];
     for p in providers::provider_ids() {
@@ -122,6 +126,68 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
     }
 
     match parts[0] {
+        "agent" => {
+            if parts.get(1) == Some(&"setup") {
+                let ws_dir = context.config.workspace_dir();
+                match crate::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                    Ok(msg) => CommandResponse {
+                        messages: vec![msg],
+                        action: CommandAction::None,
+                    },
+                    Err(e) => CommandResponse {
+                        messages: vec![format!("Agent setup failed: {}", e)],
+                        action: CommandAction::None,
+                    },
+                }
+            } else {
+                CommandResponse {
+                    messages: vec!["Usage: /agent setup".to_string()],
+                    action: CommandAction::None,
+                }
+            }
+        }
+        "ollama" => {
+            // /ollama <action> [model]
+            let action = parts.get(1).copied().unwrap_or("status");
+            let model = parts.get(2).copied();
+            let dest = parts.get(3).copied();
+            let mut args = serde_json::json!({"action": action});
+            if let Some(m) = model { args["model"] = serde_json::json!(m); }
+            if let Some(d) = dest { args["destination"] = serde_json::json!(d); }
+            let ws_dir = context.config.workspace_dir();
+            match crate::tools::ollama::exec_ollama_manage(&args, &ws_dir) {
+                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
+                Err(e) => CommandResponse { messages: vec![format!("ollama error: {}", e)], action: CommandAction::None },
+            }
+        }
+        "exo" => {
+            // /exo <action> [model]
+            let action = parts.get(1).copied().unwrap_or("status");
+            let model = parts.get(2).copied();
+            let mut args = serde_json::json!({"action": action});
+            if let Some(m) = model { args["model"] = serde_json::json!(m); }
+            let ws_dir = context.config.workspace_dir();
+            match crate::tools::exo_ai::exec_exo_manage(&args, &ws_dir) {
+                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
+                Err(e) => CommandResponse { messages: vec![format!("exo error: {}", e)], action: CommandAction::None },
+            }
+        }
+        "uv" => {
+            // /uv <action> [package ...]
+            let action = parts.get(1).copied().unwrap_or("version");
+            let rest: Vec<&str> = parts.iter().skip(2).copied().collect();
+            let mut args = serde_json::json!({"action": action});
+            if rest.len() == 1 {
+                args["package"] = serde_json::json!(rest[0]);
+            } else if rest.len() > 1 {
+                args["packages"] = serde_json::json!(rest);
+            }
+            let ws_dir = context.config.workspace_dir();
+            match crate::tools::uv::exec_uv_manage(&args, &ws_dir) {
+                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
+                Err(e) => CommandResponse { messages: vec![format!("uv error: {}", e)], action: CommandAction::None },
+            }
+        }
         "help" => CommandResponse {
             messages: vec![
                 "Available commands:".to_string(),
@@ -144,6 +210,10 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /tools                   - Edit tool permissions (allow/deny/ask/skill)".to_string(),
                 "  /secrets                 - Open the secrets vault".to_string(),
                 "  /clawhub                 - ClawHub skill registry commands".to_string(),
+                "  /agent setup             - Set up local model tools (uv, exo, ollama)".to_string(),
+                "  /ollama <action> [model] - Ollama admin (setup/pull/list/ps/status/…)".to_string(),
+                "  /exo <action> [model]    - Exo cluster admin (setup/start/stop/status/…)".to_string(),
+                "  /uv <action> [pkg …]     - Python/uv admin (setup/pip-install/list/…)".to_string(),
             ],
             action: CommandAction::None,
         },

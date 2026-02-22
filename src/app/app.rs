@@ -650,7 +650,7 @@ impl App {
             }
             Action::ConfirmStoreSecret { provider, key } => {
                 let secret_key = providers::secret_key_for_provider(provider).unwrap_or("API_KEY");
-                let display = providers::display_name_for_provider(provider).to_string();
+                let _display = providers::display_name_for_provider(provider).to_string();
                 let frame = serde_json::json!({
                     "type": "secrets_store",
                     "key": secret_key,
@@ -1131,6 +1131,7 @@ impl App {
         Err("No local cache or URL available".to_string())
     }
 
+    #[allow(dead_code)]
     fn build_hatching_chat_request(
         &mut self,
         messages: Vec<crate::gateway::ChatMessage>,

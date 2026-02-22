@@ -1414,3 +1414,133 @@ pub fn firewall_params() -> Vec<ToolParam> {
         },
     ]
 }
+
+// ── Local model & environment tool params ───────────────────────────────────
+
+pub fn ollama_manage_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action to perform: 'setup', 'serve', 'stop', 'status', 'pull', \
+                          'rm', 'list', 'show', 'ps', 'load', 'unload', 'copy'."
+                .into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "model".into(),
+            description: "Model name for pull/rm/show/load/unload/copy \
+                          (e.g. 'llama3.1', 'mistral:7b-instruct').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "destination".into(),
+            description: "Destination tag for the 'copy' action.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn exo_manage_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action to perform: 'setup', 'start', 'stop', 'status', \
+                          'topology', 'models', 'download', 'remove'."
+                .into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "model".into(),
+            description: "Model name for download/remove/start \
+                          (e.g. 'llama-3.1-8b', 'mistral-7b').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "port".into(),
+            description: "API port for 'start' action (default: 52415).".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "discovery".into(),
+            description: "Discovery module for 'start' action \
+                          (e.g. 'udp', 'tailscale', 'manual').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn uv_manage_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action to perform: 'setup', 'version', 'venv', 'pip-install', \
+                          'pip-uninstall', 'pip-list', 'pip-freeze', 'sync', 'run', \
+                          'python', 'init'."
+                .into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "package".into(),
+            description: "Single package name for pip-install/pip-uninstall.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "packages".into(),
+            description: "Array of package names for pip-install/pip-uninstall.".into(),
+            param_type: "array".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "name".into(),
+            description: "Name for venv (default '.venv') or init (project name).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "python".into(),
+            description: "Python version specifier for venv (e.g. '3.12').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "version".into(),
+            description: "Python version for 'python' action (e.g. '3.12', '3.11.6').".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "command".into(),
+            description: "Command string for 'run' action.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "file".into(),
+            description: "Requirements file path for 'sync' action.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn agent_setup_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "components".into(),
+            description: "Array of components to set up: 'uv', 'exo', 'ollama'. \
+                          Defaults to all three if omitted."
+                .into(),
+            param_type: "array".into(),
+            required: false,
+        },
+    ]
+}

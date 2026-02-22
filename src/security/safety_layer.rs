@@ -46,7 +46,7 @@ use anyhow::{bail, Result};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::sync::OnceLock;
-use tracing::{debug, warn};
+use tracing::warn;
 
 /// Policy action to take when a security issue is detected
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -113,6 +113,7 @@ impl MessagesPane {
     }
 
     /// Whether this role is a collapsible "thinking" message.
+    #[allow(dead_code)]
     fn is_thinking(role: &MessageRole) -> bool {
         matches!(role, MessageRole::Thinking)
     }
@@ -331,6 +332,7 @@ impl Pane for MessagesPane {
             /// Total visual rows after wrapping.
             height: u16,
             /// Original message index (None for spacing/loading entries)
+            #[allow(dead_code)]
             msg_index: Option<usize>,
         }
 

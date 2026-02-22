@@ -11,6 +11,7 @@ use super::helpers::{resolve_path, expand_tilde};
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Run a command and collect stdout, or return an error.
+#[allow(dead_code)]
 fn run(cmd: &str, args: &[&str]) -> Result<String, String> {
     let output = Command::new(cmd)
         .args(args)
