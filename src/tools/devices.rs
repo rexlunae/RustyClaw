@@ -11,6 +11,7 @@
 use serde_json::{json, Value};
 use std::path::Path;
 use std::process::{Command, Stdio};
+use tracing::{debug, warn, instrument};
 
 /// Discover and control paired nodes via SSH, ADB, VNC, or RDP.
 ///
@@ -25,11 +26,15 @@ use std::process::{Command, Stdio};
 /// - ADB: `adb:device_id` or just device serial
 /// - VNC: `vnc:host:display` or `vnc:host:port` (port > 99 = raw port, else display number)
 /// - RDP: `rdp:host` or `rdp:user@host:port`
+#[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    tracing::Span::current().record("action", action);
+    debug!("Executing nodes tool");
 
     match action {
         "status" => node_status(),
@@ -456,9 +461,11 @@ fn node_describe(node: &str) -> Result<String, String> {
 
 /// Run a command on a remote node.
 fn node_run(node: &str, command: &[impl AsRef<str>]) -> Result<String, String> {
+    debug!(node, "Running command on node");
     match parse_node(node) {
         NodeType::Ssh { user, host, port } => {
             let cmd_str = command.iter().map(|s| s.as_ref()).collect::<Vec<_>>().join(" ");
+            debug!(user, host, port, cmd = %cmd_str, "SSH command");
 
             let output = Command::new("ssh")
                 .args([
@@ -472,6 +479,7 @@ fn node_run(node: &str, command: &[impl AsRef<str>]) -> Result<String, String> {
 
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
+            debug!(exit_code = ?output.status.code(), "SSH command complete");
 
             Ok(json!({
                 "node": node,
@@ -483,6 +491,7 @@ fn node_run(node: &str, command: &[impl AsRef<str>]) -> Result<String, String> {
         }
         NodeType::Adb { device } => {
             let cmd_str = command.iter().map(|s| s.as_ref()).collect::<Vec<_>>().join(" ");
+            debug!(device, cmd = %cmd_str, "ADB command");
 
             let output = Command::new("adb")
                 .args(["-s", &device, "shell", &cmd_str])
@@ -1140,11 +1149,15 @@ static CANVAS_URL: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None
 /// - Fetches page metadata (title, description) for immediate feedback.
 /// - Captures page text content for the `snapshot` action.
 /// - Tracks the current canvas URL for `navigate` / `eval` / `snapshot`.
+#[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    tracing::Span::current().record("action", action);
+    debug!("Executing canvas tool");
 
     let node = args.get("node").and_then(|v| v.as_str());
 

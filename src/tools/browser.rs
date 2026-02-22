@@ -5,6 +5,7 @@
 
 use serde_json::{json, Value};
 use std::path::Path;
+use tracing::{debug, warn, instrument};
 
 #[cfg(feature = "browser")]
 mod real {
@@ -34,8 +35,11 @@ mod real {
     pub async fn ensure_browser() -> Result<(), String> {
         let mut state = browser_state().lock().await;
         if state.is_some() {
+            debug!("Browser already running");
             return Ok(());
         }
+
+        debug!("Launching browser");
 
         // Configure browser
         let config = BrowserConfig::builder()
@@ -61,6 +65,7 @@ mod real {
             handler_handle,
         });
 
+        debug!("Browser launched successfully");
         Ok(())
     }
 
@@ -69,12 +74,14 @@ mod real {
         let state = browser_state().lock().await;
         if let Some(ref s) = *state {
             let tab_count = s.pages.len();
+            debug!(tabs = tab_count, "Browser status: running");
             Ok(json!({
                 "running": true,
                 "tabs": tab_count,
                 "profile": "rustyclaw"
             }).to_string())
         } else {
+            debug!("Browser status: not running");
             Ok(json!({
                 "running": false,
                 "tabs": 0,
@@ -415,11 +422,15 @@ mod real {
 ///
 /// When compiled with `browser` feature, uses real chromiumoxide CDP.
 /// Otherwise, returns helpful stub responses.
+#[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_browser(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
+
+    tracing::Span::current().record("action", action);
+    debug!("Executing browser tool");
 
     #[cfg(feature = "browser")]
     {
@@ -929,6 +940,7 @@ mod lite {
 
 #[cfg(not(feature = "browser"))]
 fn exec_browser_stub(args: &Value, action: &str) -> Result<String, String> {
+    debug!(action, "Browser stub mode (feature not enabled)");
     let tab_id = args.get("targetId").and_then(|v| v.as_str());
 
     match action {
