@@ -110,8 +110,11 @@ fn parse_downloads_from_state(state: &Value) -> String {
                         };
                         // Visual progress bar
                         let filled = (pct / 5.0) as usize; // 20 chars wide
-                        let bar: String = "█".repeat(filled)
-                            + &"░".repeat(20_usize.saturating_sub(filled));
+                        let bar: String = format!(
+                            "{}{}",
+                            "█".repeat(filled),
+                            "░".repeat(20_usize.saturating_sub(filled))
+                        );
                         pending.push(format!(
                             "  ⏳ {} [{bar}] {:.1}%  ({} / {})",
                             model_id,
@@ -562,11 +565,14 @@ pub fn exec_exo_manage(args: &Value, _workspace_dir: &Path) -> Result<String, St
                     steps.push(format!("✓ exo verified: {}", preview));
                 }
                 Ok(out) => {
-                    let combined = String::from_utf8_lossy(&out.stdout).to_string()
-                        + &String::from_utf8_lossy(&out.stderr);
+                    let combined: String = format!(
+                        "{}{}",
+                        String::from_utf8_lossy(&out.stdout),
+                        String::from_utf8_lossy(&out.stderr)
+                    );
                     let tail: String = combined
                         .lines()
-                        .filter(|l| !l.trim().is_empty())
+                        .filter(|l: &&str| !l.trim().is_empty())
                         .rev()
                         .take(5)
                         .collect::<Vec<_>>()

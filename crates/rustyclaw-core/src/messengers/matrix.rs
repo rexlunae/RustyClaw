@@ -12,7 +12,7 @@ use matrix_sdk::{
             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
         }, OwnedUserId, RoomId, UserId,
     },
-    Client, Room,
+    Client, Room, SessionTokens,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -155,7 +155,7 @@ impl Messenger for MatrixMessenger {
                             .transpose()?
                             .unwrap_or_else(|| "RUSTYCLAW".into()),
                     },
-                    tokens: matrix_sdk::authentication::matrix::MatrixSessionTokens {
+                    tokens: SessionTokens {
                         access_token: token.clone(),
                         refresh_token: None,
                     },
