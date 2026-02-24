@@ -18,12 +18,12 @@ workspace = true
 [features]
 default = ["web-tools"]
 web-tools = ["dep:scraper", "dep:html2md"]
-matrix = ["dep:matrix-sdk"]
-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", "dep:wa-rs-ureq-http"]
 browser = ["dep:chromiumoxide"]
-# Publishable feature sets
-all-messengers = ["matrix", "whatsapp"]
-full = ["web-tools", "matrix", "whatsapp", "browser"]
+# Legacy feature flags (no longer needed, all messengers now compiled in)
+matrix = []
+whatsapp = []
+all-messengers = []
+full = ["web-tools", "browser"]
 
 [dependencies]
 serde.workspace = true
@@ -71,15 +71,17 @@ indicatif.workspace = true
 unicode-width.workspace = true
 rpassword.workspace = true
 
-# Optional
+# Optional (browser only)
 scraper = { workspace = true, optional = true }
 html2md = { workspace = true, optional = true }
-matrix-sdk = { workspace = true, optional = true }
 chromiumoxide = { workspace = true, optional = true }
-wa-rs = { workspace = true, optional = true }
-wa-rs-sqlite-storage = { workspace = true, optional = true }
-wa-rs-tokio-transport = { workspace = true, optional = true }
-wa-rs-ureq-http = { workspace = true, optional = true }
+
+# Messengers (always compiled)
+matrix-sdk.workspace = true
+wa-rs.workspace = true
+wa-rs-sqlite-storage.workspace = true
+wa-rs-tokio-transport.workspace = true
+wa-rs-ureq-http.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

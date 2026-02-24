@@ -161,19 +161,15 @@ pub use console::ConsoleMessenger;
 pub use discord::DiscordMessenger;
 pub use telegram::TelegramMessenger;
 
-// ── Optional messengers (feature-gated) ─────────────────────────────────────
+// ── Additional messengers ───────────────────────────────────────────────────
+// Note: These are deprecated in favor of skill-based messaging (see module docs).
+// They remain compiled-in for backwards compatibility.
 
-#[cfg(feature = "matrix")]
 mod matrix;
-#[cfg(feature = "matrix")]
 pub use matrix::MatrixMessenger;
 
-#[cfg(feature = "signal")]
-mod signal;
-#[cfg(feature = "signal")]
-pub use signal::SignalMessenger;
+// Signal messenger removed — was incomplete and never had its dependencies (presage) added.
+// Use the signal-messenger-standalone skill or claw-me-maybe for Signal integration.
 
-#[cfg(feature = "whatsapp")]
 mod whatsapp;
-#[cfg(feature = "whatsapp")]
 pub use whatsapp::WhatsAppMessenger;

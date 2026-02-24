@@ -1,7 +1,7 @@
 //! Messenger integration for the gateway.
 //!
 //! This module provides the messenger polling loop that receives messages
-//! from configured messengers (Telegram, Discord, Signal, etc.) and routes
+//! from configured messengers (Telegram, Discord, Matrix, etc.) and routes
 //! them through the model for processing with full tool loop support.
 
 use crate::config::{Config, MessengerConfig};
@@ -24,11 +24,7 @@ use super::secrets_handler;
 use super::skills_handler;
 use super::{ChatMessage, MediaRef, ModelContext, ProviderRequest, SharedSkillManager, SharedVault, ToolCallResult};
 
-#[cfg(feature = "matrix")]
 use crate::messengers::MatrixMessenger;
-
-#[cfg(feature = "signal")]
-use crate::messengers::SignalMessenger;
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
@@ -112,7 +108,6 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .context("Webhook requires 'webhook_url' or WEBHOOK_URL env var")?;
             Box::new(WebhookMessenger::new(name, url))
         }
-        #[cfg(feature = "matrix")]
         "matrix" => {
             let homeserver = config
                 .homeserver
@@ -139,16 +134,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             };
             Box::new(messenger)
         }
-        #[cfg(feature = "signal")]
-        "signal" => {
-            let phone = config
-                .phone
-                .clone()
-                .context("Signal requires 'phone' number")?;
-            let messenger =
-                SignalMessenger::new(&phone).context("Failed to create Signal messenger")?;
-            Box::new(messenger)
-        }
+        // Signal messenger removed — use claw-me-maybe skill or signal-messenger-standalone
         other => anyhow::bail!("Unknown messenger type: {}", other),
     };
 
