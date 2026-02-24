@@ -143,7 +143,8 @@ This interactive wizard sets up:
 - API key for your preferred provider
 - Encrypted secrets vault
 - Workspace directory
-- Channel connections (optional)
+- **Messaging** via [Beeper](https://www.beeper.com) (WhatsApp, Telegram, Signal, Discord, Slack, iMessage, and more)
+- Recommended skills from ClawHub
 
 ### Run
 
@@ -154,6 +155,26 @@ rustyclaw tui
 # Or run as a daemon for integrations
 rustyclaw gateway start
 ```
+
+## Messaging
+
+RustyClaw uses **skills** for messaging rather than compiled-in integrations. This means:
+- ✅ No recompilation to add new platforms
+- ✅ Single skill handles 15+ platforms
+- ✅ Privacy-preserving local API
+
+The recommended approach uses **Beeper** + the **claw-me-maybe** skill:
+
+```bash
+# 1. Install Beeper Desktop: https://www.beeper.com/download
+# 2. Enable Desktop API in Beeper Settings → Developers
+# 3. Install the skill:
+clawhub install claw-me-maybe
+```
+
+**Supported platforms:** WhatsApp, Telegram, Signal, Discord, Slack, iMessage, Instagram, LinkedIn, Facebook Messenger, Google Messages, Google Chat, X (Twitter) DMs
+
+The `rustyclaw onboard` wizard walks you through this setup step-by-step.
 
 ## Building from Source
 
