@@ -1,5 +1,5 @@
 [package]
-name = "rustyclaw-cli"
+name = "rustyclaw"
 description = "CLI binary for RustyClaw — main entry point and gateway daemon"
 keywords = ["ai", "agent", "cli"]
 categories = ["command-line-utilities"]
