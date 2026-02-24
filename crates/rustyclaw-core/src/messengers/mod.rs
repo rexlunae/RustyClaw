@@ -162,3 +162,8 @@ pub use matrix::MatrixMessenger;
 mod signal;
 #[cfg(feature = "signal")]
 pub use signal::SignalMessenger;
+
+#[cfg(feature = "whatsapp")]
+mod whatsapp;
+#[cfg(feature = "whatsapp")]
+pub use whatsapp::WhatsAppMessenger;

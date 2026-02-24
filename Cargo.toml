@@ -112,7 +112,14 @@ smol = "2"
 crossterm = "0.28"
 
 # Matrix messenger support
-matrix-sdk = { version = "0.10", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
+# Matrix messenger support (0.16+ for libsqlite3-sys 0.35 compatibility with wa-rs)
+matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
+
+# WhatsApp Web support
+wa-rs = "0.2"
+wa-rs-sqlite-storage = "0.2"
+wa-rs-tokio-transport = "0.2"
+wa-rs-ureq-http = "0.2"
 
 # Browser automation
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
