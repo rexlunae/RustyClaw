@@ -104,7 +104,7 @@ pub enum Action {
     FinishHatching(String),
     /// Gateway returned the secrets list
     SecretsListResult {
-        entries: Vec<serde_json::Value>,
+        entries: Vec<rustyclaw_core::gateway::SecretEntryDto>,
     },
     /// Gateway returned a secret value (for provider probing, device flow, etc.)
     SecretsGetResult {
@@ -173,7 +173,7 @@ pub enum Action {
     GatewayToolCall {
         id: String,
         name: String,
-        arguments: serde_json::Value,
+        arguments: String,
     },
     /// Gateway sent a tool result from execution
     GatewayToolResult {
@@ -200,7 +200,7 @@ pub enum Action {
     ToolApprovalRequest {
         id: String,
         name: String,
-        arguments: serde_json::Value,
+        arguments: String,
     },
     /// User responded to a tool approval request
     ToolApprovalResponse {
@@ -208,9 +208,9 @@ pub enum Action {
         approved: bool,
     },
     /// Gateway is requesting structured user input (ask_user tool)
-    UserPromptRequest(crate::dialogs::user_prompt::UserPrompt),
+    UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
     /// User responded to a structured prompt
-    UserPromptResponse(crate::dialogs::user_prompt::UserPromptResponse),
+    UserPromptResponse(rustyclaw_core::user_prompt_types::UserPromptResponse),
     /// A long-running slash-command tool finished (msg, is_error)
     ToolCommandDone {
         message: String,

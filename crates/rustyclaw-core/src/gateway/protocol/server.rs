@@ -443,7 +443,7 @@ pub async fn send_tool_call<S>(
     writer: &mut S,
     id: &str,
     name: &str,
-    arguments: serde_json::Value,
+    arguments: &str,
 ) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -453,7 +453,7 @@ where
         payload: ServerPayload::ToolCall {
             id: id.into(),
             name: name.into(),
-            arguments,
+            arguments: arguments.into(),
         },
     };
     send_frame(writer, &frame).await
@@ -487,7 +487,7 @@ pub async fn send_tool_approval_request<S>(
     writer: &mut S,
     id: &str,
     name: &str,
-    arguments: serde_json::Value,
+    arguments: &str,
 ) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -497,7 +497,7 @@ where
         payload: ServerPayload::ToolApprovalRequest {
             id: id.into(),
             name: name.into(),
-            arguments,
+            arguments: arguments.into(),
         },
     };
     send_frame(writer, &frame).await
@@ -507,7 +507,7 @@ where
 pub async fn send_user_prompt_request<S>(
     writer: &mut S,
     id: &str,
-    prompt_json: &str,
+    prompt: &crate::user_prompt_types::UserPrompt,
 ) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
@@ -516,7 +516,7 @@ where
         frame_type: ServerFrameType::UserPromptRequest,
         payload: ServerPayload::UserPromptRequest {
             id: id.into(),
-            prompt_json: prompt_json.into(),
+            prompt: prompt.clone(),
         },
     };
     send_frame(writer, &frame).await

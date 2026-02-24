@@ -18,10 +18,9 @@ workspace = true
 rustyclaw-core.workspace = true
 
 # TUI framework
-ratatui.workspace = true
+iocraft.workspace = true
+smol.workspace = true
 crossterm.workspace = true
-tui-markdown.workspace = true
-tui-input.workspace = true
 
 # Also needed directly by TUI code
 anyhow.workspace = true

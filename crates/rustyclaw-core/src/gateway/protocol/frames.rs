@@ -205,7 +205,7 @@ pub enum ClientPayload {
     UserPromptResponse {
         id: String,
         dismissed: bool,
-        value: serde_json::Value,
+        value: crate::user_prompt_types::PromptResponseValue,
     },
 }
 
@@ -323,7 +323,7 @@ pub enum ServerPayload {
     ToolCall {
         id: String,
         name: String,
-        arguments: serde_json::Value,
+        arguments: String,
     },
     ToolResult {
         id: String,
@@ -337,16 +337,16 @@ pub enum ServerPayload {
     ToolApprovalRequest {
         id: String,
         name: String,
-        arguments: serde_json::Value,
+        arguments: String,
     },
     UserPromptRequest {
         id: String,
-        prompt_json: String,
+        prompt: crate::user_prompt_types::UserPrompt,
     },
 }
 
 /// DTO for secret entries in list results.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SecretEntryDto {
     pub name: String,
     pub label: String,
@@ -631,6 +631,138 @@ mod tests {
             assert_eq!(decoded.kind, "ApiKey");
             assert_eq!(decoded.policy, "always");
             assert!(!decoded.disabled);
+        }
+
+        #[test]
+        fn test_user_prompt_response_bincode_roundtrip() {
+            use crate::user_prompt_types::PromptResponseValue;
+
+            let frame = ClientFrame {
+                frame_type: ClientFrameType::UserPromptResponse,
+                payload: ClientPayload::UserPromptResponse {
+                    id: "call_456".into(),
+                    dismissed: false,
+                    value: PromptResponseValue::Text("hello world".into()),
+                },
+            };
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ClientFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+            match decoded.payload {
+                ClientPayload::UserPromptResponse { id, dismissed, value } => {
+                    assert_eq!(id, "call_456");
+                    assert!(!dismissed);
+                    assert_eq!(value, PromptResponseValue::Text("hello world".into()));
+                }
+                _ => panic!("Expected UserPromptResponse payload"),
+            }
+        }
+
+        #[test]
+        fn test_server_user_prompt_request_bincode_roundtrip() {
+            use crate::user_prompt_types::{UserPrompt, PromptType};
+
+            let prompt = UserPrompt {
+                id: "call_789".into(),
+                title: "What is your name?".into(),
+                description: Some("Please enter your full name".into()),
+                prompt_type: PromptType::TextInput {
+                    placeholder: Some("John Doe".into()),
+                    default: None,
+                },
+            };
+
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::UserPromptRequest,
+                payload: ServerPayload::UserPromptRequest {
+                    id: "call_789".into(),
+                    prompt: prompt.clone(),
+                },
+            };
+
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ServerFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+
+            assert_eq!(decoded.frame_type, ServerFrameType::UserPromptRequest);
+            match decoded.payload {
+                ServerPayload::UserPromptRequest { id, prompt: p } => {
+                    assert_eq!(id, "call_789");
+                    assert_eq!(p.title, "What is your name?");
+                    assert_eq!(p.description, Some("Please enter your full name".into()));
+                    assert!(matches!(p.prompt_type, PromptType::TextInput { .. }));
+                }
+                _ => panic!("Expected UserPromptRequest payload"),
+            }
+        }
+
+        #[test]
+        fn test_client_frame_roundtrip_auth_response() {
+            let frame = ClientFrame {
+                frame_type: ClientFrameType::AuthResponse,
+                payload: ClientPayload::AuthResponse {
+                    code: "123456".into(),
+                },
+            };
+
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ClientFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+
+            assert_eq!(decoded.frame_type, ClientFrameType::AuthResponse);
+            match decoded.payload {
+                ClientPayload::AuthResponse { code } => {
+                    assert_eq!(code, "123456");
+                }
+                _ => panic!("Expected AuthResponse payload"),
+            }
+        }
+
+        #[test]
+        fn test_server_frame_roundtrip_auth_challenge() {
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::AuthChallenge,
+                payload: ServerPayload::AuthChallenge {
+                    method: "totp".into(),
+                },
+            };
+
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ServerFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+
+            assert_eq!(decoded.frame_type, ServerFrameType::AuthChallenge);
+            match decoded.payload {
+                ServerPayload::AuthChallenge { method } => {
+                    assert_eq!(method, "totp");
+                }
+                _ => panic!("Expected AuthChallenge payload"),
+            }
+        }
+
+        #[test]
+        fn test_server_tool_call_bincode_roundtrip() {
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::ToolCall,
+                payload: ServerPayload::ToolCall {
+                    id: "call_001".into(),
+                    name: "read_file".into(),
+                    arguments: r#"{"path":"/tmp/test"}"#.into(),
+                },
+            };
+
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ServerFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+
+            match decoded.payload {
+                ServerPayload::ToolCall { id, name, arguments } => {
+                    assert_eq!(id, "call_001");
+                    assert_eq!(name, "read_file");
+                    assert_eq!(arguments, r#"{"path":"/tmp/test"}"#);
+                }
+                _ => panic!("Expected ToolCall payload"),
+            }
         }
     }
 }

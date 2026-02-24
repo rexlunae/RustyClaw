@@ -22,7 +22,6 @@ pub struct UserPrompt {
 
 /// The different input types the agent can request.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
 pub enum PromptType {
     /// Pick exactly one option from a list.
     Select {
@@ -81,12 +80,28 @@ pub struct FormField {
     pub required: bool,
 }
 
+/// Typed response value from a user prompt.
+///
+/// Each variant matches a `PromptType` input kind so the response is
+/// statically typed end-to-end — no `serde_json::Value` anywhere.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum PromptResponseValue {
+    /// Free-text input or a single selected option label.
+    Text(String),
+    /// Yes / No confirmation.
+    Confirm(bool),
+    /// Zero or more selected option labels.
+    Selected(Vec<String>),
+    /// Form field name→value pairs.
+    Form(Vec<(String, String)>),
+}
+
 /// The user's response to a prompt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct UserPromptResponse {
     pub id: String,
     /// Whether the user dismissed the prompt (Esc).
     pub dismissed: bool,
-    /// The response value (JSON: string, array of strings, bool, or object).
-    pub value: serde_json::Value,
+    /// The typed response value.
+    pub value: PromptResponseValue,
 }

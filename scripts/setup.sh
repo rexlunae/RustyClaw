@@ -44,6 +44,7 @@ ONLY=()
 EXO_DIR="${EXO_DIR:-$HOME/exo}"
 RUSTYCLAW_FEATURES=""
 FROM_SOURCE=false
+FORCE=false
 
 print_help() {
     cat <<'EOF'
@@ -57,6 +58,7 @@ Options:
   --exo-dir <path>          Where to clone exo (default: ~/exo)
   --features <features>     Extra cargo features for RustyClaw (e.g. "rustyclaw-core/matrix")
   --from-source             Build RustyClaw from local workspace instead of crates.io
+  --force                   Overwrite existing RustyClaw binaries
   --help                    Show this help
 
 Components: rust, rustyclaw, uv, ollama, node, exo
@@ -88,6 +90,7 @@ while [[ $# -gt 0 ]]; do
         --exo-dir)   EXO_DIR="$2"; shift 2 ;;
         --features)  RUSTYCLAW_FEATURES="$2"; shift 2 ;;
         --from-source) FROM_SOURCE=true; shift ;;
+        --force|-f) FORCE=true; shift ;;
         *) warn "Unknown option: $1"; shift ;;
     esac
 done
@@ -99,8 +102,10 @@ should_install() {
         printf '%s\n' "${ONLY[@]}" | grep -qx "$comp"
         return $?
     fi
-    if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
-        return 1
+    if [[ ${#SKIP[@]} -gt 0 ]]; then
+        if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
+            return 1
+        fi
     fi
     return 0
 }
@@ -229,17 +234,23 @@ if should_install rustyclaw; then
             INSTALL_PATH="/tmp/rustyclaw-build/crates/rustyclaw-cli"
         fi
 
+        FORCE_FLAG=""
+        [[ "$FORCE" == true ]] && FORCE_FLAG="--force"
+
         if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
-            cargo install --path "$INSTALL_PATH" --features "$RUSTYCLAW_FEATURES"
+            cargo install --path "$INSTALL_PATH" --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
         else
-            cargo install --path "$INSTALL_PATH"
+            cargo install --path "$INSTALL_PATH" $FORCE_FLAG
         fi
     else
         info "Installing from crates.io..."
+        FORCE_FLAG=""
+        [[ "$FORCE" == true ]] && FORCE_FLAG="--force"
+
         if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
-            cargo install rustyclaw --features "$RUSTYCLAW_FEATURES"
+            cargo install rustyclaw --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
         else
-            cargo install rustyclaw
+            cargo install rustyclaw $FORCE_FLAG
         fi
     fi
 

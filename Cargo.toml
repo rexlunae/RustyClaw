@@ -107,10 +107,9 @@ unicode-width = "0.2"
 rpassword = "7"
 
 # TUI dependencies
-ratatui = "0.30"
-crossterm = { version = "0.29", features = ["event-stream"] }
-tui-markdown = "0.3"
-tui-input = "0.15"
+iocraft = "0.7"
+smol = "2"
+crossterm = "0.28"
 
 # Matrix messenger support
 matrix-sdk = { version = "0.10", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }

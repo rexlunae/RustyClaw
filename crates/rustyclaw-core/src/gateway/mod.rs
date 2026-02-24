@@ -452,7 +452,13 @@ async fn handle_connection(
                 Ok(Ok(code)) => {
                     let valid = {
                         let mut v = vault.lock().await;
-                        v.verify_totp(code.trim()).unwrap_or(false)
+                        match v.verify_totp(code.trim()) {
+                            Ok(result) => result,
+                            Err(e) => {
+                                warn!(error = %e, "TOTP verification error (vault issue?)");
+                                false
+                            }
+                        }
                     };
                     if valid {
                         auth::clear_rate_limit(&rate_limiter, peer_ip).await;
@@ -669,7 +675,7 @@ async fn handle_connection(
 
     // Channel for user-prompt responses (used by the ask_user tool).
     let (user_prompt_tx, user_prompt_rx) =
-        tokio::sync::mpsc::channel::<(String, bool, serde_json::Value)>(4);
+        tokio::sync::mpsc::channel::<(String, bool, crate::user_prompt_types::PromptResponseValue)>(4);
     let user_prompt_rx = Arc::new(Mutex::new(user_prompt_rx));
 
     let reader_cancel = cancel.clone();
@@ -708,7 +714,7 @@ async fn handle_connection(
                                     }
                                 }
                                 Err(e) => {
-                                    trace!(error = %e, "Failed to parse client frame");
+                                    warn!(error = %e, bytes = data.len(), "Failed to parse client frame — possible version mismatch");
                                 }
                             }
                             // Forward binary messages
@@ -799,8 +805,8 @@ async fn handle_connection(
                                     .map(|(name, entry)| SecretEntryDto {
                                         name: name.clone(),
                                         label: entry.label.clone(),
-                                        kind: format!("{:?}", entry.kind),
-                                        policy: format!("{:?}", entry.policy),
+                                        kind: entry.kind.to_string(),
+                                        policy: entry.policy.badge().to_string(),
                                         disabled: entry.disabled,
                                     })
                                     .collect();
@@ -1076,7 +1082,7 @@ async fn execute_user_prompt(
     writer: &mut WsWriter,
     call_id: &str,
     arguments: &serde_json::Value,
-    user_prompt_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, serde_json::Value)>>>,
+    user_prompt_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, crate::user_prompt_types::PromptResponseValue)>>>,
 ) -> (String, bool) {
     use crate::user_prompt_types::{FormField, PromptOption, PromptType, UserPrompt};
 
@@ -1219,18 +1225,11 @@ async fn execute_user_prompt(
         prompt_type,
     };
 
-    // Serialize the prompt to JSON and send it to the TUI.
-    let prompt_json = match serde_json::to_string(&prompt) {
-        Ok(json) => json,
-        Err(e) => {
-            return (format!("Failed to serialize user prompt: {}", e), true);
-        }
-    };
-
+    // Send the prompt directly to the TUI (embedded in the binary frame).
     if let Err(e) = protocol::server::send_user_prompt_request(
         writer,
         call_id,
-        &prompt_json,
+        &prompt,
     )
     .await
     {
@@ -1248,7 +1247,21 @@ async fn execute_user_prompt(
             if dismissed {
                 ("User dismissed the prompt without answering.".to_string(), false)
             } else {
-                (serde_json::to_string_pretty(&value).unwrap_or_else(|_| value.to_string()), false)
+                use crate::user_prompt_types::PromptResponseValue;
+                match value {
+                    PromptResponseValue::Text(s) => (s, false),
+                    PromptResponseValue::Confirm(b) => {
+                        (if b { "yes" } else { "no" }.to_string(), false)
+                    }
+                    PromptResponseValue::Selected(items) => (items.join(", "), false),
+                    PromptResponseValue::Form(fields) => {
+                        let formatted: Vec<String> = fields
+                            .iter()
+                            .map(|(k, v)| format!("{}: {}", k, v))
+                            .collect();
+                        (formatted.join("\n"), false)
+                    }
+                }
             }
         }
         Ok(Some(_)) => ("Mismatched prompt response ID.".to_string(), true),
@@ -1278,7 +1291,7 @@ async fn dispatch_text_message(
     tool_cancel: &ToolCancelFlag,
     shared_config: &SharedConfig,
     approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
-    user_prompt_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, serde_json::Value)>>>,
+    user_prompt_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, crate::user_prompt_types::PromptResponseValue)>>>,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
@@ -1556,6 +1569,10 @@ async fn dispatch_text_message(
         };
 
         for tc in &model_resp.tool_calls {
+            // Stringify arguments once for the wire protocol (tool args are
+            // inherently schemaless JSON from the LLM).
+            let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
+
             // ── Permission check ────────────────────────────────────
             let permission = tool_permissions
                 .get(&tc.name)
@@ -1569,7 +1586,7 @@ async fn dispatch_text_message(
                         writer,
                         &tc.id,
                         &tc.name,
-                        tc.arguments.clone(),
+                        &args_str,
                     ).await?;
 
                     let msg = format!(
@@ -1584,7 +1601,7 @@ async fn dispatch_text_message(
                         writer,
                         &tc.id,
                         &tc.name,
-                        tc.arguments.clone(),
+                        &args_str,
                     ).await?;
 
                     let msg = format!(
@@ -1599,7 +1616,7 @@ async fn dispatch_text_message(
                         writer,
                         &tc.id,
                         &tc.name,
-                        tc.arguments.clone(),
+                        &args_str,
                     ).await?;
 
                     // Wait for the user's response (with timeout).
@@ -1622,7 +1639,7 @@ async fn dispatch_text_message(
                             writer,
                             &tc.id,
                             &tc.name,
-                            tc.arguments.clone(),
+                            &args_str,
                         ).await?;
 
                         let msg = format!(
@@ -1636,7 +1653,7 @@ async fn dispatch_text_message(
                             writer,
                             &tc.id,
                             &tc.name,
-                            tc.arguments.clone(),
+                            &args_str,
                         ).await?;
 
                         if tools::is_user_prompt_tool(&tc.name) {
@@ -1665,7 +1682,7 @@ async fn dispatch_text_message(
                         writer,
                         &tc.id,
                         &tc.name,
-                        tc.arguments.clone(),
+                        &args_str,
                     ).await?;
 
                     // Execute the tool.

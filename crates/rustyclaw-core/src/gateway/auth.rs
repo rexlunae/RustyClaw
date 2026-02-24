@@ -154,7 +154,8 @@ where
                         }
                         // Ignore non-auth frames during the handshake.
                     }
-                    Err(_) => {
+                    Err(e) => {
+                        warn!(bytes = data.len(), error = %e, "Failed to parse client frame during auth handshake");
                         // Continue waiting for valid frame
                     }
                 }

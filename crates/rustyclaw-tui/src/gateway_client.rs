@@ -110,19 +110,9 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             }
         }
         ServerPayload::SecretsListResult { ok: _, entries } => {
-            let entries: Vec<serde_json::Value> = entries
-                .iter()
-                .map(|e| {
-                    serde_json::json!({
-                        "name": e.name,
-                        "label": e.label,
-                        "kind": e.kind,
-                        "policy": e.policy,
-                        "disabled": e.disabled,
-                    })
-                })
-                .collect();
-            FrameAction::just_action(Action::SecretsListResult { entries })
+            FrameAction::just_action(Action::SecretsListResult {
+                entries: entries.clone(),
+            })
         }
         ServerPayload::SecretsStoreResult { ok, message } => {
             FrameAction::just_action(Action::SecretsStoreResult {
@@ -232,17 +222,10 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             name: name.clone(),
             arguments: arguments.clone(),
         }),
-        ServerPayload::UserPromptRequest { id, prompt_json } => {
-            match serde_json::from_str::<rustyclaw_core::user_prompt_types::UserPrompt>(prompt_json) {
-                Ok(mut prompt) => {
-                    prompt.id = id.clone();
-                    FrameAction::just_action(Action::UserPromptRequest(prompt))
-                }
-                Err(e) => FrameAction::just_action(Action::Error(format!(
-                    "Failed to parse user prompt: {}",
-                    e
-                ))),
-            }
+        ServerPayload::UserPromptRequest { id, prompt } => {
+            let mut prompt = prompt.clone();
+            prompt.id = id.clone();
+            FrameAction::just_action(Action::UserPromptRequest(prompt))
         }
         ServerPayload::Empty => FrameAction::none(),
     }
@@ -347,7 +330,7 @@ mod tests {
                 payload: ServerPayload::ToolCall {
                     id: "call_001".into(),
                     name: "read_file".into(),
-                    arguments: serde_json::json!({"path": "/tmp/test"}),
+                    arguments: r#"{"path":"/tmp/test"}"#.into(),
                 },
             };
 
