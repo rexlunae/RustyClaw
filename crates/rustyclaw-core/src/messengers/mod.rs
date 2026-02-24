@@ -1,5 +1,15 @@
 //! Messenger implementations for various chat platforms.
 //!
+//! **DEPRECATION NOTICE**: Native messenger integrations are being phased out
+//! in favor of skill-based messaging via [Beeper](https://www.beeper.com) and
+//! the `claw-me-maybe` skill from ClawHub. The skill approach:
+//! - Requires no recompilation for new platforms
+//! - Handles 15+ platforms through one API
+//! - Is the recommended path in `rustyclaw onboard`
+//!
+//! The native messengers below are retained for backwards compatibility but
+//! are largely untested. New development should focus on skill-based approaches.
+//!
 //! Each messenger implements the `Messenger` trait and can be enabled
 //! via feature flags in Cargo.toml.
 
