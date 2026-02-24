@@ -55,34 +55,39 @@ RustyClaw is in excellent shape. The architecture is clean, the crate split (cor
    - Skill execution
    - Streaming
 
-### 🚨 Critical: TUI Rewrite Incomplete
+### ✅ TUI Rewrite Complete
 
-The iocraft TUI rewrite is **not compilable**. `lib.rs` declares modules that don't exist:
+The iocraft TUI rewrite is **complete and compiling**. Located in `crates/rustyclaw-tui/`:
 
 ```
-Declared in lib.rs    | Status
-─────────────────────────────────
-pub mod action;       | ❌ MISSING
-pub mod app;          | ⚠️ Partial (only handlers/gateway.rs)
-pub mod dialogs;      | ✅ 2 files (user_prompt.rs, tool_approval.rs)
-pub mod gateway_client| ✅ 464 lines
-pub mod onboard;      | ❌ MISSING
-pub mod pages;        | ❌ MISSING
-pub mod panes;        | ❌ MISSING
-pub mod tui;          | ❌ MISSING
-pub mod tui_palette;  | ❌ MISSING
+Module              | Lines  | Description
+─────────────────────────────────────────────────────
+action.rs           | 6,873  | Action enum and variants
+app/app.rs          | ~2,500 | Main application state and logic
+components/         | 15+    | iocraft UI components
+gateway_client.rs   | 15,869 | WebSocket client
+onboard.rs          | 44,456 | Onboarding wizard
+theme.rs            | 4,409  | Color palette and styling
+types.rs            | 1,798  | Shared types
 ```
 
-**Files that exist:**
-- `lib.rs` (17 lines — just module declarations)
-- `gateway_client.rs` (464 lines)
-- `dialogs/user_prompt.rs` (625 lines)
-- `dialogs/tool_approval.rs` (155 lines)
-- `app/handlers/gateway.rs` (1,043 lines)
+**Components implemented:**
+- `root.rs` — Main layout
+- `sidebar.rs` — Navigation sidebar
+- `messages.rs` — Chat message list
+- `message_bubble.rs` — Individual message rendering
+- `input_bar.rs` — User input
+- `status_bar.rs` — Status display
+- `command_menu.rs` — Slash command menu
+- `auth_dialog.rs` — TOTP authentication
+- `vault_unlock_dialog.rs` — Vault password entry
+- `secrets_dialog.rs` — Secrets management
+- `skills_dialog.rs` — Skills browser
+- `tool_approval_dialog.rs` — Tool execution approval
+- `tool_perms_dialog.rs` — Tool permissions
+- `user_prompt_dialog.rs` — User prompts
 
-**Total: ~2,300 lines written, but project won't compile.**
-
-This needs immediate attention before any other work.
+**Build verified:** `cargo check -p rustyclaw-tui` passes.
 
 2. **Messengers**
    | Backend | RustyClaw | OpenClaw |
@@ -146,9 +151,9 @@ OpenClaw has had extensive security work:
 
 ### Critical (Block Production Use)
 
-1. **TUI Compilation** — Verify the iocraft rewrite compiles and runs
-2. **WhatsApp Messenger** — High-value channel for many users
-3. **Canvas Tool** — Currently stub only
+1. **WhatsApp Messenger** — High-value channel for many users
+2. **Canvas Tool** — Currently stub only
+3. **Security Audit** — Match OpenClaw's recent hardening
 
 ### High Priority
 
@@ -176,21 +181,21 @@ OpenClaw has had extensive security work:
 
 ### Immediate (This Week)
 
-1. **Verify TUI builds** — Run `cargo build` on a machine with Rust 1.85
-2. **Complete TUI modules** — Finish stubs in `onboard`, `pages`, `panes`, `tui`
-3. **Test gateway connection** — Ensure WebSocket handshake works end-to-end
+1. **Integration testing** — Run TUI against real gateway
+2. **WhatsApp messenger** — Port from OpenClaw or implement fresh
+3. **End-to-end test** — Full chat flow with tool execution
 
 ### Short Term (2-4 Weeks)
 
-1. **Add WhatsApp messenger** — Port from OpenClaw or implement fresh
-2. **Security review** — Apply OpenClaw's recent hardening patterns
-3. **Integration testing** — Run against real providers (Anthropic, OpenAI)
+1. **Security review** — Apply OpenClaw's recent hardening patterns
+2. **Canvas implementation** — Full node canvas support
+3. **Slack messenger** — Business user support
 
 ### Medium Term (1-2 Months)
 
-1. **Canvas implementation** — Full node canvas support
-2. **Slack messenger** — Business user support
-3. **Documentation** — Migration guide, API docs
+1. **Documentation** — Migration guide, API docs
+2. **iMessage/IRC/Google Chat** — Additional messenger backends
+3. **Kilo/Vercel Providers** — New provider integrations
 
 ### Long Term
 
