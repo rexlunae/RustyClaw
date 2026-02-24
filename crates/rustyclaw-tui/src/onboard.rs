@@ -9,7 +9,7 @@ use std::io::{self, BufRead, Write};
 use anyhow::{Context, Result};
 use crossterm::terminal;
 
-use rustyclaw_core::config::{Config, MessengerConfig, ModelProvider};
+use rustyclaw_core::config::{Config, ModelProvider};
 use rustyclaw_core::providers::PROVIDERS;
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::soul::{SoulManager, DEFAULT_SOUL_CONTENT};
@@ -467,113 +467,15 @@ pub fn run_onboard_wizard(
 
     // ── 7. Configure messengers ────────────────────────────────────
     println!();
-    println!("{}", t::heading("Configure messengers (optional):"));
+    // ── 7. Messaging setup (Beeper / claw-me-maybe) ─────────────
     println!();
-    println!("  Messengers let RustyClaw send and receive messages");
-    println!("  through external platforms.  You can enable any");
-    println!("  combination, or skip this step entirely.");
-    println!();
+    setup_messaging(&mut reader, config)?;
 
-    /// Available messenger definitions for onboarding.
-    struct MessengerDef {
-        id: &'static str,
-        display: &'static str,
-        secret_label: &'static str,
-        secret_key: &'static str,
-    }
-
-    const MESSENGERS: &[MessengerDef] = &[
-        MessengerDef {
-            id: "slack",
-            display: "Slack",
-            secret_label: "Bot token (xoxb-…)",
-            secret_key: "slack_bot_token",
-        },
-        MessengerDef {
-            id: "discord",
-            display: "Discord",
-            secret_label: "Bot token",
-            secret_key: "discord_bot_token",
-        },
-        MessengerDef {
-            id: "telegram",
-            display: "Telegram",
-            secret_label: "Bot token (from @BotFather)",
-            secret_key: "telegram_bot_token",
-        },
-    ];
-
-    let mut configured_messengers: Vec<MessengerConfig> = Vec::new();
-
-    // Allow the user to pick multiple messengers in a loop.
-    let mut remaining: Vec<usize> = (0..MESSENGERS.len()).collect();
-
-    loop {
-        if remaining.is_empty() {
-            break;
-        }
-
-        let mut choices: Vec<&str> = remaining.iter().map(|&i| MESSENGERS[i].display).collect();
-        choices.push("Done — no more messengers");
-
-        let heading = if configured_messengers.is_empty() {
-            "Select a messenger to configure:"
-        } else {
-            "Add another messenger?"
-        };
-
-        match arrow_select(&choices, heading)? {
-            None => break,
-            Some(idx) if idx == choices.len() - 1 => break,
-            Some(pick) => {
-                let orig_idx = remaining[pick];
-                let def = &MESSENGERS[orig_idx];
-                println!();
-
-                let token = prompt_secret(
-                    &mut reader,
-                    &format!("{} ", t::accent(&format!("{} — {}:", def.display, def.secret_label))),
-                )?;
-                let token = token.trim().to_string();
-
-                if token.is_empty() {
-                    println!("  {}", t::icon_warn(&format!(
-                        "No token entered — skipping {}.", def.display,
-                    )));
-                } else {
-                    secrets.store_secret(def.secret_key, &token)?;
-                    println!("  {}", t::icon_ok(&format!(
-                        "{} token stored securely.", def.display,
-                    )));
-
-                    configured_messengers.push(MessengerConfig {
-                        name: def.id.to_string(),
-                        messenger_type: def.id.to_string(),
-                        enabled: true,
-                        ..Default::default()
-                    });
-                }
-
-                remaining.remove(pick);
-                println!();
-            }
-        }
-    }
-
-    if configured_messengers.is_empty() {
-        println!("  {}", t::muted("No messengers configured. You can add them later."));
-    } else {
-        let names: Vec<&str> = configured_messengers.iter().map(|m| m.name.as_str()).collect();
-        println!("  {}", t::icon_ok(&format!(
-            "Messengers enabled: {}", names.join(", "),
-        )));
-    }
-
-    // ── 8. Recommend skills ────────────────────────────────────────
+    // ── 8. Recommend additional skills ─────────────────────────────
     println!();
     setup_recommended_skills(&mut reader, config)?;
 
-    // ── 9. Write config ────────────────────────────────────────────
+    // ── 9. Write config ────────────────────────────────────────
     config.model = Some(ModelProvider {
         provider: provider.id.to_string(),
         model: if model.is_empty() {
@@ -587,7 +489,6 @@ pub fn run_onboard_wizard(
             Some(base_url)
         },
     });
-    config.messengers = configured_messengers;
 
     // Ensure the full directory skeleton exists and save.
     config.ensure_dirs()
@@ -609,7 +510,242 @@ pub fn run_onboard_wizard(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-/// Recommended skills with descriptions.
+/// Walk the user through messaging setup via Beeper + claw-me-maybe skill.
+fn setup_messaging(
+    reader: &mut impl BufRead,
+    config: &Config,
+) -> Result<()> {
+    println!("{}", t::heading("📱 Messaging Setup"));
+    println!();
+    println!("  RustyClaw can send and receive messages across multiple");
+    println!("  platforms using {} — a free app that unifies",
+        t::accent_bright("Beeper"));
+    println!("  all your chats in one place.");
+    println!();
+    println!("  {}", t::bold("Supported platforms:"));
+    println!("    WhatsApp • Telegram • Signal • Discord • Slack");
+    println!("    iMessage • Instagram • LinkedIn • Facebook Messenger");
+    println!("    Google Messages • Google Chat • X (Twitter) DMs");
+    println!();
+
+    let choices = &[
+        "Yes — set up messaging now",
+        "Skip — I'll set it up later",
+    ];
+
+    let selected = match arrow_select(choices, "Would you like to set up messaging?")? {
+        Some(idx) => idx,
+        None => return Ok(()),
+    };
+
+    if selected == 1 {
+        println!();
+        println!("  {}", t::muted("Skipping messaging setup."));
+        println!("  You can set it up later by running:");
+        println!("    {}", t::accent_bright("clawhub install claw-me-maybe"));
+        println!();
+        return Ok(());
+    }
+
+    println!();
+
+    // Step 1: Check/install Beeper
+    println!("{}", t::heading("Step 1: Install Beeper"));
+    println!();
+    println!("  Beeper is a free desktop app that connects all your chat");
+    println!("  accounts. RustyClaw talks to Beeper's local API.");
+    println!();
+    println!("  {} {}", t::bold("Download:"), t::accent_bright("https://www.beeper.com/download"));
+    println!();
+
+    let beeper_ready = prompt_line(
+        reader,
+        &format!("{} ", t::accent("Press Enter once Beeper is installed (or 's' to skip):")),
+    )?;
+
+    if beeper_ready.trim().eq_ignore_ascii_case("s") {
+        println!();
+        println!("  {}", t::muted("Skipping messaging setup. Run the wizard again when ready."));
+        println!();
+        return Ok(());
+    }
+
+    // Step 2: Enable Desktop API
+    println!();
+    println!("{}", t::heading("Step 2: Enable Beeper Desktop API"));
+    println!();
+    println!("  In the Beeper app:");
+    println!("    1. Open {} → {}", t::bold("Settings"), t::bold("Developers"));
+    println!("    2. Toggle {} ON", t::accent_bright("\"Beeper Desktop API\""));
+    println!();
+
+    let api_enabled = prompt_line(
+        reader,
+        &format!("{} ", t::accent("Press Enter once the API is enabled (or 's' to skip):")),
+    )?;
+
+    if api_enabled.trim().eq_ignore_ascii_case("s") {
+        println!();
+        println!("  {}", t::muted("Skipping. You can continue setup later."));
+        println!();
+        return Ok(());
+    }
+
+    // Step 3: Test connection
+    println!();
+    print!("  {} Testing Beeper connection...", t::muted("⠋"));
+    io::stdout().flush()?;
+
+    let beeper_ok = std::process::Command::new("curl")
+        .args(["-s", "--connect-timeout", "2", "http://localhost:23373/health"])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    print!("\r{}\r", " ".repeat(50));
+
+    if beeper_ok {
+        println!("  {}", t::icon_ok("Beeper Desktop API is running!"));
+    } else {
+        println!("  {}", t::icon_warn("Could not connect to Beeper API."));
+        println!("  Make sure Beeper is running and the Desktop API is enabled.");
+        println!();
+
+        let retry = prompt_line(
+            reader,
+            &format!("{} ", t::accent("Try again? [Y/n]:")),
+        )?;
+
+        if !retry.trim().eq_ignore_ascii_case("n") {
+            // Recursive retry
+            return setup_messaging(reader, config);
+        }
+
+        println!();
+        println!("  {}", t::muted("You can test the connection later with:"));
+        println!("    {}", t::accent_bright("curl http://localhost:23373/health"));
+        println!();
+        // Continue to install skill anyway
+    }
+
+    // Step 4: Install claw-me-maybe skill
+    println!();
+    println!("{}", t::heading("Step 3: Install Messaging Skill"));
+    println!();
+
+    // Check if clawhub is available
+    let clawhub_available = std::process::Command::new("clawhub")
+        .arg("--help")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !clawhub_available {
+        println!("  {}", t::warn("clawhub CLI not found."));
+        println!();
+        println!("  Install it with:");
+        println!("    {}", t::accent_bright("npm install -g clawhub"));
+        println!();
+        println!("  Then install the messaging skill:");
+        println!("    {}", t::accent_bright("clawhub install claw-me-maybe"));
+        println!();
+        return Ok(());
+    }
+
+    let skills_dir = config.workspace_dir().join("skills");
+
+    // Check if already installed
+    let skill_path = skills_dir.join("claw-me-maybe");
+    if skill_path.exists() {
+        println!("  {}", t::icon_ok("claw-me-maybe skill is already installed!"));
+        println!();
+        println!("  {}", t::bold("You're all set! Try asking RustyClaw:"));
+        println!("    {}", t::muted("\"Show me my unread messages\""));
+        println!("    {}", t::muted("\"Send a WhatsApp message to Mom\""));
+        println!("    {}", t::muted("\"Search my chats for dinner plans\""));
+        println!();
+        return Ok(());
+    }
+
+    print!("  {} Installing claw-me-maybe skill...", t::muted("⠋"));
+    io::stdout().flush()?;
+
+    let output = std::process::Command::new("clawhub")
+        .args(["install", "claw-me-maybe", "--dir", &skills_dir.to_string_lossy()])
+        .output();
+
+    print!("\r{}\r", " ".repeat(50));
+
+    match output {
+        Ok(out) if out.status.success() => {
+            println!("  {}", t::icon_ok("Messaging skill installed!"));
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            println!("  {}", t::icon_warn(&format!("Installation failed: {}", stderr.trim())));
+            println!();
+            println!("  You can try manually:");
+            println!("    {}", t::accent_bright("clawhub install claw-me-maybe"));
+            println!();
+            return Ok(());
+        }
+        Err(e) => {
+            println!("  {}", t::icon_warn(&format!("Installation failed: {}", e)));
+            return Ok(());
+        }
+    }
+
+    // Step 5: Optional access token
+    println!();
+    println!("{}", t::heading("Step 4: Access Token (Optional)"));
+    println!();
+    println!("  For smoother automation, you can create a Beeper access token.");
+    println!("  This is optional — Beeper will prompt for OAuth if needed.");
+    println!();
+    println!("  To create a token:");
+    println!("    1. Beeper → {} → {}", t::bold("Settings"), t::bold("Developers"));
+    println!("    2. Click {}", t::accent_bright("\"Create Access Token\""));
+    println!();
+
+    let token = prompt_secret(
+        reader,
+        &format!("{} ", t::accent("Paste token here (or press Enter to skip):")),
+    )?;
+    let token = token.trim();
+
+    if !token.is_empty() {
+        // Store in skills config or environment
+        // For now, tell them how to configure it
+        println!();
+        println!("  {}", t::icon_ok("Token noted!"));
+        println!();
+        println!("  Add it to your config:");
+        println!("    {}", t::accent_bright("~/.rustyclaw/config.toml"));
+        println!();
+        println!("    [skills.claw-me-maybe.env]");
+        println!("    BEEPER_ACCESS_TOKEN = \"{}...\"", &token[..token.len().min(8)]);
+        println!();
+    } else {
+        println!("  {}", t::muted("Skipping token — Beeper will prompt when needed."));
+    }
+
+    // Success!
+    println!();
+    t::print_header("🎉 Messaging is ready!");
+    println!();
+    println!("  {}", t::bold("Try these commands:"));
+    println!("    {}", t::muted("\"Show me my unread messages\""));
+    println!("    {}", t::muted("\"Send a WhatsApp message to John saying I'm on my way\""));
+    println!("    {}", t::muted("\"Search my Telegram chats for project updates\""));
+    println!("    {}", t::muted("\"React with 👍 to that last message\""));
+    println!();
+
+    Ok(())
+}
+
+/// Recommended skills with descriptions (excludes messaging — handled separately).
 struct RecommendedSkill {
     slug: &'static str,
     display: &'static str,
@@ -618,19 +754,6 @@ struct RecommendedSkill {
 }
 
 const RECOMMENDED_SKILLS: &[RecommendedSkill] = &[
-    // Messaging
-    RecommendedSkill {
-        slug: "claw-me-maybe",
-        display: "Claw Me Maybe (Beeper)",
-        description: "Unified messaging via Beeper — WhatsApp, Telegram, Signal, Discord, Slack, iMessage, and more through one API",
-        category: "Messaging",
-    },
-    RecommendedSkill {
-        slug: "signal-messenger-standalone",
-        display: "Signal Standalone",
-        description: "Direct Signal integration via signal-cli for standalone bots",
-        category: "Messaging",
-    },
     // Development
     RecommendedSkill {
         slug: "github",
