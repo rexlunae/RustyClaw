@@ -1,4 +1,4 @@
-//! Memory tools: memory_search and memory_get.
+//! Memory tools: memory_search, memory_get, and save_memory.
 
 use serde_json::Value;
 use std::path::Path;
@@ -123,4 +123,91 @@ pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, Str
     debug!(path, from_line, num_lines, "Reading memory file");
 
     crate::memory::read_memory_file(workspace_dir, path, from_line, num_lines)
+}
+
+/// Save memory using two-layer consolidation.
+///
+/// This tool allows the LLM to:
+/// 1. Append a timestamped entry to HISTORY.md (searchable log)
+/// 2. Optionally update MEMORY.md with curated long-term facts
+///
+/// The LLM decides what's important enough to persist.
+#[instrument(skip(args, workspace_dir))]
+pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+    let history_entry = args
+        .get("history_entry")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: history_entry".to_string())?;
+
+    let memory_update = args
+        .get("memory_update")
+        .and_then(|v| v.as_str());
+
+    debug!(
+        history_entry_len = history_entry.len(),
+        has_memory_update = memory_update.is_some(),
+        "Saving memory"
+    );
+
+    let config = crate::memory_consolidation::ConsolidationConfig::default();
+    let consolidation = crate::memory_consolidation::MemoryConsolidation::new(config);
+
+    // Append to HISTORY.md
+    let history_size = consolidation.append_history(workspace_dir, history_entry)?;
+
+    // Update MEMORY.md if provided
+    let memory_size = if let Some(content) = memory_update {
+        consolidation.update_memory(workspace_dir, content)?
+    } else {
+        // Read current size
+        consolidation
+            .read_memory(workspace_dir)
+            .map(|s| s.len())
+            .unwrap_or(0)
+    };
+
+    let mut output = String::new();
+    output.push_str("Memory saved successfully.\n\n");
+    output.push_str(&format!("- HISTORY.md: {} bytes (entry appended)\n", history_size));
+    if memory_update.is_some() {
+        output.push_str(&format!("- MEMORY.md: {} bytes (updated)\n", memory_size));
+    } else {
+        output.push_str("- MEMORY.md: unchanged\n");
+    }
+
+    Ok(output)
+}
+
+/// Search HISTORY.md for past entries matching a pattern.
+#[instrument(skip(args, workspace_dir))]
+pub fn exec_search_history(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+    let pattern = args
+        .get("pattern")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: pattern".to_string())?;
+
+    let max_results = args
+        .get("maxResults")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10) as usize;
+
+    debug!(pattern, max_results, "Searching history");
+
+    let config = crate::memory_consolidation::ConsolidationConfig::default();
+    let consolidation = crate::memory_consolidation::MemoryConsolidation::new(config);
+
+    let results = consolidation.search_history(workspace_dir, pattern, max_results)?;
+
+    if results.is_empty() {
+        return Ok(format!("No entries found in HISTORY.md matching: {}", pattern));
+    }
+
+    let mut output = String::new();
+    output.push_str(&format!("History entries matching '{}' ({} found):\n\n", pattern, results.len()));
+
+    for entry in results {
+        output.push_str(&format!("[{}] {}\n\n", entry.timestamp, entry.text));
+    }
+
+    Ok(output)
 }

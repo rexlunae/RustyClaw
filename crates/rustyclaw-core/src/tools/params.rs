@@ -348,6 +348,40 @@ pub fn memory_get_params() -> Vec<ToolParam> {
     ]
 }
 
+pub fn save_memory_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "history_entry".into(),
+            description: "A summary to append to HISTORY.md with timestamp. Use for logging events, decisions, and facts.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "memory_update".into(),
+            description: "Optional: full new content for MEMORY.md. Replaces the entire file. Use to curate long-term facts.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn search_history_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "pattern".into(),
+            description: "Text pattern to search for in HISTORY.md entries.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "maxResults".into(),
+            description: "Maximum number of entries to return. Default: 10.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}
+
 pub fn secrets_list_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "prefix".into(),

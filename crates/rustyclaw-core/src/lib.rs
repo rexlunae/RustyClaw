@@ -13,6 +13,7 @@ pub mod error;
 pub mod gateway;
 pub mod logging;
 pub mod memory;
+pub mod memory_consolidation;
 pub mod memory_flush;
 pub mod messengers;
 pub mod observability;

@@ -56,7 +56,7 @@ use runtime::{exec_execute_command, exec_process};
 use web::{exec_web_fetch, exec_web_search};
 
 // Memory operations
-use memory_tools::{exec_memory_search, exec_memory_get};
+use memory_tools::{exec_memory_search, exec_memory_get, exec_save_memory, exec_search_history};
 
 // Cron operations
 use cron_tool::exec_cron;
@@ -207,6 +207,8 @@ pub fn tool_summary(name: &str) -> &'static str {
         "process" => "Manage background processes",
         "memory_search" => "Search agent memory files",
         "memory_get" => "Read agent memory files",
+        "save_memory" => "Save memories (two-layer consolidation)",
+        "search_history" => "Search HISTORY.md for past entries",
         "cron" => "Manage scheduled jobs",
         "sessions_list" => "List active sessions",
         "sessions_spawn" => "Spawn sub-agent sessions",
@@ -294,6 +296,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &PROCESS,
         &MEMORY_SEARCH,
         &MEMORY_GET,
+        &SAVE_MEMORY,
+        &SEARCH_HISTORY,
         &CRON,
         &SESSIONS_LIST,
         &SESSIONS_SPAWN,
@@ -468,6 +472,23 @@ pub static MEMORY_GET: ToolDef = ToolDef {
                   Supports optional line range for large files.",
     parameters: vec![],
     execute: exec_memory_get,
+};
+
+pub static SAVE_MEMORY: ToolDef = ToolDef {
+    name: "save_memory",
+    description: "Save memories using two-layer consolidation. Appends a timestamped entry to HISTORY.md \
+                  (grep-searchable log) and optionally updates MEMORY.md (curated long-term facts). \
+                  Use to persist important context, decisions, and facts for future recall.",
+    parameters: vec![],
+    execute: exec_save_memory,
+};
+
+pub static SEARCH_HISTORY: ToolDef = ToolDef {
+    name: "search_history",
+    description: "Search HISTORY.md for past entries matching a pattern. Returns timestamped entries \
+                  that match the query. Use to recall when something happened or find past events.",
+    parameters: vec![],
+    execute: exec_search_history,
 };
 
 pub static CRON: ToolDef = ToolDef {
@@ -979,6 +1000,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "process" => process_params(),
         "memory_search" => memory_search_params(),
         "memory_get" => memory_get_params(),
+        "save_memory" => save_memory_params(),
+        "search_history" => search_history_params(),
         "cron" => cron_params(),
         "sessions_list" => sessions_list_params(),
         "sessions_spawn" => sessions_spawn_params(),
