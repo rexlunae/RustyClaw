@@ -16,6 +16,7 @@ mod providers;
 pub mod protocol;
 mod secrets_handler;
 mod skills_handler;
+pub mod task_handler;
 mod types;
 
 // Re-export protocol types
@@ -82,6 +83,9 @@ pub type SharedConfig = Arc<RwLock<Config>>;
 
 /// Shared model context, updated on reload.
 pub type SharedModelCtx = Arc<RwLock<Option<Arc<ModelContext>>>>;
+
+/// Shared task manager for first-class task orchestration.
+pub type SharedTaskManager = Arc<crate::tasks::TaskManager>;
 
 // Re-export protocol helpers for external use
 pub use protocol::server::{
@@ -168,8 +172,12 @@ pub async fn run_gateway(
     model_ctx: Option<ModelContext>,
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
+    task_mgr: Option<SharedTaskManager>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    // Create task manager if not provided
+    let task_mgr = task_mgr.unwrap_or_else(|| Arc::new(crate::tasks::TaskManager::new()));
+
     // Register the credentials directory so file-access tools can enforce
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());

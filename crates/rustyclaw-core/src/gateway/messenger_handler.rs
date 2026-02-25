@@ -381,6 +381,10 @@ async fn process_incoming_message(
                 // Canvas tools require the canvas host - for now, return an error
                 // TODO: Pass canvas_host to this function
                 (format!("Canvas tool '{}' called but canvas host not available in this context", tc.name), true)
+            } else if super::task_handler::is_task_tool(&tc.name) {
+                // Task tools require the task manager - for now, return an error
+                // TODO: Pass task_mgr to this function
+                (format!("Task tool '{}' called but task manager not available in this context", tc.name), true)
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir) {
                     Ok(text) => (text, false),
