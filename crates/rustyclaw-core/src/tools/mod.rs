@@ -50,7 +50,7 @@ pub use helpers::{
 use file::{exec_read_file, exec_write_file, exec_edit_file, exec_list_directory, exec_search_files, exec_find_files};
 
 // Runtime operations
-use runtime::{exec_execute_command, exec_process};
+use runtime::{exec_execute_command, exec_process, exec_execute_command_async, exec_process_async};
 
 // Web operations
 use web::{exec_web_fetch, exec_web_search};
@@ -1402,15 +1402,31 @@ pub fn is_user_prompt_tool(name: &str) -> bool {
     name == "ask_user"
 }
 
+/// Tools that have native async implementations.
+const ASYNC_NATIVE_TOOLS: &[&str] = &["execute_command", "process"];
+
 /// Find a tool by name and execute it with the given arguments.
 /// 
-/// Tool execution is run on a blocking thread pool to avoid blocking
-/// the async runtime, since most tools do sync I/O.
+/// Tools with async implementations are called directly.
+/// Other tools run on a blocking thread pool to avoid blocking the async runtime.
 #[instrument(skip(args, workspace_dir), fields(tool = name))]
 pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Result<String, String> {
     debug!("Executing tool");
     
-    // Find the tool
+    // Handle async-native tools directly
+    if ASYNC_NATIVE_TOOLS.contains(&name) {
+        let result = match name {
+            "execute_command" => runtime::exec_execute_command_async(args, workspace_dir).await,
+            "process" => runtime::exec_process_async(args, workspace_dir).await,
+            _ => unreachable!(),
+        };
+        if result.is_err() {
+            warn!(error = ?result.as_ref().err(), "Tool execution failed");
+        }
+        return result;
+    }
+    
+    // Find the tool for sync execution
     let tool = all_tools().into_iter().find(|t| t.name == name);
     
     let Some(tool) = tool else {
@@ -1423,7 +1439,7 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
     
-    // Run on blocking thread pool to avoid blocking async runtime
+    // Run sync tools on blocking thread pool
     let result = tokio::task::spawn_blocking(move || {
         execute_fn(&args, &workspace_dir)
     })
