@@ -1571,10 +1571,18 @@ fn run_refresh_token(args: &RefreshTokenArgs, config: &mut Config) -> Result<()>
         if pid_file.exists() {
             if let Ok(pid_str) = fs::read_to_string(&pid_file) {
                 if let Ok(pid) = pid_str.trim().parse::<i32>() {
-                    unsafe {
-                        libc::kill(pid, libc::SIGHUP);
+                    #[cfg(unix)]
+                    {
+                        unsafe {
+                            libc::kill(pid, libc::SIGHUP);
+                        }
+                        println!("{} Sent reload signal to gateway (pid {})", "✓".green(), pid);
                     }
-                    println!("{} Sent reload signal to gateway (pid {})", "✓".green(), pid);
+                    #[cfg(not(unix))]
+                    {
+                        let _ = pid; // Suppress unused warning
+                        println!("{}", "Signal sending not supported on Windows. Please restart gateway manually.".yellow());
+                    }
                 }
             }
         } else {
