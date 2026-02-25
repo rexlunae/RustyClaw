@@ -6,7 +6,7 @@ use serde_json::{json, Value};
 use tracing::instrument;
 
 use super::SharedTaskManager;
-use crate::tasks::{Task, TaskId, TaskStatus, TaskIcon, format_task_status};
+use crate::tasks::{Task, TaskId, TaskStatus, TaskIcon, format_task_status, format_task_indicators};
 
 /// Check if a tool name is a task tool.
 pub fn is_task_tool(name: &str) -> bool {

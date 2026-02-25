@@ -175,12 +175,12 @@ impl TaskManager {
         let (control_tx, _control_rx) = mpsc::channel(32);
         
         // Create output broadcast channel
-        let (output_tx, output_rx) = broadcast::channel(256);
+        let (output_tx, _output_rx) = broadcast::channel(256);
         
         // Store task
         self.tasks.write().await.insert(id, task.clone());
         self.controls.write().await.insert(id, control_tx.clone());
-        self.outputs.write().await.insert(id, output_tx);
+        self.outputs.write().await.insert(id, output_tx.clone());
         
         // Emit event
         let _ = self.events_tx.send(TaskEvent::Created(task));
