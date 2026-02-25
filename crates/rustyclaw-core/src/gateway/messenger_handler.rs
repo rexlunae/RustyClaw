@@ -24,6 +24,7 @@ use super::secrets_handler;
 use super::skills_handler;
 use super::{ChatMessage, MediaRef, ModelContext, ProviderRequest, SharedSkillManager, SharedVault, ToolCallResult};
 
+#[cfg(feature = "matrix")]
 use crate::messengers::MatrixMessenger;
 
 /// Shared messenger manager for the gateway.
@@ -108,6 +109,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .context("Webhook requires 'webhook_url' or WEBHOOK_URL env var")?;
             Box::new(WebhookMessenger::new(name, url))
         }
+        #[cfg(feature = "matrix")]
         "matrix" => {
             let homeserver = config
                 .homeserver
@@ -133,6 +135,10 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 anyhow::bail!("Matrix requires either 'password' or 'access_token'");
             };
             Box::new(messenger)
+        }
+        #[cfg(not(feature = "matrix"))]
+        "matrix" => {
+            anyhow::bail!("Matrix messenger not compiled in. Rebuild with --features matrix");
         }
         // Signal messenger removed — use claw-me-maybe skill or signal-messenger-standalone
         other => anyhow::bail!("Unknown messenger type: {}", other),
