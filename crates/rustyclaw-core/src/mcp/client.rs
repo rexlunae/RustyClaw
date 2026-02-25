@@ -4,9 +4,11 @@ use anyhow::{Context, Result};
 use rmcp::{
     ServiceExt,
     transport::TokioChildProcess,
-    model::{CallToolRequestParam, ListToolsResult},
+    model::{CallToolRequestParams, ListToolsResult},
+    service::RunningService,
+    RoleClient,
 };
-use std::collections::HashMap;
+use serde_json::Map as JsonMap;
 use std::sync::Arc;
 use tokio::process::Command;
 use tokio::sync::Mutex;
@@ -20,8 +22,8 @@ pub struct McpClient {
     /// Server name for identification
     name: String,
 
-    /// The underlying rmcp service peer
-    peer: Arc<Mutex<Option<rmcp::Peer<rmcp::RoleClient>>>>,
+    /// The underlying rmcp running service (owns the peer)
+    service: Arc<Mutex<Option<RunningService<RoleClient, ()>>>>,
 
     /// Cached tools from this server
     tools: Arc<Mutex<Vec<McpTool>>>,
@@ -35,7 +37,7 @@ impl McpClient {
     pub fn new(name: String, config: McpServerConfig) -> Self {
         Self {
             name,
-            peer: Arc::new(Mutex::new(None)),
+            service: Arc::new(Mutex::new(None)),
             tools: Arc::new(Mutex::new(Vec::new())),
             config,
         }
@@ -58,16 +60,16 @@ impl McpClient {
             cmd.current_dir(cwd);
         }
 
-        // Create stdio transport
-        let transport = TokioChildProcess::new(&mut cmd)
+        // Create stdio transport - pass owned Command (rmcp 0.16 API)
+        let transport = TokioChildProcess::new(cmd)
             .context("Failed to spawn MCP server process")?;
 
-        // Connect and initialize
-        let peer = ().serve(transport).await
+        // Connect and initialize - returns RunningService which derefs to Peer
+        let running = ().serve(transport).await
             .context("Failed to initialize MCP connection")?;
 
-        // Store the peer
-        *self.peer.lock().await = Some(peer);
+        // Store the running service
+        *self.service.lock().await = Some(running);
 
         // Refresh tools list
         self.refresh_tools().await?;
@@ -78,13 +80,13 @@ impl McpClient {
 
     /// Check if connected.
     pub async fn is_connected(&self) -> bool {
-        self.peer.lock().await.is_some()
+        self.service.lock().await.is_some()
     }
 
     /// Disconnect from the MCP server.
     pub async fn disconnect(&self) -> Result<()> {
-        if let Some(peer) = self.peer.lock().await.take() {
-            peer.cancel().await?;
+        if let Some(service) = self.service.lock().await.take() {
+            let _ = service.cancel().await;
             info!(server = %self.name, "MCP server disconnected");
         }
         Ok(())
@@ -92,11 +94,11 @@ impl McpClient {
 
     /// Refresh the list of available tools.
     pub async fn refresh_tools(&self) -> Result<Vec<McpTool>> {
-        let peer_guard = self.peer.lock().await;
-        let peer = peer_guard.as_ref()
+        let service_guard = self.service.lock().await;
+        let service = service_guard.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to MCP server"))?;
 
-        let result: ListToolsResult = peer.list_tools(None).await
+        let result: ListToolsResult = service.list_tools(None).await
             .context("Failed to list tools")?;
 
         let tools: Vec<McpTool> = result.tools
@@ -124,46 +126,66 @@ impl McpClient {
 
     /// Call a tool on this MCP server.
     pub async fn call_tool(&self, tool_name: &str, arguments: serde_json::Value) -> Result<McpToolResult> {
-        let peer_guard = self.peer.lock().await;
-        let peer = peer_guard.as_ref()
+        let service_guard = self.service.lock().await;
+        let service = service_guard.as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to MCP server"))?;
 
         debug!(server = %self.name, tool = tool_name, "Calling MCP tool");
 
-        // Convert arguments to the expected format
-        let args_map: Option<HashMap<String, serde_json::Value>> = match arguments {
-            serde_json::Value::Object(map) => {
-                Some(map.into_iter().collect())
-            }
+        // Convert arguments to JsonObject (serde_json::Map)
+        let args_map: Option<JsonMap<String, serde_json::Value>> = match arguments {
+            serde_json::Value::Object(map) => Some(map),
             serde_json::Value::Null => None,
             _ => {
                 return Ok(McpToolResult::error("Arguments must be an object"));
             }
         };
 
-        let params = CallToolRequestParam {
-            name: tool_name.into(),
+        let params = CallToolRequestParams {
+            name: tool_name.to_string().into(),
             arguments: args_map,
+            meta: None,
+            task: None,
         };
 
-        match peer.call_tool(params).await {
+        match service.call_tool(params).await {
             Ok(result) => {
+                use rmcp::model::RawContent;
+                
                 let content: Vec<McpContent> = result.content
                     .into_iter()
                     .map(|c| {
-                        // Convert rmcp content to our McpContent type
-                        match c {
-                            rmcp::model::Content::Text(t) => McpContent::Text { 
-                                text: t.text.to_string() 
+                        // Annotated<RawContent> derefs to RawContent
+                        match &*c {
+                            RawContent::Text(t) => McpContent::Text { 
+                                text: t.text.clone()
                             },
-                            rmcp::model::Content::Image(i) => McpContent::Image {
-                                data: i.data.to_string(),
-                                mime_type: i.mime_type.to_string(),
+                            RawContent::Image(i) => McpContent::Image {
+                                data: i.data.clone(),
+                                mime_type: i.mime_type.clone(),
                             },
-                            rmcp::model::Content::Resource(r) => McpContent::Resource {
-                                uri: r.resource.uri.to_string(),
-                                mime_type: r.resource.mime_type.map(|s| s.to_string()),
-                                text: r.resource.text.map(|s| s.to_string()),
+                            RawContent::Resource(r) => {
+                                use rmcp::model::ResourceContents;
+                                match &r.resource {
+                                    ResourceContents::TextResourceContents { uri, mime_type, text, .. } => McpContent::Resource {
+                                        uri: uri.clone(),
+                                        mime_type: mime_type.clone(),
+                                        text: Some(text.clone()),
+                                    },
+                                    ResourceContents::BlobResourceContents { uri, mime_type, .. } => McpContent::Resource {
+                                        uri: uri.clone(),
+                                        mime_type: mime_type.clone(),
+                                        text: None,
+                                    },
+                                }
+                            },
+                            RawContent::Audio(a) => McpContent::Text {
+                                text: format!("[Audio: {} bytes, {}]", a.data.len(), a.mime_type),
+                            },
+                            RawContent::ResourceLink(r) => McpContent::Resource {
+                                uri: r.uri.clone(),
+                                mime_type: r.mime_type.clone(),
+                                text: r.description.clone(),
                             },
                         }
                     })

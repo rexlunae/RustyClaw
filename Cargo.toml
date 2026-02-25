@@ -127,7 +127,7 @@ wa-rs-ureq-http = "0.2"
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 
 # MCP (Model Context Protocol) client support
-rmcp = { version = "0.16", features = ["client"] }
+rmcp = { version = "0.16", features = ["client", "transport-child-process"] }
 
 # Schema generation for MCP
 schemars = "1.0.0-alpha.17"
