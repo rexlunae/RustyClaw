@@ -1,7 +1,7 @@
 //! Task model — core types for task representation.
 
 use serde::{Deserialize, Serialize};
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, SystemTime};
 
 /// Unique identifier for a task.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

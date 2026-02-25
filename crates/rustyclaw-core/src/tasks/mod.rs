@@ -19,4 +19,4 @@ mod display;
 
 pub use model::{Task, TaskId, TaskStatus, TaskKind, TaskProgress};
 pub use manager::{TaskManager, TaskHandle, TaskEvent};
-pub use display::{TaskIcon, TaskIndicator, format_task_status, format_task_indicators};
+pub use display::{TaskIcon, TaskIndicator, format_task_status, format_task_indicators, format_task_icons};

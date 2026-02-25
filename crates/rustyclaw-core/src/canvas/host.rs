@@ -2,10 +2,10 @@
 
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use super::a2ui::{A2UIMessage, A2UISurface};
 use super::config::CanvasConfig;
@@ -193,7 +193,7 @@ impl CanvasHost {
     // ── Snapshot ────────────────────────────────────────────────────────────
 
     /// Capture a snapshot of the canvas (placeholder for browser-based capture).
-    pub async fn snapshot(&self, session: &str) -> Result<Vec<u8>> {
+    pub async fn snapshot(&self, _session: &str) -> Result<Vec<u8>> {
         // This would require browser automation to capture
         // For now, return an error indicating it's not implemented
         anyhow::bail!("Canvas snapshot requires browser automation (not yet implemented)")

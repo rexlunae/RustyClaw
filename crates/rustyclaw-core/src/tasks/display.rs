@@ -1,6 +1,6 @@
 //! Task display — icons, indicators, and formatting.
 
-use super::model::{Task, TaskId, TaskStatus, TaskKind};
+use super::model::{Task, TaskStatus};
 
 /// Icon representation for task status.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,7 +7,7 @@
 //! The LLM calls `save_memory` to consolidate conversation history, deciding
 //! what facts to keep in MEMORY.md and what to log in HISTORY.md.
 
-use chrono::{DateTime, Utc};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::Write;

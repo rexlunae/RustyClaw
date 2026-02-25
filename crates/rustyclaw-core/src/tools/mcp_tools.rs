@@ -10,7 +10,7 @@ use tracing::{debug, instrument};
 
 /// List connected MCP servers and their tools.
 #[instrument(skip(args, _workspace_dir), fields(action = "list"))]
-pub fn exec_mcp_list(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_mcp_list(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     debug!("Listing MCP servers");
 
     // This is a stub — the gateway intercepts this and uses its MCP manager

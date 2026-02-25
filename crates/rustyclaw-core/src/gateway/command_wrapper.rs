@@ -3,11 +3,11 @@
 //! Intercepts execute_command tool calls at the gateway level to create
 //! first-class Task entries for all command executions.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tracing::{debug, instrument};
 
 use super::SharedTaskManager;
-use crate::tasks::{TaskId, TaskKind, TaskProgress};
+use crate::tasks::{TaskId, TaskKind};
 
 /// Check if a tool call should be wrapped in a Task.
 pub fn should_wrap_in_task(tool_name: &str) -> bool {

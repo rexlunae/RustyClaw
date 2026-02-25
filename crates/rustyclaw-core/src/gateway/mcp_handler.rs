@@ -1,6 +1,6 @@
 //! MCP tool execution handler for the gateway.
 
-use tracing::{debug, warn, instrument};
+use tracing::instrument;
 
 #[cfg(feature = "mcp")]
 use crate::mcp::McpManager;

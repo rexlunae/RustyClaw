@@ -3,7 +3,7 @@
 //! Handles model_* tool calls by interacting with the shared ModelRegistry.
 
 use serde_json::{json, Value};
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use crate::models::{CostTier, TaskComplexity, SharedModelRegistry};
 
