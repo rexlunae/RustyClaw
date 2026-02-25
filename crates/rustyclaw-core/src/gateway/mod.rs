@@ -7,6 +7,7 @@
 
 mod auth;
 pub mod canvas_handler;
+mod command_wrapper;
 pub mod csrf;
 pub mod health;
 mod helpers;

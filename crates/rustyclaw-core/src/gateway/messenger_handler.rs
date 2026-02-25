@@ -395,6 +395,43 @@ async fn process_incoming_message(
                     Ok(text) => (text, false),
                     Err(err) => (err, true),
                 }
+            } else if super::command_wrapper::should_wrap_in_task(&tc.name) {
+                // Wrap execute_command in a Task
+                let task_id = super::command_wrapper::start_command_task(
+                    task_mgr,
+                    &tc.arguments,
+                    &conv_key,
+                ).await;
+
+                let result = tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir);
+
+                match result {
+                    Ok(output) => {
+                        // Check if it was backgrounded
+                        if let Some(session_id) = super::command_wrapper::parse_session_id(&output) {
+                            super::command_wrapper::update_command_task_session(
+                                task_mgr,
+                                task_id,
+                                &session_id,
+                            ).await;
+                        } else {
+                            super::command_wrapper::complete_command_task(
+                                task_mgr,
+                                task_id,
+                                &output,
+                            ).await;
+                        }
+                        (output, false)
+                    }
+                    Err(err) => {
+                        super::command_wrapper::fail_command_task(
+                            task_mgr,
+                            task_id,
+                            &err,
+                        ).await;
+                        (err, true)
+                    }
+                }
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir) {
                     Ok(text) => (text, false),
