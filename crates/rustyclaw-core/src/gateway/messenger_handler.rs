@@ -615,25 +615,19 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
     ).await;
     parts.push(model_guidance);
 
-    // Add tool usage guidelines (inspired by OpenClaw's explicit behavioral guidance)
+    // Add comprehensive tool usage guidelines (inspired by OpenClaw's patterns)
+    parts.push(build_tool_usage_section());
+
+    // Add silent reply guidance
     parts.push(
-        "## Tool Usage Guidelines\n\n\
-        ### Credentials & API Access\n\
-        **Before asking for API keys or tokens:** Run `secrets_list` to check the vault first.\n\
-        If a credential exists, use `secrets_get` to retrieve it — don't ask the user again.\n\n\
-        **Authenticated API workflow:**\n\
-        1. `secrets_list()` → discover available credentials\n\
-        2. `secrets_get(name=\"...\")` → retrieve the value\n\
-        3. `web_fetch(url=\"...\", authorization=\"token <value>\")` → make the API call\n\n\
-        ### Memory Recall\n\
-        Before answering questions about prior work, decisions, dates, people, preferences, or todos:\n\
-        Run `memory_search` first, then use `memory_get` to pull relevant context.\n\n\
-        ### Tool Call Style\n\
-        - Default: don't narrate routine tool calls (just call them)\n\
-        - Narrate only for: multi-step work, complex problems, or sensitive actions\n\
-        - Keep narration brief and value-dense\n\n\
-        ### Long-Running Commands\n\
-        Use `execute_command` with `background=true`, then poll with `process` tool."
+        "## Silent Replies\n\
+        When you have nothing to say, respond with ONLY: NO_REPLY\n\n\
+        ⚠️ Rules:\n\
+        - It must be your ENTIRE message — nothing else\n\
+        - Never append it to an actual response\n\
+        - Never wrap it in markdown or code blocks\n\n\
+        ❌ Wrong: \"Here's the info... NO_REPLY\"\n\
+        ✅ Right: NO_REPLY"
         .to_string()
     );
 
@@ -646,13 +640,62 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         When responding:\n\
         - Be concise and appropriate for chat\n\
         - You have access to tools — use them when helpful\n\
-        - If you have nothing to say, reply with: NO_REPLY",
+        - For proactive sends, use the `message` tool",
         msg.channel.as_deref().unwrap_or("direct"),
         msg.sender,
         messenger_type
     ));
 
     parts.join("\n\n")
+}
+
+/// Build the Tool Usage Guidelines section for system prompts.
+fn build_tool_usage_section() -> String {
+    "\
+## Tool Usage Guidelines
+
+### Credentials & API Access (IMPORTANT)
+**Before asking for API keys or tokens:** Run `secrets_list` to check the vault first.
+If a credential exists, use `secrets_get` to retrieve it — don't ask the user again.
+
+**Authenticated API workflow:**
+1. `secrets_list()` → discover available credentials
+2. `secrets_get(name=\"...\")` → retrieve the value  
+3. `web_fetch(url=\"...\", authorization=\"token <value>\")` → make the API call
+
+**Common authorization formats:**
+- GitHub PAT: `authorization=\"token ghp_...\"`
+- Bearer tokens: `authorization=\"Bearer eyJ...\"`
+- Custom headers: `headers={\"X-Api-Key\": \"...\"}`
+
+### Memory Recall
+Before answering questions about prior work, decisions, dates, people, preferences, or todos:
+Run `memory_search` first, then use `memory_get` to pull relevant context.
+If low confidence after search, mention that you checked but didn't find a match.
+
+### File Operations
+- `read_file` — read file contents (supports text, PDF, docx, etc.)
+- `write_file` — create or overwrite files (creates parent dirs)
+- `edit_file` — surgical search-and-replace (include enough context for unique match)
+- `find_files` — find by name/glob pattern
+- `search_files` — search file contents (like grep)
+
+### Command Execution
+- Short commands: `execute_command(command=\"...\")`
+- Long-running: `execute_command(command=\"...\", background=true)` then `process(action=\"poll\", session_id=\"...\")`
+- Interactive TTY: use `pty=true` for commands needing terminal
+
+### Sub-Agents
+Spawn sub-agents for complex or time-consuming tasks:
+- `sessions_spawn(task=\"...\", model=\"...\")` — runs asynchronously
+- Results auto-announce when complete — no polling needed
+- Use cheaper models for simple tasks (llama3.2, claude-haiku)
+
+### Tool Call Style
+- Default: don't narrate routine tool calls (just call them)
+- Narrate only for: multi-step work, complex problems, sensitive actions
+- Keep narration brief and value-dense
+- Use plain language unless in technical context".to_string()
 }
 
 // ── Image Handling ──────────────────────────────────────────────────────────
