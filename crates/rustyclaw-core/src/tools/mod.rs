@@ -72,7 +72,10 @@ use sessions_tools::{exec_sessions_list, exec_sessions_spawn, exec_sessions_send
 use patch::exec_apply_patch;
 
 // Gateway operations
-use gateway_tools::{exec_gateway, exec_message, exec_tts, exec_image};
+use gateway_tools::{
+    exec_gateway, exec_message, exec_tts, exec_image,
+    exec_gateway_async, exec_message_async, exec_tts_async, exec_image_async,
+};
 
 // Device operations
 use devices::{exec_nodes, exec_canvas};
@@ -121,7 +124,7 @@ use sysadmin::{
 use exo_ai::exec_exo_manage;
 
 // Ollama tools
-use ollama::exec_ollama_manage;
+use ollama::{exec_ollama_manage, exec_ollama_manage_async};
 
 /// Stub executor for the `ask_user` tool — never called directly.
 /// Execution is intercepted by the gateway, which forwards the prompt
@@ -1418,6 +1421,11 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "list_directory",
     "search_files",
     "find_files",
+    "gateway",
+    "message",
+    "tts",
+    "image",
+    "ollama_manage",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -1441,6 +1449,11 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "list_directory" => file::exec_list_directory_async(args, workspace_dir).await,
             "search_files" => file::exec_search_files_async(args, workspace_dir).await,
             "find_files" => file::exec_find_files_async(args, workspace_dir).await,
+            "gateway" => gateway_tools::exec_gateway_async(args, workspace_dir).await,
+            "message" => gateway_tools::exec_message_async(args, workspace_dir).await,
+            "tts" => gateway_tools::exec_tts_async(args, workspace_dir).await,
+            "image" => gateway_tools::exec_image_async(args, workspace_dir).await,
+            "ollama_manage" => ollama::exec_ollama_manage_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
