@@ -642,6 +642,17 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         .to_string()
     );
 
+    // Add heartbeat guidance
+    parts.push(
+        "## Heartbeats\n\
+        Heartbeat prompt: Read HEARTBEAT.md if it exists. Follow it strictly. \
+        Do not infer or repeat old tasks from prior chats.\n\n\
+        If you receive a heartbeat poll and nothing needs attention, reply exactly:\n\
+        HEARTBEAT_OK\n\n\
+        If something needs attention, do NOT include HEARTBEAT_OK; reply with the alert text instead."
+        .to_string()
+    );
+
     parts.push(format!(
         "## Messaging Context\n\
         - Channel: {}\n\
@@ -655,6 +666,14 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         msg.channel.as_deref().unwrap_or("direct"),
         msg.sender,
         messenger_type
+    ));
+
+    // Add runtime info
+    parts.push(format!(
+        "## Runtime\n\
+        Workspace: {}\n\
+        Platform: RustyClaw",
+        config.workspace_dir().display()
     ));
 
     parts.join("\n\n")
