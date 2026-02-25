@@ -9,7 +9,7 @@ use std::path::Path;
 use tracing::{debug, instrument};
 
 /// List connected MCP servers and their tools.
-#[instrument(skip(args, _workspace_dir), fields(action = "list"))]
+#[instrument(skip(_args, _workspace_dir), fields(action = "list"))]
 pub fn exec_mcp_list(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     debug!("Listing MCP servers");
 
