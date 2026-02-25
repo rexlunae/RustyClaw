@@ -16,7 +16,7 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-default = ["web-tools", "matrix"]
+default = ["web-tools"]
 web-tools = ["dep:scraper", "dep:html2md"]
 browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp", "dep:schemars"]
