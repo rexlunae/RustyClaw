@@ -3,11 +3,10 @@
 //! Handles task_* tool calls by interacting with the shared TaskManager.
 
 use serde_json::{json, Value};
-use tracing::{debug, instrument};
+use tracing::instrument;
 
 use super::SharedTaskManager;
-use crate::tasks::{Task, TaskId, TaskStatus, TaskKind};
-use crate::tasks::display::{format_task_status, format_task_indicators};
+use crate::tasks::{Task, TaskId, TaskStatus, TaskIcon, format_task_status};
 
 /// Check if a tool name is a task tool.
 pub fn is_task_tool(name: &str) -> bool {
@@ -268,7 +267,7 @@ pub async fn generate_task_prompt_section(
     let mut section = String::from("## Active Tasks\n");
     
     for task in &active {
-        let icon = crate::tasks::display::TaskIcon::from_status(&task.status);
+        let icon = TaskIcon::from_status(&task.status);
         let fg = if task.status.is_foreground() { " [foreground]" } else { "" };
         section.push_str(&format!(
             "- {} #{}: {}{}\n",

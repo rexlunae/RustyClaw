@@ -8,7 +8,6 @@ use tracing::{debug, info, warn, instrument};
 use super::model::{Task, TaskId, TaskKind, TaskStatus, TaskProgress};
 
 /// Handle to a running task for control and monitoring.
-#[derive(Clone)]
 pub struct TaskHandle {
     /// Task ID
     pub id: TaskId,
@@ -16,11 +15,26 @@ pub struct TaskHandle {
     /// Channel to send control commands
     control_tx: mpsc::Sender<TaskControl>,
     
-    /// Channel to receive output
-    output_rx: Option<broadcast::Receiver<TaskOutput>>,
+    /// Channel to receive output (not Clone, so we store the sender to resubscribe)
+    output_tx: broadcast::Sender<TaskOutput>,
+}
+
+impl Clone for TaskHandle {
+    fn clone(&self) -> Self {
+        Self {
+            id: self.id,
+            control_tx: self.control_tx.clone(),
+            output_tx: self.output_tx.clone(),
+        }
+    }
 }
 
 impl TaskHandle {
+    /// Subscribe to task output.
+    pub fn subscribe(&self) -> broadcast::Receiver<TaskOutput> {
+        self.output_tx.subscribe()
+    }
+
     /// Send a control command to the task.
     pub async fn send_control(&self, cmd: TaskControl) -> Result<(), mpsc::error::SendError<TaskControl>> {
         self.control_tx.send(cmd).await
@@ -176,7 +190,7 @@ impl TaskManager {
         TaskHandle {
             id,
             control_tx,
-            output_rx: Some(output_rx),
+            output_tx,
         }
     }
 
@@ -218,11 +232,14 @@ impl TaskManager {
     #[instrument(skip(self))]
     pub async fn set_foreground(&self, id: TaskId) -> Result<(), String> {
         let mut tasks = self.tasks.write().await;
-        let task = tasks.get_mut(&id)
-            .ok_or_else(|| format!("Task {} not found", id))?;
         
-        let session = task.session_key.clone()
-            .ok_or_else(|| "Task has no session".to_string())?;
+        // Get session key first
+        let session = {
+            let task = tasks.get(&id)
+                .ok_or_else(|| format!("Task {} not found", id))?;
+            task.session_key.clone()
+                .ok_or_else(|| "Task has no session".to_string())?
+        };
         
         // Background the current foreground task if any
         if let Some(old_fg_id) = self.foreground_tasks.read().await.get(&session).copied() {
@@ -235,7 +252,9 @@ impl TaskManager {
         }
         
         // Foreground this task
-        task.foreground();
+        if let Some(task) = tasks.get_mut(&id) {
+            task.foreground();
+        }
         self.foreground_tasks.write().await.insert(session, id);
         let _ = self.events_tx.send(TaskEvent::Foregrounded(id));
         

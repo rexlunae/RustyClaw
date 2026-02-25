@@ -75,46 +75,42 @@ pub fn exec_mcp_disconnect(args: &Value, _workspace_dir: &Path) -> Result<String
 }
 
 /// Get parameter definitions for MCP tools.
-pub fn mcp_list_params() -> Vec<crate::tools::params::ParamDef> {
+pub fn mcp_list_params() -> Vec<super::ToolParam> {
     vec![]
 }
 
-pub fn mcp_connect_params() -> Vec<crate::tools::params::ParamDef> {
-    use crate::tools::params::{ParamDef, ParamType};
+pub fn mcp_connect_params() -> Vec<super::ToolParam> {
+    use super::ToolParam;
 
     vec![
-        ParamDef {
-            name: "name",
-            description: "Server name from config (mcp.servers.<name>)",
-            param_type: ParamType::String,
+        ToolParam {
+            name: "name".into(),
+            description: "Server name from config (mcp.servers.<name>)".into(),
+            param_type: "string".into(),
             required: false,
-            enum_values: None,
         },
-        ParamDef {
-            name: "command",
-            description: "Command to run (e.g., 'npx', 'uvx', '/path/to/binary')",
-            param_type: ParamType::String,
+        ToolParam {
+            name: "command".into(),
+            description: "Command to run (e.g., 'npx', 'uvx', '/path/to/binary')".into(),
+            param_type: "string".into(),
             required: false,
-            enum_values: None,
         },
-        ParamDef {
-            name: "args",
-            description: "Arguments to pass to the command",
-            param_type: ParamType::Array,
+        ToolParam {
+            name: "args".into(),
+            description: "Arguments to pass to the command".into(),
+            param_type: "array".into(),
             required: false,
-            enum_values: None,
         },
     ]
 }
 
-pub fn mcp_disconnect_params() -> Vec<crate::tools::params::ParamDef> {
-    use crate::tools::params::{ParamDef, ParamType};
+pub fn mcp_disconnect_params() -> Vec<super::ToolParam> {
+    use super::ToolParam;
 
-    vec![ParamDef {
-        name: "name",
-        description: "Server name to disconnect",
-        param_type: ParamType::String,
+    vec![ToolParam {
+        name: "name".into(),
+        description: "Server name to disconnect".into(),
+        param_type: "string".into(),
         required: true,
-        enum_values: None,
     }]
 }

@@ -152,52 +152,47 @@ pub fn exec_task_input(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 // ── Parameter definitions ───────────────────────────────────────────────────
 
-use crate::tools::params::{ParamDef, ParamType};
+use super::ToolParam;
 
-pub fn task_list_params() -> Vec<ParamDef> {
+pub fn task_list_params() -> Vec<ToolParam> {
     vec![
-        ParamDef {
-            name: "session",
-            description: "Filter tasks by session key",
-            param_type: ParamType::String,
+        ToolParam {
+            name: "session".into(),
+            description: "Filter tasks by session key".into(),
+            param_type: "string".into(),
             required: false,
-            enum_values: None,
         },
-        ParamDef {
-            name: "includeCompleted",
-            description: "Include completed/cancelled tasks",
-            param_type: ParamType::Boolean,
+        ToolParam {
+            name: "includeCompleted".into(),
+            description: "Include completed/cancelled tasks".into(),
+            param_type: "boolean".into(),
             required: false,
-            enum_values: None,
         },
     ]
 }
 
-pub fn task_id_param() -> Vec<ParamDef> {
-    vec![ParamDef {
-        name: "id",
-        description: "Task ID (number)",
-        param_type: ParamType::Integer,
+pub fn task_id_param() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "id".into(),
+        description: "Task ID (number)".into(),
+        param_type: "integer".into(),
         required: true,
-        enum_values: None,
     }]
 }
 
-pub fn task_input_params() -> Vec<ParamDef> {
+pub fn task_input_params() -> Vec<ToolParam> {
     vec![
-        ParamDef {
-            name: "id",
-            description: "Task ID (number)",
-            param_type: ParamType::Integer,
+        ToolParam {
+            name: "id".into(),
+            description: "Task ID (number)".into(),
+            param_type: "integer".into(),
             required: true,
-            enum_values: None,
         },
-        ParamDef {
-            name: "input",
-            description: "Input text to send to the task",
-            param_type: ParamType::String,
+        ToolParam {
+            name: "input".into(),
+            description: "Input text to send to the task".into(),
+            param_type: "string".into(),
             required: true,
-            enum_values: None,
         },
     ]
 }

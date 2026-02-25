@@ -94,50 +94,45 @@ pub fn exec_model_recommend(args: &Value, _workspace_dir: &Path) -> Result<Strin
 
 // ── Parameter definitions ───────────────────────────────────────────────────
 
-use crate::tools::params::{ParamDef, ParamType};
+use super::ToolParam;
 
-pub fn model_list_params() -> Vec<ParamDef> {
+pub fn model_list_params() -> Vec<ToolParam> {
     vec![
-        ParamDef {
-            name: "tier",
-            description: "Filter by cost tier (free, economy, standard, premium)",
-            param_type: ParamType::String,
+        ToolParam {
+            name: "tier".into(),
+            description: "Filter by cost tier (free, economy, standard, premium)".into(),
+            param_type: "string".into(),
             required: false,
-            enum_values: Some(vec!["free", "economy", "standard", "premium"]),
         },
-        ParamDef {
-            name: "enabledOnly",
-            description: "Only show enabled models",
-            param_type: ParamType::Boolean,
+        ToolParam {
+            name: "enabledOnly".into(),
+            description: "Only show enabled models".into(),
+            param_type: "boolean".into(),
             required: false,
-            enum_values: None,
         },
-        ParamDef {
-            name: "usableOnly",
-            description: "Only show usable models (enabled + available)",
-            param_type: ParamType::Boolean,
+        ToolParam {
+            name: "usableOnly".into(),
+            description: "Only show usable models (enabled + available)".into(),
+            param_type: "boolean".into(),
             required: false,
-            enum_values: None,
         },
     ]
 }
 
-pub fn model_id_param() -> Vec<ParamDef> {
-    vec![ParamDef {
-        name: "id",
-        description: "Model ID (e.g., 'anthropic/claude-sonnet-4')",
-        param_type: ParamType::String,
+pub fn model_id_param() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "id".into(),
+        description: "Model ID (e.g., 'anthropic/claude-sonnet-4')".into(),
+        param_type: "string".into(),
         required: true,
-        enum_values: None,
     }]
 }
 
-pub fn model_recommend_params() -> Vec<ParamDef> {
-    vec![ParamDef {
-        name: "complexity",
-        description: "Task complexity (simple, medium, complex, critical)",
-        param_type: ParamType::String,
+pub fn model_recommend_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "complexity".into(),
+        description: "Task complexity (simple, medium, complex, critical)".into(),
+        param_type: "string".into(),
         required: false,
-        enum_values: Some(vec!["simple", "medium", "complex", "critical"]),
     }]
 }
