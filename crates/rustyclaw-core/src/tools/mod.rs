@@ -28,10 +28,10 @@ pub mod npm;
 pub mod ollama;
 pub mod uv;
 // UV tool
-use uv::exec_uv_manage;
+use uv::{exec_uv_manage, exec_uv_manage_async};
 
 // npm / Node.js tool
-use npm::exec_npm_manage;
+use npm::{exec_npm_manage, exec_npm_manage_async};
 
 // Agent setup orchestrator
 use agent_setup::exec_agent_setup;
@@ -1427,6 +1427,8 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "image",
     "ollama_manage",
     "exo_manage",
+    "uv_manage",
+    "npm_manage",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -1456,6 +1458,8 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "image" => gateway_tools::exec_image_async(args, workspace_dir).await,
             "ollama_manage" => ollama::exec_ollama_manage_async(args, workspace_dir).await,
             "exo_manage" => exo_ai::exec_exo_manage_async(args, workspace_dir).await,
+            "uv_manage" => uv::exec_uv_manage_async(args, workspace_dir).await,
+            "npm_manage" => npm::exec_npm_manage_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
