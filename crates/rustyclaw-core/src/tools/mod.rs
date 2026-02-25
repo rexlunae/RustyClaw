@@ -468,12 +468,15 @@ pub static FIND_FILES: ToolDef = ToolDef {
 
 pub static EXECUTE_COMMAND: ToolDef = ToolDef {
     name: "execute_command",
-    description: "Execute a shell command and return its output (stdout + stderr). \
-                  Runs via `sh -c` in the workspace directory by default. \
-                  Use for builds, tests, git operations, system lookups \
-                  (e.g. `find ~ -name '*.pdf'`, `mdfind`, `which`), or \
-                  any other CLI task. Set `working_dir` to an absolute \
-                  path to run in a different directory.",
+    description: "Execute a shell command and return output (stdout + stderr). \
+                  Runs via `sh -c` in the workspace directory.\n\n\
+                  **Common uses:**\n\
+                  - Git: git status, git commit, git push\n\
+                  - Build: cargo build, npm install, make\n\
+                  - System: find, grep, curl, ssh\n\
+                  - API calls: curl -H 'Authorization: token ...' URL\n\n\
+                  For long-running commands, use background=true and poll with process tool. \
+                  Set working_dir for different directory.",
     parameters: vec![],
     execute: exec_execute_command,
 };
@@ -481,9 +484,13 @@ pub static EXECUTE_COMMAND: ToolDef = ToolDef {
 pub static WEB_FETCH: ToolDef = ToolDef {
     name: "web_fetch",
     description: "Fetch and extract readable content from a URL (HTML → markdown or plain text). \
-                  Use for reading web pages, documentation, articles, or any HTTP-accessible content. \
-                  Set use_cookies=true to use stored browser cookies for authenticated requests. \
-                  For JavaScript-heavy sites that require rendering, use a browser tool instead.",
+                  Use for reading web pages, documentation, articles, APIs, or any HTTP content.\n\n\
+                  **For API calls:** Use the 'authorization' parameter to pass auth headers:\n\
+                  - GitHub: authorization='token ghp_...'\n\
+                  - Bearer tokens: authorization='Bearer eyJ...'\n\
+                  - API keys: Use 'headers' param: {\"X-Api-Key\": \"...\"}\n\n\
+                  Set use_cookies=true for sites requiring login cookies. \
+                  For JavaScript-heavy sites, use browser tools instead.",
     parameters: vec![],
     execute: exec_web_fetch,
 };
@@ -615,19 +622,21 @@ pub static APPLY_PATCH: ToolDef = ToolDef {
 
 pub static SECRETS_LIST: ToolDef = ToolDef {
     name: "secrets_list",
-    description: "List the names (keys) stored in the encrypted secrets vault. \
-                  Returns only key names, never values. Use secrets_get to \
-                  retrieve a specific value.",
+    description: "List credentials stored in the encrypted vault. Returns names, types, and policies. \
+                  Use this FIRST to discover what tokens/keys are available, then use secrets_get to retrieve them.",
     parameters: vec![],
     execute: exec_secrets_stub,
 };
 
 pub static SECRETS_GET: ToolDef = ToolDef {
     name: "secrets_get",
-    description: "Retrieve a credential from the encrypted vault by name. Returns the \
-                  value as a string. Use this to get API keys and tokens for API calls. \
-                  For HTTP APIs, pass the token to web_fetch via the 'authorization' \
-                  parameter, or use execute_command with curl -H 'Authorization: ...'.",
+    description: "Retrieve a credential from the vault by name. Returns the value directly.\n\n\
+                  **Common workflow:**\n\
+                  1. secrets_list() → see available credentials\n\
+                  2. secrets_get(name='github_token') → get the token value\n\
+                  3. web_fetch(url='...', authorization='token <value>') → use it\n\n\
+                  For HTTP APIs, pass the token to web_fetch via 'authorization' parameter. \
+                  For CLI tools, use execute_command with the token in headers or env vars.",
     parameters: vec![],
     execute: exec_secrets_stub,
 };
@@ -662,9 +671,11 @@ pub static GATEWAY: ToolDef = ToolDef {
 
 pub static MESSAGE: ToolDef = ToolDef {
     name: "message",
-    description: "Send messages via channel plugins. Actions: send (send a message), \
-                  broadcast (send to multiple targets). Supports various channels \
-                  like telegram, discord, whatsapp, signal, etc.",
+    description: "Send messages via configured channels (telegram, discord, whatsapp, signal, matrix, etc.).\n\n\
+                  **Actions:** send, poll, react, thread-create, thread-reply, search, pin, edit, delete\n\n\
+                  **Example:** message(action='send', channel='telegram', target='@username', message='Hello')\n\n\
+                  Use for proactive notifications, cross-channel messaging, or channel-specific features \
+                  like reactions, threads, and polls. The channel parameter selects which messenger to use.",
     parameters: vec![],
     execute: exec_message,
 };
