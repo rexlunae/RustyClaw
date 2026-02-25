@@ -31,6 +31,7 @@ pub async fn execute_secrets_tool(
         "secrets_list" => exec_secrets_list(vault).await,
         "secrets_get" => exec_secrets_get(args, vault).await,
         "secrets_store" => exec_secrets_store(args, vault).await,
+        "secrets_set_policy" => exec_secrets_set_policy(args, vault).await,
         _ => {
             warn!("Unknown secrets tool requested");
             Err(format!("Unknown secrets tool: {}", name))
@@ -187,6 +188,8 @@ pub async fn exec_secrets_store(
 
     let username = args.get("username").and_then(|v| v.as_str());
 
+    let policy_str = args.get("policy").and_then(|v| v.as_str());
+
     debug!(credential = cred_name, kind = kind_str, "Storing credential");
 
     let kind = match kind_str {
@@ -210,6 +213,23 @@ pub async fn exec_secrets_store(
         }
     };
 
+    let policy = match policy_str {
+        Some("always") | Some("open") => AccessPolicy::Always,
+        Some("approval") | Some("ask") | None => AccessPolicy::WithApproval,
+        Some("auth") => AccessPolicy::WithAuth,
+        Some(s) if s.starts_with("skill:") => {
+            let skill_name = s.strip_prefix("skill:").unwrap();
+            AccessPolicy::SkillOnly(vec![skill_name.to_string()])
+        }
+        Some(s) => {
+            warn!(policy = s, "Unknown policy");
+            return Err(format!(
+                "Unknown policy: '{}'. Use: always, approval, auth, or skill:<name>.",
+                s,
+            ));
+        }
+    };
+
     if kind == SecretKind::UsernamePassword && username.is_none() {
         return Err(
             "username_password credentials require the 'username' parameter.".into(),
@@ -219,7 +239,7 @@ pub async fn exec_secrets_store(
     let entry = SecretEntry {
         label: cred_name.to_string(),
         kind,
-        policy: AccessPolicy::default(), // WithApproval
+        policy: policy.clone(),
         description,
         disabled: false,
     };
@@ -235,5 +255,54 @@ pub async fn exec_secrets_store(
     Ok(format!(
         "Credential '{}' stored successfully (kind: {}, policy: {}).",
         cred_name, entry.kind, entry.policy,
+    ))
+}
+
+/// Change the access policy of an existing credential.
+#[instrument(skip(args, vault))]
+pub async fn exec_secrets_set_policy(
+    args: &serde_json::Value,
+    vault: &SharedVault,
+) -> Result<String, String> {
+    let cred_name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: name".to_string())?;
+
+    let policy_str = args
+        .get("policy")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: policy".to_string())?;
+
+    debug!(credential = cred_name, policy = policy_str, "Setting credential policy");
+
+    let policy = match policy_str {
+        "always" | "open" => AccessPolicy::Always,
+        "approval" | "ask" => AccessPolicy::WithApproval,
+        "auth" => AccessPolicy::WithAuth,
+        s if s.starts_with("skill:") => {
+            let skill_name = s.strip_prefix("skill:").unwrap();
+            AccessPolicy::SkillOnly(vec![skill_name.to_string()])
+        }
+        _ => {
+            warn!(policy = policy_str, "Unknown policy");
+            return Err(format!(
+                "Unknown policy: '{}'. Use: always, approval, auth, or skill:<name>.",
+                policy_str,
+            ));
+        }
+    };
+
+    let mut mgr = vault.lock().await;
+    mgr.set_credential_policy(cred_name, policy.clone())
+        .map_err(|e| {
+            warn!(credential = cred_name, error = %e, "Failed to set policy");
+            format!("Failed to set policy: {}", e)
+        })?;
+
+    debug!(credential = cred_name, "Policy updated successfully");
+    Ok(format!(
+        "Policy for '{}' set to '{}'.",
+        cred_name, policy,
     ))
 }

@@ -393,8 +393,8 @@ pub fn secrets_list_params() -> Vec<ToolParam> {
 
 pub fn secrets_get_params() -> Vec<ToolParam> {
     vec![ToolParam {
-        name: "key".into(),
-        description: "The name of the secret to retrieve.".into(),
+        name: "name".into(),
+        description: "The name of the credential to retrieve.".into(),
         param_type: "string".into(),
         required: true,
     }]
@@ -403,14 +403,55 @@ pub fn secrets_get_params() -> Vec<ToolParam> {
 pub fn secrets_store_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
-            name: "key".into(),
-            description: "The name under which to store the secret.".into(),
+            name: "name".into(),
+            description: "The name under which to store the credential.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "kind".into(),
+            description: "Credential kind: api_key, token, username_password, ssh_key, secure_note, http_passkey, form_autofill, payment_method, other.".into(),
             param_type: "string".into(),
             required: true,
         },
         ToolParam {
             name: "value".into(),
             description: "The secret value to encrypt and store.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "policy".into(),
+            description: "Access policy: always (agent can read freely), approval (requires user approval, default), auth (requires re-authentication), skill:<name> (only accessible by named skill).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "description".into(),
+            description: "Optional description of the credential.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "username".into(),
+            description: "Username (required for username_password kind).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn secrets_set_policy_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "name".into(),
+            description: "The credential name to update.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "policy".into(),
+            description: "New access policy: always (agent can read freely), approval (requires user approval), auth (requires re-authentication), skill:<name> (only accessible by named skill).".into(),
             param_type: "string".into(),
             required: true,
         },

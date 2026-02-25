@@ -237,6 +237,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "secrets_list" => "List vault secret names",
         "secrets_get" => "Read secrets from the vault",
         "secrets_store" => "Store secrets in the vault",
+        "secrets_set_policy" => "Change credential access policy",
         "gateway" => "Control the gateway daemon",
         "message" => "Send messages via channels",
         "tts" => "Convert text to speech",
@@ -342,6 +343,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SECRETS_LIST,
         &SECRETS_GET,
         &SECRETS_STORE,
+        &SECRETS_SET_POLICY,
         &GATEWAY,
         &MESSAGE,
         &TTS,
@@ -631,9 +633,18 @@ pub static SECRETS_GET: ToolDef = ToolDef {
 
 pub static SECRETS_STORE: ToolDef = ToolDef {
     name: "secrets_store",
-    description: "Store or update a key/value pair in the encrypted secrets vault. \
+    description: "Store or update a credential in the encrypted secrets vault. \
                   The value is encrypted at rest. Use for API keys, tokens, and \
-                  other sensitive material.",
+                  other sensitive material. Set policy to 'always' for agent access.",
+    parameters: vec![],
+    execute: exec_secrets_stub,
+};
+
+pub static SECRETS_SET_POLICY: ToolDef = ToolDef {
+    name: "secrets_set_policy",
+    description: "Change the access policy of an existing credential. Policies: \
+                  always (agent can read freely), approval (requires user approval), \
+                  auth (requires re-authentication), skill:<name> (only named skill).",
     parameters: vec![],
     execute: exec_secrets_stub,
 };
@@ -1200,6 +1211,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "secrets_list" => secrets_list_params(),
         "secrets_get" => secrets_get_params(),
         "secrets_store" => secrets_store_params(),
+        "secrets_set_policy" => secrets_set_policy_params(),
         "gateway" => gateway_params(),
         "message" => message_params(),
         "tts" => tts_params(),
@@ -1338,7 +1350,7 @@ pub fn tools_google() -> Vec<Value> {
 /// Returns `true` for tools that must be routed through the gateway
 /// (i.e. handled by `execute_secrets_tool`) rather than `execute_tool`.
 pub fn is_secrets_tool(name: &str) -> bool {
-    matches!(name, "secrets_list" | "secrets_get" | "secrets_store")
+    matches!(name, "secrets_list" | "secrets_get" | "secrets_store" | "secrets_set_policy")
 }
 
 /// Returns `true` for skill-management tools that are routed through the
