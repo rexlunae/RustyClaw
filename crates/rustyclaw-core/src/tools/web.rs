@@ -36,6 +36,16 @@ pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, Str
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
+    // Authorization header (convenience for API calls)
+    let authorization = args
+        .get("authorization")
+        .and_then(|v| v.as_str());
+
+    // Custom headers
+    let custom_headers = args
+        .get("headers")
+        .and_then(|v| v.as_object());
+
     debug!(extract_mode, max_chars, use_cookies, "Fetching URL");
 
     // Validate URL
@@ -69,6 +79,20 @@ pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, Str
     if use_cookies {
         if let Some(cookie_header) = get_cookie_header(domain, path, is_secure) {
             request = request.header("Cookie", cookie_header);
+        }
+    }
+
+    // Add Authorization header if provided
+    if let Some(auth) = authorization {
+        request = request.header("Authorization", auth);
+    }
+
+    // Add custom headers if provided
+    if let Some(headers) = custom_headers {
+        for (key, value) in headers {
+            if let Some(val_str) = value.as_str() {
+                request = request.header(key.as_str(), val_str);
+            }
         }
     }
 

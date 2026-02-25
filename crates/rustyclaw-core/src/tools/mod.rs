@@ -624,9 +624,10 @@ pub static SECRETS_LIST: ToolDef = ToolDef {
 
 pub static SECRETS_GET: ToolDef = ToolDef {
     name: "secrets_get",
-    description: "Retrieve a secret value from the encrypted vault by key name. \
-                  The value is returned as a string. Prefer injecting it directly \
-                  into environment variables or config rather than echoing it.",
+    description: "Retrieve a credential from the encrypted vault by name. Returns the \
+                  value as a string. Use this to get API keys and tokens for API calls. \
+                  For HTTP APIs, pass the token to web_fetch via the 'authorization' \
+                  parameter, or use execute_command with curl -H 'Authorization: ...'.",
     parameters: vec![],
     execute: exec_secrets_stub,
 };

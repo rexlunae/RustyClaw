@@ -206,6 +206,23 @@ pub fn web_fetch_params() -> Vec<ToolParam> {
             param_type: "boolean".into(),
             required: false,
         },
+        ToolParam {
+            name: "authorization".into(),
+            description: "Authorization header value for API requests. For Bearer tokens: \
+                          'Bearer <token>'. For GitHub PATs: 'token <pat>'. This is sent \
+                          as the Authorization HTTP header."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "headers".into(),
+            description: "Additional HTTP headers as JSON object, e.g. {\"X-Api-Key\": \"...\"}. \
+                          Use for custom headers beyond Authorization."
+                .into(),
+            param_type: "object".into(),
+            required: false,
+        },
     ]
 }
 
