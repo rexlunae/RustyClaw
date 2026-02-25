@@ -283,8 +283,14 @@ async fn process_incoming_message(
         store.entry(conv_key.clone()).or_insert_with(Vec::new).clone()
     };
 
-    // Build system prompt
-    let system_prompt = build_messenger_system_prompt(config, messenger_type, &msg);
+    // Build system prompt (async to include task context)
+    let system_prompt = build_messenger_system_prompt(
+        config,
+        messenger_type,
+        &msg,
+        task_mgr,
+        &conv_key,
+    ).await;
 
     // Add system message if not present
     if messages.is_empty() || messages[0].role != "system" {
@@ -529,8 +535,14 @@ async fn process_incoming_message(
     Ok(())
 }
 
-/// Build system prompt with messenger context and workspace files.
-fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Message) -> String {
+/// Build system prompt with messenger context, workspace files, and active tasks.
+async fn build_messenger_system_prompt(
+    config: &Config,
+    messenger_type: &str,
+    msg: &Message,
+    task_mgr: &super::SharedTaskManager,
+    session_key: &str,
+) -> String {
     use crate::workspace_context::{SessionType, WorkspaceContext};
 
     let base_prompt = config.system_prompt.clone().unwrap_or_else(|| {
@@ -559,6 +571,14 @@ fn build_messenger_system_prompt(config: &Config, messenger_type: &str, msg: &Me
 
     if !workspace_prompt.is_empty() {
         parts.push(workspace_prompt);
+    }
+
+    // Add active tasks section if any
+    if let Some(task_section) = super::task_handler::generate_task_prompt_section(
+        task_mgr,
+        session_key,
+    ).await {
+        parts.push(task_section);
     }
 
     parts.push(format!(
