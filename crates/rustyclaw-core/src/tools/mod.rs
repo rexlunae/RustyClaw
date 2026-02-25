@@ -83,6 +83,13 @@ use skills_tools::{exec_skill_list, exec_skill_search, exec_skill_install, exec_
 mod mcp_tools;
 use mcp_tools::{exec_mcp_list, exec_mcp_connect, exec_mcp_disconnect};
 
+// Task operations
+mod task_tools;
+use task_tools::{
+    exec_task_list, exec_task_status, exec_task_foreground, exec_task_background,
+    exec_task_cancel, exec_task_pause, exec_task_resume, exec_task_input,
+};
+
 // Secrets operations
 use secrets_tools::exec_secrets_stub;
 
@@ -241,6 +248,14 @@ pub fn tool_summary(name: &str) -> &'static str {
         "mcp_list" => "List connected MCP servers",
         "mcp_connect" => "Connect to an MCP server",
         "mcp_disconnect" => "Disconnect from an MCP server",
+        "task_list" => "List active tasks",
+        "task_status" => "Get task status by ID",
+        "task_foreground" => "Bring task to foreground",
+        "task_background" => "Move task to background",
+        "task_cancel" => "Cancel a running task",
+        "task_pause" => "Pause a running task",
+        "task_resume" => "Resume a paused task",
+        "task_input" => "Send input to a task",
         "disk_usage" => "Scan disk usage by folder",
         "classify_files" => "Categorize files as docs, caches, etc.",
         "system_monitor" => "View CPU, memory & process info",
@@ -333,6 +348,14 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &MCP_LIST,
         &MCP_CONNECT,
         &MCP_DISCONNECT,
+        &TASK_LIST,
+        &TASK_STATUS,
+        &TASK_FOREGROUND,
+        &TASK_BACKGROUND,
+        &TASK_CANCEL,
+        &TASK_PAUSE,
+        &TASK_RESUME,
+        &TASK_INPUT,
         &DISK_USAGE,
         &CLASSIFY_FILES,
         &SYSTEM_MONITOR,
@@ -743,6 +766,68 @@ pub static MCP_DISCONNECT: ToolDef = ToolDef {
 };
 
 
+// ── Task tools ──────────────────────────────────────────────────────────────
+
+pub static TASK_LIST: ToolDef = ToolDef {
+    name: "task_list",
+    description: "List active tasks. Tasks include running commands, sub-agents, cron jobs, \
+                  and other long-running operations. Shows task ID, kind, status, and progress.",
+    parameters: vec![],
+    execute: exec_task_list,
+};
+
+pub static TASK_STATUS: ToolDef = ToolDef {
+    name: "task_status",
+    description: "Get detailed status of a specific task by ID.",
+    parameters: vec![],
+    execute: exec_task_status,
+};
+
+pub static TASK_FOREGROUND: ToolDef = ToolDef {
+    name: "task_foreground",
+    description: "Bring a task to the foreground. Foreground tasks stream their output \
+                  to the user in real-time. Only one task per session can be foregrounded.",
+    parameters: vec![],
+    execute: exec_task_foreground,
+};
+
+pub static TASK_BACKGROUND: ToolDef = ToolDef {
+    name: "task_background",
+    description: "Move a task to the background. Background tasks continue running but \
+                  don't stream output. Their output is buffered for later review.",
+    parameters: vec![],
+    execute: exec_task_background,
+};
+
+pub static TASK_CANCEL: ToolDef = ToolDef {
+    name: "task_cancel",
+    description: "Cancel a running task. The task will be terminated and marked as cancelled.",
+    parameters: vec![],
+    execute: exec_task_cancel,
+};
+
+pub static TASK_PAUSE: ToolDef = ToolDef {
+    name: "task_pause",
+    description: "Pause a running task. Not all task types support pausing.",
+    parameters: vec![],
+    execute: exec_task_pause,
+};
+
+pub static TASK_RESUME: ToolDef = ToolDef {
+    name: "task_resume",
+    description: "Resume a paused task.",
+    parameters: vec![],
+    execute: exec_task_resume,
+};
+
+pub static TASK_INPUT: ToolDef = ToolDef {
+    name: "task_input",
+    description: "Send input to a task that is waiting for user input.",
+    parameters: vec![],
+    execute: exec_task_input,
+};
+
+
 // ── System tools ────────────────────────────────────────────────────────────
 
 pub static DISK_USAGE: ToolDef = ToolDef {
@@ -1065,6 +1150,14 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "mcp_list" => mcp_tools::mcp_list_params(),
         "mcp_connect" => mcp_tools::mcp_connect_params(),
         "mcp_disconnect" => mcp_tools::mcp_disconnect_params(),
+        "task_list" => task_tools::task_list_params(),
+        "task_status" => task_tools::task_id_param(),
+        "task_foreground" => task_tools::task_id_param(),
+        "task_background" => task_tools::task_id_param(),
+        "task_cancel" => task_tools::task_id_param(),
+        "task_pause" => task_tools::task_id_param(),
+        "task_resume" => task_tools::task_id_param(),
+        "task_input" => task_tools::task_input_params(),
         "disk_usage" => disk_usage_params(),
         "classify_files" => classify_files_params(),
         "system_monitor" => system_monitor_params(),
