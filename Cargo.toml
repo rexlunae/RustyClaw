@@ -115,7 +115,7 @@ crossterm = "0.28"
 # NOTE: matrix-sdk 0.16 can hit Rust recursion limits on some compilers.
 # If you get "queries overflow the depth limit", try: RUSTFLAGS="--cfg recursion_limit=\"512\"" cargo build
 # Or disable the matrix feature: cargo build --no-default-features
-matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"], optional = true }
+matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
 
 # WhatsApp Web support
 wa-rs = "0.2"
