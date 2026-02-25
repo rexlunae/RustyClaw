@@ -47,13 +47,17 @@ pub use helpers::{
 };
 
 // File operations
-use file::{exec_read_file, exec_write_file, exec_edit_file, exec_list_directory, exec_search_files, exec_find_files};
+use file::{
+    exec_read_file, exec_write_file, exec_edit_file, exec_list_directory, exec_search_files, exec_find_files,
+    exec_read_file_async, exec_write_file_async, exec_edit_file_async, exec_list_directory_async,
+    exec_search_files_async, exec_find_files_async,
+};
 
 // Runtime operations
 use runtime::{exec_execute_command, exec_process, exec_execute_command_async, exec_process_async};
 
 // Web operations
-use web::{exec_web_fetch, exec_web_search};
+use web::{exec_web_fetch, exec_web_search, exec_web_fetch_async, exec_web_search_async};
 
 // Memory operations
 use memory_tools::{exec_memory_search, exec_memory_get, exec_save_memory, exec_search_history};
@@ -1403,7 +1407,18 @@ pub fn is_user_prompt_tool(name: &str) -> bool {
 }
 
 /// Tools that have native async implementations.
-const ASYNC_NATIVE_TOOLS: &[&str] = &["execute_command", "process"];
+const ASYNC_NATIVE_TOOLS: &[&str] = &[
+    "execute_command",
+    "process",
+    "web_fetch",
+    "web_search",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_directory",
+    "search_files",
+    "find_files",
+];
 
 /// Find a tool by name and execute it with the given arguments.
 /// 
@@ -1418,6 +1433,14 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
         let result = match name {
             "execute_command" => runtime::exec_execute_command_async(args, workspace_dir).await,
             "process" => runtime::exec_process_async(args, workspace_dir).await,
+            "web_fetch" => web::exec_web_fetch_async(args, workspace_dir).await,
+            "web_search" => web::exec_web_search_async(args, workspace_dir).await,
+            "read_file" => file::exec_read_file_async(args, workspace_dir).await,
+            "write_file" => file::exec_write_file_async(args, workspace_dir).await,
+            "edit_file" => file::exec_edit_file_async(args, workspace_dir).await,
+            "list_directory" => file::exec_list_directory_async(args, workspace_dir).await,
+            "search_files" => file::exec_search_files_async(args, workspace_dir).await,
+            "find_files" => file::exec_find_files_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
