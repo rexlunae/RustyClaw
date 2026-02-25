@@ -1,8 +1,9 @@
 // ── Message bubble ──────────────────────────────────────────────────────────
 
+use crate::markdown;
+use crate::theme;
 use iocraft::prelude::*;
 use rustyclaw_core::types::MessageRole;
-use crate::theme;
 
 #[derive(Default, Props)]
 pub struct MessageBubbleProps {
@@ -31,8 +32,11 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
         MessageRole::Thinking => "Thinking",
     };
 
+    // Render markdown for assistant messages, plain text for others
     let display = if role == MessageRole::Thinking && props.content.len() > 120 {
         format!("{}…", &props.content[..120])
+    } else if role == MessageRole::Assistant {
+        markdown::render_ansi(&props.content)
     } else {
         props.content.clone()
     };
