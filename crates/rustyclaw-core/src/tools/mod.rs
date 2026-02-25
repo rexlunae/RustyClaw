@@ -622,8 +622,9 @@ pub static APPLY_PATCH: ToolDef = ToolDef {
 
 pub static SECRETS_LIST: ToolDef = ToolDef {
     name: "secrets_list",
-    description: "List credentials stored in the encrypted vault. Returns names, types, and policies. \
-                  Use this FIRST to discover what tokens/keys are available, then use secrets_get to retrieve them.",
+    description: "**CHECK THIS FIRST** before asking the user for API keys or tokens! \
+                  Lists all credentials stored in the encrypted vault with their names, types, and access policies. \
+                  If a credential exists here, use secrets_get to retrieve it — don't ask the user for it again.",
     parameters: vec![],
     execute: exec_secrets_stub,
 };

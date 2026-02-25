@@ -608,6 +608,15 @@ async fn build_messenger_system_prompt(
     ).await;
     parts.push(model_guidance);
 
+    // Add tool usage guidance
+    parts.push(
+        "## Tool Usage Guidelines\n\
+        - **Before asking for API keys or tokens:** Run `secrets_list` to check the vault first\n\
+        - **To make authenticated API calls:** Use `secrets_get` then pass to `web_fetch(authorization=...)`\n\
+        - **For long-running commands:** Use `execute_command` with `background=true`, then `process` to poll"
+        .to_string()
+    );
+
     parts.push(format!(
         "## Messaging Context\n\
         - Channel: {}\n\
