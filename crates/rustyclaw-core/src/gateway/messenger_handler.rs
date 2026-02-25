@@ -299,6 +299,7 @@ async fn process_incoming_message(
         &msg,
         task_mgr,
         model_registry,
+        &skill_mgr,
         &conv_key,
     ).await;
 
@@ -562,6 +563,7 @@ async fn build_messenger_system_prompt(
     msg: &Message,
     task_mgr: &super::SharedTaskManager,
     model_registry: &super::SharedModelRegistry,
+    skill_mgr: &SharedSkillManager,
     session_key: &str,
 ) -> String {
     use crate::workspace_context::{SessionType, WorkspaceContext};
@@ -599,6 +601,15 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     if !workspace_prompt.is_empty() {
         parts.push(workspace_prompt);
+    }
+
+    // Add skills context if any skills are loaded
+    {
+        let mgr = skill_mgr.read().await;
+        let skills_context = mgr.generate_prompt_context();
+        if !skills_context.is_empty() {
+            parts.push(skills_context);
+        }
     }
 
     // Add active tasks section if any
