@@ -302,23 +302,48 @@ impl WorkspaceContext {
             }
         }
 
+        // Add tool categories overview
         guidance.push_str(
-"### Communication
+            "### Available Tool Categories
+- **Files:** read_file, write_file, edit_file, list_directory, search_files, find_files
+- **Shell:** execute_command, process (background commands)
+- **Web:** web_fetch, web_search, browser (automation)
+- **Memory:** memory_search, memory_get, save_memory
+- **Sessions:** sessions_send (communicate with parent)
+- **Secrets:** secrets_list, secrets_get
+- **Scheduling:** cron
+
+",
+        );
+
+        guidance.push_str(
+            "### Communication
 - Your final output will be delivered to the parent session automatically when you complete
 - If you need to send interim updates, use `sessions_send` with the parent session key
 - Do **not** assume access to messaging channels (Signal, Discord, etc.) — route through the parent
 
+### Tools
+You have access to the same tools as the parent agent. **Use them to verify assumptions.**
+
+Before claiming something is missing or unavailable:
+- Use `execute_command` to check if software is installed (e.g., `which node`, `python --version`)
+- Use `browser` action=status to check browser connectivity
+- Use `secrets_list` to see available credentials
+- Use `read_file` to check if files exist
+
+**Do not assume.** Check with tools first.
+
 ### Blocking Issues
 If you cannot proceed due to missing resources (e.g., browser not attached, credentials unavailable):
-1. **Clearly state what's blocking you** — be specific about the missing resource
-2. **List actions needed** — what the user or parent agent can do to unblock you
-3. **Exit cleanly** — don't retry indefinitely or loop; complete with a clear status message
+1. **Verify with tools first** — run commands or checks to confirm the issue
+2. **Clearly state what's blocking you** — be specific about what you checked and found
+3. **List actions needed** — what the user or parent agent can do to unblock you
+4. **Exit cleanly** — don't retry indefinitely or loop; complete with a clear status message
 
-Example: \"Browser relay not connected. To proceed, the user needs to attach a Chrome tab via the OpenClaw Browser Relay toolbar button, then re-run this task.\"
+Example: \"Browser relay not connected (verified via `browser action=status`). To proceed, the user needs to attach a Chrome tab via the Browser Relay toolbar button.\"
 
 ### Scope
 - Focus on your assigned task; do not take on unrelated work
-- You have access to the same tools as the parent, but may lack delivery context
 - If the task is complete, summarize your results clearly for the parent session
 "
         );
