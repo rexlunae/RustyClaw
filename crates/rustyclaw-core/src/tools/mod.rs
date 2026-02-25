@@ -118,6 +118,8 @@ use system_tools::{
 use sysadmin::{
     exec_pkg_manage, exec_net_info, exec_net_scan,
     exec_service_manage, exec_user_manage, exec_firewall,
+    exec_pkg_manage_async, exec_net_info_async, exec_net_scan_async,
+    exec_service_manage_async, exec_user_manage_async, exec_firewall_async,
 };
 
 // Exo AI tools
@@ -1429,6 +1431,12 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "exo_manage",
     "uv_manage",
     "npm_manage",
+    "pkg_manage",
+    "net_info",
+    "net_scan",
+    "service_manage",
+    "user_manage",
+    "firewall",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -1460,6 +1468,12 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "exo_manage" => exo_ai::exec_exo_manage_async(args, workspace_dir).await,
             "uv_manage" => uv::exec_uv_manage_async(args, workspace_dir).await,
             "npm_manage" => npm::exec_npm_manage_async(args, workspace_dir).await,
+            "pkg_manage" => sysadmin::exec_pkg_manage_async(args, workspace_dir).await,
+            "net_info" => sysadmin::exec_net_info_async(args, workspace_dir).await,
+            "net_scan" => sysadmin::exec_net_scan_async(args, workspace_dir).await,
+            "service_manage" => sysadmin::exec_service_manage_async(args, workspace_dir).await,
+            "user_manage" => sysadmin::exec_user_manage_async(args, workspace_dir).await,
+            "firewall" => sysadmin::exec_firewall_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
