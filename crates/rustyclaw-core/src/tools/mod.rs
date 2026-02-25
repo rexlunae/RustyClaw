@@ -28,10 +28,10 @@ pub mod npm;
 pub mod ollama;
 pub mod uv;
 // UV tool
-use uv::exec_uv_manage;
+use uv::{exec_uv_manage, exec_uv_manage_async};
 
 // npm / Node.js tool
-use npm::exec_npm_manage;
+use npm::{exec_npm_manage, exec_npm_manage_async};
 
 // Agent setup orchestrator
 use agent_setup::exec_agent_setup;
@@ -47,13 +47,17 @@ pub use helpers::{
 };
 
 // File operations
-use file::{exec_read_file, exec_write_file, exec_edit_file, exec_list_directory, exec_search_files, exec_find_files};
+use file::{
+    exec_read_file, exec_write_file, exec_edit_file, exec_list_directory, exec_search_files, exec_find_files,
+    exec_read_file_async, exec_write_file_async, exec_edit_file_async, exec_list_directory_async,
+    exec_search_files_async, exec_find_files_async,
+};
 
 // Runtime operations
-use runtime::{exec_execute_command, exec_process};
+use runtime::{exec_execute_command, exec_process, exec_execute_command_async, exec_process_async};
 
 // Web operations
-use web::{exec_web_fetch, exec_web_search};
+use web::{exec_web_fetch, exec_web_search, exec_web_fetch_async, exec_web_search_async};
 
 // Memory operations
 use memory_tools::{exec_memory_search, exec_memory_get, exec_save_memory, exec_search_history};
@@ -68,10 +72,13 @@ use sessions_tools::{exec_sessions_list, exec_sessions_spawn, exec_sessions_send
 use patch::exec_apply_patch;
 
 // Gateway operations
-use gateway_tools::{exec_gateway, exec_message, exec_tts, exec_image};
+use gateway_tools::{
+    exec_gateway, exec_message, exec_tts, exec_image,
+    exec_gateway_async, exec_message_async, exec_tts_async, exec_image_async,
+};
 
 // Device operations
-use devices::{exec_nodes, exec_canvas};
+use devices::{exec_nodes, exec_canvas, exec_nodes_async, exec_canvas_async};
 
 // Browser automation (separate module with feature-gated implementation)
 use browser::exec_browser;
@@ -105,19 +112,25 @@ use system_tools::{
     exec_battery_health, exec_app_index, exec_cloud_browse,
     exec_browser_cache, exec_screenshot, exec_clipboard,
     exec_audit_sensitive, exec_secure_delete, exec_summarize_file,
+    exec_disk_usage_async, exec_classify_files_async, exec_system_monitor_async,
+    exec_battery_health_async, exec_app_index_async, exec_cloud_browse_async,
+    exec_browser_cache_async, exec_screenshot_async, exec_clipboard_async,
+    exec_audit_sensitive_async, exec_secure_delete_async, exec_summarize_file_async,
 };
 
 // System administration tools
 use sysadmin::{
     exec_pkg_manage, exec_net_info, exec_net_scan,
     exec_service_manage, exec_user_manage, exec_firewall,
+    exec_pkg_manage_async, exec_net_info_async, exec_net_scan_async,
+    exec_service_manage_async, exec_user_manage_async, exec_firewall_async,
 };
 
 // Exo AI tools
-use exo_ai::exec_exo_manage;
+use exo_ai::{exec_exo_manage, exec_exo_manage_async};
 
 // Ollama tools
-use ollama::exec_ollama_manage;
+use ollama::{exec_ollama_manage, exec_ollama_manage_async};
 
 /// Stub executor for the `ask_user` tool — never called directly.
 /// Execution is intercepted by the gateway, which forwards the prompt
@@ -303,14 +316,28 @@ pub struct ToolParam {
     pub required: bool,
 }
 
+/// Sync tool execution function type (legacy, for static definitions).
+pub type SyncExecuteFn = fn(args: &Value, workspace_dir: &Path) -> Result<String, String>;
+
 /// A tool that the agent can invoke.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolDef {
     pub name: &'static str,
     pub description: &'static str,
     pub parameters: Vec<ToolParam>,
-    /// The function that executes the tool, returning a string result or error.
-    pub execute: fn(args: &Value, workspace_dir: &Path) -> Result<String, String>,
+    /// The sync function that executes the tool.
+    /// This is wrapped in an async context by execute_tool.
+    pub execute: SyncExecuteFn,
+}
+
+impl std::fmt::Debug for ToolDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolDef")
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .field("parameters", &self.parameters)
+            .finish()
+    }
 }
 
 // ── Tool registry ───────────────────────────────────────────────────────────
@@ -1388,21 +1415,130 @@ pub fn is_user_prompt_tool(name: &str) -> bool {
     name == "ask_user"
 }
 
+/// Tools that have native async implementations.
+const ASYNC_NATIVE_TOOLS: &[&str] = &[
+    "execute_command",
+    "process",
+    "web_fetch",
+    "web_search",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_directory",
+    "search_files",
+    "find_files",
+    "gateway",
+    "message",
+    "tts",
+    "image",
+    "ollama_manage",
+    "exo_manage",
+    "uv_manage",
+    "npm_manage",
+    "pkg_manage",
+    "net_info",
+    "net_scan",
+    "service_manage",
+    "user_manage",
+    "firewall",
+    "disk_usage",
+    "classify_files",
+    "system_monitor",
+    "battery_health",
+    "app_index",
+    "cloud_browse",
+    "browser_cache",
+    "screenshot",
+    "clipboard",
+    "audit_sensitive",
+    "secure_delete",
+    "summarize_file",
+    "nodes",
+    "canvas",
+];
+
 /// Find a tool by name and execute it with the given arguments.
+/// 
+/// Tools with async implementations are called directly.
+/// Other tools run on a blocking thread pool to avoid blocking the async runtime.
 #[instrument(skip(args, workspace_dir), fields(tool = name))]
-pub fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Result<String, String> {
     debug!("Executing tool");
-    for tool in all_tools() {
-        if tool.name == name {
-            let result = (tool.execute)(args, workspace_dir);
-            if result.is_err() {
-                warn!(error = ?result.as_ref().err(), "Tool execution failed");
-            }
-            return result;
+    
+    // Handle async-native tools directly
+    if ASYNC_NATIVE_TOOLS.contains(&name) {
+        let result = match name {
+            "execute_command" => runtime::exec_execute_command_async(args, workspace_dir).await,
+            "process" => runtime::exec_process_async(args, workspace_dir).await,
+            "web_fetch" => web::exec_web_fetch_async(args, workspace_dir).await,
+            "web_search" => web::exec_web_search_async(args, workspace_dir).await,
+            "read_file" => file::exec_read_file_async(args, workspace_dir).await,
+            "write_file" => file::exec_write_file_async(args, workspace_dir).await,
+            "edit_file" => file::exec_edit_file_async(args, workspace_dir).await,
+            "list_directory" => file::exec_list_directory_async(args, workspace_dir).await,
+            "search_files" => file::exec_search_files_async(args, workspace_dir).await,
+            "find_files" => file::exec_find_files_async(args, workspace_dir).await,
+            "gateway" => gateway_tools::exec_gateway_async(args, workspace_dir).await,
+            "message" => gateway_tools::exec_message_async(args, workspace_dir).await,
+            "tts" => gateway_tools::exec_tts_async(args, workspace_dir).await,
+            "image" => gateway_tools::exec_image_async(args, workspace_dir).await,
+            "ollama_manage" => ollama::exec_ollama_manage_async(args, workspace_dir).await,
+            "exo_manage" => exo_ai::exec_exo_manage_async(args, workspace_dir).await,
+            "uv_manage" => uv::exec_uv_manage_async(args, workspace_dir).await,
+            "npm_manage" => npm::exec_npm_manage_async(args, workspace_dir).await,
+            "pkg_manage" => sysadmin::exec_pkg_manage_async(args, workspace_dir).await,
+            "net_info" => sysadmin::exec_net_info_async(args, workspace_dir).await,
+            "net_scan" => sysadmin::exec_net_scan_async(args, workspace_dir).await,
+            "service_manage" => sysadmin::exec_service_manage_async(args, workspace_dir).await,
+            "user_manage" => sysadmin::exec_user_manage_async(args, workspace_dir).await,
+            "firewall" => sysadmin::exec_firewall_async(args, workspace_dir).await,
+            "disk_usage" => system_tools::exec_disk_usage_async(args, workspace_dir).await,
+            "classify_files" => system_tools::exec_classify_files_async(args, workspace_dir).await,
+            "system_monitor" => system_tools::exec_system_monitor_async(args, workspace_dir).await,
+            "battery_health" => system_tools::exec_battery_health_async(args, workspace_dir).await,
+            "app_index" => system_tools::exec_app_index_async(args, workspace_dir).await,
+            "cloud_browse" => system_tools::exec_cloud_browse_async(args, workspace_dir).await,
+            "browser_cache" => system_tools::exec_browser_cache_async(args, workspace_dir).await,
+            "screenshot" => system_tools::exec_screenshot_async(args, workspace_dir).await,
+            "clipboard" => system_tools::exec_clipboard_async(args, workspace_dir).await,
+            "audit_sensitive" => system_tools::exec_audit_sensitive_async(args, workspace_dir).await,
+            "secure_delete" => system_tools::exec_secure_delete_async(args, workspace_dir).await,
+            "summarize_file" => system_tools::exec_summarize_file_async(args, workspace_dir).await,
+            "nodes" => devices::exec_nodes_async(args, workspace_dir).await,
+            "canvas" => devices::exec_canvas_async(args, workspace_dir).await,
+            _ => unreachable!(),
+        };
+        if result.is_err() {
+            warn!(error = ?result.as_ref().err(), "Tool execution failed");
         }
+        return result;
     }
-    warn!(tool = name, "Unknown tool requested");
-    Err(format!("Unknown tool: {}", name))
+    
+    // Find the tool for sync execution
+    let tool = all_tools().into_iter().find(|t| t.name == name);
+    
+    let Some(tool) = tool else {
+        warn!(tool = name, "Unknown tool requested");
+        return Err(format!("Unknown tool: {}", name));
+    };
+    
+    // Clone what we need for the blocking task
+    let execute_fn = tool.execute;
+    let args = args.clone();
+    let workspace_dir = workspace_dir.to_path_buf();
+    
+    // Run sync tools on blocking thread pool
+    let result = tokio::task::spawn_blocking(move || {
+        execute_fn(&args, &workspace_dir)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+    
+    if result.is_err() {
+        warn!(error = ?result.as_ref().err(), "Tool execution failed");
+    }
+    
+    result
 }
 
 // ── Wire types for WebSocket protocol ───────────────────────────────────────
@@ -1647,16 +1783,16 @@ mod tests {
 
     // ── execute_tool dispatch ───────────────────────────────────────
 
-    #[test]
-    fn test_execute_tool_dispatch() {
+    #[tokio::test]
+    async fn test_execute_tool_dispatch() {
         let args = json!({ "path": file!() });
-        let result = execute_tool("read_file", &args, ws());
+        let result = execute_tool("read_file", &args, ws()).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_execute_tool_unknown() {
-        let result = execute_tool("no_such_tool", &json!({}), ws());
+    #[tokio::test]
+    async fn test_execute_tool_unknown() {
+        let result = execute_tool("no_such_tool", &json!({}), ws()).await;
         assert!(result.is_err());
     }
 

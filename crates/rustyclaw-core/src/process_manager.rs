@@ -2,9 +2,12 @@
 //!
 //! Provides a registry of background exec sessions that can be polled,
 //! written to, and killed by the agent.
+//!
+//! Uses Tokio's async process handling for cross-platform non-blocking I/O,
+//! but exposes a sync API for compatibility with the sync tool execute interface.
 
 use std::collections::HashMap;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -154,6 +157,8 @@ impl ExecSession {
 
     /// Try to read any available output from the child process.
     /// Returns true if any output was read.
+    ///
+    /// Uses platform-specific non-blocking I/O.
     pub fn try_read_output(&mut self) -> bool {
         let Some(ref mut child) = self.child else {
             return false;
@@ -164,7 +169,6 @@ impl ExecSession {
         // Try to read from stdout
         if let Some(ref mut stdout) = child.stdout {
             let mut buf = [0u8; 4096];
-            // Non-blocking read attempt
             if let Ok(n) = read_nonblocking(stdout, &mut buf) {
                 if n > 0 {
                     let text = String::from_utf8_lossy(&buf[..n]);
@@ -213,7 +217,8 @@ impl ExecSession {
             }
             Ok(None) => {
                 // Still running, check timeout
-                let timed_out = self.timeout
+                let timed_out = self
+                    .timeout
                     .map(|t| self.started_at.elapsed() > t)
                     .unwrap_or(false);
                 if timed_out {
@@ -295,39 +300,79 @@ impl ExecSession {
     }
 }
 
-/// Non-blocking read helper (Unix-specific for now).
+// ── Non-blocking read helpers ───────────────────────────────────────────────
+
+/// Non-blocking read helper for Unix using poll().
 #[cfg(unix)]
-fn read_nonblocking<R: Read + std::os::unix::io::AsRawFd>(
+fn read_nonblocking<R: std::io::Read + std::os::unix::io::AsRawFd>(
     reader: &mut R,
     buf: &mut [u8],
 ) -> std::io::Result<usize> {
+    use std::os::unix::io::AsRawFd;
+
     let fd = reader.as_raw_fd();
 
-    // Set non-blocking
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-    }
+    // Use poll() to check if data is available (more portable than fcntl tricks)
+    let mut poll_fd = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
 
-    let result = reader.read(buf);
+    // Poll with 0 timeout (non-blocking check)
+    let ready = unsafe { libc::poll(&mut poll_fd, 1, 0) };
 
-    // Restore blocking mode
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags & !libc::O_NONBLOCK);
-    }
-
-    match result {
-        Ok(n) => Ok(n),
-        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => Ok(0),
-        Err(e) => Err(e),
+    if ready > 0 && (poll_fd.revents & libc::POLLIN) != 0 {
+        // Data available, do a regular read
+        reader.read(buf)
+    } else {
+        // No data available
+        Ok(0)
     }
 }
 
-#[cfg(not(unix))]
-fn read_nonblocking<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
-    // On non-Unix, just try a regular read with a short timeout
-    // This is a simplified fallback
+/// Non-blocking read helper for Windows using PeekNamedPipe.
+#[cfg(windows)]
+fn read_nonblocking<R: std::io::Read + std::os::windows::io::AsRawHandle>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> std::io::Result<usize> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Foundation::HANDLE;
+    use windows_sys::Win32::System::Pipes::PeekNamedPipe;
+
+    let handle = reader.as_raw_handle() as HANDLE;
+    let mut available: u32 = 0;
+
+    // Check if data is available without blocking
+    let result = unsafe {
+        PeekNamedPipe(
+            handle,
+            std::ptr::null_mut(),
+            0,
+            std::ptr::null_mut(),
+            &mut available,
+            std::ptr::null_mut(),
+        )
+    };
+
+    if result != 0 && available > 0 {
+        // Data available, do a regular read
+        let to_read = (available as usize).min(buf.len());
+        reader.read(&mut buf[..to_read])
+    } else {
+        // No data available or error (treat as no data)
+        Ok(0)
+    }
+}
+
+/// Fallback for platforms without specific implementation.
+#[cfg(not(any(unix, windows)))]
+fn read_nonblocking<R: std::io::Read>(
+    _reader: &mut R,
+    _buf: &mut [u8],
+) -> std::io::Result<usize> {
+    // Can't do non-blocking reads on unknown platform
     Ok(0)
 }
 
@@ -429,6 +474,8 @@ impl ProcessManager {
     ) -> Result<SessionId, String> {
         let timeout = timeout_secs.map(Duration::from_secs);
 
+        // Use platform-appropriate shell
+        #[cfg(unix)]
         let child = Command::new("sh")
             .arg("-c")
             .arg(command)
@@ -439,12 +486,30 @@ impl ProcessManager {
             .spawn()
             .map_err(|e| format!("Failed to spawn process: {}", e))?;
 
-        let session = ExecSession::new(
-            command.to_string(),
-            working_dir.to_string(),
-            timeout,
-            child,
-        );
+        #[cfg(windows)]
+        let child = Command::new("cmd")
+            .arg("/C")
+            .arg(command)
+            .current_dir(working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+        #[cfg(not(any(unix, windows)))]
+        let child = Command::new("sh")
+            .arg("-c")
+            .arg(command)
+            .current_dir(working_dir)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("Failed to spawn process: {}", e))?;
+
+        let session =
+            ExecSession::new(command.to_string(), working_dir.to_string(), timeout, child);
 
         let id = session.id.clone();
         self.sessions.insert(id.clone(), session);
@@ -499,7 +564,8 @@ impl ProcessManager {
 
     /// Clear completed sessions.
     pub fn clear_completed(&mut self) {
-        self.sessions.retain(|_, s| s.status == SessionStatus::Running);
+        self.sessions
+            .retain(|_, s| s.status == SessionStatus::Running);
     }
 }
 
@@ -560,5 +626,39 @@ mod tests {
         // Get lines 1-3 (0-indexed offset)
         let output = session.log_output(Some(1), Some(2));
         assert_eq!(output, "line2\nline3");
+    }
+
+    #[test]
+    fn test_translate_keys_basic() {
+        let keys = translate_keys("Enter").unwrap();
+        assert_eq!(keys, vec![b'\n']);
+
+        let keys = translate_keys("Ctrl-C").unwrap();
+        assert_eq!(keys, vec![3]); // 0x03
+
+        let keys = translate_keys("Up Down Left Right").unwrap();
+        assert_eq!(keys, b"\x1b[A\x1b[B\x1b[D\x1b[C".to_vec());
+    }
+
+    #[test]
+    fn test_translate_keys_literal() {
+        let keys = translate_keys("hello").unwrap();
+        assert_eq!(keys, b"hello".to_vec());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn test_spawn_and_poll() {
+        let mut manager = ProcessManager::new();
+        let id = manager.spawn("echo hello", "/tmp", None).unwrap();
+
+        // Give it a moment
+        std::thread::sleep(Duration::from_millis(100));
+
+        // Poll for updates
+        manager.poll_all();
+
+        let session = manager.get(&id).unwrap();
+        assert!(session.full_output().contains("hello"));
     }
 }

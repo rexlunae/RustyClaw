@@ -420,7 +420,7 @@ async fn process_incoming_message(
                     &conv_key,
                 ).await;
 
-                let result = tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir);
+                let result = tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await;
 
                 match result {
                     Ok(output) => {
@@ -460,7 +460,7 @@ async fn process_incoming_message(
                     Err(err) => (err, true),
                 }
             } else {
-                match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir) {
+                match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await {
                     Ok(text) => (text, false),
                     Err(err) => (err, true),
                 }
