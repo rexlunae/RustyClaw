@@ -112,6 +112,10 @@ use system_tools::{
     exec_battery_health, exec_app_index, exec_cloud_browse,
     exec_browser_cache, exec_screenshot, exec_clipboard,
     exec_audit_sensitive, exec_secure_delete, exec_summarize_file,
+    exec_disk_usage_async, exec_classify_files_async, exec_system_monitor_async,
+    exec_battery_health_async, exec_app_index_async, exec_cloud_browse_async,
+    exec_browser_cache_async, exec_screenshot_async, exec_clipboard_async,
+    exec_audit_sensitive_async, exec_secure_delete_async, exec_summarize_file_async,
 };
 
 // System administration tools
@@ -1437,6 +1441,18 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "service_manage",
     "user_manage",
     "firewall",
+    "disk_usage",
+    "classify_files",
+    "system_monitor",
+    "battery_health",
+    "app_index",
+    "cloud_browse",
+    "browser_cache",
+    "screenshot",
+    "clipboard",
+    "audit_sensitive",
+    "secure_delete",
+    "summarize_file",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -1474,6 +1490,18 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "service_manage" => sysadmin::exec_service_manage_async(args, workspace_dir).await,
             "user_manage" => sysadmin::exec_user_manage_async(args, workspace_dir).await,
             "firewall" => sysadmin::exec_firewall_async(args, workspace_dir).await,
+            "disk_usage" => system_tools::exec_disk_usage_async(args, workspace_dir).await,
+            "classify_files" => system_tools::exec_classify_files_async(args, workspace_dir).await,
+            "system_monitor" => system_tools::exec_system_monitor_async(args, workspace_dir).await,
+            "battery_health" => system_tools::exec_battery_health_async(args, workspace_dir).await,
+            "app_index" => system_tools::exec_app_index_async(args, workspace_dir).await,
+            "cloud_browse" => system_tools::exec_cloud_browse_async(args, workspace_dir).await,
+            "browser_cache" => system_tools::exec_browser_cache_async(args, workspace_dir).await,
+            "screenshot" => system_tools::exec_screenshot_async(args, workspace_dir).await,
+            "clipboard" => system_tools::exec_clipboard_async(args, workspace_dir).await,
+            "audit_sensitive" => system_tools::exec_audit_sensitive_async(args, workspace_dir).await,
+            "secure_delete" => system_tools::exec_secure_delete_async(args, workspace_dir).await,
+            "summarize_file" => system_tools::exec_summarize_file_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
