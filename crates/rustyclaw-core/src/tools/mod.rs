@@ -90,6 +90,12 @@ use task_tools::{
     exec_task_cancel, exec_task_pause, exec_task_resume, exec_task_input,
 };
 
+// Model operations
+mod model_tools;
+use model_tools::{
+    exec_model_list, exec_model_enable, exec_model_disable, exec_model_set, exec_model_recommend,
+};
+
 // Secrets operations
 use secrets_tools::exec_secrets_stub;
 
@@ -222,7 +228,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "search_history" => "Search HISTORY.md for past entries",
         "cron" => "Manage scheduled jobs",
         "sessions_list" => "List active sessions",
-        "sessions_spawn" => "Spawn sub-agent sessions",
+        "sessions_spawn" => "Spawn async sub-agents (use cheaper models for simple tasks)",
         "sessions_send" => "Send messages to sessions",
         "sessions_history" => "Read session message history",
         "session_status" => "Check session status & usage",
@@ -256,6 +262,11 @@ pub fn tool_summary(name: &str) -> &'static str {
         "task_pause" => "Pause a running task",
         "task_resume" => "Resume a paused task",
         "task_input" => "Send input to a task",
+        "model_list" => "List available models with cost tiers",
+        "model_enable" => "Enable a model for use",
+        "model_disable" => "Disable a model",
+        "model_set" => "Set the active model",
+        "model_recommend" => "Get model recommendation for task complexity",
         "disk_usage" => "Scan disk usage by folder",
         "classify_files" => "Categorize files as docs, caches, etc.",
         "system_monitor" => "View CPU, memory & process info",
@@ -356,6 +367,11 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &TASK_PAUSE,
         &TASK_RESUME,
         &TASK_INPUT,
+        &MODEL_LIST,
+        &MODEL_ENABLE,
+        &MODEL_DISABLE,
+        &MODEL_SET,
+        &MODEL_RECOMMEND,
         &DISK_USAGE,
         &CLASSIFY_FILES,
         &SYSTEM_MONITOR,
@@ -543,8 +559,15 @@ pub static SESSIONS_LIST: ToolDef = ToolDef {
 
 pub static SESSIONS_SPAWN: ToolDef = ToolDef {
     name: "sessions_spawn",
-    description: "Spawn a sub-agent to run a task in the background. The sub-agent runs in its own \
-                  isolated session and announces results back when finished. Non-blocking.",
+    description: "Spawn a sub-agent to run a task asynchronously. Sub-agents run in isolated sessions \
+                  and announce results when finished. SPAWN FREELY — the system handles concurrency efficiently.\n\n\
+                  **Model selection guidance:**\n\
+                  - Use `model_recommend` to get a cost-appropriate model for the task\n\
+                  - Simple tasks (grep, format, list) → use free/economy models (llama3.2, claude-haiku)\n\
+                  - Medium tasks (code edits, analysis) → use economy/standard models\n\
+                  - Complex tasks (debugging, architecture) → use standard models\n\
+                  - Critical tasks (security, production) → use premium models\n\n\
+                  Multiple sub-agents can run concurrently. Continue working while they run.",
     parameters: vec![],
     execute: exec_sessions_spawn,
 };
@@ -825,6 +848,50 @@ pub static TASK_INPUT: ToolDef = ToolDef {
     description: "Send input to a task that is waiting for user input.",
     parameters: vec![],
     execute: exec_task_input,
+};
+
+
+// ── Model tools ─────────────────────────────────────────────────────────────
+
+pub static MODEL_LIST: ToolDef = ToolDef {
+    name: "model_list",
+    description: "List available models with their cost tiers and status. \
+                  Models are categorized as: 🆓 Free, 💰 Economy, ⚖️ Standard, 💎 Premium. \
+                  Use tier parameter to filter. Shows enabled/disabled and available status.",
+    parameters: vec![],
+    execute: exec_model_list,
+};
+
+pub static MODEL_ENABLE: ToolDef = ToolDef {
+    name: "model_enable",
+    description: "Enable a model for use. Enabling a model makes it available for selection \
+                  as the active model or for sub-agent use.",
+    parameters: vec![],
+    execute: exec_model_enable,
+};
+
+pub static MODEL_DISABLE: ToolDef = ToolDef {
+    name: "model_disable",
+    description: "Disable a model. Disabled models won't be used even if credentials are available.",
+    parameters: vec![],
+    execute: exec_model_disable,
+};
+
+pub static MODEL_SET: ToolDef = ToolDef {
+    name: "model_set",
+    description: "Set the active model for this session. The active model handles all chat requests.",
+    parameters: vec![],
+    execute: exec_model_set,
+};
+
+pub static MODEL_RECOMMEND: ToolDef = ToolDef {
+    name: "model_recommend",
+    description: "Get a model recommendation for a given task complexity. \
+                  Complexity levels: simple (use free/economy), medium (economy/standard), \
+                  complex (standard), critical (premium). \
+                  Use this when spawning sub-agents to pick cost-effective models.",
+    parameters: vec![],
+    execute: exec_model_recommend,
 };
 
 
@@ -1158,6 +1225,11 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "task_pause" => task_tools::task_id_param(),
         "task_resume" => task_tools::task_id_param(),
         "task_input" => task_tools::task_input_params(),
+        "model_list" => model_tools::model_list_params(),
+        "model_enable" => model_tools::model_id_param(),
+        "model_disable" => model_tools::model_id_param(),
+        "model_set" => model_tools::model_id_param(),
+        "model_recommend" => model_tools::model_recommend_params(),
         "disk_usage" => disk_usage_params(),
         "classify_files" => classify_files_params(),
         "system_monitor" => system_monitor_params(),

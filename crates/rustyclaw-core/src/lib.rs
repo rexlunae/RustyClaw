@@ -18,6 +18,7 @@ pub mod memory;
 pub mod memory_consolidation;
 pub mod memory_flush;
 pub mod messengers;
+pub mod models;
 pub mod observability;
 pub mod process_manager;
 pub mod providers;
