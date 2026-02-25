@@ -19,11 +19,12 @@ workspace = true
 default = ["web-tools"]
 web-tools = ["dep:scraper", "dep:html2md"]
 browser = ["dep:chromiumoxide"]
+mcp = ["dep:rmcp", "dep:schemars"]
 # Legacy feature flags (no longer needed, all messengers now compiled in)
 matrix = []
 whatsapp = []
 all-messengers = []
-full = ["web-tools", "browser"]
+full = ["web-tools", "browser", "mcp"]
 
 [dependencies]
 serde.workspace = true
@@ -75,6 +76,10 @@ rpassword.workspace = true
 scraper = { workspace = true, optional = true }
 html2md = { workspace = true, optional = true }
 chromiumoxide = { workspace = true, optional = true }
+
+# MCP (Model Context Protocol) client support
+rmcp = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
 
 # Messengers (always compiled)
 matrix-sdk.workspace = true

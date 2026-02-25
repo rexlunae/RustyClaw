@@ -5,6 +5,7 @@
 // skills, providers, commands, and shared display types.
 
 pub mod args;
+pub mod canvas;
 pub mod commands;
 pub mod config;
 pub mod cron;
@@ -12,6 +13,7 @@ pub mod daemon;
 pub mod error;
 pub mod gateway;
 pub mod logging;
+pub mod mcp;
 pub mod memory;
 pub mod memory_consolidation;
 pub mod memory_flush;

@@ -124,6 +124,12 @@ wa-rs-ureq-http = "0.2"
 # Browser automation
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 
+# MCP (Model Context Protocol) client support
+rmcp = { version = "0.16", features = ["client"] }
+
+# Schema generation for MCP
+schemars = "1.0.0-alpha.17"
+
 # Patches for crypto compatibility
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
