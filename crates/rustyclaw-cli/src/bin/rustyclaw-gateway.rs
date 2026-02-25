@@ -305,7 +305,7 @@ async fn main() -> Result<()> {
         let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
             std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
-        run_gateway(config, GatewayOptions { listen, tls_cert, tls_key }, model_ctx, shared_vault, shared_skills, cancel).await
+        run_gateway(config, GatewayOptions { listen, tls_cert, tls_key }, model_ctx, shared_vault, shared_skills, None, None, cancel).await
     };
     daemon::remove_pid(&settings_dir);
 
