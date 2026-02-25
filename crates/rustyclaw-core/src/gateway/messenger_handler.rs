@@ -153,6 +153,7 @@ pub async fn run_messenger_loop(
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: super::SharedTaskManager,
+    model_registry: super::SharedModelRegistry,
     cancel: CancellationToken,
 ) -> Result<()> {
     // If no model context, we can't process messages
@@ -204,6 +205,7 @@ pub async fn run_messenger_loop(
                         &vault,
                         &skill_mgr,
                         &task_mgr,
+                        &model_registry,
                         &conversations,
                         &messenger_type,
                         msg,
@@ -253,6 +255,7 @@ async fn process_incoming_message(
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
     task_mgr: &super::SharedTaskManager,
+    model_registry: &super::SharedModelRegistry,
     conversations: &ConversationStore,
     messenger_type: &str,
     msg: Message,
@@ -283,12 +286,13 @@ async fn process_incoming_message(
         store.entry(conv_key.clone()).or_insert_with(Vec::new).clone()
     };
 
-    // Build system prompt (async to include task context)
+    // Build system prompt (async to include task and model context)
     let system_prompt = build_messenger_system_prompt(
         config,
         messenger_type,
         &msg,
         task_mgr,
+        model_registry,
         &conv_key,
     ).await;
 
@@ -438,6 +442,16 @@ async fn process_incoming_message(
                         (err, true)
                     }
                 }
+            } else if super::model_handler::is_model_tool(&tc.name) {
+                // Model management tools
+                match super::model_handler::execute_model_tool(
+                    &tc.name,
+                    &tc.arguments,
+                    model_registry,
+                ).await {
+                    Ok(text) => (text, false),
+                    Err(err) => (err, true),
+                }
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir) {
                     Ok(text) => (text, false),
@@ -535,12 +549,13 @@ async fn process_incoming_message(
     Ok(())
 }
 
-/// Build system prompt with messenger context, workspace files, and active tasks.
+/// Build system prompt with messenger context, workspace files, active tasks, and model guidance.
 async fn build_messenger_system_prompt(
     config: &Config,
     messenger_type: &str,
     msg: &Message,
     task_mgr: &super::SharedTaskManager,
+    model_registry: &super::SharedModelRegistry,
     session_key: &str,
 ) -> String {
     use crate::workspace_context::{SessionType, WorkspaceContext};
@@ -580,6 +595,12 @@ async fn build_messenger_system_prompt(
     ).await {
         parts.push(task_section);
     }
+
+    // Add model selection guidance for sub-agents
+    let model_guidance = super::model_handler::generate_model_prompt_section(
+        model_registry,
+    ).await;
+    parts.push(model_guidance);
 
     parts.push(format!(
         "## Messaging Context\n\

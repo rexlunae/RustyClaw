@@ -13,6 +13,7 @@ pub mod health;
 mod helpers;
 pub mod mcp_handler;
 mod messenger_handler;
+pub mod model_handler;
 mod providers;
 pub mod protocol;
 mod secrets_handler;
@@ -87,6 +88,9 @@ pub type SharedModelCtx = Arc<RwLock<Option<Arc<ModelContext>>>>;
 
 /// Shared task manager for first-class task orchestration.
 pub type SharedTaskManager = Arc<crate::tasks::TaskManager>;
+
+/// Shared model registry for model management.
+pub type SharedModelRegistry = crate::models::SharedModelRegistry;
 
 // Re-export protocol helpers for external use
 pub use protocol::server::{
@@ -174,10 +178,14 @@ pub async fn run_gateway(
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: Option<SharedTaskManager>,
+    model_registry: Option<SharedModelRegistry>,
     cancel: CancellationToken,
 ) -> Result<()> {
     // Create task manager if not provided
     let task_mgr = task_mgr.unwrap_or_else(|| Arc::new(crate::tasks::TaskManager::new()));
+
+    // Create model registry if not provided
+    let model_registry = model_registry.unwrap_or_else(crate::models::create_model_registry);
 
     // Register the credentials directory so file-access tools can enforce
     // the vault boundary (blocks read_file, execute_command, etc.).
@@ -323,6 +331,7 @@ pub async fn run_gateway(
                 let messenger_vault = vault.clone();
                 let messenger_skills = skill_mgr.clone();
                 let messenger_tasks = task_mgr.clone();
+                let messenger_models = model_registry.clone();
                 let messenger_cancel = cancel.child_token();
                 let mgr_clone = shared_mgr.clone();
 
@@ -334,6 +343,7 @@ pub async fn run_gateway(
                         messenger_vault,
                         messenger_skills,
                         messenger_tasks,
+                        messenger_models,
                         messenger_cancel,
                     ).await {
                         error!(error = %e, "Messenger loop error");
