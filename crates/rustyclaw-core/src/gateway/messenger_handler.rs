@@ -605,7 +605,7 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Add skills context if any skills are loaded
     {
-        let mgr = skill_mgr.read().await;
+        let mgr = skill_mgr.lock().await;
         let skills_context = mgr.generate_prompt_context();
         if !skills_context.is_empty() {
             parts.push(skills_context);
