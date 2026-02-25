@@ -303,14 +303,28 @@ pub struct ToolParam {
     pub required: bool,
 }
 
+/// Sync tool execution function type (legacy, for static definitions).
+pub type SyncExecuteFn = fn(args: &Value, workspace_dir: &Path) -> Result<String, String>;
+
 /// A tool that the agent can invoke.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolDef {
     pub name: &'static str,
     pub description: &'static str,
     pub parameters: Vec<ToolParam>,
-    /// The function that executes the tool, returning a string result or error.
-    pub execute: fn(args: &Value, workspace_dir: &Path) -> Result<String, String>,
+    /// The sync function that executes the tool.
+    /// This is wrapped in an async context by execute_tool.
+    pub execute: SyncExecuteFn,
+}
+
+impl std::fmt::Debug for ToolDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolDef")
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .field("parameters", &self.parameters)
+            .finish()
+    }
 }
 
 // ── Tool registry ───────────────────────────────────────────────────────────
@@ -1389,20 +1403,38 @@ pub fn is_user_prompt_tool(name: &str) -> bool {
 }
 
 /// Find a tool by name and execute it with the given arguments.
+/// 
+/// Tool execution is run on a blocking thread pool to avoid blocking
+/// the async runtime, since most tools do sync I/O.
 #[instrument(skip(args, workspace_dir), fields(tool = name))]
-pub fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Result<String, String> {
     debug!("Executing tool");
-    for tool in all_tools() {
-        if tool.name == name {
-            let result = (tool.execute)(args, workspace_dir);
-            if result.is_err() {
-                warn!(error = ?result.as_ref().err(), "Tool execution failed");
-            }
-            return result;
-        }
+    
+    // Find the tool
+    let tool = all_tools().into_iter().find(|t| t.name == name);
+    
+    let Some(tool) = tool else {
+        warn!(tool = name, "Unknown tool requested");
+        return Err(format!("Unknown tool: {}", name));
+    };
+    
+    // Clone what we need for the blocking task
+    let execute_fn = tool.execute;
+    let args = args.clone();
+    let workspace_dir = workspace_dir.to_path_buf();
+    
+    // Run on blocking thread pool to avoid blocking async runtime
+    let result = tokio::task::spawn_blocking(move || {
+        execute_fn(&args, &workspace_dir)
+    })
+    .await
+    .map_err(|e| format!("Task join error: {}", e))?;
+    
+    if result.is_err() {
+        warn!(error = ?result.as_ref().err(), "Tool execution failed");
     }
-    warn!(tool = name, "Unknown tool requested");
-    Err(format!("Unknown tool: {}", name))
+    
+    result
 }
 
 // ── Wire types for WebSocket protocol ───────────────────────────────────────
@@ -1647,16 +1679,16 @@ mod tests {
 
     // ── execute_tool dispatch ───────────────────────────────────────
 
-    #[test]
-    fn test_execute_tool_dispatch() {
+    #[tokio::test]
+    async fn test_execute_tool_dispatch() {
         let args = json!({ "path": file!() });
-        let result = execute_tool("read_file", &args, ws());
+        let result = execute_tool("read_file", &args, ws()).await;
         assert!(result.is_ok());
     }
 
-    #[test]
-    fn test_execute_tool_unknown() {
-        let result = execute_tool("no_such_tool", &json!({}), ws());
+    #[tokio::test]
+    async fn test_execute_tool_unknown() {
+        let result = execute_tool("no_such_tool", &json!({}), ws()).await;
         assert!(result.is_err());
     }
 

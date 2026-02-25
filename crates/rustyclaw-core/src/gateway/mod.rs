@@ -1692,7 +1692,7 @@ async fn dispatch_text_message(
                                 Err(err) => (err, true),
                             }
                         } else {
-                            match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir) {
+                            match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir).await {
                                 Ok(text) => (text, false),
                                 Err(err) => (err, true),
                             }
@@ -1722,7 +1722,7 @@ async fn dispatch_text_message(
                             Err(err) => (err, true),
                         }
                     } else {
-                        match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir) {
+                        match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir).await {
                             Ok(text) => (text, false),
                             Err(err) => (err, true),
                         }
