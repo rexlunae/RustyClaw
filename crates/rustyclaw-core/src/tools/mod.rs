@@ -121,7 +121,7 @@ use sysadmin::{
 };
 
 // Exo AI tools
-use exo_ai::exec_exo_manage;
+use exo_ai::{exec_exo_manage, exec_exo_manage_async};
 
 // Ollama tools
 use ollama::{exec_ollama_manage, exec_ollama_manage_async};
@@ -1426,6 +1426,7 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "tts",
     "image",
     "ollama_manage",
+    "exo_manage",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -1454,6 +1455,7 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "tts" => gateway_tools::exec_tts_async(args, workspace_dir).await,
             "image" => gateway_tools::exec_image_async(args, workspace_dir).await,
             "ollama_manage" => ollama::exec_ollama_manage_async(args, workspace_dir).await,
+            "exo_manage" => exo_ai::exec_exo_manage_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
