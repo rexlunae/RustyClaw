@@ -69,6 +69,18 @@ jobs:
             features_label: default
             use_cross: false
 
+          # ── Windows x86_64 ───────────────────────────────────────
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            features: ""
+            features_label: default
+            use_cross: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            features: "--no-default-features"
+            features_label: no-default
+            use_cross: false
+
     steps:
       - uses: actions/checkout@v4
 
@@ -80,13 +92,18 @@ jobs:
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Check
+      - name: Check (Unix)
+        if: runner.os != 'Windows'
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross check --target ${{ matrix.target }} ${{ matrix.features }}
           else
             cargo check --target ${{ matrix.target }} ${{ matrix.features }}
           fi
+
+      - name: Check (Windows)
+        if: runner.os == 'Windows'
+        run: cargo check --target ${{ matrix.target }} ${{ matrix.features }}
 
   test:
     name: Unit Tests
@@ -205,6 +222,10 @@ jobs:
             runner: macos-latest
             features: ""
             use_cross: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            features: ""
+            use_cross: false
 
     steps:
       - uses: actions/checkout@v4
@@ -217,7 +238,8 @@ jobs:
         if: matrix.use_cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build release
+      - name: Build release (Unix)
+        if: runner.os != 'Windows'
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             cross build --release --target ${{ matrix.target }} ${{ matrix.features }}
@@ -225,11 +247,24 @@ jobs:
             cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
           fi
 
-      - name: Package binaries
+      - name: Build release (Windows)
+        if: runner.os == 'Windows'
+        run: cargo build --release --target ${{ matrix.target }} ${{ matrix.features }}
+
+      - name: Package binaries (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/rustyclaw dist/rustyclaw-${{ matrix.target }} 2>/dev/null || true
           cp target/${{ matrix.target }}/release/rustyclaw-gateway dist/rustyclaw-gateway-${{ matrix.target }} 2>/dev/null || true
+
+      - name: Package binaries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist
+          Copy-Item "target/${{ matrix.target }}/release/rustyclaw.exe" "dist/rustyclaw-${{ matrix.target }}.exe" -ErrorAction SilentlyContinue
+          Copy-Item "target/${{ matrix.target }}/release/rustyclaw-gateway.exe" "dist/rustyclaw-gateway-${{ matrix.target }}.exe" -ErrorAction SilentlyContinue
 
       - uses: actions/upload-artifact@v4
         with:
