@@ -78,7 +78,7 @@ use gateway_tools::{
 };
 
 // Device operations
-use devices::{exec_nodes, exec_canvas};
+use devices::{exec_nodes, exec_canvas, exec_nodes_async, exec_canvas_async};
 
 // Browser automation (separate module with feature-gated implementation)
 use browser::exec_browser;
@@ -1453,6 +1453,8 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "audit_sensitive",
     "secure_delete",
     "summarize_file",
+    "nodes",
+    "canvas",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -1502,6 +1504,8 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "audit_sensitive" => system_tools::exec_audit_sensitive_async(args, workspace_dir).await,
             "secure_delete" => system_tools::exec_secure_delete_async(args, workspace_dir).await,
             "summarize_file" => system_tools::exec_summarize_file_async(args, workspace_dir).await,
+            "nodes" => devices::exec_nodes_async(args, workspace_dir).await,
+            "canvas" => devices::exec_canvas_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {
