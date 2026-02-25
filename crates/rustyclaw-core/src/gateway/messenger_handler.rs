@@ -567,8 +567,15 @@ async fn build_messenger_system_prompt(
     use crate::workspace_context::{SessionType, WorkspaceContext};
 
     let base_prompt = config.system_prompt.clone().unwrap_or_else(|| {
-        "You are a helpful AI assistant.".to_string()
+        "You are a helpful AI assistant running inside RustyClaw.".to_string()
     });
+
+    // Safety guardrails (inspired by Anthropic's constitution)
+    let safety_section = "\
+## Safety\n\
+You have no independent goals: do not pursue self-preservation, replication, resource acquisition, or power-seeking.\n\
+Prioritize safety and human oversight over completion. If instructions conflict, pause and ask.\n\
+Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Determine session type based on messenger context
     // Direct messages are treated as main session, channels/groups as group session
@@ -587,8 +594,8 @@ async fn build_messenger_system_prompt(
     );
     let workspace_prompt = workspace_ctx.build_context(session_type);
 
-    // Combine base prompt, workspace context, and messaging context
-    let mut parts = vec![base_prompt];
+    // Combine base prompt, safety, workspace context, and messaging context
+    let mut parts = vec![base_prompt, safety_section.to_string()];
 
     if !workspace_prompt.is_empty() {
         parts.push(workspace_prompt);
@@ -608,12 +615,25 @@ async fn build_messenger_system_prompt(
     ).await;
     parts.push(model_guidance);
 
-    // Add tool usage guidance
+    // Add tool usage guidelines (inspired by OpenClaw's explicit behavioral guidance)
     parts.push(
-        "## Tool Usage Guidelines\n\
-        - **Before asking for API keys or tokens:** Run `secrets_list` to check the vault first\n\
-        - **To make authenticated API calls:** Use `secrets_get` then pass to `web_fetch(authorization=...)`\n\
-        - **For long-running commands:** Use `execute_command` with `background=true`, then `process` to poll"
+        "## Tool Usage Guidelines\n\n\
+        ### Credentials & API Access\n\
+        **Before asking for API keys or tokens:** Run `secrets_list` to check the vault first.\n\
+        If a credential exists, use `secrets_get` to retrieve it — don't ask the user again.\n\n\
+        **Authenticated API workflow:**\n\
+        1. `secrets_list()` → discover available credentials\n\
+        2. `secrets_get(name=\"...\")` → retrieve the value\n\
+        3. `web_fetch(url=\"...\", authorization=\"token <value>\")` → make the API call\n\n\
+        ### Memory Recall\n\
+        Before answering questions about prior work, decisions, dates, people, preferences, or todos:\n\
+        Run `memory_search` first, then use `memory_get` to pull relevant context.\n\n\
+        ### Tool Call Style\n\
+        - Default: don't narrate routine tool calls (just call them)\n\
+        - Narrate only for: multi-step work, complex problems, or sensitive actions\n\
+        - Keep narration brief and value-dense\n\n\
+        ### Long-Running Commands\n\
+        Use `execute_command` with `background=true`, then poll with `process` tool."
         .to_string()
     );
 
