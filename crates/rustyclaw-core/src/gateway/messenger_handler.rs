@@ -366,6 +366,21 @@ async fn process_incoming_message(
                     Ok(text) => (text, false),
                     Err(err) => (err, true),
                 }
+            } else if super::mcp_handler::is_mcp_tool(&tc.name) {
+                #[cfg(feature = "mcp")]
+                {
+                    // MCP tools require the MCP manager - for now, return an error
+                    // TODO: Pass mcp_mgr to this function
+                    (format!("MCP tool '{}' called but MCP manager not available in this context", tc.name), true)
+                }
+                #[cfg(not(feature = "mcp"))]
+                {
+                    (format!("MCP tool '{}' requires the 'mcp' feature", tc.name), true)
+                }
+            } else if super::canvas_handler::is_canvas_tool(&tc.name) {
+                // Canvas tools require the canvas host - for now, return an error
+                // TODO: Pass canvas_host to this function
+                (format!("Canvas tool '{}' called but canvas host not available in this context", tc.name), true)
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir) {
                     Ok(text) => (text, false),

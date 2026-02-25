@@ -6,9 +6,11 @@
 //! for incoming messages and routes them through the model.
 
 mod auth;
+pub mod canvas_handler;
 pub mod csrf;
 pub mod health;
 mod helpers;
+pub mod mcp_handler;
 mod messenger_handler;
 mod providers;
 pub mod protocol;

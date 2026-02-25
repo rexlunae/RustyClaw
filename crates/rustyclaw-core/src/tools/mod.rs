@@ -79,6 +79,10 @@ use browser::exec_browser;
 // Skill operations
 use skills_tools::{exec_skill_list, exec_skill_search, exec_skill_install, exec_skill_info, exec_skill_enable, exec_skill_link_secret, exec_skill_create};
 
+// MCP operations
+mod mcp_tools;
+use mcp_tools::{exec_mcp_list, exec_mcp_connect, exec_mcp_disconnect};
+
 // Secrets operations
 use secrets_tools::exec_secrets_stub;
 
@@ -234,6 +238,9 @@ pub fn tool_summary(name: &str) -> &'static str {
         "skill_enable" => "Enable or disable skills",
         "skill_link_secret" => "Link vault secrets to skills",
         "skill_create" => "Create a new skill from scratch",
+        "mcp_list" => "List connected MCP servers",
+        "mcp_connect" => "Connect to an MCP server",
+        "mcp_disconnect" => "Disconnect from an MCP server",
         "disk_usage" => "Scan disk usage by folder",
         "classify_files" => "Categorize files as docs, caches, etc.",
         "system_monitor" => "View CPU, memory & process info",
@@ -323,6 +330,9 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SKILL_ENABLE,
         &SKILL_LINK_SECRET,
         &SKILL_CREATE,
+        &MCP_LIST,
+        &MCP_CONNECT,
+        &MCP_DISCONNECT,
         &DISK_USAGE,
         &CLASSIFY_FILES,
         &SYSTEM_MONITOR,
@@ -707,6 +717,31 @@ pub static SKILL_CREATE: ToolDef = ToolDef {
     execute: exec_skill_create,
 };
 
+// ── MCP tools ───────────────────────────────────────────────────────────────
+
+pub static MCP_LIST: ToolDef = ToolDef {
+    name: "mcp_list",
+    description: "List connected MCP (Model Context Protocol) servers and their available tools. \
+                  Shows server name, connection status, and tool count.",
+    parameters: vec![],
+    execute: exec_mcp_list,
+};
+
+pub static MCP_CONNECT: ToolDef = ToolDef {
+    name: "mcp_connect",
+    description: "Connect to an MCP server by name (from config) or command. \
+                  Parameters: name (string, server name from config), or command (string) + args (array).",
+    parameters: vec![],
+    execute: exec_mcp_connect,
+};
+
+pub static MCP_DISCONNECT: ToolDef = ToolDef {
+    name: "mcp_disconnect",
+    description: "Disconnect from an MCP server by name.",
+    parameters: vec![],
+    execute: exec_mcp_disconnect,
+};
+
 
 // ── System tools ────────────────────────────────────────────────────────────
 
@@ -1027,6 +1062,9 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "skill_enable" => skill_enable_params(),
         "skill_link_secret" => skill_link_secret_params(),
         "skill_create" => skill_create_params(),
+        "mcp_list" => mcp_tools::mcp_list_params(),
+        "mcp_connect" => mcp_tools::mcp_connect_params(),
+        "mcp_disconnect" => mcp_tools::mcp_disconnect_params(),
         "disk_usage" => disk_usage_params(),
         "classify_files" => classify_files_params(),
         "system_monitor" => system_monitor_params(),
