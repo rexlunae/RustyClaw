@@ -152,6 +152,7 @@ pub async fn run_messenger_loop(
     model_ctx: Option<Arc<ModelContext>>,
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
+    task_mgr: super::SharedTaskManager,
     cancel: CancellationToken,
 ) -> Result<()> {
     // If no model context, we can't process messages
@@ -202,6 +203,7 @@ pub async fn run_messenger_loop(
                         &model_ctx,
                         &vault,
                         &skill_mgr,
+                        &task_mgr,
                         &conversations,
                         &messenger_type,
                         msg,
@@ -250,6 +252,7 @@ async fn process_incoming_message(
     model_ctx: &Arc<ModelContext>,
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
+    task_mgr: &super::SharedTaskManager,
     conversations: &ConversationStore,
     messenger_type: &str,
     msg: Message,
@@ -382,9 +385,16 @@ async fn process_incoming_message(
                 // TODO: Pass canvas_host to this function
                 (format!("Canvas tool '{}' called but canvas host not available in this context", tc.name), true)
             } else if super::task_handler::is_task_tool(&tc.name) {
-                // Task tools require the task manager - for now, return an error
-                // TODO: Pass task_mgr to this function
-                (format!("Task tool '{}' called but task manager not available in this context", tc.name), true)
+                // Execute task tool with task manager
+                match super::task_handler::execute_task_tool(
+                    &tc.name,
+                    &tc.arguments,
+                    task_mgr,
+                    Some(&conv_key),
+                ).await {
+                    Ok(text) => (text, false),
+                    Err(err) => (err, true),
+                }
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir) {
                     Ok(text) => (text, false),

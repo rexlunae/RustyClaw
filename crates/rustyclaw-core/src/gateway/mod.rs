@@ -321,6 +321,7 @@ pub async fn run_gateway(
                 let messenger_ctx = model_ctx.clone();
                 let messenger_vault = vault.clone();
                 let messenger_skills = skill_mgr.clone();
+                let messenger_tasks = task_mgr.clone();
                 let messenger_cancel = cancel.child_token();
                 let mgr_clone = shared_mgr.clone();
 
@@ -331,6 +332,7 @@ pub async fn run_gateway(
                         messenger_ctx,
                         messenger_vault,
                         messenger_skills,
+                        messenger_tasks,
                         messenger_cancel,
                     ).await {
                         error!(error = %e, "Messenger loop error");
