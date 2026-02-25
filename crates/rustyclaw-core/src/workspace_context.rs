@@ -163,6 +163,17 @@ const WORKSPACE_FILES: &[WorkspaceFile] = &[
     },
 ];
 
+/// Sub-agent context with parent information for isolation.
+#[derive(Debug, Clone, Default)]
+pub struct SubagentInfo {
+    /// Parent session key for communication.
+    pub parent_key: Option<String>,
+    /// Task description assigned to this sub-agent.
+    pub task: Option<String>,
+    /// Label if provided.
+    pub label: Option<String>,
+}
+
 /// Workspace context builder.
 ///
 /// Loads workspace files and builds system prompt sections for injection
@@ -170,6 +181,7 @@ const WORKSPACE_FILES: &[WorkspaceFile] = &[
 pub struct WorkspaceContext {
     workspace_dir: PathBuf,
     config: WorkspaceContextConfig,
+    subagent_info: Option<SubagentInfo>,
 }
 
 impl WorkspaceContext {
@@ -178,6 +190,7 @@ impl WorkspaceContext {
         Self {
             workspace_dir,
             config: WorkspaceContextConfig::default(),
+            subagent_info: None,
         }
     }
 
@@ -186,6 +199,20 @@ impl WorkspaceContext {
         Self {
             workspace_dir,
             config,
+            subagent_info: None,
+        }
+    }
+
+    /// Create a workspace context for a sub-agent session.
+    pub fn for_subagent(
+        workspace_dir: PathBuf,
+        config: WorkspaceContextConfig,
+        info: SubagentInfo,
+    ) -> Self {
+        Self {
+            workspace_dir,
+            config,
+            subagent_info: Some(info),
         }
     }
 
@@ -242,6 +269,11 @@ impl WorkspaceContext {
             }
         }
 
+        // Add sub-agent guidance for isolated sessions
+        if session_type == SessionType::Isolated {
+            sections.push(self.build_subagent_guidance());
+        }
+
         if sections.is_empty() {
             String::new()
         } else {
@@ -251,6 +283,47 @@ impl WorkspaceContext {
                 sections.join("\n\n---\n\n")
             )
         }
+    }
+
+    /// Build guidance section for sub-agent sessions.
+    fn build_subagent_guidance(&self) -> String {
+        let mut guidance = String::from("## Sub-Agent Guidelines\n\n");
+        guidance.push_str(
+            "You are running in an **isolated sub-agent session** spawned by a parent agent.\n\n",
+        );
+
+        // Add task context if available
+        if let Some(ref info) = self.subagent_info {
+            if let Some(ref task) = info.task {
+                guidance.push_str(&format!("**Your assigned task:** {}\n\n", task));
+            }
+            if let Some(ref label) = info.label {
+                guidance.push_str(&format!("**Session label:** {}\n\n", label));
+            }
+        }
+
+        guidance.push_str(
+"### Communication
+- Your final output will be delivered to the parent session automatically when you complete
+- If you need to send interim updates, use `sessions_send` with the parent session key
+- Do **not** assume access to messaging channels (Signal, Discord, etc.) — route through the parent
+
+### Blocking Issues
+If you cannot proceed due to missing resources (e.g., browser not attached, credentials unavailable):
+1. **Clearly state what's blocking you** — be specific about the missing resource
+2. **List actions needed** — what the user or parent agent can do to unblock you
+3. **Exit cleanly** — don't retry indefinitely or loop; complete with a clear status message
+
+Example: \"Browser relay not connected. To proceed, the user needs to attach a Chrome tab via the OpenClaw Browser Relay toolbar button, then re-run this task.\"
+
+### Scope
+- Focus on your assigned task; do not take on unrelated work
+- You have access to the same tools as the parent, but may lack delivery context
+- If the task is complete, summarize your results clearly for the parent session
+"
+        );
+
+        guidance
     }
 
     /// Load today's and recent daily memory files.
@@ -400,7 +473,7 @@ mod tests {
         let ctx = WorkspaceContext::new(workspace.path().to_path_buf());
 
         let audit = ctx.audit_files(SessionType::Main);
-        
+
         // SOUL.md exists
         assert!(audit.iter().any(|(p, e)| p == "SOUL.md" && *e));
         // MEMORY.md exists
