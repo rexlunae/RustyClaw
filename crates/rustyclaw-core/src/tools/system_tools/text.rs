@@ -19,7 +19,7 @@ fn human_size(bytes: u64) -> String {
 
 #[instrument(skip(args, workspace_dir))]
 pub async fn exec_summarize_file_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
     let max_lines = args.get("max_lines").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
 
     debug!(path = path_str, max_lines, "Summarize file");
@@ -134,7 +134,7 @@ pub async fn exec_summarize_file_async(args: &Value, workspace_dir: &Path) -> Re
 
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_summarize_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
     let max_lines = args.get("max_lines").and_then(|v| v.as_u64()).unwrap_or(30) as usize;
 
     let target = if path_str.starts_with('~') || path_str.starts_with('/') {

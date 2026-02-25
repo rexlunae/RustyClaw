@@ -68,7 +68,7 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> Result
 
 #[instrument(skip(args, _workspace_dir))]
 pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing action (read|write)")?;
+    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing required parameter: action")?;
 
     match action {
         "read" => {
@@ -135,7 +135,7 @@ pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
 #[instrument(skip(args, _workspace_dir))]
 pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing action")?;
+    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing required parameter: action")?;
 
     match action {
         "read" => {

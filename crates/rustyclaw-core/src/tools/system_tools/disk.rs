@@ -73,7 +73,7 @@ pub async fn exec_disk_usage_async(args: &Value, workspace_dir: &Path) -> Result
 
 #[instrument(skip(args, workspace_dir))]
 pub async fn exec_classify_files_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
 
     let target = if path_str.starts_with('~') || path_str.starts_with('/') {
         expand_tilde(path_str)
@@ -145,7 +145,7 @@ pub fn exec_disk_usage(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_classify_files(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
 
     let target = if path_str.starts_with('~') || path_str.starts_with('/') {
         expand_tilde(path_str)

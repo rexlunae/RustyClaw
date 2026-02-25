@@ -547,7 +547,14 @@ fn node_status_sync() -> Result<String, String> {
             nodes.push(json!({"id": format!("adb:{}", parts[0]), "type": "adb", "status": "connected"}));
         }
     }
-    Ok(json!({"nodes": nodes, "note": "Sync mode - limited info"}).to_string())
+    Ok(json!({
+        "nodes": nodes,
+        "tools": {
+            "adb": has_command("adb"),
+            "ssh": has_command("ssh"),
+        },
+        "note": "Sync mode - limited info"
+    }).to_string())
 }
 
 fn node_describe_sync(node: &str) -> Result<String, String> {

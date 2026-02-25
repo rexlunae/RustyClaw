@@ -89,7 +89,7 @@ pub async fn exec_audit_sensitive_async(args: &Value, workspace_dir: &Path) -> R
 
 #[instrument(skip(args, workspace_dir))]
 pub async fn exec_secure_delete_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
     let passes = args.get("passes").and_then(|v| v.as_u64()).unwrap_or(3);
     let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
 
@@ -173,7 +173,7 @@ pub fn exec_audit_sensitive(args: &Value, workspace_dir: &Path) -> Result<String
 
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+    let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
     let confirm = args.get("confirm").and_then(|v| v.as_bool()).unwrap_or(false);
 
     let target = if path_str.starts_with('~') || path_str.starts_with('/') {

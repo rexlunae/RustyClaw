@@ -99,7 +99,7 @@ pub async fn exec_cloud_browse_async(args: &Value, _workspace_dir: &Path) -> Res
             Ok(json!({ "cloud_folders": found }).to_string())
         }
         "list" => {
-            let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing path")?;
+            let path_str = args.get("path").and_then(|v| v.as_str()).ok_or("Missing required parameter: path")?;
             let target = expand_tilde(path_str);
             let exists = tokio::fs::try_exists(&target).await.unwrap_or(false);
             if !exists { return Err(format!("Not found: {}", target.display())); }
