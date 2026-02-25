@@ -79,13 +79,37 @@ pub async fn exec_gw_skill_list(
         } else {
             format!(" [secrets: {}]", s.linked_secrets.join(", "))
         };
+        
+        // Check availability (gate status)
+        let gate_result = mgr.check_gates(s);
+        let availability = if gate_result.passed {
+            "available".to_string()
+        } else {
+            let mut missing = Vec::new();
+            if gate_result.wrong_os {
+                missing.push("wrong OS".to_string());
+            }
+            if !gate_result.missing_bins.is_empty() {
+                missing.push(format!("missing bins: {}", gate_result.missing_bins.join(", ")));
+            }
+            if !gate_result.missing_env.is_empty() {
+                missing.push(format!("missing env: {}", gate_result.missing_env.join(", ")));
+            }
+            if missing.is_empty() {
+                "unavailable".to_string()
+            } else {
+                format!("unavailable ({})", missing.join("; "))
+            }
+        };
+        
         lines.push(format!(
-            "  {} {} ({}) — {}{}\n",
+            "  {} {} ({}) — {}{} [{}]\n",
             status,
             s.name,
             source,
             s.description.as_deref().unwrap_or("(no description)"),
             secrets,
+            availability,
         ));
     }
     Ok(lines.join(""))

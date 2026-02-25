@@ -709,19 +709,20 @@ impl SkillManager {
 
     /// Generate prompt context for all eligible skills
     pub fn generate_prompt_context(&self) -> String {
-        let eligible = self.get_eligible_skills();
+        // Get all enabled skills (not just those passing gates)
+        let enabled_skills: Vec<&Skill> = self.skills.iter().filter(|s| s.enabled).collect();
 
         let mut context = String::from("## Skills (mandatory)\n\n");
         context.push_str("Before replying: scan <available_skills> <description> entries.\n");
-        context.push_str("- If exactly one skill clearly applies: read its SKILL.md at <location> with `read_file`, then follow it.\n");
+        context.push_str("- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.\n");
         context.push_str("- If multiple could apply: choose the most specific one, then read/follow it.\n");
         context.push_str("- If none clearly apply: do not read any SKILL.md.\n");
         context.push_str("Constraints: never read more than one skill up front; only read after selecting.\n\n");
         context.push_str("The following skills provide specialized instructions for specific tasks.\n");
-        context.push_str("Use the read_file tool to load a skill's file when the task matches its description.\n");
+        context.push_str("Use the read tool to load a skill's file when the task matches its description.\n");
         context.push_str("When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n");
 
-        if eligible.is_empty() {
+        if enabled_skills.is_empty() {
             context.push_str("No skills are currently loaded.\n\n");
             context.push_str("To find and install skills:\n");
             context.push_str("- Browse: https://clawhub.com\n");
@@ -732,13 +733,38 @@ impl SkillManager {
 
         context.push_str("<available_skills>\n");
 
-        for skill in eligible {
+        for skill in enabled_skills {
+            let gate_result = self.check_gates(skill);
+            let available = gate_result.passed;
+
             context.push_str("  <skill>\n");
             context.push_str(&format!("    <name>{}</name>\n", skill.name));
             if let Some(ref desc) = skill.description {
                 context.push_str(&format!("    <description>{}</description>\n", desc));
             }
             context.push_str(&format!("    <location>{}</location>\n", skill.path.display()));
+            
+            if available {
+                context.push_str("    <available>true</available>\n");
+            } else {
+                context.push_str("    <available>false</available>\n");
+                
+                // Show what's missing
+                let mut missing = Vec::new();
+                if gate_result.wrong_os {
+                    missing.push(format!("OS: requires {:?}", skill.metadata.os));
+                }
+                if !gate_result.missing_bins.is_empty() {
+                    missing.push(format!("bins: {}", gate_result.missing_bins.join(", ")));
+                }
+                if !gate_result.missing_env.is_empty() {
+                    missing.push(format!("env: {}", gate_result.missing_env.join(", ")));
+                }
+                if !missing.is_empty() {
+                    context.push_str(&format!("    <requires>{}</requires>\n", missing.join("; ")));
+                }
+            }
+            
             context.push_str("  </skill>\n");
         }
 
