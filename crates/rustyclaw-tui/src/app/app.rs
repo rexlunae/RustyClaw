@@ -14,11 +14,11 @@
 use anyhow::Result;
 use std::sync::mpsc as sync_mpsc;
 
-use rustyclaw_core::commands::{handle_command, CommandAction, CommandContext, CommandResponse};
+use rustyclaw_core::commands::{CommandAction, CommandContext, CommandResponse, handle_command};
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
-    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame,
-    deserialize_frame, serialize_frame,
+    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame, deserialize_frame,
+    serialize_frame,
 };
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
@@ -45,8 +45,13 @@ pub(crate) enum GwEvent {
     ThinkingStart,
     ThinkingDelta,
     ThinkingEnd,
-    ToolCall { name: String, arguments: String },
-    ToolResult { result: String },
+    ToolCall {
+        name: String,
+        arguments: String,
+    },
+    ToolResult {
+        result: String,
+    },
     /// Gateway requests user approval for a tool call (Ask mode)
     ToolApprovalRequest {
         id: String,
@@ -84,7 +89,10 @@ pub(crate) enum UserInput {
     Command(String),
     AuthResponse(String),
     /// User approved or denied a tool call
-    ToolApprovalResponse { id: String, approved: bool },
+    ToolApprovalResponse {
+        id: String,
+        approved: bool,
+    },
     /// User submitted vault password
     VaultUnlock(String),
     /// User responded to a structured prompt
@@ -96,15 +104,27 @@ pub(crate) enum UserInput {
     /// Feed back the completed assistant response for conversation history tracking.
     AssistantResponse(String),
     /// Toggle a skill's enabled state
-    ToggleSkill { name: String },
+    ToggleSkill {
+        name: String,
+    },
     /// Cycle a tool's permission level (Allow → Ask → Deny → SkillOnly → Allow)
-    CycleToolPermission { name: String },
+    CycleToolPermission {
+        name: String,
+    },
     /// Cycle a secret's access policy (OPEN → ASK → AUTH → SKILL)
-    CycleSecretPolicy { name: String, current_policy: String },
+    CycleSecretPolicy {
+        name: String,
+        current_policy: String,
+    },
     /// Delete a secret credential
-    DeleteSecret { name: String },
+    DeleteSecret {
+        name: String,
+    },
     /// Add a new secret (API key)
-    AddSecret { name: String, value: String },
+    AddSecret {
+        name: String,
+        value: String,
+    },
     /// Re-request secrets list from gateway (after a mutation)
     RefreshSecrets,
     Quit,
@@ -247,31 +267,36 @@ impl App {
                             Ok(tokio_tungstenite::tungstenite::Message::Binary(data)) => {
                                 match deserialize_frame::<ServerFrame>(&data) {
                                     Ok(frame) => {
-                                    // Check for ModelReady status before action conversion
-                                    // since it maps to a generic Success action otherwise.
-                                    let is_model_ready = matches!(
-                                        &frame.payload,
-                                        rustyclaw_core::gateway::ServerPayload::Status {
-                                            status: rustyclaw_core::gateway::StatusType::ModelReady,
-                                            ..
-                                        }
-                                    );
-                                    if is_model_ready {
-                                        if let rustyclaw_core::gateway::ServerPayload::Status { detail, .. } = &frame.payload {
+                                        // Check for ModelReady status before action conversion
+                                        // since it maps to a generic Success action otherwise.
+                                        let is_model_ready = matches!(
+                                            &frame.payload,
+                                            rustyclaw_core::gateway::ServerPayload::Status {
+                                                status:
+                                                    rustyclaw_core::gateway::StatusType::ModelReady,
+                                                ..
+                                            }
+                                        );
+                                        if is_model_ready {
+                                            if let rustyclaw_core::gateway::ServerPayload::Status { detail, .. } = &frame.payload {
                                             let _ = gw_tx_conn.send(GwEvent::ModelReady(detail.clone()));
                                         }
-                                    } else {
-                                        let fa = gateway_client::server_frame_to_action(&frame);
-                                        if let Some(action) = fa.action {
-                                            let ev = action_to_gw_event(&action);
-                                            if let Some(ev) = ev {
-                                                let _ = gw_tx_conn.send(ev);
+                                        } else {
+                                            let fa = gateway_client::server_frame_to_action(&frame);
+                                            if let Some(action) = fa.action {
+                                                let ev = action_to_gw_event(&action);
+                                                if let Some(ev) = ev {
+                                                    let _ = gw_tx_conn.send(ev);
+                                                }
                                             }
                                         }
                                     }
-                                    }
                                     Err(e) => {
-                                        eprintln!("[rustyclaw] Failed to deserialize server frame ({} bytes): {}", data.len(), e);
+                                        eprintln!(
+                                            "[rustyclaw] Failed to deserialize server frame ({} bytes): {}",
+                                            data.len(),
+                                            e
+                                        );
                                         let _ = gw_tx_conn.send(GwEvent::Error(format!(
                                             "Protocol error: failed to deserialize frame ({}). Gateway/TUI version mismatch?",
                                             e
@@ -293,7 +318,8 @@ impl App {
                 }
                 Err(e) => {
                     drop(sink_tx);
-                    let _ = gw_tx_conn.send(GwEvent::Error(format!("Gateway connection failed: {}", e)));
+                    let _ = gw_tx_conn
+                        .send(GwEvent::Error(format!("Gateway connection failed: {}", e)));
                     let _ = gw_tx_conn.send(GwEvent::Disconnected(e.to_string()));
                 }
             }
@@ -321,7 +347,7 @@ impl App {
                     hint: hint,
                 ))
                 .fullscreen()
-                .disable_mouse_capture()
+                .disable_mouse_capture(),
             )
         });
 
@@ -395,12 +421,20 @@ impl App {
                         }
                     }
                 }
-                Ok(UserInput::UserPromptResponse { id, dismissed, value }) => {
+                Ok(UserInput::UserPromptResponse {
+                    id,
+                    dismissed,
+                    value,
+                }) => {
                     if let Some(ref mut sink) = ws_sink {
                         use futures_util::SinkExt;
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::UserPromptResponse,
-                            payload: ClientPayload::UserPromptResponse { id, dismissed, value },
+                            payload: ClientPayload::UserPromptResponse {
+                                id,
+                                dismissed,
+                                value,
+                            },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
                             let _ = sink
@@ -438,56 +472,73 @@ impl App {
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
                                     let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
                                         .await;
                                 }
                             }
                         }
                         CommandAction::ShowSkills => {
-                            let skills_list: Vec<_> = skill_manager.get_skills().iter().map(|s| {
-                                crate::components::skills_dialog::SkillInfo {
+                            let skills_list: Vec<_> = skill_manager
+                                .get_skills()
+                                .iter()
+                                .map(|s| crate::components::skills_dialog::SkillInfo {
                                     name: s.name.clone(),
                                     description: s.description.clone().unwrap_or_default(),
                                     enabled: s.enabled,
-                                }
-                            }).collect();
-                            let _ = gw_tx.send(GwEvent::ShowSkills { skills: skills_list });
+                                })
+                                .collect();
+                            let _ = gw_tx.send(GwEvent::ShowSkills {
+                                skills: skills_list,
+                            });
                         }
                         CommandAction::ShowToolPermissions => {
                             let tool_names = rustyclaw_core::tools::all_tool_names();
-                            let tools: Vec<_> = tool_names.iter().map(|name| {
-                                let perm = config.tool_permissions
-                                    .get(*name)
-                                    .cloned()
-                                    .unwrap_or_default();
-                                crate::components::tool_perms_dialog::ToolPermInfo {
-                                    name: name.to_string(),
-                                    permission: perm.badge().to_string(),
-                                    summary: rustyclaw_core::tools::tool_summary(name).to_string(),
-                                }
-                            }).collect();
+                            let tools: Vec<_> = tool_names
+                                .iter()
+                                .map(|name| {
+                                    let perm = config
+                                        .tool_permissions
+                                        .get(*name)
+                                        .cloned()
+                                        .unwrap_or_default();
+                                    crate::components::tool_perms_dialog::ToolPermInfo {
+                                        name: name.to_string(),
+                                        permission: perm.badge().to_string(),
+                                        summary: rustyclaw_core::tools::tool_summary(name)
+                                            .to_string(),
+                                    }
+                                })
+                                .collect();
                             let _ = gw_tx.send(GwEvent::ShowToolPerms { tools });
                         }
                         _ => {}
                     }
                 }
                 Ok(UserInput::ToggleSkill { name }) => {
-                    if let Some(skill) = skill_manager.get_skills().iter().find(|s| s.name == name) {
+                    if let Some(skill) = skill_manager.get_skills().iter().find(|s| s.name == name)
+                    {
                         let new_enabled = !skill.enabled;
                         let _ = skill_manager.set_skill_enabled(&name, new_enabled);
                         // Re-send updated skills list
-                        let skills_list: Vec<_> = skill_manager.get_skills().iter().map(|s| {
-                            crate::components::skills_dialog::SkillInfo {
+                        let skills_list: Vec<_> = skill_manager
+                            .get_skills()
+                            .iter()
+                            .map(|s| crate::components::skills_dialog::SkillInfo {
                                 name: s.name.clone(),
                                 description: s.description.clone().unwrap_or_default(),
                                 enabled: s.enabled,
-                            }
-                        }).collect();
-                        let _ = gw_tx.send(GwEvent::ShowSkills { skills: skills_list });
+                            })
+                            .collect();
+                        let _ = gw_tx.send(GwEvent::ShowSkills {
+                            skills: skills_list,
+                        });
                     }
                 }
                 Ok(UserInput::CycleToolPermission { name }) => {
-                    let current = config.tool_permissions
+                    let current = config
+                        .tool_permissions
                         .get(&name)
                         .cloned()
                         .unwrap_or_default();
@@ -496,20 +547,27 @@ impl App {
                     let _ = config.save(None);
                     // Re-send updated tool perms list
                     let tool_names = rustyclaw_core::tools::all_tool_names();
-                    let tools: Vec<_> = tool_names.iter().map(|tn| {
-                        let perm = config.tool_permissions
-                            .get(*tn)
-                            .cloned()
-                            .unwrap_or_default();
-                        crate::components::tool_perms_dialog::ToolPermInfo {
-                            name: tn.to_string(),
-                            permission: perm.badge().to_string(),
-                            summary: rustyclaw_core::tools::tool_summary(tn).to_string(),
-                        }
-                    }).collect();
+                    let tools: Vec<_> = tool_names
+                        .iter()
+                        .map(|tn| {
+                            let perm = config
+                                .tool_permissions
+                                .get(*tn)
+                                .cloned()
+                                .unwrap_or_default();
+                            crate::components::tool_perms_dialog::ToolPermInfo {
+                                name: tn.to_string(),
+                                permission: perm.badge().to_string(),
+                                summary: rustyclaw_core::tools::tool_summary(tn).to_string(),
+                            }
+                        })
+                        .collect();
                     let _ = gw_tx.send(GwEvent::ShowToolPerms { tools });
                 }
-                Ok(UserInput::CycleSecretPolicy { name, current_policy }) => {
+                Ok(UserInput::CycleSecretPolicy {
+                    name,
+                    current_policy,
+                }) => {
                     // Cycle OPEN → ASK → AUTH → SKILL → OPEN
                     let next_policy = match current_policy.as_str() {
                         "OPEN" => "ask",
@@ -618,7 +676,9 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         Action::GatewayThinkingEnd => Some(GwEvent::ThinkingEnd),
 
         // ── Tool calls and results ──────────────────────────────────────
-        Action::GatewayToolCall { name, arguments, .. } => Some(GwEvent::ToolCall {
+        Action::GatewayToolCall {
+            name, arguments, ..
+        } => Some(GwEvent::ToolCall {
             name: name.clone(),
             arguments: arguments.clone(),
         }),
@@ -627,18 +687,18 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         }),
 
         // ── Interactive: tool approval ──────────────────────────────────
-        Action::ToolApprovalRequest { id, name, arguments } => {
-            Some(GwEvent::ToolApprovalRequest {
-                id: id.clone(),
-                name: name.clone(),
-                arguments: arguments.clone(),
-            })
-        }
+        Action::ToolApprovalRequest {
+            id,
+            name,
+            arguments,
+        } => Some(GwEvent::ToolApprovalRequest {
+            id: id.clone(),
+            name: name.clone(),
+            arguments: arguments.clone(),
+        }),
 
         // ── Interactive: user prompt ────────────────────────────────────
-        Action::UserPromptRequest(prompt) => {
-            Some(GwEvent::UserPromptRequest(prompt.clone()))
-        }
+        Action::UserPromptRequest(prompt) => Some(GwEvent::UserPromptRequest(prompt.clone())),
 
         // ── Generic messages ────────────────────────────────────────────
         Action::Info(s) => Some(GwEvent::Info(s.clone())),
@@ -668,14 +728,22 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             if *ok {
                 Some(GwEvent::RefreshSecrets)
             } else {
-                Some(GwEvent::Error(format!("Failed to store secret: {}", message)))
+                Some(GwEvent::Error(format!(
+                    "Failed to store secret: {}",
+                    message
+                )))
             }
         }
         Action::SecretsGetResult { key, value } => {
             let display = value.as_deref().unwrap_or("(not found)");
             Some(GwEvent::Info(format!("Secret [{}]: {}", key, display)))
         }
-        Action::SecretsPeekResult { name, ok, fields, message } => {
+        Action::SecretsPeekResult {
+            name,
+            ok,
+            fields,
+            message,
+        } => {
             if *ok {
                 let field_strs: Vec<String> = fields
                     .iter()
@@ -688,7 +756,9 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
                 )))
             } else {
                 Some(GwEvent::Error(
-                    message.clone().unwrap_or_else(|| format!("Failed to peek {}", name)),
+                    message
+                        .clone()
+                        .unwrap_or_else(|| format!("Failed to peek {}", name)),
                 ))
             }
         }
@@ -697,14 +767,23 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
                 Some(GwEvent::RefreshSecrets)
             } else {
                 Some(GwEvent::Error(
-                    message.clone().unwrap_or_else(|| "Failed to update policy".into()),
+                    message
+                        .clone()
+                        .unwrap_or_else(|| "Failed to update policy".into()),
                 ))
             }
         }
-        Action::SecretsSetDisabledResult { ok, cred_name, disabled } => {
+        Action::SecretsSetDisabledResult {
+            ok,
+            cred_name,
+            disabled,
+        } => {
             let action_word = if *disabled { "disabled" } else { "enabled" };
             if *ok {
-                Some(GwEvent::Success(format!("Credential {} {}", cred_name, action_word)))
+                Some(GwEvent::Success(format!(
+                    "Credential {} {}",
+                    cred_name, action_word
+                )))
             } else {
                 Some(GwEvent::Error(format!(
                     "Failed to {} credential {}",
@@ -722,22 +801,24 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
                 )))
             }
         }
-        Action::SecretsHasTotpResult { has_totp } => {
-            Some(GwEvent::Info(if *has_totp {
-                "TOTP is configured".into()
-            } else {
-                "TOTP is not configured".into()
-            }))
-        }
+        Action::SecretsHasTotpResult { has_totp } => Some(GwEvent::Info(if *has_totp {
+            "TOTP is configured".into()
+        } else {
+            "TOTP is not configured".into()
+        })),
         Action::SecretsSetupTotpResult { ok, uri, message } => {
             if *ok {
                 Some(GwEvent::Success(format!(
                     "TOTP setup complete{}",
-                    uri.as_ref().map(|u| format!(" — URI: {}", u)).unwrap_or_default()
+                    uri.as_ref()
+                        .map(|u| format!(" — URI: {}", u))
+                        .unwrap_or_default()
                 )))
             } else {
                 Some(GwEvent::Error(
-                    message.clone().unwrap_or_else(|| "TOTP setup failed".into()),
+                    message
+                        .clone()
+                        .unwrap_or_else(|| "TOTP setup failed".into()),
                 ))
             }
         }
@@ -845,6 +926,9 @@ mod tui_component {
         let mut user_prompt_title = hooks.use_state(|| String::new());
         let mut user_prompt_desc = hooks.use_state(|| String::new());
         let mut user_prompt_input = hooks.use_state(|| String::new());
+        let mut user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>> =
+            hooks.use_state(|| None);
+        let mut user_prompt_selected = hooks.use_state(|| 0usize);
 
         // ── Command menu (slash-command completions) ────────────────────
         let mut command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -869,8 +953,9 @@ mod tui_component {
         let mut skills_selected: State<Option<usize>> = hooks.use_state(|| Some(0));
 
         let mut show_tool_perms_dialog = hooks.use_state(|| false);
-        let mut tool_perms_dialog_data: State<Vec<crate::components::tool_perms_dialog::ToolPermInfo>> =
-            hooks.use_state(Vec::new);
+        let mut tool_perms_dialog_data: State<
+            Vec<crate::components::tool_perms_dialog::ToolPermInfo>,
+        > = hooks.use_state(Vec::new);
         let mut tool_perms_selected: State<Option<usize>> = hooks.use_state(|| Some(0));
 
         // Scroll offsets for interactive dialogs
@@ -878,12 +963,10 @@ mod tui_component {
         let mut tool_perms_scroll_offset = hooks.use_state(|| 0usize);
 
         // ── Channel access ──────────────────────────────────────────────
-        let gw_rx: Arc<StdMutex<Option<sync_mpsc::Receiver<GwEvent>>>> = hooks.use_const(|| {
-            Arc::new(StdMutex::new(CHANNEL_RX.lock().unwrap().take()))
-        });
-        let user_tx: Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>> = hooks.use_const(|| {
-            Arc::new(StdMutex::new(CHANNEL_TX.lock().unwrap().take()))
-        });
+        let gw_rx: Arc<StdMutex<Option<sync_mpsc::Receiver<GwEvent>>>> =
+            hooks.use_const(|| Arc::new(StdMutex::new(CHANNEL_RX.lock().unwrap().take())));
+        let user_tx: Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>> =
+            hooks.use_const(|| Arc::new(StdMutex::new(CHANNEL_TX.lock().unwrap().take())));
 
         // ── Poll gateway channel on a timer ─────────────────────────────
         hooks.use_future({
@@ -1067,11 +1150,35 @@ mod tui_component {
                                             prompt.description.clone().unwrap_or_default(),
                                         );
                                         user_prompt_input.set(String::new());
+                                        user_prompt_type.set(Some(prompt.prompt_type.clone()));
+                                        // Set default selection based on prompt type
+                                        let default_sel = match &prompt.prompt_type {
+                                            rustyclaw_core::user_prompt_types::PromptType::Select { default, .. } => {
+                                                default.unwrap_or(0)
+                                            }
+                                            rustyclaw_core::user_prompt_types::PromptType::Confirm { default } => {
+                                                if *default { 0 } else { 1 }
+                                            }
+                                            _ => 0,
+                                        };
+                                        user_prompt_selected.set(default_sel);
                                         show_user_prompt.set(true);
+
+                                        // Build informative message based on prompt type
+                                        let hint = match &prompt.prompt_type {
+                                            rustyclaw_core::user_prompt_types::PromptType::Select { options, .. } => {
+                                                let opt_list: Vec<_> = options.iter().map(|o| o.label.as_str()).collect();
+                                                format!("Options: {}", opt_list.join(", "))
+                                            }
+                                            rustyclaw_core::user_prompt_types::PromptType::Confirm { .. } => {
+                                                "Yes/No".to_string()
+                                            }
+                                            _ => "Type your answer".to_string(),
+                                        };
                                         let mut m = messages.read().clone();
                                         m.push(DisplayMessage::system(format!(
-                                            "❓ Agent asks: {} — type your answer and press Enter, or Esc to dismiss",
-                                            prompt.title,
+                                            "❓ Agent asks: {} — {}",
+                                            prompt.title, hint,
                                         )));
                                         if let Some(desc) = &prompt.description {
                                             if !desc.is_empty() {
@@ -1345,6 +1452,7 @@ mod tui_component {
 
                     // ── User prompt dialog ──────────────────────────
                     if show_user_prompt.get() {
+                        let prompt_type = user_prompt_type.read().clone();
                         match code {
                             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                                 should_quit.set(true);
@@ -1358,6 +1466,7 @@ mod tui_component {
                                 let id = user_prompt_id.read().clone();
                                 show_user_prompt.set(false);
                                 user_prompt_input.set(String::new());
+                                user_prompt_type.set(None);
                                 let mut m = messages.read().clone();
                                 m.push(DisplayMessage::info("Prompt dismissed."));
                                 messages.set(m);
@@ -1371,10 +1480,70 @@ mod tui_component {
                                     }
                                 }
                             }
+                            // Navigation for Select/MultiSelect
+                            KeyCode::Up | KeyCode::Char('k') => {
+                                if let Some(ref pt) = prompt_type {
+                                    match pt {
+                                        rustyclaw_core::user_prompt_types::PromptType::Select { options, .. } |
+                                        rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. } => {
+                                            let current = user_prompt_selected.get();
+                                            if current > 0 {
+                                                user_prompt_selected.set(current - 1);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            KeyCode::Down | KeyCode::Char('j') => {
+                                if let Some(ref pt) = prompt_type {
+                                    match pt {
+                                        rustyclaw_core::user_prompt_types::PromptType::Select { options, .. } |
+                                        rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. } => {
+                                            let current = user_prompt_selected.get();
+                                            if current + 1 < options.len() {
+                                                user_prompt_selected.set(current + 1);
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            // Left/Right for Confirm
+                            KeyCode::Left | KeyCode::Right => {
+                                if let Some(rustyclaw_core::user_prompt_types::PromptType::Confirm { .. }) = prompt_type {
+                                    let current = user_prompt_selected.get();
+                                    user_prompt_selected.set(if current == 0 { 1 } else { 0 });
+                                }
+                            }
+                            // Y/N shortcuts for Confirm
+                            KeyCode::Char('y') | KeyCode::Char('Y') => {
+                                if let Some(rustyclaw_core::user_prompt_types::PromptType::Confirm { .. }) = prompt_type {
+                                    user_prompt_selected.set(0); // Yes
+                                } else {
+                                    // Normal text input
+                                    let mut input = user_prompt_input.read().clone();
+                                    input.push(if code == KeyCode::Char('Y') { 'Y' } else { 'y' });
+                                    user_prompt_input.set(input);
+                                }
+                            }
+                            KeyCode::Char('n') | KeyCode::Char('N') => {
+                                if let Some(rustyclaw_core::user_prompt_types::PromptType::Confirm { .. }) = prompt_type {
+                                    user_prompt_selected.set(1); // No
+                                } else {
+                                    // Normal text input
+                                    let mut input = user_prompt_input.read().clone();
+                                    input.push(if code == KeyCode::Char('N') { 'N' } else { 'n' });
+                                    user_prompt_input.set(input);
+                                }
+                            }
                             KeyCode::Char(c) => {
-                                let mut input = user_prompt_input.read().clone();
-                                input.push(c);
-                                user_prompt_input.set(input);
+                                // Only for TextInput types
+                                if matches!(prompt_type, None | Some(rustyclaw_core::user_prompt_types::PromptType::TextInput { .. }) | Some(rustyclaw_core::user_prompt_types::PromptType::Form { .. })) {
+                                    let mut input = user_prompt_input.read().clone();
+                                    input.push(c);
+                                    user_prompt_input.set(input);
+                                }
                             }
                             KeyCode::Backspace => {
                                 let mut input = user_prompt_input.read().clone();
@@ -1384,17 +1553,40 @@ mod tui_component {
                             KeyCode::Enter => {
                                 let id = user_prompt_id.read().clone();
                                 let input = user_prompt_input.read().clone();
+                                let selected = user_prompt_selected.get();
                                 show_user_prompt.set(false);
                                 user_prompt_input.set(String::new());
+                                user_prompt_type.set(None);
+
+                                // Build response based on prompt type
+                                let (value, display) = match &prompt_type {
+                                    Some(rustyclaw_core::user_prompt_types::PromptType::Select { options, .. }) => {
+                                        let label = options.get(selected).map(|o| o.label.clone()).unwrap_or_default();
+                                        (rustyclaw_core::user_prompt_types::PromptResponseValue::Selected(vec![label.clone()]), format!("→ {}", label))
+                                    }
+                                    Some(rustyclaw_core::user_prompt_types::PromptType::Confirm { .. }) => {
+                                        let yes = selected == 0;
+                                        (rustyclaw_core::user_prompt_types::PromptResponseValue::Confirm(yes), format!("→ {}", if yes { "Yes" } else { "No" }))
+                                    }
+                                    Some(rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. }) => {
+                                        // TODO: track multiple selections properly
+                                        let label = options.get(selected).map(|o| o.label.clone()).unwrap_or_default();
+                                        (rustyclaw_core::user_prompt_types::PromptResponseValue::Selected(vec![label.clone()]), format!("→ {}", label))
+                                    }
+                                    _ => {
+                                        (rustyclaw_core::user_prompt_types::PromptResponseValue::Text(input.clone()), format!("→ {}", input))
+                                    }
+                                };
+
                                 let mut m = messages.read().clone();
-                                m.push(DisplayMessage::user(format!("→ {}", input)));
+                                m.push(DisplayMessage::user(display));
                                 messages.set(m);
                                 if let Ok(guard) = tx_for_keys.lock() {
                                     if let Some(ref tx) = *guard {
                                         let _ = tx.send(UserInput::UserPromptResponse {
                                             id,
                                             dismissed: false,
-                                            value: rustyclaw_core::user_prompt_types::PromptResponseValue::Text(input),
+                                            value,
                                         });
                                     }
                                 }
@@ -1829,6 +2021,8 @@ mod tui_component {
                 user_prompt_title: user_prompt_title.read().clone(),
                 user_prompt_desc: user_prompt_desc.read().clone(),
                 user_prompt_input: user_prompt_input.read().clone(),
+                user_prompt_type: user_prompt_type.read().clone(),
+                user_prompt_selected: user_prompt_selected.get(),
                 show_secrets_dialog: show_secrets_dialog.get(),
                 secrets_data: secrets_dialog_data.read().clone(),
                 secrets_agent_access: secrets_agent_access.get(),

@@ -9,12 +9,12 @@ use crate::components::auth_dialog::AuthDialog;
 use crate::components::command_menu::CommandMenu;
 use crate::components::input_bar::InputBar;
 use crate::components::messages::Messages;
-use crate::components::secrets_dialog::{SecretsDialog, SecretInfo};
+use crate::components::secrets_dialog::{SecretInfo, SecretsDialog};
 use crate::components::sidebar::Sidebar;
-use crate::components::skills_dialog::{SkillsDialog, SkillInfo};
+use crate::components::skills_dialog::{SkillInfo, SkillsDialog};
 use crate::components::status_bar::StatusBar;
 use crate::components::tool_approval_dialog::ToolApprovalDialog;
-use crate::components::tool_perms_dialog::{ToolPermsDialog, ToolPermInfo};
+use crate::components::tool_perms_dialog::{ToolPermInfo, ToolPermsDialog};
 use crate::components::user_prompt_dialog::UserPromptDialog;
 use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
@@ -79,6 +79,8 @@ pub struct RootProps {
     pub user_prompt_title: String,
     pub user_prompt_desc: String,
     pub user_prompt_input: String,
+    pub user_prompt_type: Option<rustyclaw_core::user_prompt_types::PromptType>,
+    pub user_prompt_selected: usize,
 
     // secrets dialog overlay
     pub show_secrets_dialog: bool,
@@ -262,6 +264,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             title: props.user_prompt_title.clone(),
                             description: props.user_prompt_desc.clone(),
                             input: props.user_prompt_input.clone(),
+                            prompt_type: props.user_prompt_type.clone(),
+                            selected: props.user_prompt_selected,
                         )
                     }
                 }.into_any()
