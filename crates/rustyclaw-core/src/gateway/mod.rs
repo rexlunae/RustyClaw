@@ -448,6 +448,12 @@ where
             foreground_id,
         },
     };
+    
+    // Debug: log serialized size
+    if let Ok(bytes) = crate::gateway::protocol::serialize_frame(&frame) {
+        tracing::debug!(bytes = bytes.len(), "Sending ThreadsUpdate frame");
+    }
+    
     send_frame(writer, &frame).await
 }
 
@@ -1315,7 +1321,11 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadList => {
                                 debug!("Thread list request");
-                                send_threads_update(&mut writer, &thread_mgr).await?;
+                                debug!("Thread count: {}", thread_mgr.list_info().len());
+                                match send_threads_update(&mut writer, &thread_mgr).await {
+                                    Ok(()) => debug!("ThreadsUpdate sent successfully"),
+                                    Err(e) => error!("Failed to send ThreadsUpdate: {}", e),
+                                }
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 debug!("Thread close request: {}", thread_id);
