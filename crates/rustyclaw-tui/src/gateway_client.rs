@@ -263,9 +263,11 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             thread_id,
             context_summary,
         } => {
-            // Thread was switched — we'll get a ThreadsUpdate too
-            // Could show the context_summary in messages if desired
-            FrameAction::none()
+            // Thread was switched — clear messages and show context summary if available
+            FrameAction::just_action(Action::ThreadSwitched {
+                thread_id: *thread_id,
+                context_summary: context_summary.clone(),
+            })
         }
         ServerPayload::Empty => FrameAction::none(),
     }

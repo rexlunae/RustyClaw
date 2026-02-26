@@ -89,6 +89,11 @@ pub(crate) enum GwEvent {
         threads: Vec<crate::action::ThreadInfo>,
         foreground_id: Option<u64>,
     },
+    /// Thread switch confirmed — clear messages and show context
+    ThreadSwitched {
+        thread_id: u64,
+        context_summary: Option<String>,
+    },
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -809,6 +814,13 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             threads: threads.clone(),
             foreground_id: *foreground_id,
         }),
+        Action::ThreadSwitched {
+            thread_id,
+            context_summary,
+        } => Some(GwEvent::ThreadSwitched {
+            thread_id: *thread_id,
+            context_summary: context_summary.clone(),
+        }),
 
         // ── Generic messages ────────────────────────────────────────────
         Action::Info(s) => Some(GwEvent::Info(s.clone())),
@@ -1387,6 +1399,27 @@ mod tui_component {
                                         if count > 0 && sidebar_selected.get() >= count {
                                             sidebar_selected.set(count - 1);
                                         }
+                                    }
+                                    GwEvent::ThreadSwitched {
+                                        thread_id,
+                                        context_summary,
+                                    } => {
+                                        // Clear messages for the new thread
+                                        let mut m = Vec::new();
+                                        m.push(DisplayMessage::info(format!(
+                                            "Switched to thread (id: {})",
+                                            thread_id
+                                        )));
+                                        // Show context summary if available
+                                        if let Some(summary) = context_summary {
+                                            m.push(DisplayMessage::assistant(format!(
+                                                "[Previous context]\n\n{}",
+                                                summary
+                                            )));
+                                        }
+                                        messages.set(m);
+                                        // Unfocus sidebar after switch
+                                        sidebar_focused.set(false);
                                     }
                                 }
                             }

@@ -218,6 +218,11 @@ pub enum Action {
         threads: Vec<ThreadInfo>,
         foreground_id: Option<u64>,
     },
+    /// Gateway confirmed thread switch
+    ThreadSwitched {
+        thread_id: u64,
+        context_summary: Option<String>,
+    },
     /// A long-running slash-command tool finished (msg, is_error)
     ToolCommandDone {
         message: String,
