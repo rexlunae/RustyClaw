@@ -201,7 +201,6 @@ toggle_selected() {
 }
 
 show_menu() {
-    clear
     echo -e "${BOLD}🦀🦞 RustyClaw Setup${NC}"
     echo -e "${DIM}   OS: $OS ($ARCH)${NC}"
     echo ""
@@ -286,7 +285,7 @@ if [[ "$INTERACTIVE" == true ]]; then
                 ;;
         esac
     done
-    clear
+    echo ""
 fi
 
 # ── Determine what to install ───────────────────────────────────────────────
