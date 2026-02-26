@@ -1086,6 +1086,17 @@ async fn handle_connection(
                                 }
                             }
                             ClientPayload::Chat { messages } => {
+                                // Add user message to current thread's history
+                                if let Some(thread) = thread_mgr.foreground_mut() {
+                                    // Find the last user message (typically the new one)
+                                    if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+                                        thread.add_message(
+                                            crate::tasks::MessageRole::User,
+                                            &last_user.content,
+                                        );
+                                    }
+                                }
+
                                 // Re-read model_ctx from shared state for each dispatch
                                 let current_model_ctx = shared_model_ctx.read().await.clone();
                                 let workspace_dir = config.workspace_dir();
@@ -1113,6 +1124,7 @@ async fn handle_connection(
                                     &shared_config,
                                     &approval_rx,
                                     &user_prompt_rx,
+                                    &mut thread_mgr,
                                 )
                                 .await
                                 {
@@ -1474,6 +1486,7 @@ async fn dispatch_text_message(
             )>,
         >,
     >,
+    thread_mgr: &mut crate::tasks::ThreadManager,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
@@ -1724,6 +1737,12 @@ async fn dispatch_text_message(
                 }
 
                 // Model explicitly finished — we're done
+                // Record assistant response in thread history
+                if !model_resp.text.is_empty() {
+                    if let Some(thread) = thread_mgr.foreground_mut() {
+                        thread.add_message(crate::tasks::MessageRole::Assistant, &model_resp.text);
+                    }
+                }
                 providers::send_response_done(writer).await?;
                 return Ok(());
             } else if finish_reason == "length" {
