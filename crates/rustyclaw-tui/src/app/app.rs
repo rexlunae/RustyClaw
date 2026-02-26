@@ -80,6 +80,10 @@ pub(crate) enum GwEvent {
     },
     /// A secrets mutation succeeded — re-fetch the list from the gateway
     RefreshSecrets,
+    /// Task list update from gateway
+    TasksUpdate {
+        tasks: Vec<crate::action::TaskInfo>,
+    },
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -127,6 +131,8 @@ pub(crate) enum UserInput {
     },
     /// Re-request secrets list from gateway (after a mutation)
     RefreshSecrets,
+    /// Request current task list from gateway
+    RefreshTasks,
     Quit,
 }
 
@@ -635,6 +641,20 @@ impl App {
                         }
                     }
                 }
+                Ok(UserInput::RefreshTasks) => {
+                    if let Some(ref mut sink) = ws_sink {
+                        use futures_util::SinkExt;
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::TasksRequest,
+                            payload: ClientPayload::TasksRequest { session: None },
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink
+                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                                .await;
+                        }
+                    }
+                }
                 Ok(UserInput::Quit) => break,
                 Err(sync_mpsc::TryRecvError::Empty) => {}
                 Err(sync_mpsc::TryRecvError::Disconnected) => break,
@@ -699,6 +719,11 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
 
         // ── Interactive: user prompt ────────────────────────────────────
         Action::UserPromptRequest(prompt) => Some(GwEvent::UserPromptRequest(prompt.clone())),
+
+        // ── Tasks ───────────────────────────────────────────────────────
+        Action::TasksUpdate(tasks) => Some(GwEvent::TasksUpdate {
+            tasks: tasks.clone(),
+        }),
 
         // ── Generic messages ────────────────────────────────────────────
         Action::Info(s) => Some(GwEvent::Info(s.clone())),
@@ -930,6 +955,9 @@ mod tui_component {
             hooks.use_state(|| None);
         let mut user_prompt_selected = hooks.use_state(|| 0usize);
 
+        // ── Task state ───────────────────────────────────────────────────
+        let mut tasks: State<Vec<crate::action::TaskInfo>> = hooks.use_state(Vec::new);
+
         // ── Command menu (slash-command completions) ────────────────────
         let mut command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
         let mut command_selected: State<Option<usize>> = hooks.use_state(|| None);
@@ -1078,6 +1106,12 @@ mod tui_component {
                                         stream_start.set(None);
                                         elapsed.set(String::new());
                                         streaming_buf.set(String::new());
+                                        // Refresh task list after response
+                                        if let Ok(guard) = tx_for_history.lock() {
+                                            if let Some(ref tx) = *guard {
+                                                let _ = tx.send(UserInput::RefreshTasks);
+                                            }
+                                        }
                                     }
                                     GwEvent::ThinkingStart => {
                                         // Thinking is a form of streaming — show spinner
@@ -1243,6 +1277,9 @@ mod tui_component {
                                                 let _ = tx.send(UserInput::RefreshSecrets);
                                             }
                                         }
+                                    }
+                                    GwEvent::TasksUpdate { tasks: task_list } => {
+                                        tasks.set(task_list);
                                     }
                                 }
                             }
@@ -2005,6 +2042,7 @@ mod tui_component {
                 task_text: if streaming.get() { "Streaming…".to_string() } else { "Idle".to_string() },
                 streaming: streaming.get(),
                 elapsed: elapsed.to_string(),
+                tasks: tasks.read().clone(),
                 hint: props.hint.clone(),
                 spinner_tick: spinner_tick.get(),
                 show_auth_dialog: show_auth_dialog.get(),

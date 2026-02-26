@@ -211,10 +211,22 @@ pub enum Action {
     UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
     /// User responded to a structured prompt
     UserPromptResponse(rustyclaw_core::user_prompt_types::UserPromptResponse),
+    /// Gateway sent a tasks update
+    TasksUpdate(Vec<TaskInfo>),
     /// A long-running slash-command tool finished (msg, is_error)
     ToolCommandDone {
         message: String,
         is_error: bool,
     },
     Noop,
+}
+
+/// Task info for TUI display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskInfo {
+    pub id: u64,
+    pub label: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub is_foreground: bool,
 }

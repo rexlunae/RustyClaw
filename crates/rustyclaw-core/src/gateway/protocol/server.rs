@@ -3,8 +3,8 @@
 //! This module provides helpers for the gateway server to send frames to clients.
 
 use super::frames::{
-    ClientFrame, SecretEntryDto, deserialize_frame, serialize_frame, ServerFrame, ServerFrameType,
-    ServerPayload,
+    ClientFrame, SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload, TaskInfoDto,
+    deserialize_frame, serialize_frame,
 };
 use anyhow::Result;
 use futures_util::SinkExt;
@@ -168,11 +168,7 @@ where
 }
 
 /// Build and send a secrets_store_result frame.
-pub async fn send_secrets_store_result<S>(
-    writer: &mut S,
-    ok: bool,
-    message: &str,
-) -> Result<()>
+pub async fn send_secrets_store_result<S>(writer: &mut S, ok: bool, message: &str) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
 {
@@ -439,12 +435,7 @@ where
 }
 
 /// Build and send a tool call frame.
-pub async fn send_tool_call<S>(
-    writer: &mut S,
-    id: &str,
-    name: &str,
-    arguments: &str,
-) -> Result<()>
+pub async fn send_tool_call<S>(writer: &mut S, id: &str, name: &str, arguments: &str) -> Result<()>
 where
     S: SinkExt<Message> + Unpin,
 {
@@ -518,6 +509,18 @@ where
             id: id.into(),
             prompt: prompt.clone(),
         },
+    };
+    send_frame(writer, &frame).await
+}
+
+/// Build and send a tasks update frame.
+pub async fn send_tasks_update<S>(writer: &mut S, tasks: Vec<TaskInfoDto>) -> Result<()>
+where
+    S: SinkExt<Message> + Unpin,
+{
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::TasksUpdate,
+        payload: ServerPayload::TasksUpdate { tasks },
     };
     send_frame(writer, &frame).await
 }

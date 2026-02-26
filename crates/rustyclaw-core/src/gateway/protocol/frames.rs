@@ -46,6 +46,8 @@ pub enum ClientFrameType {
     ToolApprovalResponse = 17,
     /// User response to a structured prompt (ask_user tool).
     UserPromptResponse = 18,
+    /// Request current task list.
+    TasksRequest = 19,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -114,6 +116,8 @@ pub enum ServerFrameType {
     ToolApprovalRequest = 29,
     /// Structured user prompt request (ask_user tool).
     UserPromptRequest = 30,
+    /// Task list update.
+    TasksUpdate = 31,
 }
 
 /// Status frame sub-types.
@@ -206,6 +210,10 @@ pub enum ClientPayload {
         id: String,
         dismissed: bool,
         value: crate::user_prompt_types::PromptResponseValue,
+    },
+    /// Request current task list (optionally filtered by session).
+    TasksRequest {
+        session: Option<String>,
     },
 }
 
@@ -343,6 +351,19 @@ pub enum ServerPayload {
         id: String,
         prompt: crate::user_prompt_types::UserPrompt,
     },
+    TasksUpdate {
+        tasks: Vec<TaskInfoDto>,
+    },
+}
+
+/// DTO for task info in updates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskInfoDto {
+    pub id: u64,
+    pub label: String,
+    pub description: Option<String>,
+    pub status: String,
+    pub is_foreground: bool,
 }
 
 /// DTO for secret entries in list results.
@@ -649,7 +670,11 @@ mod tests {
             let decoded: ClientFrame =
                 deserialize_frame(&bytes).expect("deserialize should succeed");
             match decoded.payload {
-                ClientPayload::UserPromptResponse { id, dismissed, value } => {
+                ClientPayload::UserPromptResponse {
+                    id,
+                    dismissed,
+                    value,
+                } => {
                     assert_eq!(id, "call_456");
                     assert!(!dismissed);
                     assert_eq!(value, PromptResponseValue::Text("hello world".into()));
@@ -660,7 +685,7 @@ mod tests {
 
         #[test]
         fn test_server_user_prompt_request_bincode_roundtrip() {
-            use crate::user_prompt_types::{UserPrompt, PromptType};
+            use crate::user_prompt_types::{PromptType, UserPrompt};
 
             let prompt = UserPrompt {
                 id: "call_789".into(),
@@ -756,7 +781,11 @@ mod tests {
                 deserialize_frame(&bytes).expect("deserialize should succeed");
 
             match decoded.payload {
-                ServerPayload::ToolCall { id, name, arguments } => {
+                ServerPayload::ToolCall {
+                    id,
+                    name,
+                    arguments,
+                } => {
                     assert_eq!(id, "call_001");
                     assert_eq!(name, "read_file");
                     assert_eq!(arguments, r#"{"path":"/tmp/test"}"#);
