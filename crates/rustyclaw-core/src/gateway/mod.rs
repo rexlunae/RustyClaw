@@ -1086,6 +1086,30 @@ async fn handle_connection(
                                 }
                             }
                             ClientPayload::Chat { messages } => {
+                                // Check for auto-switch: find better matching thread
+                                if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+                                    if let Some(better_thread_id) = thread_mgr.find_best_match(&last_user.content) {
+                                        // Found a better match — switch threads
+                                        if thread_mgr.switch_to(better_thread_id).is_some() {
+                                            // Get the context summary from the new foreground thread
+                                            let context_summary = thread_mgr
+                                                .foreground()
+                                                .and_then(|t| t.compact_summary.clone());
+                                            // Send ThreadSwitched notification
+                                            let frame = ServerFrame {
+                                                frame_type: ServerFrameType::ThreadSwitched,
+                                                payload: ServerPayload::ThreadSwitched {
+                                                    thread_id: better_thread_id.0,
+                                                    context_summary,
+                                                },
+                                            };
+                                            send_frame(&mut writer, &frame).await?;
+                                            // Update thread list
+                                            send_threads_update(&mut writer, &thread_mgr).await?;
+                                        }
+                                    }
+                                }
+
                                 // Add user message to current thread's history
                                 if let Some(thread) = thread_mgr.foreground_mut() {
                                     // Find the last user message (typically the new one)

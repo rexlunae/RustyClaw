@@ -301,6 +301,46 @@ impl ThreadManager {
         ctx
     }
 
+    /// Find the best matching thread for a user message.
+    /// Returns thread ID if a better match exists than current foreground.
+    /// Uses keyword matching: counts label words present in message.
+    pub fn find_best_match(&self, message: &str) -> Option<TaskId> {
+        let message_lower = message.to_lowercase();
+        let foreground = self.foreground_id;
+
+        let mut best_match: Option<(TaskId, usize)> = None;
+        let mut foreground_score = 0usize;
+
+        for (id, thread) in &self.threads {
+            // Skip "Main" — it's the catch-all
+            if thread.label.eq_ignore_ascii_case("main") {
+                continue;
+            }
+
+            // Count how many label words appear in the message
+            let score: usize = thread
+                .label
+                .split_whitespace()
+                .filter(|word| word.len() >= 3) // Skip short words
+                .filter(|word| message_lower.contains(&word.to_lowercase()))
+                .count();
+
+            if Some(*id) == foreground {
+                foreground_score = score;
+            } else if score > 0 {
+                if best_match.is_none() || score > best_match.unwrap().1 {
+                    best_match = Some((*id, score));
+                }
+            }
+        }
+
+        // Only switch if the other thread is a better match
+        match best_match {
+            Some((id, score)) if score > foreground_score => Some(id),
+            _ => None,
+        }
+    }
+
     /// Count active threads.
     pub fn count(&self) -> usize {
         self.threads.len()
