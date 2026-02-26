@@ -570,7 +570,7 @@
                     </a>
                 </div>
                 <div class="install-snippet">
-                    <pre><span class="command">cargo install rustyclaw</span></pre>
+                    <pre><span class="command">curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash</span></pre>
                 </div>
             </div>
         </section>
@@ -788,11 +788,11 @@
                             <span style="margin-left: auto; color: var(--text-muted); font-size: 0.8rem;">bash</span>
                         </div>
                         <div class="code-content">
-                            <pre><span class="code-comment"># One-line install (installs Rust + dependencies + RustyClaw)</span>
-<span class="code-command">curl -fsSL https://rexlunae.github.io/RustyClaw/install.sh | bash</span>
+                            <pre><span class="code-comment"># One-line install (Rust + RustyClaw)</span>
+<span class="code-command">curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash</span>
 
-<span class="code-comment"># Or with all features (Matrix, browser automation)</span>
-<span class="code-command">curl -fsSL https://rexlunae.github.io/RustyClaw/install.sh | bash -s -- --full</span>
+<span class="code-comment"># Or with all extras (Ollama, exo cluster)</span>
+<span class="code-command">curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash -s -- --all</span>
 
 <span class="code-comment"># Then configure and start</span>
 <span class="code-command">rustyclaw onboard</span>
