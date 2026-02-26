@@ -228,6 +228,11 @@ pub struct AgentThread {
 }
 
 impl AgentThread {
+    /// Backwards-compatible alias for id (used by gateway code).
+    pub fn task_id(&self) -> ThreadId {
+        self.id
+    }
+    
     /// Create a new chat thread.
     pub fn new_chat(label: impl Into<String>) -> Self {
         let now = SystemTime::now();

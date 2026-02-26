@@ -261,6 +261,51 @@ impl ThreadManager {
         true
     }
     
+    /// Rename a thread.
+    pub fn rename(&mut self, id: ThreadId, new_label: impl Into<String>) -> bool {
+        if let Some(thread) = self.threads.get_mut(&id) {
+            thread.label = new_label.into();
+            thread.last_activity = SystemTime::now();
+            true
+        } else {
+            false
+        }
+    }
+    
+    /// Find the best matching thread for a given message content.
+    /// Returns the thread ID if a good match is found, None otherwise.
+    pub fn find_best_match(&self, content: &str) -> Option<ThreadId> {
+        let content_lower = content.to_lowercase();
+        
+        // Look for threads where label or description matches content keywords
+        for thread in self.threads.values() {
+            // Skip the current foreground
+            if thread.is_foreground {
+                continue;
+            }
+            
+            // Check if thread label is mentioned in content
+            if content_lower.contains(&thread.label.to_lowercase()) {
+                return Some(thread.id);
+            }
+            
+            // Check if description keywords match
+            if let Some(desc) = &thread.description {
+                let desc_words: Vec<&str> = desc.split_whitespace()
+                    .filter(|w| w.len() > 3)
+                    .collect();
+                let matches = desc_words.iter()
+                    .filter(|w| content_lower.contains(&w.to_lowercase()))
+                    .count();
+                if matches >= 2 {
+                    return Some(thread.id);
+                }
+            }
+        }
+        
+        None
+    }
+    
     /// Mark a thread as completed.
     pub fn complete(&mut self, id: ThreadId, summary: Option<String>, result: Option<String>) {
         if let Some(thread) = self.threads.get_mut(&id) {
