@@ -178,6 +178,7 @@
         .install-snippet {
             margin-top: 48px;
             display: inline-block;
+            position: relative;
         }
         
         .install-snippet pre {
@@ -185,12 +186,41 @@
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 16px 24px;
+            padding-right: 60px;
             font-size: 1rem;
             color: var(--text-primary);
         }
         
         .install-snippet .command {
             color: var(--green);
+        }
+        
+        .copy-btn {
+            position: absolute;
+            right: 8px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        
+        .copy-btn:hover {
+            background: var(--border);
+            color: var(--text-primary);
+        }
+        
+        .copy-btn.copied {
+            color: var(--green);
+            border-color: var(--green);
         }
         
         /* Stats bar */
@@ -444,6 +474,31 @@
             gap: 8px;
         }
         
+        .code-header .copy-btn {
+            margin-left: auto;
+            background: transparent;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: 0.75rem;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .code-header .copy-btn:hover {
+            background: var(--border);
+            color: var(--text-primary);
+        }
+        
+        .code-header .copy-btn.copied {
+            color: var(--green);
+            border-color: var(--green);
+        }
+        
         .code-dot {
             width: 12px;
             height: 12px;
@@ -571,6 +626,9 @@
                 </div>
                 <div class="install-snippet">
                     <pre><span class="command">curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash</span></pre>
+                    <button class="copy-btn" onclick="copyCommand(this, 'curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash')">
+                        <span class="copy-icon">📋</span><span class="copy-text">Copy</span>
+                    </button>
                 </div>
             </div>
         </section>
@@ -786,6 +844,9 @@
                             <span class="code-dot yellow"></span>
                             <span class="code-dot green"></span>
                             <span style="margin-left: auto; color: var(--text-muted); font-size: 0.8rem;">bash</span>
+                            <button class="copy-btn" onclick="copyCommand(this, 'curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash')">
+                                <span class="copy-icon">📋</span><span class="copy-text">Copy</span>
+                            </button>
                         </div>
                         <div class="code-content">
                             <pre><span class="code-comment"># One-line install (Rust + RustyClaw)</span>
@@ -808,6 +869,9 @@
                             <span class="code-dot yellow"></span>
                             <span class="code-dot green"></span>
                             <span style="margin-left: auto; color: var(--text-muted); font-size: 0.8rem;">PowerShell (Admin)</span>
+                            <button class="copy-btn" onclick="copyCommand(this, 'irm https://rexlunae.github.io/RustyClaw/install.ps1 | iex')">
+                                <span class="copy-icon">📋</span><span class="copy-text">Copy</span>
+                            </button>
                         </div>
                         <div class="code-content">
                             <pre><span class="code-comment"># One-line install (Run PowerShell as Administrator)</span>
@@ -916,6 +980,19 @@
                 // Show selected tab
                 document.getElementById('tab-' + tab).classList.add('active');
                 event.target.classList.add('active');
+            }
+            
+            function copyCommand(btn, text) {
+                navigator.clipboard.writeText(text).then(() => {
+                    btn.classList.add('copied');
+                    btn.querySelector('.copy-text').textContent = 'Copied!';
+                    btn.querySelector('.copy-icon').textContent = '✓';
+                    setTimeout(() => {
+                        btn.classList.remove('copied');
+                        btn.querySelector('.copy-text').textContent = 'Copy';
+                        btn.querySelector('.copy-icon').textContent = '📋';
+                    }, 2000);
+                });
             }
         </script>
         
