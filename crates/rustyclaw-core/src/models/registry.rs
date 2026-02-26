@@ -193,7 +193,13 @@ impl ModelEntry {
         } else {
             "🟢"
         };
-        format!("{} {} {} ({})", status, self.tier.emoji(), self.display_name, self.provider)
+        format!(
+            "{} {} {} ({})",
+            status,
+            self.tier.emoji(),
+            self.display_name,
+            self.provider
+        )
     }
 }
 
@@ -229,63 +235,142 @@ impl ModelRegistry {
     /// Populate with default models from known providers.
     fn populate_defaults(&mut self) {
         // Anthropic
-        self.register(ModelEntry::new("anthropic/claude-opus-4", "anthropic", CostTier::Premium)
-            .with_context(200_000).with_vision().with_thinking());
-        self.register(ModelEntry::new("anthropic/claude-sonnet-4", "anthropic", CostTier::Standard)
-            .with_context(200_000).with_vision().with_thinking());
-        self.register(ModelEntry::new("anthropic/claude-haiku-4", "anthropic", CostTier::Economy)
-            .with_context(200_000).with_vision());
+        self.register(
+            ModelEntry::new("anthropic/claude-opus-4", "anthropic", CostTier::Premium)
+                .with_context(200_000)
+                .with_vision()
+                .with_thinking(),
+        );
+        self.register(
+            ModelEntry::new("anthropic/claude-sonnet-4", "anthropic", CostTier::Standard)
+                .with_context(200_000)
+                .with_vision()
+                .with_thinking(),
+        );
+        self.register(
+            ModelEntry::new("anthropic/claude-haiku-4", "anthropic", CostTier::Economy)
+                .with_context(200_000)
+                .with_vision(),
+        );
 
         // OpenAI
-        self.register(ModelEntry::new("openai/gpt-4.1", "openai", CostTier::Standard)
-            .with_context(128_000).with_vision());
-        self.register(ModelEntry::new("openai/gpt-4.1-mini", "openai", CostTier::Economy)
-            .with_context(128_000).with_vision());
-        self.register(ModelEntry::new("openai/gpt-4.1-nano", "openai", CostTier::Economy)
-            .with_context(128_000));
-        self.register(ModelEntry::new("openai/o3", "openai", CostTier::Premium)
-            .with_context(200_000).with_thinking());
-        self.register(ModelEntry::new("openai/o4-mini", "openai", CostTier::Standard)
-            .with_context(200_000).with_thinking());
+        self.register(
+            ModelEntry::new("openai/gpt-4.1", "openai", CostTier::Standard)
+                .with_context(128_000)
+                .with_vision(),
+        );
+        self.register(
+            ModelEntry::new("openai/gpt-4.1-mini", "openai", CostTier::Economy)
+                .with_context(128_000)
+                .with_vision(),
+        );
+        self.register(
+            ModelEntry::new("openai/gpt-4.1-nano", "openai", CostTier::Economy)
+                .with_context(128_000),
+        );
+        self.register(
+            ModelEntry::new("openai/o3", "openai", CostTier::Premium)
+                .with_context(200_000)
+                .with_thinking(),
+        );
+        self.register(
+            ModelEntry::new("openai/o4-mini", "openai", CostTier::Standard)
+                .with_context(200_000)
+                .with_thinking(),
+        );
 
         // Google
-        self.register(ModelEntry::new("google/gemini-2.5-pro", "google", CostTier::Standard)
-            .with_context(1_000_000).with_vision().with_thinking());
-        self.register(ModelEntry::new("google/gemini-2.5-flash", "google", CostTier::Economy)
-            .with_context(1_000_000).with_vision());
-        self.register(ModelEntry::new("google/gemini-2.0-flash", "google", CostTier::Economy)
-            .with_context(1_000_000).with_vision());
+        self.register(
+            ModelEntry::new("google/gemini-2.5-pro", "google", CostTier::Standard)
+                .with_context(1_000_000)
+                .with_vision()
+                .with_thinking(),
+        );
+        self.register(
+            ModelEntry::new("google/gemini-2.5-flash", "google", CostTier::Economy)
+                .with_context(1_000_000)
+                .with_vision(),
+        );
+        self.register(
+            ModelEntry::new("google/gemini-2.0-flash", "google", CostTier::Economy)
+                .with_context(1_000_000)
+                .with_vision(),
+        );
 
         // xAI
-        self.register(ModelEntry::new("xai/grok-3", "xai", CostTier::Standard)
-            .with_context(131_072).with_vision());
-        self.register(ModelEntry::new("xai/grok-3-mini", "xai", CostTier::Economy)
-            .with_context(131_072).with_thinking());
+        self.register(
+            ModelEntry::new("xai/grok-3", "xai", CostTier::Standard)
+                .with_context(131_072)
+                .with_vision(),
+        );
+        self.register(
+            ModelEntry::new("xai/grok-3-mini", "xai", CostTier::Economy)
+                .with_context(131_072)
+                .with_thinking(),
+        );
 
         // GitHub Copilot (via proxy)
-        self.register(ModelEntry::new("github-copilot/claude-opus-4", "github-copilot", CostTier::Free)
-            .with_context(200_000).with_vision().with_thinking()
-            .with_notes("Via Copilot subscription"));
-        self.register(ModelEntry::new("github-copilot/claude-sonnet-4", "github-copilot", CostTier::Free)
-            .with_context(200_000).with_vision().with_thinking()
-            .with_notes("Via Copilot subscription"));
-        self.register(ModelEntry::new("github-copilot/gpt-4.1", "github-copilot", CostTier::Free)
-            .with_context(128_000).with_vision()
-            .with_notes("Via Copilot subscription"));
+        self.register(
+            ModelEntry::new(
+                "github-copilot/claude-opus-4",
+                "github-copilot",
+                CostTier::Free,
+            )
+            .with_context(200_000)
+            .with_vision()
+            .with_thinking()
+            .with_notes("Via Copilot subscription"),
+        );
+        self.register(
+            ModelEntry::new(
+                "github-copilot/claude-sonnet-4",
+                "github-copilot",
+                CostTier::Free,
+            )
+            .with_context(200_000)
+            .with_vision()
+            .with_thinking()
+            .with_notes("Via Copilot subscription"),
+        );
+        self.register(
+            ModelEntry::new("github-copilot/gpt-4.1", "github-copilot", CostTier::Free)
+                .with_context(128_000)
+                .with_vision()
+                .with_notes("Via Copilot subscription"),
+        );
 
         // Local (Ollama)
-        self.register(ModelEntry::new("ollama/llama3.1", "ollama", CostTier::Free)
-            .with_context(128_000).with_notes("Local inference"));
-        self.register(ModelEntry::new("ollama/llama3.2:3b", "ollama", CostTier::Free)
-            .with_context(128_000).with_notes("Lightweight local"));
-        self.register(ModelEntry::new("ollama/qwen2.5-coder", "ollama", CostTier::Free)
-            .with_context(32_000).with_notes("Code-focused local"));
+        self.register(
+            ModelEntry::new("ollama/llama3.1", "ollama", CostTier::Free)
+                .with_context(128_000)
+                .with_notes("Local inference"),
+        );
+        self.register(
+            ModelEntry::new("ollama/llama3.2:3b", "ollama", CostTier::Free)
+                .with_context(128_000)
+                .with_notes("Lightweight local"),
+        );
+        self.register(
+            ModelEntry::new("ollama/qwen2.5-coder", "ollama", CostTier::Free)
+                .with_context(32_000)
+                .with_notes("Code-focused local"),
+        );
 
         // Set default subagent models
-        self.subagent_defaults.insert(TaskComplexity::Simple, "ollama/llama3.2:3b".to_string());
-        self.subagent_defaults.insert(TaskComplexity::Medium, "anthropic/claude-haiku-4".to_string());
-        self.subagent_defaults.insert(TaskComplexity::Complex, "anthropic/claude-sonnet-4".to_string());
-        self.subagent_defaults.insert(TaskComplexity::Critical, "anthropic/claude-opus-4".to_string());
+        self.subagent_defaults
+            .insert(TaskComplexity::Simple, "ollama/llama3.2:3b".to_string());
+        self.subagent_defaults.insert(
+            TaskComplexity::Medium,
+            "anthropic/claude-haiku-4".to_string(),
+        );
+        self.subagent_defaults.insert(
+            TaskComplexity::Complex,
+            "anthropic/claude-sonnet-4".to_string(),
+        );
+        self.subagent_defaults.insert(
+            TaskComplexity::Critical,
+            "anthropic/claude-opus-4".to_string(),
+        );
     }
 
     /// Register a model.
@@ -308,7 +393,8 @@ impl ModelRegistry {
     pub fn all(&self) -> Vec<&ModelEntry> {
         let mut models: Vec<_> = self.models.values().collect();
         models.sort_by(|a, b| {
-            a.tier.cmp(&b.tier)
+            a.tier
+                .cmp(&b.tier)
                 .then_with(|| a.provider.cmp(&b.provider))
                 .then_with(|| a.name.cmp(&b.name))
         });
@@ -332,7 +418,9 @@ impl ModelRegistry {
 
     /// Enable a model.
     pub fn enable(&mut self, id: &str) -> Result<(), String> {
-        let model = self.models.get_mut(id)
+        let model = self
+            .models
+            .get_mut(id)
             .ok_or_else(|| format!("Model not found: {}", id))?;
         model.enabled = true;
         info!(model_id = %id, "Model enabled");
@@ -341,7 +429,9 @@ impl ModelRegistry {
 
     /// Disable a model.
     pub fn disable(&mut self, id: &str) -> Result<(), String> {
-        let model = self.models.get_mut(id)
+        let model = self
+            .models
+            .get_mut(id)
             .ok_or_else(|| format!("Model not found: {}", id))?;
         model.enabled = false;
         info!(model_id = %id, "Model disabled");
@@ -367,7 +457,9 @@ impl ModelRegistry {
 
     /// Get the active model.
     pub fn active(&self) -> Option<&ModelEntry> {
-        self.active_model.as_ref().and_then(|id| self.models.get(id))
+        self.active_model
+            .as_ref()
+            .and_then(|id| self.models.get(id))
     }
 
     /// Get recommended model for a sub-agent task.
@@ -435,13 +527,14 @@ fn format_display_name(name: &str) -> String {
 pub fn generate_subagent_guidance(registry: &ModelRegistry) -> String {
     let mut guidance = String::from(
         "## Sub-Agent Model Selection\n\n\
-        When spawning sub-agents, choose models based on task complexity:\n\n"
+        When spawning sub-agents, choose models based on task complexity:\n\n",
     );
 
     // List defaults by complexity
     for (complexity, default_id) in registry.subagent_defaults() {
         let tier = complexity.recommended_tier();
-        let model_name = registry.get(default_id)
+        let model_name = registry
+            .get(default_id)
             .map(|m| m.display_name.as_str())
             .unwrap_or(default_id);
         guidance.push_str(&format!(

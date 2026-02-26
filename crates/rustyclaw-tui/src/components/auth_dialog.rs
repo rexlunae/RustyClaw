@@ -1,7 +1,7 @@
 // ── Auth dialog — TOTP code entry overlay ───────────────────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct AuthDialogProps {
@@ -16,11 +16,7 @@ pub fn AuthDialog(props: &AuthDialogProps) -> impl Into<AnyElement<'static>> {
     // Build the display: show typed digits + placeholder dots
     let typed = &props.code;
     let remaining = 6usize.saturating_sub(typed.len());
-    let display = format!(
-        "{}{}",
-        typed,
-        "·".repeat(remaining),
-    );
+    let display = format!("{}{}", typed, "·".repeat(remaining),);
 
     let has_error = !props.error.is_empty();
 

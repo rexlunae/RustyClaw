@@ -51,7 +51,11 @@ pub struct RetryAttempt {
 /// - Delta-seconds (`Retry-After: 5`)
 /// - HTTP-date (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`)
 pub fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
-    let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?.trim();
+    let raw = headers
+        .get(reqwest::header::RETRY_AFTER)?
+        .to_str()
+        .ok()?
+        .trim();
 
     if let Ok(secs) = raw.parse::<u64>() {
         return Some(Duration::from_secs(secs));
@@ -141,7 +145,13 @@ where
         };
 
         match (decision, result) {
-            (RetryDecision::Retry { reason, retry_after }, Err(err)) => {
+            (
+                RetryDecision::Retry {
+                    reason,
+                    retry_after,
+                },
+                Err(err),
+            ) => {
                 let backoff = policy.backoff_delay(attempt);
                 let base_delay = retry_after.unwrap_or(backoff);
                 let delay = policy.with_jitter(base_delay);
@@ -153,7 +163,13 @@ where
                 tokio::time::sleep(delay).await;
                 let _ = err;
             }
-            (RetryDecision::Retry { reason, retry_after }, Ok(_)) => {
+            (
+                RetryDecision::Retry {
+                    reason,
+                    retry_after,
+                },
+                Ok(_),
+            ) => {
                 let backoff = policy.backoff_delay(attempt);
                 let base_delay = retry_after.unwrap_or(backoff);
                 let delay = policy.with_jitter(base_delay);
@@ -202,11 +218,7 @@ mod tests {
                 let seen = seen.clone();
                 async move {
                     let n = seen.fetch_add(1, Ordering::SeqCst) + 1;
-                    if n < 3 {
-                        Err("transient")
-                    } else {
-                        Ok("ok")
-                    }
+                    if n < 3 { Err("transient") } else { Ok("ok") }
                 }
             },
             |r: &std::result::Result<&str, &str>| match r {

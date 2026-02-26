@@ -95,7 +95,9 @@ pub async fn call_openai_streaming(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        let _ = tx.send(StreamChunk::Error(format!("{} — {}", status, text))).await;
+        let _ = tx
+            .send(StreamChunk::Error(format!("{} — {}", status, text)))
+            .await;
         return Ok(());
     }
 
@@ -129,13 +131,19 @@ pub async fn call_openai_streaming(
                             }
 
                             // Tool calls
-                            if let Some(tc_array) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                            if let Some(tc_array) =
+                                delta.get("tool_calls").and_then(|t| t.as_array())
+                            {
                                 for tc in tc_array {
                                     let index = tc["index"].as_u64().unwrap_or(0) as usize;
-                                    
+
                                     // Ensure tool_calls vec is big enough
                                     while tool_calls.len() <= index {
-                                        tool_calls.push((String::new(), String::new(), String::new()));
+                                        tool_calls.push((
+                                            String::new(),
+                                            String::new(),
+                                            String::new(),
+                                        ));
                                     }
 
                                     // Tool call start
@@ -145,18 +153,22 @@ pub async fn call_openai_streaming(
                                     if let Some(func) = tc.get("function") {
                                         if let Some(name) = func["name"].as_str() {
                                             tool_calls[index].1 = name.to_string();
-                                            let _ = tx.send(StreamChunk::ToolCallStart {
-                                                index,
-                                                id: tool_calls[index].0.clone(),
-                                                name: name.to_string(),
-                                            }).await;
+                                            let _ = tx
+                                                .send(StreamChunk::ToolCallStart {
+                                                    index,
+                                                    id: tool_calls[index].0.clone(),
+                                                    name: name.to_string(),
+                                                })
+                                                .await;
                                         }
                                         if let Some(args) = func["arguments"].as_str() {
                                             tool_calls[index].2.push_str(args);
-                                            let _ = tx.send(StreamChunk::ToolCallDelta {
-                                                index,
-                                                arguments: args.to_string(),
-                                            }).await;
+                                            let _ = tx
+                                                .send(StreamChunk::ToolCallDelta {
+                                                    index,
+                                                    arguments: args.to_string(),
+                                                })
+                                                .await;
                                         }
                                     }
                                 }
@@ -257,7 +269,9 @@ pub async fn call_anthropic_streaming(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        let _ = tx.send(StreamChunk::Error(format!("{} — {}", status, text))).await;
+        let _ = tx
+            .send(StreamChunk::Error(format!("{} — {}", status, text)))
+            .await;
         return Ok(());
     }
 
@@ -305,12 +319,15 @@ pub async fn call_anthropic_streaming(
                                 Some("tool_use") => {
                                     let id = block["id"].as_str().unwrap_or("").to_string();
                                     let name = block["name"].as_str().unwrap_or("").to_string();
-                                    current_tool_index = json["index"].as_u64().unwrap_or(0) as usize;
-                                    let _ = tx.send(StreamChunk::ToolCallStart {
-                                        index: current_tool_index,
-                                        id,
-                                        name,
-                                    }).await;
+                                    current_tool_index =
+                                        json["index"].as_u64().unwrap_or(0) as usize;
+                                    let _ = tx
+                                        .send(StreamChunk::ToolCallStart {
+                                            index: current_tool_index,
+                                            id,
+                                            name,
+                                        })
+                                        .await;
                                 }
                                 Some("text") => {
                                     // Regular text block - nothing special to do on start
@@ -326,7 +343,9 @@ pub async fn call_anthropic_streaming(
                                     // Extended thinking content streaming
                                     if let Some(thinking) = delta["thinking"].as_str() {
                                         thinking_content.push_str(thinking);
-                                        let _ = tx.send(StreamChunk::ThinkingDelta(thinking.to_string())).await;
+                                        let _ = tx
+                                            .send(StreamChunk::ThinkingDelta(thinking.to_string()))
+                                            .await;
                                     }
                                 }
                                 Some("text_delta") => {
@@ -336,10 +355,12 @@ pub async fn call_anthropic_streaming(
                                 }
                                 Some("input_json_delta") => {
                                     if let Some(partial) = delta["partial_json"].as_str() {
-                                        let _ = tx.send(StreamChunk::ToolCallDelta {
-                                            index: current_tool_index,
-                                            arguments: partial.to_string(),
-                                        }).await;
+                                        let _ = tx
+                                            .send(StreamChunk::ToolCallDelta {
+                                                index: current_tool_index,
+                                                arguments: partial.to_string(),
+                                            })
+                                            .await;
                                     }
                                 }
                                 _ => {}
@@ -372,9 +393,7 @@ pub async fn call_anthropic_streaming(
                         return Ok(());
                     }
                     "error" => {
-                        let msg = json["error"]["message"]
-                            .as_str()
-                            .unwrap_or("Unknown error");
+                        let msg = json["error"]["message"].as_str().unwrap_or("Unknown error");
                         let _ = tx.send(StreamChunk::Error(msg.to_string())).await;
                         return Ok(());
                     }
@@ -411,7 +430,9 @@ mod tests {
         assert!(json.contains("ThinkingDelta"));
         assert!(json.contains("analyzing"));
 
-        let end = StreamChunk::ThinkingEnd { summary: Some("Done thinking".to_string()) };
+        let end = StreamChunk::ThinkingEnd {
+            summary: Some("Done thinking".to_string()),
+        };
         let json = serde_json::to_string(&end).unwrap();
         assert!(json.contains("ThinkingEnd"));
         assert!(json.contains("Done thinking"));

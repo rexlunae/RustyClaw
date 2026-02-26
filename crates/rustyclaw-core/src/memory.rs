@@ -171,10 +171,7 @@ impl MemoryIndex {
             let unique_terms: std::collections::HashSet<_> = terms.iter().collect();
 
             for term in unique_terms {
-                self.term_index
-                    .entry(term.clone())
-                    .or_default()
-                    .push(idx);
+                self.term_index.entry(term.clone()).or_default().push(idx);
 
                 *self.doc_freq.entry(term.clone()).or_insert(0) += 1;
             }
@@ -223,9 +220,12 @@ impl MemoryIndex {
         let doc_len = chunk_terms.len() as f64;
 
         // Calculate average document length
-        let avg_doc_len = self.chunks.iter()
+        let avg_doc_len = self
+            .chunks
+            .iter()
             .map(|c| tokenize(&c.text).len())
-            .sum::<usize>() as f64 / self.total_docs.max(1) as f64;
+            .sum::<usize>() as f64
+            / self.total_docs.max(1) as f64;
 
         let mut score = 0.0;
 
@@ -238,7 +238,8 @@ impl MemoryIndex {
                 let idf = ((self.total_docs as f64 - df + 0.5) / (df + 0.5) + 1.0).ln();
 
                 // TF component with length normalization
-                let tf_norm = (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * (doc_len / avg_doc_len)));
+                let tf_norm =
+                    (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * (doc_len / avg_doc_len)));
 
                 score += idf * tf_norm;
             }
@@ -556,14 +557,16 @@ mod tests {
         // Old file with the search term
         fs::write(
             dir.path().join("memory/2026-01-01.md"),
-            "# Old Note\nThis contains important search term.\n"
-        ).unwrap();
+            "# Old Note\nThis contains important search term.\n",
+        )
+        .unwrap();
 
         // Recent file with the search term
         fs::write(
             dir.path().join("memory/2026-02-19.md"),
-            "# Recent Note\nThis also contains important search term.\n"
-        ).unwrap();
+            "# Recent Note\nThis also contains important search term.\n",
+        )
+        .unwrap();
 
         let index = MemoryIndex::index_workspace(dir.path()).unwrap();
 

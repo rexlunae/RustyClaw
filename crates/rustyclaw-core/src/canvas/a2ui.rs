@@ -11,10 +11,7 @@ use std::collections::HashMap;
 #[serde(rename_all = "camelCase")]
 pub enum A2UIMessage {
     /// Start rendering a surface
-    BeginRendering {
-        surface_id: String,
-        root: String,
-    },
+    BeginRendering { surface_id: String, root: String },
 
     /// Update surface components
     SurfaceUpdate {
@@ -29,9 +26,7 @@ pub enum A2UIMessage {
     },
 
     /// Delete a surface
-    DeleteSurface {
-        surface_id: String,
-    },
+    DeleteSurface { surface_id: String },
 }
 
 /// A2UI component definition.
@@ -94,9 +89,7 @@ pub enum A2UIComponent {
     },
 
     /// Markdown content
-    Markdown {
-        content: A2UITextValue,
-    },
+    Markdown { content: A2UITextValue },
 
     /// Code block
     Code {
@@ -130,10 +123,7 @@ pub enum A2UIChildren {
     ExplicitList(Vec<String>),
 
     /// Dynamic children from data binding
-    DataBinding {
-        source: String,
-        template: String,
-    },
+    DataBinding { source: String, template: String },
 }
 
 /// A2UI text value (literal or data binding).
@@ -194,10 +184,14 @@ impl A2UISurface {
                     self.root = Some(root.clone());
                 }
             }
-            A2UIMessage::SurfaceUpdate { surface_id, components } => {
+            A2UIMessage::SurfaceUpdate {
+                surface_id,
+                components,
+            } => {
                 if surface_id == &self.id {
                     for comp_def in components {
-                        self.components.insert(comp_def.id.clone(), comp_def.component.clone());
+                        self.components
+                            .insert(comp_def.id.clone(), comp_def.component.clone());
                     }
                 }
             }

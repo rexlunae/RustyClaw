@@ -20,15 +20,9 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
 
     tracing::Span::current().record("query", query);
 
-    let max_results = args
-        .get("maxResults")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5) as usize;
+    let max_results = args.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
-    let min_score = args
-        .get("minScore")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(0.1);
+    let min_score = args.get("minScore").and_then(|v| v.as_f64()).unwrap_or(0.1);
 
     // Recency boost options
     let use_recency = args
@@ -41,11 +35,14 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
         .and_then(|v| v.as_f64())
         .unwrap_or(DEFAULT_HALF_LIFE_DAYS);
 
-    debug!(max_results, min_score, use_recency, half_life_days, "Searching memory");
+    debug!(
+        max_results,
+        min_score, use_recency, half_life_days, "Searching memory"
+    );
 
     // Build index and search
     let index = crate::memory::MemoryIndex::index_workspace(workspace_dir)?;
-    
+
     let results = if use_recency {
         index.search_with_decay(query, max_results, half_life_days)
     } else {
@@ -60,7 +57,10 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     let mut output = String::new();
     output.push_str(&format!("Memory search results for: {}\n", query));
     if use_recency {
-        output.push_str(&format!("(recency boost enabled, half-life: {} days)\n", half_life_days));
+        output.push_str(&format!(
+            "(recency boost enabled, half-life: {} days)\n",
+            half_life_days
+        ));
     }
     output.push('\n');
 
@@ -80,11 +80,7 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
 
         output.push_str(&format!(
             "{}. **{}** (lines {}-{}, score: {:.2})\n",
-            count,
-            result.chunk.path,
-            result.chunk.start_line,
-            result.chunk.end_line,
-            result.score
+            count, result.chunk.path, result.chunk.start_line, result.chunk.end_line, result.score
         ));
         output.push_str(&format!("{}\n\n", snippet));
         output.push_str(&format!(
@@ -139,9 +135,7 @@ pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, St
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: history_entry".to_string())?;
 
-    let memory_update = args
-        .get("memory_update")
-        .and_then(|v| v.as_str());
+    let memory_update = args.get("memory_update").and_then(|v| v.as_str());
 
     debug!(
         history_entry_len = history_entry.len(),
@@ -168,7 +162,10 @@ pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, St
 
     let mut output = String::new();
     output.push_str("Memory saved successfully.\n\n");
-    output.push_str(&format!("- HISTORY.md: {} bytes (entry appended)\n", history_size));
+    output.push_str(&format!(
+        "- HISTORY.md: {} bytes (entry appended)\n",
+        history_size
+    ));
     if memory_update.is_some() {
         output.push_str(&format!("- MEMORY.md: {} bytes (updated)\n", memory_size));
     } else {
@@ -199,11 +196,18 @@ pub fn exec_search_history(args: &Value, workspace_dir: &Path) -> Result<String,
     let results = consolidation.search_history(workspace_dir, pattern, max_results)?;
 
     if results.is_empty() {
-        return Ok(format!("No entries found in HISTORY.md matching: {}", pattern));
+        return Ok(format!(
+            "No entries found in HISTORY.md matching: {}",
+            pattern
+        ));
     }
 
     let mut output = String::new();
-    output.push_str(&format!("History entries matching '{}' ({} found):\n\n", pattern, results.len()));
+    output.push_str(&format!(
+        "History entries matching '{}' ({} found):\n\n",
+        pattern,
+        results.len()
+    ));
 
     for entry in results {
         output.push_str(&format!("[{}] {}\n\n", entry.timestamp, entry.text));

@@ -1,7 +1,7 @@
 // ── Skills dialog — interactive skill list overlay ──────────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct SkillInfo {

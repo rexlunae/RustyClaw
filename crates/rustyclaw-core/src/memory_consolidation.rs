@@ -127,17 +127,12 @@ impl MemoryConsolidation {
     /// Save a history entry (append to HISTORY.md).
     ///
     /// This is called by the `save_memory` tool to log timestamped entries.
-    pub fn append_history(
-        &self,
-        workspace: &Path,
-        entry: &str,
-    ) -> Result<usize, String> {
+    pub fn append_history(&self, workspace: &Path, entry: &str) -> Result<usize, String> {
         let history_path = workspace.join(&self.config.history_path);
-        
+
         // Create parent directories if needed
         if let Some(parent) = history_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
         }
 
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
@@ -161,17 +156,12 @@ impl MemoryConsolidation {
     /// Update MEMORY.md (full replacement).
     ///
     /// This is called by the `save_memory` tool with the LLM's curated content.
-    pub fn update_memory(
-        &self,
-        workspace: &Path,
-        content: &str,
-    ) -> Result<usize, String> {
+    pub fn update_memory(&self, workspace: &Path, content: &str) -> Result<usize, String> {
         let memory_path = workspace.join(&self.config.memory_path);
 
         // Create parent directories if needed
         if let Some(parent) = memory_path.parent() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create directory: {}", e))?;
+            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
         }
 
         fs::write(&memory_path, content)
@@ -192,25 +182,23 @@ impl MemoryConsolidation {
     /// Read current MEMORY.md content.
     pub fn read_memory(&self, workspace: &Path) -> Result<String, String> {
         let memory_path = workspace.join(&self.config.memory_path);
-        
+
         if !memory_path.exists() {
             return Ok(String::new());
         }
 
-        fs::read_to_string(&memory_path)
-            .map_err(|e| format!("Failed to read MEMORY.md: {}", e))
+        fs::read_to_string(&memory_path).map_err(|e| format!("Failed to read MEMORY.md: {}", e))
     }
 
     /// Read current HISTORY.md content.
     pub fn read_history(&self, workspace: &Path) -> Result<String, String> {
         let history_path = workspace.join(&self.config.history_path);
-        
+
         if !history_path.exists() {
             return Ok(String::new());
         }
 
-        fs::read_to_string(&history_path)
-            .map_err(|e| format!("Failed to read HISTORY.md: {}", e))
+        fs::read_to_string(&history_path).map_err(|e| format!("Failed to read HISTORY.md: {}", e))
     }
 
     /// Search HISTORY.md using grep-style pattern matching.
@@ -243,7 +231,7 @@ impl MemoryConsolidation {
                 if let Some(end_bracket) = line.find(']') {
                     let timestamp_str = &line[1..end_bracket];
                     let text = line[end_bracket + 1..].trim().to_string();
-                    
+
                     current_entry = Some(HistoryEntry {
                         timestamp: timestamp_str.to_string(),
                         text,
@@ -344,11 +332,19 @@ mod tests {
         let config = ConsolidationConfig::default();
         let consolidation = MemoryConsolidation::new(config);
 
-        consolidation.append_history(dir.path(), "Meeting with Alice about project").unwrap();
-        consolidation.append_history(dir.path(), "Fixed bug in parser").unwrap();
-        consolidation.append_history(dir.path(), "Called Alice, discussed timeline").unwrap();
+        consolidation
+            .append_history(dir.path(), "Meeting with Alice about project")
+            .unwrap();
+        consolidation
+            .append_history(dir.path(), "Fixed bug in parser")
+            .unwrap();
+        consolidation
+            .append_history(dir.path(), "Called Alice, discussed timeline")
+            .unwrap();
 
-        let results = consolidation.search_history(dir.path(), "Alice", 10).unwrap();
+        let results = consolidation
+            .search_history(dir.path(), "Alice", 10)
+            .unwrap();
         assert_eq!(results.len(), 2);
     }
 

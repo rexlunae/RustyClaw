@@ -1,7 +1,7 @@
 //! MCP tool execution handler for the gateway.
 
 #[cfg(feature = "mcp")]
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "mcp")]
 use crate::mcp::McpManager;
@@ -37,7 +37,9 @@ pub async fn execute_mcp_tool(
             if result.success {
                 Ok(result.to_llm_string())
             } else {
-                Err(result.error.unwrap_or_else(|| "Unknown MCP error".to_string()))
+                Err(result
+                    .error
+                    .unwrap_or_else(|| "Unknown MCP error".to_string()))
             }
         }
         Err(e) => {

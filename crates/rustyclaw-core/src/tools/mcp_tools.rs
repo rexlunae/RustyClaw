@@ -4,7 +4,7 @@
 //! themselves are dynamically registered with prefixed names (mcp_<server>_<tool>)
 //! and dispatched through the gateway's MCP handler.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -21,7 +21,8 @@ pub fn exec_mcp_list(_args: &Value, _workspace_dir: &Path) -> Result<String, Str
             "note": "MCP server listing requires gateway connection. Use /mcp status in the TUI.",
             "feature": "mcp",
             "enabled": true,
-        }).to_string())
+        })
+        .to_string())
     }
 
     #[cfg(not(feature = "mcp"))]
@@ -53,7 +54,8 @@ pub fn exec_mcp_connect(args: &Value, _workspace_dir: &Path) -> Result<String, S
         "note": "MCP server connection requires gateway. Use /mcp connect <name> in the TUI.",
         "name": name,
         "command": command,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Disconnect from an MCP server.
@@ -71,7 +73,8 @@ pub fn exec_mcp_disconnect(args: &Value, _workspace_dir: &Path) -> Result<String
         "status": "stub",
         "note": "MCP server disconnection requires gateway. Use /mcp disconnect <name> in the TUI.",
         "name": name,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Get parameter definitions for MCP tools.

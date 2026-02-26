@@ -6,7 +6,7 @@ use super::helpers::vault;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 // ── Async implementations ───────────────────────────────────────────────────
 
@@ -197,10 +197,7 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> Resul
         .min(10)
         .max(1) as usize;
 
-    let country = args
-        .get("country")
-        .and_then(|v| v.as_str())
-        .unwrap_or("US");
+    let country = args.get("country").and_then(|v| v.as_str()).unwrap_or("US");
 
     let search_lang = args.get("search_lang").and_then(|v| v.as_str());
     let freshness = args.get("freshness").and_then(|v| v.as_str());
@@ -398,7 +395,9 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
         }
     }
 
-    let response = request.send().map_err(|e| format!("HTTP request failed: {}", e))?;
+    let response = request
+        .send()
+        .map_err(|e| format!("HTTP request failed: {}", e))?;
 
     let status = response.status();
 
@@ -501,10 +500,7 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> Result<String, S
         .min(10)
         .max(1) as usize;
 
-    let country = args
-        .get("country")
-        .and_then(|v| v.as_str())
-        .unwrap_or("US");
+    let country = args.get("country").and_then(|v| v.as_str()).unwrap_or("US");
 
     let search_lang = args.get("search_lang").and_then(|v| v.as_str());
     let freshness = args.get("freshness").and_then(|v| v.as_str());

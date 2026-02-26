@@ -1,7 +1,7 @@
 // ── Status bar ──────────────────────────────────────────────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct StatusBarProps {
@@ -24,14 +24,22 @@ pub fn StatusBar(props: &StatusBarProps) -> impl Into<AnyElement<'static>> {
         props.hint.clone()
     };
 
-    let right_color = if props.streaming { theme::ACCENT } else { theme::MUTED };
+    let right_color = if props.streaming {
+        theme::ACCENT
+    } else {
+        theme::MUTED
+    };
 
     let model_text = if props.model_label.is_empty() {
         "(no model)".to_string()
     } else {
         props.model_label.clone()
     };
-    let model_color = if props.model_label.is_empty() { theme::WARN } else { theme::INFO };
+    let model_color = if props.model_label.is_empty() {
+        theme::WARN
+    } else {
+        theme::INFO
+    };
 
     element! {
         View(

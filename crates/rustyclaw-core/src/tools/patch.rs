@@ -3,7 +3,7 @@
 use super::helpers::resolve_path;
 use serde_json::Value;
 use std::path::Path;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 /// Apply a unified diff patch to files.
 #[instrument(skip(args, workspace_dir))]

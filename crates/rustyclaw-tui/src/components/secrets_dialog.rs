@@ -1,7 +1,7 @@
 // ── Secrets dialog — interactive vault management overlay ────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct SecretInfo {
@@ -27,10 +27,22 @@ pub struct SecretsDialogProps {
 
 #[component]
 pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static>> {
-    let access_label = if props.agent_access { "Enabled" } else { "Disabled" };
-    let access_color = if props.agent_access { theme::SUCCESS } else { theme::WARN };
+    let access_label = if props.agent_access {
+        "Enabled"
+    } else {
+        "Disabled"
+    };
+    let access_color = if props.agent_access {
+        theme::SUCCESS
+    } else {
+        theme::WARN
+    };
     let totp_label = if props.has_totp { "On" } else { "Off" };
-    let totp_color = if props.has_totp { theme::SUCCESS } else { theme::MUTED };
+    let totp_color = if props.has_totp {
+        theme::SUCCESS
+    } else {
+        theme::MUTED
+    };
     let count = props.secrets.len();
     let sel = props.selected.unwrap_or(0);
 

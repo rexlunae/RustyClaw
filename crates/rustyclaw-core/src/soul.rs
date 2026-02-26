@@ -71,8 +71,8 @@ impl SoulManager {
     /// Load the SOUL.md file
     pub fn load(&mut self) -> Result<()> {
         if self.soul_path.exists() {
-            let content = std::fs::read_to_string(&self.soul_path)
-                .context("Failed to read SOUL.md")?;
+            let content =
+                std::fs::read_to_string(&self.soul_path).context("Failed to read SOUL.md")?;
             self.content = Some(content);
             Ok(())
         } else {
@@ -103,8 +103,7 @@ impl SoulManager {
             if let Some(parent) = self.soul_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&self.soul_path, content)
-                .context("Failed to write SOUL.md")?;
+            std::fs::write(&self.soul_path, content).context("Failed to write SOUL.md")?;
         }
         Ok(())
     }
@@ -123,10 +122,10 @@ impl SoulManager {
 
     /// Check if this SOUL needs hatching (doesn't exist or is still default content)
     pub fn needs_hatching(&self) -> bool {
-        !self.soul_path.exists() || 
-        std::fs::read_to_string(&self.soul_path)
-            .map(|c| c == DEFAULT_SOUL_CONTENT)
-            .unwrap_or(true)
+        !self.soul_path.exists()
+            || std::fs::read_to_string(&self.soul_path)
+                .map(|c| c == DEFAULT_SOUL_CONTENT)
+                .unwrap_or(true)
     }
 
     /// Get the path to the SOUL file

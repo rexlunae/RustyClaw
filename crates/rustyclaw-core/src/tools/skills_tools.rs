@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 use std::path::Path;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 /// List all loaded skills with their status.
 #[instrument(skip(_args, _workspace_dir))]

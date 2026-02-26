@@ -319,8 +319,7 @@ impl CronStore {
             .open(&runs_file)
             .map_err(|e| format!("Failed to open runs file: {}", e))?;
 
-        writeln!(file, "{}", line)
-            .map_err(|e| format!("Failed to write run entry: {}", e))?;
+        writeln!(file, "{}", line).map_err(|e| format!("Failed to write run entry: {}", e))?;
 
         Ok(())
     }

@@ -2,10 +2,10 @@
 //!
 //! Handles model_* tool calls by interacting with the shared ModelRegistry.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::instrument;
 
-use crate::models::{CostTier, TaskComplexity, SharedModelRegistry};
+use crate::models::{CostTier, SharedModelRegistry, TaskComplexity};
 
 /// Check if a tool name is a model tool.
 pub fn is_model_tool(name: &str) -> bool {
@@ -37,15 +37,23 @@ async fn exec_model_list(
     args: &Value,
     model_registry: &SharedModelRegistry,
 ) -> Result<String, String> {
-    let tier_filter = args.get("tier")
+    let tier_filter = args
+        .get("tier")
         .and_then(|v| v.as_str())
         .and_then(CostTier::from_str);
-    let enabled_only = args.get("enabledOnly").and_then(|v| v.as_bool()).unwrap_or(false);
-    let usable_only = args.get("usableOnly").and_then(|v| v.as_bool()).unwrap_or(false);
+    let enabled_only = args
+        .get("enabledOnly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let usable_only = args
+        .get("usableOnly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let registry = model_registry.read().await;
 
-    let models: Vec<_> = registry.all()
+    let models: Vec<_> = registry
+        .all()
         .into_iter()
         .filter(|m| {
             if let Some(tier) = tier_filter {
@@ -85,7 +93,8 @@ async fn exec_model_list(
         "models": models,
         "count": models.len(),
         "activeModel": active,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Enable a model.
@@ -102,7 +111,8 @@ async fn exec_model_enable(
         "success": true,
         "modelId": model_id,
         "message": format!("Model '{}' enabled", model_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Disable a model.
@@ -119,7 +129,8 @@ async fn exec_model_disable(
         "success": true,
         "modelId": model_id,
         "message": format!("Model '{}' disabled", model_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Set the active model.
@@ -130,10 +141,11 @@ async fn exec_model_set(
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
-    
+
     // Check if model exists and is usable
     {
-        let model = registry.get(&model_id)
+        let model = registry
+            .get(&model_id)
             .ok_or_else(|| format!("Model not found: {}", model_id))?;
         if !model.is_usable() {
             return Err(format!(
@@ -142,14 +154,15 @@ async fn exec_model_set(
             ));
         }
     }
-    
+
     registry.set_active(&model_id)?;
 
     Ok(json!({
         "success": true,
         "modelId": model_id,
         "message": format!("Active model set to '{}'", model_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Get model recommendation for task complexity.
@@ -157,7 +170,8 @@ async fn exec_model_recommend(
     args: &Value,
     model_registry: &SharedModelRegistry,
 ) -> Result<String, String> {
-    let complexity_str = args.get("complexity")
+    let complexity_str = args
+        .get("complexity")
         .and_then(|v| v.as_str())
         .unwrap_or("medium");
 
@@ -166,7 +180,12 @@ async fn exec_model_recommend(
         "medium" => TaskComplexity::Medium,
         "complex" => TaskComplexity::Complex,
         "critical" => TaskComplexity::Critical,
-        _ => return Err(format!("Unknown complexity: {}. Use: simple, medium, complex, critical", complexity_str)),
+        _ => {
+            return Err(format!(
+                "Unknown complexity: {}. Use: simple, medium, complex, critical",
+                complexity_str
+            ));
+        }
     };
 
     let registry = model_registry.read().await;
@@ -211,9 +230,7 @@ fn parse_model_id(args: &Value) -> Result<String, String> {
 }
 
 /// Generate system prompt section for model selection guidance.
-pub async fn generate_model_prompt_section(
-    model_registry: &SharedModelRegistry,
-) -> String {
+pub async fn generate_model_prompt_section(model_registry: &SharedModelRegistry) -> String {
     let registry = model_registry.read().await;
     crate::models::generate_subagent_guidance(&registry)
 }

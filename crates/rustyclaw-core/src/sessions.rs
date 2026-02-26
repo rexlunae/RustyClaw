@@ -102,7 +102,12 @@ impl Session {
     }
 
     /// Create a new sub-agent session.
-    pub fn new_subagent(agent_id: &str, task: &str, label: Option<String>, parent_key: Option<SessionKey>) -> Self {
+    pub fn new_subagent(
+        agent_id: &str,
+        task: &str,
+        label: Option<String>,
+        parent_key: Option<SessionKey>,
+    ) -> Self {
         let now_ms = now_millis();
         let run_id = generate_uuid();
         Self {
@@ -213,14 +218,17 @@ impl SessionManager {
     }
 
     /// List sessions with optional filters.
-    pub fn list(&self, kinds: Option<&[SessionKind]>, active_only: bool, limit: usize) -> Vec<&Session> {
+    pub fn list(
+        &self,
+        kinds: Option<&[SessionKind]>,
+        active_only: bool,
+        limit: usize,
+    ) -> Vec<&Session> {
         let mut sessions: Vec<_> = self
             .sessions
             .values()
             .filter(|s| {
-                let kind_match = kinds
-                    .map(|ks| ks.contains(&s.kind))
-                    .unwrap_or(true);
+                let kind_match = kinds.map(|ks| ks.contains(&s.kind)).unwrap_or(true);
                 let active_match = !active_only || s.status == SessionStatus::Active;
                 kind_match && active_match
             })
@@ -233,7 +241,12 @@ impl SessionManager {
     }
 
     /// Get message history for a session.
-    pub fn history(&self, key: &str, limit: usize, include_tools: bool) -> Option<Vec<&SessionMessage>> {
+    pub fn history(
+        &self,
+        key: &str,
+        limit: usize,
+        include_tools: bool,
+    ) -> Option<Vec<&SessionMessage>> {
         self.sessions.get(key).map(|s| {
             s.messages
                 .iter()
@@ -323,7 +336,8 @@ mod tests {
     #[test]
     fn test_subagent_spawn() {
         let mut manager = SessionManager::new();
-        let key = manager.spawn_subagent("main", "Research task", Some("research".to_string()), None);
+        let key =
+            manager.spawn_subagent("main", "Research task", Some("research".to_string()), None);
 
         assert!(key.contains("subagent"));
 

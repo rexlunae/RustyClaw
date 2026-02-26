@@ -12,7 +12,7 @@ use crossterm::terminal;
 use rustyclaw_core::config::{Config, MessengerConfig, ModelProvider};
 use rustyclaw_core::providers::PROVIDERS;
 use rustyclaw_core::secrets::SecretsManager;
-use rustyclaw_core::soul::{SoulManager, DEFAULT_SOUL_CONTENT};
+use rustyclaw_core::soul::{DEFAULT_SOUL_CONTENT, SoulManager};
 use rustyclaw_core::theme as t;
 
 // ── Public entry point ──────────────────────────────────────────────────────
@@ -38,17 +38,28 @@ pub fn run_onboard_wizard(
     }
 
     // ── 0. Safety acknowledgment ───────────────────────────────────
-    println!("{}", t::warn("⚠  Important: Please read before continuing."));
+    println!(
+        "{}",
+        t::warn("⚠  Important: Please read before continuing.")
+    );
     println!();
-    println!("  RustyClaw is an {}, meaning it can",
-        t::accent_bright("agentic coding tool"));
+    println!(
+        "  RustyClaw is an {}, meaning it can",
+        t::accent_bright("agentic coding tool")
+    );
     println!("  read, write, and execute code on your machine on your");
     println!("  behalf. Like any powerful tool, it should be used with");
     println!("  care and awareness.");
     println!();
-    println!("  • {} and modify files in your project", t::bold("It can create"));
+    println!(
+        "  • {} and modify files in your project",
+        t::bold("It can create")
+    );
     println!("  • {} commands in your terminal", t::bold("It can run"));
-    println!("  • {} with external APIs using your credentials", t::bold("It can interact"));
+    println!(
+        "  • {} with external APIs using your credentials",
+        t::bold("It can interact")
+    );
     println!();
     println!("  Always review actions before approving them, especially");
     println!("  in production environments. You are responsible for any");
@@ -57,7 +68,10 @@ pub fn run_onboard_wizard(
 
     let ack = prompt_line(
         &mut reader,
-        &format!("{} ", t::accent("Do you acknowledge and wish to continue? [y/N]:")),
+        &format!(
+            "{} ",
+            t::accent("Do you acknowledge and wish to continue? [y/N]:")
+        ),
     )?;
     if !ack.trim().eq_ignore_ascii_case("y") {
         println!();
@@ -92,7 +106,13 @@ pub fn run_onboard_wizard(
     } else if current_name.is_none() {
         config.agent_name = "RustyClaw".to_string();
     }
-    println!("  {}", t::icon_ok(&format!("Agent name: {}", t::accent_bright(&config.agent_name))));
+    println!(
+        "  {}",
+        t::icon_ok(&format!(
+            "Agent name: {}",
+            t::accent_bright(&config.agent_name)
+        ))
+    );
     println!();
 
     // ── 1. Secrets vault setup ─────────────────────────────────────
@@ -123,31 +143,53 @@ pub fn run_onboard_wizard(
         println!();
 
         // ── 1a. Optional password ──────────────────────────────────
-        println!("{}", t::bold("You can protect your secrets vault with a password."));
-        println!("{}", t::muted("If you skip this, a key file will be generated instead."));
+        println!(
+            "{}",
+            t::bold("You can protect your secrets vault with a password.")
+        );
+        println!(
+            "{}",
+            t::muted("If you skip this, a key file will be generated instead.")
+        );
         println!();
-        println!("  {}  If you set a password you will need to enter it every", t::warn("⚠"));
+        println!(
+            "  {}  If you set a password you will need to enter it every",
+            t::warn("⚠")
+        );
         println!("     time RustyClaw starts, including when the gateway is");
         println!("     launched.  Automated / unattended starts will not be");
         println!("     possible without the password.");
         println!();
 
-        let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("Vault password (leave blank to skip):")))?;
+        let pw = prompt_secret(
+            &mut reader,
+            &format!("{} ", t::accent("Vault password (leave blank to skip):")),
+        )?;
         let pw = pw.trim().to_string();
 
         if pw.is_empty() {
-            println!("  {}", t::icon_ok("Using auto-generated key file (no password)."));
+            println!(
+                "  {}",
+                t::icon_ok("Using auto-generated key file (no password).")
+            );
             config.secrets_password_protected = false;
         } else {
             loop {
-                let confirm = prompt_secret(&mut reader, &format!("{} ", t::accent("Confirm password:")))?;
+                let confirm =
+                    prompt_secret(&mut reader, &format!("{} ", t::accent("Confirm password:")))?;
                 if confirm.trim() == pw {
                     secrets.set_password(pw.clone());
                     config.secrets_password_protected = true;
-                    println!("  {}", t::icon_ok("Secrets vault will be password-protected."));
+                    println!(
+                        "  {}",
+                        t::icon_ok("Secrets vault will be password-protected.")
+                    );
                     break;
                 }
-                println!("  {}", t::icon_warn("Passwords do not match — please try again."));
+                println!(
+                    "  {}",
+                    t::icon_warn("Passwords do not match — please try again.")
+                );
             }
         }
         println!();
@@ -163,16 +205,25 @@ pub fn run_onboard_wizard(
         // file is present, the vault *must* be password-protected even
         // if config doesn't reflect it (e.g. a previous run crashed
         // before saving the config).
-        let needs_password = config.secrets_password_protected
-            || (vault_path.exists() && !key_path.exists());
+        let needs_password =
+            config.secrets_password_protected || (vault_path.exists() && !key_path.exists());
 
         if needs_password {
             if !config.secrets_password_protected {
-                println!("  {}", t::warn("Vault appears to be password-protected but config disagrees."));
-                println!("  {}", t::muted("(This can happen if a previous onboard run was interrupted.)"));
+                println!(
+                    "  {}",
+                    t::warn("Vault appears to be password-protected but config disagrees.")
+                );
+                println!(
+                    "  {}",
+                    t::muted("(This can happen if a previous onboard run was interrupted.)")
+                );
                 println!();
             }
-            let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("Enter vault password:")))?;
+            let pw = prompt_secret(
+                &mut reader,
+                &format!("{} ", t::accent("Enter vault password:")),
+            )?;
             secrets.set_password(pw.trim().to_string());
             config.secrets_password_protected = true;
         }
@@ -185,8 +236,16 @@ pub fn run_onboard_wizard(
         // Offer to reconfigure vault security.
         println!("{}", t::heading("Secrets vault:"));
         println!();
-        let pw_status = if config.secrets_password_protected { "password-protected" } else { "key-file (no password)" };
-        let totp_status = if config.totp_enabled { "enabled" } else { "disabled" };
+        let pw_status = if config.secrets_password_protected {
+            "password-protected"
+        } else {
+            "key-file (no password)"
+        };
+        let totp_status = if config.totp_enabled {
+            "enabled"
+        } else {
+            "disabled"
+        };
         println!("  Encryption : {}", t::info(pw_status));
         println!("  2FA (TOTP) : {}", t::info(totp_status));
         println!();
@@ -204,23 +263,33 @@ pub fn run_onboard_wizard(
             println!("{}", t::muted("Leave blank to keep current setting."));
             println!();
 
-            let pw = prompt_secret(&mut reader, &format!("{} ", t::accent("New vault password (blank to keep):")))?;
+            let pw = prompt_secret(
+                &mut reader,
+                &format!("{} ", t::accent("New vault password (blank to keep):")),
+            )?;
             let pw = pw.trim().to_string();
 
             if !pw.is_empty() {
                 loop {
-                    let confirm = prompt_secret(&mut reader, &format!("{} ", t::accent("Confirm password:")))?;
+                    let confirm = prompt_secret(
+                        &mut reader,
+                        &format!("{} ", t::accent("Confirm password:")),
+                    )?;
                     if confirm.trim() == pw {
                         // Re-encrypt the existing vault with the new password
                         // instead of just setting it (which would lose access
                         // to the vault encrypted under the old key source).
-                        secrets.change_password(pw.clone())
+                        secrets
+                            .change_password(pw.clone())
                             .context("Failed to re-encrypt vault with new password")?;
                         config.secrets_password_protected = true;
                         println!("  {}", t::icon_ok("Vault password updated."));
                         break;
                     }
-                    println!("  {}", t::icon_warn("Passwords do not match — please try again."));
+                    println!(
+                        "  {}",
+                        t::icon_warn("Passwords do not match — please try again.")
+                    );
                 }
             } else {
                 println!("  {}", t::muted("Keeping current password setting."));
@@ -259,7 +328,9 @@ pub fn run_onboard_wizard(
         None => {
             println!("  {}", t::warn("Cancelled."));
             // Save any config changes made during vault setup before returning.
-            config.ensure_dirs().context("Failed to create directory structure")?;
+            config
+                .ensure_dirs()
+                .context("Failed to create directory structure")?;
             config.save(None)?;
             println!("  {}", t::muted("Partial config saved."));
             return Ok(false);
@@ -267,7 +338,10 @@ pub fn run_onboard_wizard(
     };
 
     println!();
-    println!("  {}", t::icon_ok(&format!("Selected: {}", t::accent_bright(provider.display))));
+    println!(
+        "  {}",
+        t::icon_ok(&format!("Selected: {}", t::accent_bright(provider.display)))
+    );
     println!();
 
     // ── 3. Authentication ──────────────────────────────────────────
@@ -281,12 +355,24 @@ pub fn run_onboard_wizard(
                 if existing.is_some() {
                     let reuse = prompt_line(
                         &mut reader,
-                        &format!("{} ", t::accent(&format!("An API key for {} is already stored. Keep it? [Y/n]:", provider.display))),
+                        &format!(
+                            "{} ",
+                            t::accent(&format!(
+                                "An API key for {} is already stored. Keep it? [Y/n]:",
+                                provider.display
+                            ))
+                        ),
                     )?;
                     if reuse.trim().eq_ignore_ascii_case("n") {
-                        let key = prompt_secret(&mut reader, &format!("{} ", t::accent("Enter API key:")))?;
+                        let key = prompt_secret(
+                            &mut reader,
+                            &format!("{} ", t::accent("Enter API key:")),
+                        )?;
                         if key.trim().is_empty() {
-                            println!("  {}", t::icon_warn("No key entered — keeping existing key."));
+                            println!(
+                                "  {}",
+                                t::icon_warn("No key entered — keeping existing key.")
+                            );
                         } else {
                             secrets.store_secret(secret_key, key.trim())?;
                             println!("  {}", t::icon_ok("API key updated."));
@@ -295,9 +381,13 @@ pub fn run_onboard_wizard(
                         println!("  {}", t::icon_ok("Keeping existing API key."));
                     }
                 } else {
-                    let key = prompt_secret(&mut reader, &format!("{} ", t::accent("Enter API key:")))?;
+                    let key =
+                        prompt_secret(&mut reader, &format!("{} ", t::accent("Enter API key:")))?;
                     if key.trim().is_empty() {
-                        println!("  {}", t::icon_warn("No key entered — you can add one later with:"));
+                        println!(
+                            "  {}",
+                            t::icon_warn("No key entered — you can add one later with:")
+                        );
                         println!("      {}", t::accent_bright("rustyclaw onboard"));
                     } else {
                         secrets.store_secret(secret_key, key.trim())?;
@@ -312,7 +402,13 @@ pub fn run_onboard_wizard(
                     if existing.is_some() {
                         let reuse = prompt_line(
                             &mut reader,
-                            &format!("{} ", t::accent(&format!("An access token for {} is already stored. Keep it? [Y/n]:", provider.display))),
+                            &format!(
+                                "{} ",
+                                t::accent(&format!(
+                                    "An access token for {} is already stored. Keep it? [Y/n]:",
+                                    provider.display
+                                ))
+                            ),
                         )?;
                         if !reuse.trim().eq_ignore_ascii_case("n") {
                             println!("  {}", t::icon_ok("Keeping existing access token."));
@@ -320,11 +416,23 @@ pub fn run_onboard_wizard(
                             // Continue to model selection
                         } else {
                             // Re-authenticate with device flow
-                            perform_device_flow_auth(&mut reader, provider.display, device_config, secret_key, secrets)?;
+                            perform_device_flow_auth(
+                                &mut reader,
+                                provider.display,
+                                device_config,
+                                secret_key,
+                                secrets,
+                            )?;
                         }
                     } else {
                         // New authentication
-                        perform_device_flow_auth(&mut reader, provider.display, device_config, secret_key, secrets)?;
+                        perform_device_flow_auth(
+                            &mut reader,
+                            provider.display,
+                            device_config,
+                            secret_key,
+                            secrets,
+                        )?;
                     }
                 } else {
                     println!("  {}", t::icon_warn("Device flow configuration missing."));
@@ -342,7 +450,8 @@ pub fn run_onboard_wizard(
     // For local providers (Ollama, LM Studio, exo): show default and
     // allow override (e.g. non-standard ports).
     let needs_url_prompt = provider.id == "custom" || provider.id == "copilot-proxy";
-    let is_local_provider = provider.id == "ollama" || provider.id == "lmstudio" || provider.id == "exo";
+    let is_local_provider =
+        provider.id == "ollama" || provider.id == "lmstudio" || provider.id == "exo";
     let base_url: String = if needs_url_prompt {
         let prompt_text = if provider.id == "copilot-proxy" {
             "Copilot Proxy URL:"
@@ -352,7 +461,10 @@ pub fn run_onboard_wizard(
         let url = prompt_line(&mut reader, &format!("{} ", t::accent(prompt_text)))?;
         let url = url.trim().to_string();
         if url.is_empty() {
-            println!("  {}", t::icon_warn("No URL entered. You can set model.base_url in config.toml later."));
+            println!(
+                "  {}",
+                t::icon_warn("No URL entered. You can set model.base_url in config.toml later.")
+            );
             String::new()
         } else {
             println!("  {}", t::icon_ok(&format!("Base URL: {}", t::info(&url))));
@@ -363,11 +475,17 @@ pub fn run_onboard_wizard(
         println!("  {} Default: {}", t::muted("ℹ"), t::info(default_url));
         let url = prompt_line(
             &mut reader,
-            &format!("{} ", t::accent("Base URL (Enter for default, or type custom):")),
+            &format!(
+                "{} ",
+                t::accent("Base URL (Enter for default, or type custom):")
+            ),
         )?;
         let url = url.trim().to_string();
         if url.is_empty() {
-            println!("  {}", t::icon_ok(&format!("Using default: {}", t::info(default_url))));
+            println!(
+                "  {}",
+                t::icon_ok(&format!("Using default: {}", t::info(default_url)))
+            );
             default_url.to_string()
         } else {
             println!("  {}", t::icon_ok(&format!("Base URL: {}", t::info(&url))));
@@ -380,12 +498,17 @@ pub fn run_onboard_wizard(
     // ── 5. Select a model ──────────────────────────────────────────
 
     // Try to dynamically fetch models from the provider API.
-    let api_key = provider.secret_key
+    let api_key = provider
+        .secret_key
         .and_then(|sk| secrets.get_secret(sk, true).ok().flatten());
 
     let fetched_models: Vec<String> = {
         let handle = tokio::runtime::Handle::current();
-        let base_ref = if base_url.is_empty() { None } else { Some(base_url.as_str()) };
+        let base_ref = if base_url.is_empty() {
+            None
+        } else {
+            Some(base_url.as_str())
+        };
         print!("  {} Fetching available models…", t::muted("⠋"));
         io::stdout().flush()?;
         let result = tokio::task::block_in_place(|| {
@@ -400,9 +523,14 @@ pub fn run_onboard_wizard(
         io::stdout().flush()?;
         match result {
             Ok(models) => {
-                println!("  {}", t::icon_ok(&format!(
-                    "Loaded {} models from {} API.", models.len(), provider.display,
-                )));
+                println!(
+                    "  {}",
+                    t::icon_ok(&format!(
+                        "Loaded {} models from {} API.",
+                        models.len(),
+                        provider.display,
+                    ))
+                );
                 models
             }
             Err(_) => Vec::new(),
@@ -432,7 +560,10 @@ pub fn run_onboard_wizard(
 
     if !model.is_empty() {
         println!();
-        println!("  {}", t::icon_ok(&format!("Default model: {}", t::accent_bright(&model))));
+        println!(
+            "  {}",
+            t::icon_ok(&format!("Default model: {}", t::accent_bright(&model)))
+        );
     }
 
     // ── 6. Initialize / update SOUL.md ─────────────────────────────
@@ -450,7 +581,10 @@ pub fn run_onboard_wizard(
     let init_soul = if soul_customised {
         let answer = prompt_line(
             &mut reader,
-            &format!("{} ", t::accent("SOUL.md has been customised. Reset to default? [y/N]:")),
+            &format!(
+                "{} ",
+                t::accent("SOUL.md has been customised. Reset to default? [y/N]:")
+            ),
         )?;
         answer.trim().eq_ignore_ascii_case("y")
     } else {
@@ -460,7 +594,13 @@ pub fn run_onboard_wizard(
     if init_soul {
         let mut soul = SoulManager::new(soul_path.clone());
         soul.load()?;
-        println!("  {}", t::icon_ok(&format!("SOUL.md initialised at {}", t::info(&soul_path.display().to_string()))));
+        println!(
+            "  {}",
+            t::icon_ok(&format!(
+                "SOUL.md initialised at {}",
+                t::info(&soul_path.display().to_string())
+            ))
+        );
     } else {
         println!("  {}", t::icon_ok("Keeping existing SOUL.md"));
     }
@@ -476,11 +616,7 @@ pub fn run_onboard_wizard(
     // ── 9. Write config ────────────────────────────────────────
     config.model = Some(ModelProvider {
         provider: provider.id.to_string(),
-        model: if model.is_empty() {
-            None
-        } else {
-            Some(model)
-        },
+        model: if model.is_empty() { None } else { Some(model) },
         base_url: if base_url.is_empty() {
             None
         } else {
@@ -490,18 +626,29 @@ pub fn run_onboard_wizard(
     config.messengers = configured_messengers;
 
     // Ensure the full directory skeleton exists and save.
-    config.ensure_dirs()
+    config
+        .ensure_dirs()
         .context("Failed to create directory structure")?;
     config.save(None)?;
 
     t::print_header("Onboarding complete! 🎉");
     println!(
         "  {}",
-        t::icon_ok(&format!("Config saved to {}",
-            t::info(&config.settings_dir.join("config.toml").display().to_string())
+        t::icon_ok(&format!(
+            "Config saved to {}",
+            t::info(
+                &config
+                    .settings_dir
+                    .join("config.toml")
+                    .display()
+                    .to_string()
+            )
         ))
     );
-    println!("  Run {} to start the TUI.", t::accent_bright("`rustyclaw tui`"));
+    println!(
+        "  Run {} to start the TUI.",
+        t::accent_bright("`rustyclaw tui`")
+    );
     println!();
 
     Ok(true)
@@ -510,10 +657,7 @@ pub fn run_onboard_wizard(
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 /// Walk the user through messaging setup — native messengers first, then optional skill.
-fn setup_messaging(
-    reader: &mut impl BufRead,
-    config: &Config,
-) -> Result<Vec<MessengerConfig>> {
+fn setup_messaging(reader: &mut impl BufRead, config: &Config) -> Result<Vec<MessengerConfig>> {
     println!("{}", t::heading("📱 Messaging Setup"));
     println!();
     println!("  RustyClaw can send and receive messages through various");
@@ -564,7 +708,11 @@ fn setup_messaging(
 
     println!("  {}", t::bold("Built-in messengers:"));
     for def in MESSENGERS {
-        println!("    {} — {}", t::accent_bright(def.display), t::muted(def.description));
+        println!(
+            "    {} — {}",
+            t::accent_bright(def.display),
+            t::muted(def.description)
+        );
     }
     println!();
 
@@ -598,15 +746,21 @@ fn setup_messaging(
                 if def.id == "matrix" {
                     println!("  {}", t::accent("Matrix configuration:"));
                     println!();
-                    
+
                     let homeserver = prompt_line(
                         reader,
-                        &format!("  {} ", t::accent("Homeserver URL (e.g., https://matrix.org):")),
+                        &format!(
+                            "  {} ",
+                            t::accent("Homeserver URL (e.g., https://matrix.org):")
+                        ),
                     )?;
                     let homeserver = homeserver.trim().to_string();
-                    
+
                     if homeserver.is_empty() {
-                        println!("  {}", t::icon_warn("No homeserver entered — skipping Matrix."));
+                        println!(
+                            "  {}",
+                            t::icon_warn("No homeserver entered — skipping Matrix.")
+                        );
                         remaining.remove(pick);
                         println!();
                         continue;
@@ -620,22 +774,25 @@ fn setup_messaging(
 
                     let token = prompt_secret(
                         reader,
-                        &format!("  {} ", t::accent("Access token (or leave empty for password):")),
+                        &format!(
+                            "  {} ",
+                            t::accent("Access token (or leave empty for password):")
+                        ),
                     )?;
                     let token = token.trim().to_string();
 
                     let password = if token.is_empty() {
-                        let pwd = prompt_secret(
-                            reader,
-                            &format!("  {} ", t::accent("Password:")),
-                        )?;
+                        let pwd = prompt_secret(reader, &format!("  {} ", t::accent("Password:")))?;
                         Some(pwd.trim().to_string())
                     } else {
                         None
                     };
 
                     if token.is_empty() && password.as_ref().map(|p| p.is_empty()).unwrap_or(true) {
-                        println!("  {}", t::icon_warn("No credentials entered — skipping Matrix."));
+                        println!(
+                            "  {}",
+                            t::icon_warn("No credentials entered — skipping Matrix.")
+                        );
                     } else {
                         let mut mc = MessengerConfig {
                             name: "matrix".to_string(),
@@ -660,14 +817,18 @@ fn setup_messaging(
                     // Standard token-based messenger
                     let token = prompt_secret(
                         reader,
-                        &format!("{} ", t::accent(&format!("{} — {}:", def.display, def.secret_label))),
+                        &format!(
+                            "{} ",
+                            t::accent(&format!("{} — {}:", def.display, def.secret_label))
+                        ),
                     )?;
                     let token = token.trim().to_string();
 
                     if token.is_empty() {
-                        println!("  {}", t::icon_warn(&format!(
-                            "No token entered — skipping {}.", def.display,
-                        )));
+                        println!(
+                            "  {}",
+                            t::icon_warn(&format!("No token entered — skipping {}.", def.display,))
+                        );
                     } else {
                         let mut mc = MessengerConfig {
                             name: def.id.to_string(),
@@ -675,18 +836,16 @@ fn setup_messaging(
                             enabled: true,
                             ..Default::default()
                         };
-                        
+
                         // Store appropriately based on type
                         match def.id {
                             "telegram" | "discord" => mc.token = Some(token),
                             "webhook" => mc.webhook_url = Some(token),
                             _ => mc.token = Some(token),
                         }
-                        
+
                         configured_messengers.push(mc);
-                        println!("  {}", t::icon_ok(&format!(
-                            "{} configured.", def.display,
-                        )));
+                        println!("  {}", t::icon_ok(&format!("{} configured.", def.display,)));
                     }
                 }
 
@@ -699,23 +858,33 @@ fn setup_messaging(
     if configured_messengers.is_empty() {
         println!("  {}", t::muted("No native messengers configured."));
     } else {
-        let names: Vec<&str> = configured_messengers.iter().map(|m| m.name.as_str()).collect();
-        println!("  {}", t::icon_ok(&format!(
-            "Messengers configured: {}", names.join(", "),
-        )));
+        let names: Vec<&str> = configured_messengers
+            .iter()
+            .map(|m| m.name.as_str())
+            .collect();
+        println!(
+            "  {}",
+            t::icon_ok(&format!("Messengers configured: {}", names.join(", "),))
+        );
     }
 
     // ── Part 2: Additional platforms via claw-me-maybe ─────────────────────
     println!();
     println!("{}", t::heading("📱 Additional Platforms (Optional)"));
     println!();
-    println!("  Want {} or other platforms?",
-        t::accent_bright("Signal, iMessage, Slack, Instagram, LinkedIn"));
+    println!(
+        "  Want {} or other platforms?",
+        t::accent_bright("Signal, iMessage, Slack, Instagram, LinkedIn")
+    );
     println!();
-    println!("  The {} skill connects to 15+ platforms",
-        t::accent_bright("claw-me-maybe"));
-    println!("  via {} — a free unified messaging app.",
-        t::accent_bright("Beeper"));
+    println!(
+        "  The {} skill connects to 15+ platforms",
+        t::accent_bright("claw-me-maybe")
+    );
+    println!(
+        "  via {} — a free unified messaging app.",
+        t::accent_bright("Beeper")
+    );
     println!();
 
     let choices = &[
@@ -730,7 +899,10 @@ fn setup_messaging(
 
     if selected == 1 {
         println!();
-        println!("  {}", t::muted("You can install claw-me-maybe later with:"));
+        println!(
+            "  {}",
+            t::muted("You can install claw-me-maybe later with:")
+        );
         println!("    {}", t::accent_bright("clawhub install claw-me-maybe"));
         println!();
         return Ok(configured_messengers);
@@ -743,17 +915,27 @@ fn setup_messaging(
     println!("  Beeper connects all your chat accounts in one app.");
     println!("  RustyClaw talks to Beeper's local API.");
     println!();
-    println!("  {} {}", t::bold("Download:"), t::accent_bright("https://www.beeper.com/download"));
+    println!(
+        "  {} {}",
+        t::bold("Download:"),
+        t::accent_bright("https://www.beeper.com/download")
+    );
     println!();
 
     let beeper_ready = prompt_line(
         reader,
-        &format!("{} ", t::accent("Press Enter once Beeper is installed (or 's' to skip):")),
+        &format!(
+            "{} ",
+            t::accent("Press Enter once Beeper is installed (or 's' to skip):")
+        ),
     )?;
 
     if beeper_ready.trim().eq_ignore_ascii_case("s") {
         println!();
-        println!("  {}", t::muted("Skipping. Install claw-me-maybe later when ready."));
+        println!(
+            "  {}",
+            t::muted("Skipping. Install claw-me-maybe later when ready.")
+        );
         return Ok(configured_messengers);
     }
 
@@ -761,13 +943,23 @@ fn setup_messaging(
     println!("{}", t::heading("Step 2: Enable Beeper Desktop API"));
     println!();
     println!("  In Beeper:");
-    println!("    1. Open {} → {}", t::bold("Settings"), t::bold("Developers"));
-    println!("    2. Toggle {} ON", t::accent_bright("\"Beeper Desktop API\""));
+    println!(
+        "    1. Open {} → {}",
+        t::bold("Settings"),
+        t::bold("Developers")
+    );
+    println!(
+        "    2. Toggle {} ON",
+        t::accent_bright("\"Beeper Desktop API\"")
+    );
     println!();
 
     let _ = prompt_line(
         reader,
-        &format!("{} ", t::accent("Press Enter once enabled (or 's' to skip):")),
+        &format!(
+            "{} ",
+            t::accent("Press Enter once enabled (or 's' to skip):")
+        ),
     )?;
 
     // Install claw-me-maybe skill
@@ -798,13 +990,21 @@ fn setup_messaging(
     let skill_path = skills_dir.join("claw-me-maybe");
 
     if skill_path.exists() {
-        println!("  {}", t::icon_ok("claw-me-maybe skill is already installed!"));
+        println!(
+            "  {}",
+            t::icon_ok("claw-me-maybe skill is already installed!")
+        );
     } else {
         print!("  {} Installing claw-me-maybe...", t::muted("⠋"));
         io::stdout().flush()?;
 
         let output = std::process::Command::new("clawhub")
-            .args(["install", "claw-me-maybe", "--dir", &skills_dir.to_string_lossy()])
+            .args([
+                "install",
+                "claw-me-maybe",
+                "--dir",
+                &skills_dir.to_string_lossy(),
+            ])
             .output();
 
         print!("\r{}\r", " ".repeat(50));
@@ -815,8 +1015,14 @@ fn setup_messaging(
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                println!("  {}", t::icon_warn(&format!("Installation failed: {}", stderr.trim())));
-                println!("  Try manually: {}", t::accent_bright("clawhub install claw-me-maybe"));
+                println!(
+                    "  {}",
+                    t::icon_warn(&format!("Installation failed: {}", stderr.trim()))
+                );
+                println!(
+                    "  Try manually: {}",
+                    t::accent_bright("clawhub install claw-me-maybe")
+                );
             }
             Err(e) => {
                 println!("  {}", t::icon_warn(&format!("Installation failed: {}", e)));
@@ -863,10 +1069,7 @@ const RECOMMENDED_SKILLS: &[RecommendedSkill] = &[
 ];
 
 /// Walk the user through installing recommended skills from ClawHub.
-fn setup_recommended_skills(
-    _reader: &mut impl BufRead,
-    config: &Config,
-) -> Result<()> {
+fn setup_recommended_skills(_reader: &mut impl BufRead, config: &Config) -> Result<()> {
     println!("{}", t::heading("Install recommended skills (optional):"));
     println!();
     println!("  Skills extend RustyClaw with new capabilities. These are");
@@ -884,8 +1087,14 @@ fn setup_recommended_skills(
 
     if !clawhub_available {
         println!("  {}", t::warn("clawhub CLI not found."));
-        println!("  Install it with: {}", t::accent_bright("npm install -g clawhub"));
-        println!("  Then run {} to add skills.", t::accent_bright("rustyclaw skills install <name>"));
+        println!(
+            "  Install it with: {}",
+            t::accent_bright("npm install -g clawhub")
+        );
+        println!(
+            "  Then run {} to add skills.",
+            t::accent_bright("rustyclaw skills install <name>")
+        );
         println!();
         return Ok(());
     }
@@ -902,15 +1111,22 @@ fn setup_recommended_skills(
     }
 
     if available.is_empty() {
-        println!("  {}", t::icon_ok("All recommended skills are already installed."));
+        println!(
+            "  {}",
+            t::icon_ok("All recommended skills are already installed.")
+        );
         println!();
         return Ok(());
     }
 
     // Group by category for display
-    let mut by_category: std::collections::BTreeMap<&str, Vec<usize>> = std::collections::BTreeMap::new();
+    let mut by_category: std::collections::BTreeMap<&str, Vec<usize>> =
+        std::collections::BTreeMap::new();
     for &i in &available {
-        by_category.entry(RECOMMENDED_SKILLS[i].category).or_default().push(i);
+        by_category
+            .entry(RECOMMENDED_SKILLS[i].category)
+            .or_default()
+            .push(i);
     }
 
     // Display available skills
@@ -920,13 +1136,18 @@ fn setup_recommended_skills(
         println!("  {}", t::accent(category));
         for &i in indices {
             let skill = &RECOMMENDED_SKILLS[i];
-            println!("    {} — {}", t::accent_bright(skill.display), t::muted(skill.description));
+            println!(
+                "    {} — {}",
+                t::accent_bright(skill.display),
+                t::muted(skill.description)
+            );
         }
         println!();
     }
 
     // Let user select which to install
-    let mut choices: Vec<String> = available.iter()
+    let mut choices: Vec<String> = available
+        .iter()
         .map(|&i| RECOMMENDED_SKILLS[i].display.to_string())
         .collect();
     choices.push("Install all recommended".to_string());
@@ -941,8 +1162,14 @@ fn setup_recommended_skills(
 
     let to_install: Vec<usize> = if selected == choices.len() - 1 {
         // Skip
-        println!("  {}", t::muted("Skipping skill installation. You can install them later with:"));
-        println!("    {}", t::accent_bright("rustyclaw skills install <name>"));
+        println!(
+            "  {}",
+            t::muted("Skipping skill installation. You can install them later with:")
+        );
+        println!(
+            "    {}",
+            t::accent_bright("rustyclaw skills install <name>")
+        );
         println!();
         return Ok(());
     } else if selected == choices.len() - 2 {
@@ -960,7 +1187,12 @@ fn setup_recommended_skills(
         io::stdout().flush()?;
 
         let output = std::process::Command::new("clawhub")
-            .args(["install", skill.slug, "--dir", &skills_dir.to_string_lossy()])
+            .args([
+                "install",
+                skill.slug,
+                "--dir",
+                &skills_dir.to_string_lossy(),
+            ])
             .output();
 
         // Clear spinner
@@ -972,14 +1204,20 @@ fn setup_recommended_skills(
             }
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                println!("  {}", t::icon_warn(&format!(
-                    "Failed to install {}: {}", skill.display, stderr.trim()
-                )));
+                println!(
+                    "  {}",
+                    t::icon_warn(&format!(
+                        "Failed to install {}: {}",
+                        skill.display,
+                        stderr.trim()
+                    ))
+                );
             }
             Err(e) => {
-                println!("  {}", t::icon_warn(&format!(
-                    "Failed to install {}: {}", skill.display, e
-                )));
+                println!(
+                    "  {}",
+                    t::icon_warn(&format!("Failed to install {}: {}", skill.display, e))
+                );
             }
         }
     }
@@ -996,26 +1234,48 @@ fn perform_device_flow_auth(
     secret_key: &str,
     secrets: &mut SecretsManager,
 ) -> Result<()> {
-    println!("{}", t::heading(&format!("Authenticating with {}...", provider_name)));
+    println!(
+        "{}",
+        t::heading(&format!("Authenticating with {}...", provider_name))
+    );
     println!();
 
     // Start the device flow
     let handle = tokio::runtime::Handle::current();
     let auth_response = tokio::task::block_in_place(|| {
         handle.block_on(rustyclaw_core::providers::start_device_flow(device_config))
-    }).map_err(|e| anyhow::anyhow!(e))?;
+    })
+    .map_err(|e| anyhow::anyhow!(e))?;
 
     // Display the verification URL and code to the user
     println!("  {}", t::bold("Please complete the following steps:"));
     println!();
-    println!("  1. Visit: {}", t::accent_bright(&auth_response.verification_uri));
-    println!("  2. Enter code: {}", t::accent_bright(&auth_response.user_code));
+    println!(
+        "  1. Visit: {}",
+        t::accent_bright(&auth_response.verification_uri)
+    );
+    println!(
+        "  2. Enter code: {}",
+        t::accent_bright(&auth_response.user_code)
+    );
     println!();
-    println!("  {}", t::muted(&format!("Code expires in {} seconds", auth_response.expires_in)));
+    println!(
+        "  {}",
+        t::muted(&format!(
+            "Code expires in {} seconds",
+            auth_response.expires_in
+        ))
+    );
     println!();
 
     // Wait for user to press Enter or type 'cancel'
-    let response = prompt_line(reader, &format!("{} ", t::accent("Press Enter after completing authorization (or type 'cancel'):")))?;
+    let response = prompt_line(
+        reader,
+        &format!(
+            "{} ",
+            t::accent("Press Enter after completing authorization (or type 'cancel'):")
+        ),
+    )?;
     if response.trim().eq_ignore_ascii_case("cancel") || response.trim().eq_ignore_ascii_case("c") {
         println!("  {}", t::muted("Authentication cancelled."));
         return Ok(());
@@ -1034,7 +1294,10 @@ fn perform_device_flow_auth(
     let mut token: Option<String> = None;
     for _attempt in 0..max_attempts {
         match tokio::task::block_in_place(|| {
-            handle.block_on(rustyclaw_core::providers::poll_device_token(device_config, &auth_response.device_code))
+            handle.block_on(rustyclaw_core::providers::poll_device_token(
+                device_config,
+                &auth_response.device_code,
+            ))
         }) {
             Ok(Some(access_token)) => {
                 token = Some(access_token);
@@ -1048,7 +1311,10 @@ fn perform_device_flow_auth(
             }
             Err(e) => {
                 println!();
-                println!("  {}", t::icon_warn(&format!("Authentication failed: {}", e)));
+                println!(
+                    "  {}",
+                    t::icon_warn(&format!("Authentication failed: {}", e))
+                );
                 return Ok(());
             }
         }
@@ -1057,9 +1323,15 @@ fn perform_device_flow_auth(
 
     if let Some(access_token) = token {
         secrets.store_secret(secret_key, &access_token)?;
-        println!("  {}", t::icon_ok("Authentication successful! Token stored securely."));
+        println!(
+            "  {}",
+            t::icon_ok("Authentication successful! Token stored securely.")
+        );
     } else {
-        println!("  {}", t::icon_warn("Authentication timed out. Please try again."));
+        println!(
+            "  {}",
+            t::icon_warn("Authentication timed out. Please try again.")
+        );
     }
 
     Ok(())
@@ -1132,9 +1404,9 @@ fn print_qr_code(data: &str) {
             // Invert: light → filled, dark → empty
             let ch = match (top_dark, bot_dark) {
                 (false, false) => '█', // both light → full block
-                (false, true)  => '▀', // top light, bottom dark → upper half
-                (true,  false) => '▄', // top dark, bottom light → lower half
-                (true,  true)  => ' ', // both dark → space
+                (false, true) => '▀',  // top light, bottom dark → upper half
+                (true, false) => '▄',  // top dark, bottom light → lower half
+                (true, true) => ' ',   // both dark → space
             };
             print!("{}", ch);
         }
@@ -1147,7 +1419,10 @@ fn prompt_line(reader: &mut impl BufRead, prompt: &str) -> Result<String> {
     io::stdout().flush()?;
     let mut buf = String::new();
     reader.read_line(&mut buf)?;
-    Ok(buf.trim_end_matches('\n').trim_end_matches('\r').to_string())
+    Ok(buf
+        .trim_end_matches('\n')
+        .trim_end_matches('\r')
+        .to_string())
 }
 
 /// Best-effort username for TOTP account labels.
@@ -1174,13 +1449,17 @@ fn setup_totp_enrollment(
 
     let enable_2fa = prompt_line(
         reader,
-        &format!("{} ", t::accent("Enable 2FA with an authenticator app? [y/N]:")),
+        &format!(
+            "{} ",
+            t::accent("Enable 2FA with an authenticator app? [y/N]:")
+        ),
     )?;
 
     if enable_2fa.trim().eq_ignore_ascii_case("y") {
         // Need the vault to exist before we can store the TOTP secret.
         // Force-create it now by storing a sentinel value.
-        config.ensure_dirs()
+        config
+            .ensure_dirs()
             .context("Failed to create directory structure")?;
         secrets.store_secret("__init", "")?;
         secrets.delete_secret("__init")?;
@@ -1189,12 +1468,24 @@ fn setup_totp_enrollment(
         let otpauth_url = secrets.setup_totp_with_issuer(&account, agent_name)?;
 
         println!();
-        println!("  {}", t::heading("Scan this QR code with your authenticator app:"));
+        println!(
+            "  {}",
+            t::heading("Scan this QR code with your authenticator app:")
+        );
         println!();
         print_qr_code(&otpauth_url);
         println!();
-        println!("  {}", t::muted("If you can't scan, enter the setup key manually."));
-        println!("  {}", t::muted(&format!("The key is the {} parameter in the URL below:", t::bold("secret"))));
+        println!(
+            "  {}",
+            t::muted("If you can't scan, enter the setup key manually.")
+        );
+        println!(
+            "  {}",
+            t::muted(&format!(
+                "The key is the {} parameter in the URL below:",
+                t::bold("secret")
+            ))
+        );
         println!();
         println!("  {}", t::accent_bright(&otpauth_url));
         println!();
@@ -1214,14 +1505,23 @@ fn setup_totp_enrollment(
             match secrets.verify_totp(code) {
                 Ok(true) => {
                     config.totp_enabled = true;
-                    println!("  {}", t::icon_ok("2FA enabled — authenticator verified successfully."));
+                    println!(
+                        "  {}",
+                        t::icon_ok("2FA enabled — authenticator verified successfully.")
+                    );
                     break;
                 }
                 Ok(false) => {
-                    println!("  {}", t::icon_warn("Invalid code. Please try again (or leave blank to cancel):"));
+                    println!(
+                        "  {}",
+                        t::icon_warn("Invalid code. Please try again (or leave blank to cancel):")
+                    );
                 }
                 Err(e) => {
-                    println!("  {}", t::icon_warn(&format!("Error verifying code: {}. 2FA not enabled.", e)));
+                    println!(
+                        "  {}",
+                        t::icon_warn(&format!("Error verifying code: {}. 2FA not enabled.", e))
+                    );
                     secrets.remove_totp()?;
                     break;
                 }
@@ -1235,15 +1535,9 @@ fn setup_totp_enrollment(
 }
 
 /// Prompt the user for a TOTP code in a retry loop.
-fn verify_totp_loop(
-    reader: &mut impl BufRead,
-    secrets: &mut SecretsManager,
-) -> Result<()> {
+fn verify_totp_loop(reader: &mut impl BufRead, secrets: &mut SecretsManager) -> Result<()> {
     loop {
-        let code = prompt_line(
-            reader,
-            &format!("{} ", t::accent("Enter your 2FA code:")),
-        )?;
+        let code = prompt_line(reader, &format!("{} ", t::accent("Enter your 2FA code:")))?;
         match secrets.verify_totp(code.trim()) {
             Ok(true) => {
                 println!("  {}", t::icon_ok("2FA verified."));
@@ -1260,21 +1554,21 @@ fn verify_totp_loop(
 }
 
 /// Offer to generate an Ed25519 SSH key for the agent.
-fn setup_agent_ssh_key(
-    reader: &mut impl BufRead,
-    secrets: &mut SecretsManager,
-) -> Result<()> {
+fn setup_agent_ssh_key(reader: &mut impl BufRead, secrets: &mut SecretsManager) -> Result<()> {
     use rustyclaw_core::secrets::AccessPolicy;
 
     // Check if one already exists.
-    let has_key = secrets.list_credentials()
+    let has_key = secrets
+        .list_credentials()
         .iter()
         .any(|(n, _)| n == "rustyclaw_agent");
 
     if has_key {
         println!("{}", t::bold("Agent SSH key:"));
-        println!("  {}",
-            t::icon_ok("SSH key already generated (stored in encrypted vault)."));
+        println!(
+            "  {}",
+            t::icon_ok("SSH key already generated (stored in encrypted vault).")
+        );
         let regen = prompt_line(
             reader,
             &format!("{} ", t::accent("Regenerate agent SSH key? [y/N]:")),
@@ -1302,11 +1596,8 @@ fn setup_agent_ssh_key(
 
     if do_gen.trim().eq_ignore_ascii_case("y") {
         let comment = format!("rustyclaw-agent@{}", whoami());
-        let pubkey = secrets.generate_ssh_key(
-            "rustyclaw_agent",
-            &comment,
-            AccessPolicy::WithApproval,
-        )?;
+        let pubkey =
+            secrets.generate_ssh_key("rustyclaw_agent", &comment, AccessPolicy::WithApproval)?;
         println!();
         println!("  {}", t::icon_ok("Agent SSH key generated."));
         println!();
@@ -1316,7 +1607,10 @@ fn setup_agent_ssh_key(
         println!("  Stored in the encrypted vault.");
         println!("  Add the public key above to your Git host or authorized_keys as needed.");
     } else {
-        println!("  {}", t::muted("Skipping agent SSH key. You can generate one later."));
+        println!(
+            "  {}",
+            t::muted("Skipping agent SSH key. You can generate one later.")
+        );
     }
     println!();
     Ok(())
@@ -1362,11 +1656,7 @@ fn arrow_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<
         for i in scroll_offset..end {
             let label = items[i].as_ref();
             let line = if i == selected {
-                format!(
-                    "  {} {}",
-                    t::accent("❯"),
-                    t::accent_bright(label),
-                )
+                format!("  {} {}", t::accent("❯"), t::accent_bright(label),)
             } else {
                 format!("    {}", t::muted(label))
             };
@@ -1388,7 +1678,11 @@ fn arrow_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<
                 )),
             )?;
         } else {
-            write!(stdout, "  {}\r\n", t::muted("↑↓ navigate · Enter select · Esc cancel"))?;
+            write!(
+                stdout,
+                "  {}\r\n",
+                t::muted("↑↓ navigate · Enter select · Esc cancel")
+            )?;
         }
         stdout.flush()
     };
@@ -1402,7 +1696,10 @@ fn arrow_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<
         draw(&mut stdout, selected, scroll_offset)?;
 
         loop {
-            if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
                 match code {
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                         anyhow::bail!("Interrupted");
@@ -1463,7 +1760,10 @@ fn prompt_secret(_reader: &mut impl BufRead, prompt: &str) -> Result<String> {
     let result = (|| -> Result<String> {
         let mut buf = String::new();
         loop {
-            if let Event::Key(KeyEvent { code, modifiers, .. }) = event::read()? {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
                 match code {
                     KeyCode::Enter => break,
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {

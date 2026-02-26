@@ -46,7 +46,8 @@ impl CsrfStore {
     fn prune_expired(&mut self) {
         let now = Instant::now();
         let ttl = self.ttl;
-        self.issued.retain(|_, issued_at| now.duration_since(*issued_at) <= ttl);
+        self.issued
+            .retain(|_, issued_at| now.duration_since(*issued_at) <= ttl);
     }
 }
 

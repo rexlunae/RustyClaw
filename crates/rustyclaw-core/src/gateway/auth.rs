@@ -5,12 +5,12 @@ use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::WebSocketStream;
-use tracing::{debug, warn, instrument};
+use tokio_tungstenite::tungstenite::Message;
+use tracing::{debug, instrument, warn};
 
 use super::protocol::server;
-use super::{CopilotSession, ClientFrameType, ClientPayload};
+use super::{ClientFrameType, ClientPayload, CopilotSession};
 use crate::providers;
 
 /// Maximum consecutive TOTP failures before lockout.
@@ -89,11 +89,20 @@ pub async fn record_totp_failure(limiter: &RateLimiter, ip: IpAddr) -> bool {
 
     attempt.failures += 1;
     if attempt.failures >= MAX_TOTP_FAILURES {
-        attempt.lockout_until = Some(Instant::now() + std::time::Duration::from_secs(TOTP_LOCKOUT_SECS));
-        warn!(failures = attempt.failures, lockout_secs = TOTP_LOCKOUT_SECS, "TOTP lockout triggered");
+        attempt.lockout_until =
+            Some(Instant::now() + std::time::Duration::from_secs(TOTP_LOCKOUT_SECS));
+        warn!(
+            failures = attempt.failures,
+            lockout_secs = TOTP_LOCKOUT_SECS,
+            "TOTP lockout triggered"
+        );
         true
     } else {
-        debug!(failures = attempt.failures, max = MAX_TOTP_FAILURES, "TOTP failure recorded");
+        debug!(
+            failures = attempt.failures,
+            max = MAX_TOTP_FAILURES,
+            "TOTP failure recorded"
+        );
         false
     }
 }

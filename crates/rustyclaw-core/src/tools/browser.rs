@@ -3,19 +3,19 @@
 //! This module provides real browser automation when the `browser` feature is enabled.
 //! Falls back to stub implementation when disabled.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "browser")]
 mod real {
     use super::*;
-    use chromiumoxide::{Browser, BrowserConfig, Page};
     use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
+    use chromiumoxide::{Browser, BrowserConfig, Page};
     use futures_util::StreamExt;
+    use std::collections::HashMap;
     use std::sync::OnceLock;
     use tokio::sync::Mutex;
-    use std::collections::HashMap;
 
     /// Global browser instance, lazily initialized.
     static BROWSER: OnceLock<Mutex<Option<BrowserState>>> = OnceLock::new();
@@ -79,14 +79,16 @@ mod real {
                 "running": true,
                 "tabs": tab_count,
                 "profile": "rustyclaw"
-            }).to_string())
+            })
+            .to_string())
         } else {
             debug!("Browser status: not running");
             Ok(json!({
                 "running": false,
                 "tabs": 0,
                 "profile": "rustyclaw"
-            }).to_string())
+            })
+            .to_string())
         }
     }
 
@@ -115,12 +117,16 @@ mod real {
     pub async fn list_tabs() -> Result<String, String> {
         let state = browser_state().lock().await;
         if let Some(ref s) = *state {
-            let tabs: Vec<Value> = s.pages.keys().map(|id| {
-                json!({
-                    "id": id,
-                    // Note: chromiumoxide doesn't expose URL easily without async call
+            let tabs: Vec<Value> = s
+                .pages
+                .keys()
+                .map(|id| {
+                    json!({
+                        "id": id,
+                        // Note: chromiumoxide doesn't expose URL easily without async call
+                    })
                 })
-            }).collect();
+                .collect();
             Ok(json!({ "tabs": tabs }).to_string())
         } else {
             Err("Browser not running. Use action='start' first.".to_string())
@@ -134,7 +140,9 @@ mod real {
         let mut state = browser_state().lock().await;
         let s = state.as_mut().ok_or("Browser not initialized")?;
 
-        let page = s.browser.new_page(url)
+        let page = s
+            .browser
+            .new_page(url)
             .await
             .map_err(|e| format!("Failed to open page: {}", e))?;
 
@@ -146,7 +154,8 @@ mod real {
             "success": true,
             "tabId": tab_id,
             "url": url
-        }).to_string())
+        })
+        .to_string())
     }
 
     /// Navigate current page to URL.
@@ -156,7 +165,9 @@ mod real {
 
         // Get the page (use provided tab_id or first available)
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
@@ -168,7 +179,8 @@ mod real {
         Ok(json!({
             "success": true,
             "url": url
-        }).to_string())
+        })
+        .to_string())
     }
 
     /// Take a screenshot.
@@ -177,7 +189,9 @@ mod real {
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
@@ -187,7 +201,7 @@ mod real {
                 chromiumoxide::page::ScreenshotParams::builder()
                     .format(CaptureScreenshotFormat::Png)
                     .full_page(true)
-                    .build()
+                    .build(),
             )
             .await
             .map_err(|e| format!("Screenshot failed: {}", e))?
@@ -195,7 +209,7 @@ mod real {
             page.screenshot(
                 chromiumoxide::page::ScreenshotParams::builder()
                     .format(CaptureScreenshotFormat::Png)
-                    .build()
+                    .build(),
             )
             .await
             .map_err(|e| format!("Screenshot failed: {}", e))?
@@ -209,7 +223,8 @@ mod real {
             "success": true,
             "format": "png",
             "data": format!("data:image/png;base64,{}", base64_data)
-        }).to_string())
+        })
+        .to_string())
     }
 
     /// Get page content.
@@ -218,12 +233,15 @@ mod real {
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
-        let content = page.content()
+        let content = page
+            .content()
             .await
             .map_err(|e| format!("Failed to get content: {}", e))?;
 
@@ -236,16 +254,20 @@ mod real {
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
-        let element = page.find_element(selector)
+        let element = page
+            .find_element(selector)
             .await
             .map_err(|e| format!("Element not found: {}", e))?;
 
-        element.click()
+        element
+            .click()
             .await
             .map_err(|e| format!("Click failed: {}", e))?;
 
@@ -253,29 +275,39 @@ mod real {
             "success": true,
             "action": "click",
             "selector": selector
-        }).to_string())
+        })
+        .to_string())
     }
 
     /// Type text into an element.
-    pub async fn type_text(tab_id: Option<&str>, selector: &str, text: &str) -> Result<String, String> {
+    pub async fn type_text(
+        tab_id: Option<&str>,
+        selector: &str,
+        text: &str,
+    ) -> Result<String, String> {
         let state = browser_state().lock().await;
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
-        let element = page.find_element(selector)
+        let element = page
+            .find_element(selector)
             .await
             .map_err(|e| format!("Element not found: {}", e))?;
 
-        element.click()
+        element
+            .click()
             .await
             .map_err(|e| format!("Click failed: {}", e))?;
 
-        element.type_str(text)
+        element
+            .type_str(text)
             .await
             .map_err(|e| format!("Type failed: {}", e))?;
 
@@ -284,7 +316,8 @@ mod real {
             "action": "type",
             "selector": selector,
             "text_length": text.len()
-        }).to_string())
+        })
+        .to_string())
     }
 
     /// Press a key.
@@ -293,13 +326,17 @@ mod real {
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
         // Use CDP DispatchKeyEventParams for key press
-        use chromiumoxide::cdp::browser_protocol::input::{DispatchKeyEventParams, DispatchKeyEventType};
+        use chromiumoxide::cdp::browser_protocol::input::{
+            DispatchKeyEventParams, DispatchKeyEventType,
+        };
 
         // Press key down
         let key_down = DispatchKeyEventParams::builder()
@@ -327,7 +364,8 @@ mod real {
             "success": true,
             "action": "press",
             "key": key
-        }).to_string())
+        })
+        .to_string())
     }
 
     /// Evaluate JavaScript.
@@ -336,12 +374,15 @@ mod real {
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
-        let result: Value = page.evaluate(script)
+        let result: Value = page
+            .evaluate(script)
             .await
             .map_err(|e| format!("Evaluate failed: {}", e))?
             .into_value()
@@ -362,7 +403,8 @@ mod real {
             Ok(json!({
                 "success": true,
                 "closed": tab_id
-            }).to_string())
+            })
+            .to_string())
         } else {
             Err(format!("Tab not found: {}", tab_id))
         }
@@ -374,19 +416,23 @@ mod real {
         let s = state.as_ref().ok_or("Browser not running")?;
 
         let page = if let Some(id) = tab_id {
-            s.pages.get(id).ok_or_else(|| format!("Tab not found: {}", id))?
+            s.pages
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?
         } else {
             s.pages.values().next().ok_or("No tabs open")?
         };
 
         // Get basic page info since full a11y tree is complex
-        let title: String = page.evaluate("document.title")
+        let title: String = page
+            .evaluate("document.title")
             .await
             .map_err(|e| format!("Failed to get title: {}", e))?
             .into_value()
             .unwrap_or_default();
 
-        let url: String = page.evaluate("window.location.href")
+        let url: String = page
+            .evaluate("window.location.href")
             .await
             .map_err(|e| format!("Failed to get URL: {}", e))?
             .into_value()
@@ -414,7 +460,8 @@ mod real {
             "title": title,
             "url": url,
             "elements": elements
-        }).to_string())
+        })
+        .to_string())
     }
 }
 
@@ -439,9 +486,7 @@ pub fn exec_browser(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
             .map_err(|_| "Browser tool requires tokio runtime")?;
 
         let args = args.clone();
-        rt.block_on(async move {
-            exec_browser_async(&args, action).await
-        })
+        rt.block_on(async move { exec_browser_async(&args, action).await })
     }
 
     #[cfg(not(feature = "browser"))]
@@ -461,21 +506,24 @@ async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String
         "tabs" => real::list_tabs().await,
 
         "open" => {
-            let url = args.get("targetUrl")
+            let url = args
+                .get("targetUrl")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'targetUrl' for open action")?;
             real::open_tab(url).await
         }
 
         "navigate" => {
-            let url = args.get("targetUrl")
+            let url = args
+                .get("targetUrl")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'targetUrl' for navigate action")?;
             real::navigate(tab_id, url).await
         }
 
         "screenshot" => {
-            let full_page = args.get("fullPage")
+            let full_page = args
+                .get("fullPage")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             real::screenshot(tab_id, full_page).await
@@ -489,42 +537,49 @@ async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String
         }
 
         "act" => {
-            let request = args.get("request")
+            let request = args
+                .get("request")
                 .ok_or("Missing 'request' for act action")?;
 
-            let kind = request.get("kind")
+            let kind = request
+                .get("kind")
                 .and_then(|v| v.as_str())
                 .ok_or("Missing 'kind' in request")?;
 
             match kind {
                 "click" => {
-                    let selector = request.get("ref")
+                    let selector = request
+                        .get("ref")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing 'ref' for click")?;
                     real::click(tab_id, selector).await
                 }
                 "type" => {
-                    let selector = request.get("ref")
+                    let selector = request
+                        .get("ref")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing 'ref' for type")?;
-                    let text = request.get("text")
+                    let text = request
+                        .get("text")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing 'text' for type")?;
                     real::type_text(tab_id, selector, text).await
                 }
                 "press" => {
-                    let key = request.get("key")
+                    let key = request
+                        .get("key")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing 'key' for press")?;
                     real::press_key(tab_id, key).await
                 }
                 "evaluate" => {
-                    let script = request.get("fn")
+                    let script = request
+                        .get("fn")
                         .and_then(|v| v.as_str())
                         .ok_or("Missing 'fn' for evaluate")?;
                     real::evaluate(tab_id, script).await
                 }
-                _ => Err(format!("Unknown act kind: {}", kind))
+                _ => Err(format!("Unknown act kind: {}", kind)),
             }
         }
 
@@ -538,13 +593,12 @@ async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String
             Ok("PDF generation not yet implemented. Use screenshot for now.".to_string())
         }
 
-        "profiles" => {
-            Ok(json!({
-                "profiles": ["rustyclaw"],
-                "current": "rustyclaw",
-                "note": "RustyClaw uses a single managed browser profile"
-            }).to_string())
-        }
+        "profiles" => Ok(json!({
+            "profiles": ["rustyclaw"],
+            "current": "rustyclaw",
+            "note": "RustyClaw uses a single managed browser profile"
+        })
+        .to_string()),
 
         "focus" => {
             // Tab focusing would need window management
@@ -554,7 +608,7 @@ async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String
         _ => Err(format!(
             "Unknown action: {}. Valid: status, start, stop, tabs, open, navigate, screenshot, snapshot, close, act, profiles",
             action
-        ))
+        )),
     }
 }
 
@@ -565,7 +619,7 @@ mod lite {
     //! Uses reqwest to fetch pages, parses HTML to extract interactive elements,
     //! links, and text content.  Tracks "tabs" (URL + cached content) in memory.
 
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
     use std::time::Duration;
@@ -575,8 +629,8 @@ mod lite {
     struct LiteTab {
         url: String,
         title: String,
-        body: String,           // raw HTML
-        text_content: String,   // stripped text
+        body: String,         // raw HTML
+        text_content: String, // stripped text
         links: Vec<Value>,
         forms: Vec<Value>,
         interactive: Vec<Value>,
@@ -602,9 +656,7 @@ mod lite {
     fn http_client() -> Result<reqwest::blocking::Client, String> {
         reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
-            .user_agent(
-                "Mozilla/5.0 (compatible; RustyClaw/0.1; +https://github.com/RustyClaw)",
-            )
+            .user_agent("Mozilla/5.0 (compatible; RustyClaw/0.1; +https://github.com/RustyClaw)")
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .map_err(|e| format!("HTTP client error: {}", e))
@@ -875,12 +927,7 @@ mod lite {
                 }
                 id.to_string()
             }
-            None => br
-                .tabs
-                .keys()
-                .next()
-                .cloned()
-                .ok_or("No tabs open")?,
+            None => br.tabs.keys().next().cloned().ok_or("No tabs open")?,
         };
         let title = tab.title.clone();
         br.tabs.insert(id, tab);
@@ -895,7 +942,10 @@ mod lite {
     pub fn snapshot(tab_id: Option<&str>) -> Result<String, String> {
         let br = browser().lock().map_err(|_| "lock poisoned")?;
         let tab = match tab_id {
-            Some(id) => br.tabs.get(id).ok_or_else(|| format!("Tab not found: {}", id))?,
+            Some(id) => br
+                .tabs
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?,
             None => br.tabs.values().next().ok_or("No tabs open")?,
         };
         Ok(json!({
@@ -911,7 +961,10 @@ mod lite {
     pub fn get_content(tab_id: Option<&str>) -> Result<String, String> {
         let br = browser().lock().map_err(|_| "lock poisoned")?;
         let tab = match tab_id {
-            Some(id) => br.tabs.get(id).ok_or_else(|| format!("Tab not found: {}", id))?,
+            Some(id) => br
+                .tabs
+                .get(id)
+                .ok_or_else(|| format!("Tab not found: {}", id))?,
             None => br.tabs.values().next().ok_or("No tabs open")?,
         };
         let text = &tab.text_content;

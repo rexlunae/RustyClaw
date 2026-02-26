@@ -1,7 +1,7 @@
 // ── Input bar ───────────────────────────────────────────────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct InputBarProps {

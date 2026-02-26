@@ -2,7 +2,7 @@
 
 use crate::theme;
 use iocraft::prelude::*;
-use rustyclaw_core::user_prompt_types::{PromptType, UserPrompt};
+use rustyclaw_core::user_prompt_types::PromptType;
 
 #[derive(Default, Props)]
 pub struct UserPromptDialogProps {
@@ -115,7 +115,7 @@ pub fn UserPromptDialog(props: &UserPromptDialogProps) -> impl Into<AnyElement<'
                             }
                         }.into_any()
                     }
-                    PromptType::Confirm { default } => {
+                    PromptType::Confirm { default: _ } => {
                         let yes_selected = props.selected == 0;
                         element! {
                             View(flex_direction: FlexDirection::Row, gap: 2u32) {

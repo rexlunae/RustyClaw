@@ -64,22 +64,20 @@ pub async fn update_command_task_session(
 ) {
     // We can't easily update the TaskKind after creation, but we can add
     // progress message with the session ID
-    task_mgr.update_status(
-        task_id,
-        crate::tasks::TaskStatus::Background {
-            progress: None,
-            message: Some(format!("Session: {}", session_id)),
-        },
-    ).await;
+    task_mgr
+        .update_status(
+            task_id,
+            crate::tasks::TaskStatus::Background {
+                progress: None,
+                message: Some(format!("Session: {}", session_id)),
+            },
+        )
+        .await;
 }
 
 /// Mark a command task as completed.
 #[instrument(skip(task_mgr))]
-pub async fn complete_command_task(
-    task_mgr: &SharedTaskManager,
-    task_id: TaskId,
-    output: &str,
-) {
+pub async fn complete_command_task(task_mgr: &SharedTaskManager, task_id: TaskId, output: &str) {
     let summary = if output.len() > 100 {
         Some(format!("{}...", &output[..100]))
     } else if !output.is_empty() {
@@ -94,11 +92,7 @@ pub async fn complete_command_task(
 
 /// Mark a command task as failed.
 #[instrument(skip(task_mgr))]
-pub async fn fail_command_task(
-    task_mgr: &SharedTaskManager,
-    task_id: TaskId,
-    error: &str,
-) {
+pub async fn fail_command_task(task_mgr: &SharedTaskManager, task_id: TaskId, error: &str) {
     task_mgr.fail(task_id, error.to_string(), true).await;
     debug!(task_id = %task_id, error = %error, "Command task failed");
 }

@@ -12,11 +12,22 @@ use std::path::PathBuf;
 #[derive(Debug, Clone, Args)]
 pub struct CommonArgs {
     /// Path to a config.toml file
-    #[arg(short = 'c', long, value_name = "PATH", env = "RUSTYCLAW_CONFIG", global = true)]
+    #[arg(
+        short = 'c',
+        long,
+        value_name = "PATH",
+        env = "RUSTYCLAW_CONFIG",
+        global = true
+    )]
     pub config: Option<PathBuf>,
 
     /// Settings directory (default: ~/.rustyclaw)
-    #[arg(long, value_name = "DIR", env = "RUSTYCLAW_SETTINGS_DIR", global = true)]
+    #[arg(
+        long,
+        value_name = "DIR",
+        env = "RUSTYCLAW_SETTINGS_DIR",
+        global = true
+    )]
     pub settings_dir: Option<PathBuf>,
 
     /// Isolate state under ~/.rustyclaw-<PROFILE>
@@ -32,7 +43,12 @@ pub struct CommonArgs {
     pub soul: Option<PathBuf>,
 
     /// Skills directory
-    #[arg(long = "skills", value_name = "DIR", env = "RUSTYCLAW_SKILLS", global = true)]
+    #[arg(
+        long = "skills",
+        value_name = "DIR",
+        env = "RUSTYCLAW_SKILLS",
+        global = true
+    )]
     pub skills_dir: Option<PathBuf>,
 
     /// Disable secrets storage
@@ -40,7 +56,12 @@ pub struct CommonArgs {
     pub no_secrets: bool,
 
     /// Gateway WebSocket URL (ws://…)
-    #[arg(long = "gateway", value_name = "WS_URL", env = "RUSTYCLAW_GATEWAY", global = true)]
+    #[arg(
+        long = "gateway",
+        value_name = "WS_URL",
+        env = "RUSTYCLAW_GATEWAY",
+        global = true
+    )]
     pub gateway: Option<String>,
 }
 

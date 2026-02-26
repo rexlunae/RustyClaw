@@ -6,13 +6,14 @@ use super::{Message, Messenger, SendOptions};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use matrix_sdk::{
+    Client, Room, SessionTokens,
     config::SyncSettings,
     ruma::{
+        OwnedUserId, RoomId, UserId,
         events::room::message::{
             MessageType, OriginalSyncRoomMessageEvent, RoomMessageEventContent,
-        }, OwnedUserId, RoomId, UserId,
+        },
     },
-    Client, Room, SessionTokens,
 };
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -133,9 +134,8 @@ impl Messenger for MatrixMessenger {
         // Authenticate
         if let Some(ref password) = self.password {
             // Password login
-            let user_id = <&UserId>::try_from(self.user_id.as_str())
-                .context("Invalid user ID")?;
-            
+            let user_id = <&UserId>::try_from(self.user_id.as_str()).context("Invalid user ID")?;
+
             client
                 .matrix_auth()
                 .login_username(user_id, password)
@@ -149,7 +149,8 @@ impl Messenger for MatrixMessenger {
                 matrix_sdk::authentication::matrix::MatrixSession {
                     meta: matrix_sdk::SessionMeta {
                         user_id: OwnedUserId::try_from(self.user_id.as_str())?,
-                        device_id: self.device_id
+                        device_id: self
+                            .device_id
                             .as_ref()
                             .map(|d| matrix_sdk::ruma::OwnedDeviceId::try_from(d.as_str()))
                             .transpose()?
@@ -159,7 +160,7 @@ impl Messenger for MatrixMessenger {
                         access_token: token.clone(),
                         refresh_token: None,
                     },
-                }
+                },
             );
             client.restore_session(session).await?;
         } else {
@@ -201,10 +202,10 @@ impl Messenger for MatrixMessenger {
 
     async fn send_message(&self, room_id: &str, content: &str) -> Result<String> {
         let room = self.resolve_room(room_id).await?;
-        
+
         let content = RoomMessageEventContent::text_plain(content);
         let response = room.send(content).await?;
-        
+
         Ok(response.event_id.to_string())
     }
 

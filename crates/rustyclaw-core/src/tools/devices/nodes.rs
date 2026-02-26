@@ -1,22 +1,39 @@
 //! Nodes tool: discover and control remote devices via SSH, ADB, VNC, RDP.
 
-use super::{sh, sh_async, has_command, has_command_async, get_node, get_command_array, shell_quote, parse_node_type, NodeType};
-use serde_json::{json, Value};
+use super::{get_command_array, get_node, has_command, has_command_async, sh, sh_async};
+use serde_json::{Value, json};
 use std::path::Path;
-use std::process::{Command, Stdio};
 use tracing::{debug, instrument};
 
 /// Node type with parsed connection details.
+#[allow(dead_code)]
 enum ParsedNode {
-    Ssh { user: String, host: String, port: u16 },
-    Adb { device: String },
-    Vnc { host: String, port: u16, password: Option<String> },
-    Rdp { user: Option<String>, host: String, port: u16 },
+    Ssh {
+        user: String,
+        host: String,
+        port: u16,
+    },
+    Adb {
+        device: String,
+    },
+    Vnc {
+        host: String,
+        port: u16,
+        #[allow(dead_code)]
+        password: Option<String>,
+    },
+    Rdp {
+        user: Option<String>,
+        host: String,
+        port: u16,
+    },
 }
 
 fn parse_node(node: &str) -> ParsedNode {
     if node.starts_with("adb:") {
-        return ParsedNode::Adb { device: node[4..].to_string() };
+        return ParsedNode::Adb {
+            device: node[4..].to_string(),
+        };
     }
     if let Some(rest) = node.strip_prefix("ssh:") {
         return parse_ssh_target(rest);
@@ -30,12 +47,14 @@ fn parse_node(node: &str) -> ParsedNode {
     if node.contains('@') {
         return parse_ssh_target(node);
     }
-    ParsedNode::Adb { device: node.to_string() }
+    ParsedNode::Adb {
+        device: node.to_string(),
+    }
 }
 
 fn parse_ssh_target(target: &str) -> ParsedNode {
     let (user_host, port) = if let Some(idx) = target.rfind(':') {
-        if let Ok(p) = target[idx+1..].parse::<u16>() {
+        if let Ok(p) = target[idx + 1..].parse::<u16>() {
             (&target[..idx], p)
         } else {
             (target, 22)
@@ -45,7 +64,10 @@ fn parse_ssh_target(target: &str) -> ParsedNode {
     };
 
     let (user, host) = if let Some(idx) = user_host.find('@') {
-        (user_host[..idx].to_string(), user_host[idx+1..].to_string())
+        (
+            user_host[..idx].to_string(),
+            user_host[idx + 1..].to_string(),
+        )
     } else {
         ("root".to_string(), user_host.to_string())
     };
@@ -55,7 +77,7 @@ fn parse_ssh_target(target: &str) -> ParsedNode {
 
 fn parse_vnc_target(target: &str) -> ParsedNode {
     let (host, port) = if let Some(idx) = target.rfind(':') {
-        if let Ok(p) = target[idx+1..].parse::<u16>() {
+        if let Ok(p) = target[idx + 1..].parse::<u16>() {
             let actual_port = if p > 99 { p } else { 5900 + p };
             (target[..idx].to_string(), actual_port)
         } else {
@@ -64,12 +86,16 @@ fn parse_vnc_target(target: &str) -> ParsedNode {
     } else {
         (target.to_string(), 5900)
     };
-    ParsedNode::Vnc { host, port, password: None }
+    ParsedNode::Vnc {
+        host,
+        port,
+        password: None,
+    }
 }
 
 fn parse_rdp_target(target: &str) -> ParsedNode {
     let (user_host, port) = if let Some(idx) = target.rfind(':') {
-        if let Ok(p) = target[idx+1..].parse::<u16>() {
+        if let Ok(p) = target[idx + 1..].parse::<u16>() {
             (&target[..idx], p)
         } else {
             (target, 3389)
@@ -79,7 +105,10 @@ fn parse_rdp_target(target: &str) -> ParsedNode {
     };
 
     let (user, host) = if let Some(idx) = user_host.find('@') {
-        (Some(user_host[..idx].to_string()), user_host[idx+1..].to_string())
+        (
+            Some(user_host[..idx].to_string()),
+            user_host[idx + 1..].to_string(),
+        )
     } else {
         (None, user_host.to_string())
     };
@@ -91,7 +120,9 @@ fn parse_rdp_target(target: &str) -> ParsedNode {
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str())
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
 
     tracing::Span::current().record("action", action);
@@ -110,7 +141,10 @@ pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<Str
         }
         "camera_snap" | "screen_snap" => {
             let node = get_node(args)?;
-            let facing = args.get("facing").and_then(|v| v.as_str()).unwrap_or("back");
+            let facing = args
+                .get("facing")
+                .and_then(|v| v.as_str())
+                .unwrap_or("back");
             node_screen_snap_async(&node, facing).await
         }
         "camera_list" => {
@@ -119,7 +153,10 @@ pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<Str
         }
         "screen_record" => {
             let node = get_node(args)?;
-            let duration = args.get("durationMs").and_then(|v| v.as_u64()).unwrap_or(5000);
+            let duration = args
+                .get("durationMs")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(5000);
             adb_screen_record_async(&node, duration).await
         }
         "location_get" => {
@@ -128,7 +165,10 @@ pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<Str
         }
         "notify" => {
             let node = get_node(args)?;
-            let title = args.get("title").and_then(|v| v.as_str()).unwrap_or("RustyClaw");
+            let title = args
+                .get("title")
+                .and_then(|v| v.as_str())
+                .unwrap_or("RustyClaw");
             let body = args.get("body").and_then(|v| v.as_str()).unwrap_or("");
             node_notify_async(&node, title, body).await
         }
@@ -136,33 +176,48 @@ pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<Str
             let node = get_node(args)?;
             let x = args.get("x").and_then(|v| v.as_i64()).unwrap_or(0);
             let y = args.get("y").and_then(|v| v.as_i64()).unwrap_or(0);
-            let button = args.get("button").and_then(|v| v.as_str()).unwrap_or("left");
+            let button = args
+                .get("button")
+                .and_then(|v| v.as_str())
+                .unwrap_or("left");
             node_click_async(&node, x as i32, y as i32, button).await
         }
         "type" => {
             let node = get_node(args)?;
-            let text = args.get("text").and_then(|v| v.as_str())
+            let text = args
+                .get("text")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'text' for type action")?;
             node_type_text_async(&node, text).await
         }
         "key" => {
             let node = get_node(args)?;
-            let key = args.get("key").and_then(|v| v.as_str())
+            let key = args
+                .get("key")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'key' for key action")?;
             node_send_key_async(&node, key).await
         }
         "pending" => Ok(json!({
             "pending": [],
             "note": "Direct connection nodes don't require pairing."
-        }).to_string()),
-        "approve" | "reject" => Ok("Direct connection nodes don't require pairing approval.".to_string()),
+        })
+        .to_string()),
+        "approve" | "reject" => {
+            Ok("Direct connection nodes don't require pairing approval.".to_string())
+        }
         "invoke" => {
             let node = get_node(args)?;
-            let cmd = args.get("invokeCommand").and_then(|v| v.as_str())
+            let cmd = args
+                .get("invokeCommand")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'invokeCommand'")?;
             node_run_async(&node, &[cmd.to_string()]).await
         }
-        _ => Err(format!("Unknown action: {}. Valid: status, describe, run, screen_snap, camera_snap, camera_list, screen_record, location_get, notify, click, type, key, invoke", action)),
+        _ => Err(format!(
+            "Unknown action: {}. Valid: status, describe, run, screen_snap, camera_snap, camera_list, screen_record, location_get, notify, click, type, key, invoke",
+            action
+        )),
     }
 }
 
@@ -170,12 +225,15 @@ async fn node_status_async() -> Result<String, String> {
     let mut nodes = Vec::new();
 
     // Check ADB devices
-    let adb_out = sh_async("adb devices -l 2>/dev/null").await.unwrap_or_default();
+    let adb_out = sh_async("adb devices -l 2>/dev/null")
+        .await
+        .unwrap_or_default();
     for line in adb_out.lines().skip(1) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 && parts[1] == "device" {
             let device_id = parts[0];
-            let model = parts.iter()
+            let model = parts
+                .iter()
                 .find(|p| p.starts_with("model:"))
                 .map(|p| &p[6..])
                 .unwrap_or("unknown");
@@ -190,7 +248,9 @@ async fn node_status_async() -> Result<String, String> {
     }
 
     // Check SSH config
-    if let Ok(config) = tokio::fs::read_to_string(dirs::home_dir().unwrap_or_default().join(".ssh/config")).await {
+    if let Ok(config) =
+        tokio::fs::read_to_string(dirs::home_dir().unwrap_or_default().join(".ssh/config")).await
+    {
         let mut current_host: Option<String> = None;
         let mut current_user: Option<String> = None;
         let mut current_hostname: Option<String> = None;
@@ -232,14 +292,23 @@ async fn node_status_async() -> Result<String, String> {
         }
     }
 
-    let vnc_tool = if has_command_async("vncdo").await { Some("vncdo") }
-        else if has_command_async("vncdotool").await { Some("vncdotool") }
-        else { None };
+    let vnc_tool = if has_command_async("vncdo").await {
+        Some("vncdo")
+    } else if has_command_async("vncdotool").await {
+        Some("vncdotool")
+    } else {
+        None
+    };
 
-    let rdp_tool = if has_command_async("xfreerdp").await { Some("xfreerdp") }
-        else if has_command_async("xfreerdp3").await { Some("xfreerdp3") }
-        else if has_command_async("rdesktop").await { Some("rdesktop") }
-        else { None };
+    let rdp_tool = if has_command_async("xfreerdp").await {
+        Some("xfreerdp")
+    } else if has_command_async("xfreerdp3").await {
+        Some("xfreerdp3")
+    } else if has_command_async("rdesktop").await {
+        Some("rdesktop")
+    } else {
+        None
+    };
 
     Ok(json!({
         "nodes": nodes,
@@ -255,26 +324,35 @@ async fn node_status_async() -> Result<String, String> {
             "vnc": "vnc:host:display or vnc:host:port",
             "rdp": "rdp:user@host:port or rdp:host"
         }
-    }).to_string())
+    })
+    .to_string())
 }
 
 async fn node_describe_async(node: &str) -> Result<String, String> {
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
-            let cmd = format!("ssh -o ConnectTimeout=5 -o BatchMode=yes -p {} {}@{} 'uname -a && hostname && uptime'", port, user, host);
+            let cmd = format!(
+                "ssh -o ConnectTimeout=5 -o BatchMode=yes -p {} {}@{} 'uname -a && hostname && uptime'",
+                port, user, host
+            );
             match sh_async(&cmd).await {
                 Ok(info) => Ok(json!({
                     "node": node, "type": "ssh", "user": user, "host": host, "port": port,
                     "status": "reachable", "info": info.trim()
-                }).to_string()),
+                })
+                .to_string()),
                 Err(e) => Ok(json!({
                     "node": node, "type": "ssh", "user": user, "host": host, "port": port,
                     "status": "unreachable", "error": e
-                }).to_string()),
+                })
+                .to_string()),
             }
         }
         ParsedNode::Adb { device } => {
-            let cmd = format!("adb -s {} shell 'getprop ro.product.model && getprop ro.build.version.release'", device);
+            let cmd = format!(
+                "adb -s {} shell 'getprop ro.product.model && getprop ro.build.version.release'",
+                device
+            );
             match sh_async(&cmd).await {
                 Ok(info) => {
                     let lines: Vec<&str> = info.lines().collect();
@@ -285,22 +363,28 @@ async fn node_describe_async(node: &str) -> Result<String, String> {
                 }
                 Err(e) => Ok(json!({
                     "node": node, "type": "adb", "device": device, "status": "error", "error": e
-                }).to_string()),
+                })
+                .to_string()),
             }
         }
         ParsedNode::Vnc { host, port, .. } => {
-            let reachable = sh_async(&format!("nc -zv -w 3 {} {} 2>&1", host, port)).await.is_ok();
+            let reachable = sh_async(&format!("nc -zv -w 3 {} {} 2>&1", host, port))
+                .await
+                .is_ok();
             Ok(json!({
                 "node": node, "type": "vnc", "host": host, "port": port,
                 "display": port.saturating_sub(5900), "status": if reachable { "reachable" } else { "unknown" }
             }).to_string())
         }
         ParsedNode::Rdp { user, host, port } => {
-            let reachable = sh_async(&format!("nc -zv -w 3 {} {} 2>&1", host, port)).await.is_ok();
+            let reachable = sh_async(&format!("nc -zv -w 3 {} {} 2>&1", host, port))
+                .await
+                .is_ok();
             Ok(json!({
                 "node": node, "type": "rdp", "user": user, "host": host, "port": port,
                 "status": if reachable { "reachable" } else { "unknown" }
-            }).to_string())
+            })
+            .to_string())
         }
     }
 }
@@ -309,24 +393,36 @@ async fn node_run_async(node: &str, command: &[String]) -> Result<String, String
     let cmd_str = command.join(" ");
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
-            let script = format!("ssh -o ConnectTimeout=10 -p {} {}@{} '{}'", port, user, host, cmd_str.replace('\'', "'\\''"));
+            let script = format!(
+                "ssh -o ConnectTimeout=10 -p {} {}@{} '{}'",
+                port,
+                user,
+                host,
+                cmd_str.replace('\'', "'\\''")
+            );
             let output = sh_async(&script).await;
             Ok(json!({
                 "node": node, "command": cmd_str,
                 "exit_code": if output.is_ok() { 0 } else { 1 },
                 "stdout": output.as_ref().map(|s| s.as_str()).unwrap_or(""),
                 "stderr": output.as_ref().err().map(|s| s.as_str()).unwrap_or("")
-            }).to_string())
+            })
+            .to_string())
         }
         ParsedNode::Adb { device } => {
-            let script = format!("adb -s {} shell '{}'", device, cmd_str.replace('\'', "'\\''"));
+            let script = format!(
+                "adb -s {} shell '{}'",
+                device,
+                cmd_str.replace('\'', "'\\''")
+            );
             let output = sh_async(&script).await;
             Ok(json!({
                 "node": node, "command": cmd_str,
                 "exit_code": if output.is_ok() { 0 } else { 1 },
                 "stdout": output.as_ref().map(|s| s.as_str()).unwrap_or(""),
                 "stderr": output.as_ref().err().map(|s| s.as_str()).unwrap_or("")
-            }).to_string())
+            })
+            .to_string())
         }
         ParsedNode::Vnc { .. } => Err("VNC nodes don't support command execution.".to_string()),
         ParsedNode::Rdp { .. } => Err("RDP nodes don't support command execution.".to_string()),
@@ -342,29 +438,45 @@ async fn node_screen_snap_async(node: &str, _facing: &str) -> Result<String, Str
             sh_async(&format!("adb -s {} shell screencap -p {}", device, remote)).await?;
             sh_async(&format!("adb -s {} pull {} {}", device, remote, local)).await?;
             let _ = sh_async(&format!("adb -s {} shell rm {}", device, remote)).await;
-            Ok(json!({"node": node, "type": "adb", "action": "screen_snap", "path": local}).to_string())
+            Ok(
+                json!({"node": node, "type": "adb", "action": "screen_snap", "path": local})
+                    .to_string(),
+            )
         }
         ParsedNode::Ssh { user, host, port } => {
             let local = format!("/tmp/ssh_snap_{}.png", timestamp);
             let out = sh_async(&format!("ssh -o ConnectTimeout=10 -p {} {}@{} 'DISPLAY=:0 scrot -o /tmp/screenshot.png && cat /tmp/screenshot.png'", port, user, host)).await?;
-            tokio::fs::write(&local, out.as_bytes()).await.map_err(|e| e.to_string())?;
-            Ok(json!({"node": node, "type": "ssh", "action": "screen_snap", "path": local}).to_string())
+            tokio::fs::write(&local, out.as_bytes())
+                .await
+                .map_err(|e| e.to_string())?;
+            Ok(
+                json!({"node": node, "type": "ssh", "action": "screen_snap", "path": local})
+                    .to_string(),
+            )
         }
         ParsedNode::Vnc { host, port, .. } => {
             let local = format!("/tmp/vnc_snap_{}.png", timestamp);
             if has_command_async("vncdo").await {
                 sh_async(&format!("vncdo -s {}:{} capture {}", host, port, local)).await?;
             } else if has_command_async("vncdotool").await {
-                sh_async(&format!("vncdotool -s {}::{} capture {}", host, port, local)).await?;
+                sh_async(&format!(
+                    "vncdotool -s {}::{} capture {}",
+                    host, port, local
+                ))
+                .await?;
             } else {
                 return Err("No VNC tool available.".to_string());
             }
-            Ok(json!({"node": node, "type": "vnc", "action": "screen_snap", "path": local}).to_string())
+            Ok(
+                json!({"node": node, "type": "vnc", "action": "screen_snap", "path": local})
+                    .to_string(),
+            )
         }
         ParsedNode::Rdp { .. } => Ok(json!({
             "node": node, "type": "rdp", "action": "screen_snap", "status": "not_implemented",
             "note": "RDP screenshot requires interactive session."
-        }).to_string()),
+        })
+        .to_string()),
     }
 }
 
@@ -375,19 +487,41 @@ async fn node_click_async(node: &str, x: i32, y: i32, button: &str) -> Result<St
             Ok(json!({"node": node, "action": "click", "x": x, "y": y}).to_string())
         }
         ParsedNode::Ssh { user, host, port } => {
-            sh_async(&format!("ssh -o ConnectTimeout=5 -p {} {}@{} 'DISPLAY=:0 xdotool mousemove {} {} click 1'", port, user, host, x, y)).await?;
-            Ok(json!({"node": node, "action": "click", "x": x, "y": y, "via": "xdotool"}).to_string())
+            sh_async(&format!(
+                "ssh -o ConnectTimeout=5 -p {} {}@{} 'DISPLAY=:0 xdotool mousemove {} {} click 1'",
+                port, user, host, x, y
+            ))
+            .await?;
+            Ok(
+                json!({"node": node, "action": "click", "x": x, "y": y, "via": "xdotool"})
+                    .to_string(),
+            )
         }
         ParsedNode::Vnc { host, port, .. } => {
-            let btn = match button { "right" | "3" => "3", "middle" | "2" => "2", _ => "1" };
+            let btn = match button {
+                "right" | "3" => "3",
+                "middle" | "2" => "2",
+                _ => "1",
+            };
             if has_command_async("vncdo").await {
-                sh_async(&format!("vncdo -s {}:{} move {} {} click {}", host, port, x, y, btn)).await?;
+                sh_async(&format!(
+                    "vncdo -s {}:{} move {} {} click {}",
+                    host, port, x, y, btn
+                ))
+                .await?;
             } else if has_command_async("vncdotool").await {
-                sh_async(&format!("vncdotool -s {}::{} move {} {} click {}", host, port, x, y, btn)).await?;
+                sh_async(&format!(
+                    "vncdotool -s {}::{} move {} {} click {}",
+                    host, port, x, y, btn
+                ))
+                .await?;
             } else {
                 return Err("No VNC tool available.".to_string());
             }
-            Ok(json!({"node": node, "action": "click", "x": x, "y": y, "button": button}).to_string())
+            Ok(
+                json!({"node": node, "action": "click", "x": x, "y": y, "button": button})
+                    .to_string(),
+            )
         }
         ParsedNode::Rdp { .. } => Err("RDP click requires interactive session.".to_string()),
     }
@@ -402,14 +536,33 @@ async fn node_type_text_async(node: &str, text: &str) -> Result<String, String> 
         }
         ParsedNode::Ssh { user, host, port } => {
             let escaped = text.replace('\'', "'\\''");
-            sh_async(&format!("ssh -o ConnectTimeout=5 -p {} {}@{} \"DISPLAY=:0 xdotool type '{}'\"", port, user, host, escaped)).await?;
-            Ok(json!({"node": node, "action": "type", "length": text.len(), "via": "xdotool"}).to_string())
+            sh_async(&format!(
+                "ssh -o ConnectTimeout=5 -p {} {}@{} \"DISPLAY=:0 xdotool type '{}'\"",
+                port, user, host, escaped
+            ))
+            .await?;
+            Ok(
+                json!({"node": node, "action": "type", "length": text.len(), "via": "xdotool"})
+                    .to_string(),
+            )
         }
         ParsedNode::Vnc { host, port, .. } => {
             if has_command_async("vncdo").await {
-                sh_async(&format!("vncdo -s {}:{} type '{}'", host, port, text.replace('\'', "'\\''"))).await?;
+                sh_async(&format!(
+                    "vncdo -s {}:{} type '{}'",
+                    host,
+                    port,
+                    text.replace('\'', "'\\''")
+                ))
+                .await?;
             } else if has_command_async("vncdotool").await {
-                sh_async(&format!("vncdotool -s {}::{} type '{}'", host, port, text.replace('\'', "'\\''"))).await?;
+                sh_async(&format!(
+                    "vncdotool -s {}::{} type '{}'",
+                    host,
+                    port,
+                    text.replace('\'', "'\\''")
+                ))
+                .await?;
             } else {
                 return Err("No VNC tool available.".to_string());
             }
@@ -430,15 +583,26 @@ async fn node_send_key_async(node: &str, key: &str) -> Result<String, String> {
                 "TAB" => "61",
                 "SPACE" => "62",
                 "DELETE" | "BACKSPACE" => "67",
-                "UP" => "19", "DOWN" => "20", "LEFT" => "21", "RIGHT" => "22",
+                "UP" => "19",
+                "DOWN" => "20",
+                "LEFT" => "21",
+                "RIGHT" => "22",
                 k if k.parse::<u32>().is_ok() => k,
                 _ => return Err(format!("Unknown key: {}", key)),
             };
-            sh_async(&format!("adb -s {} shell input keyevent {}", device, keycode)).await?;
+            sh_async(&format!(
+                "adb -s {} shell input keyevent {}",
+                device, keycode
+            ))
+            .await?;
             Ok(json!({"node": node, "action": "key", "key": key, "keycode": keycode}).to_string())
         }
         ParsedNode::Ssh { user, host, port } => {
-            sh_async(&format!("ssh -o ConnectTimeout=5 -p {} {}@{} 'DISPLAY=:0 xdotool key {}'", port, user, host, key)).await?;
+            sh_async(&format!(
+                "ssh -o ConnectTimeout=5 -p {} {}@{} 'DISPLAY=:0 xdotool key {}'",
+                port, user, host, key
+            ))
+            .await?;
             Ok(json!({"node": node, "action": "key", "key": key, "via": "xdotool"}).to_string())
         }
         ParsedNode::Vnc { host, port, .. } => {
@@ -458,15 +622,24 @@ async fn node_send_key_async(node: &str, key: &str) -> Result<String, String> {
 async fn node_notify_async(node: &str, title: &str, body: &str) -> Result<String, String> {
     match parse_node(node) {
         ParsedNode::Adb { device } => {
-            let _ = sh_async(&format!("adb -s {} shell \"cmd notification post -t '{}' 'RustyClaw' '{}'\"", device, title, body)).await;
+            let _ = sh_async(&format!(
+                "adb -s {} shell \"cmd notification post -t '{}' 'RustyClaw' '{}'\"",
+                device, title, body
+            ))
+            .await;
             Ok(json!({"node": node, "action": "notify", "title": title, "body": body, "status": "sent"}).to_string())
         }
         ParsedNode::Ssh { user, host, port } => {
-            let result = sh_async(&format!("ssh -o ConnectTimeout=5 -p {} {}@{} \"notify-send '{}' '{}'\"", port, user, host, title, body)).await;
+            let result = sh_async(&format!(
+                "ssh -o ConnectTimeout=5 -p {} {}@{} \"notify-send '{}' '{}'\"",
+                port, user, host, title, body
+            ))
+            .await;
             Ok(json!({
                 "node": node, "action": "notify", "title": title, "body": body,
                 "status": if result.is_ok() { "sent" } else { "failed" }
-            }).to_string())
+            })
+            .to_string())
         }
         _ => Err("Notifications require ADB or SSH.".to_string()),
     }
@@ -477,7 +650,11 @@ async fn adb_camera_list_async(node: &str) -> Result<String, String> {
         ParsedNode::Adb { device } => device,
         _ => return Err("camera_list only works with ADB nodes".to_string()),
     };
-    let out = sh_async(&format!("adb -s {} shell \"dumpsys media.camera | grep -E 'Camera|Facing'\"", device)).await?;
+    let out = sh_async(&format!(
+        "adb -s {} shell \"dumpsys media.camera | grep -E 'Camera|Facing'\"",
+        device
+    ))
+    .await?;
     Ok(json!({"node": node, "cameras": out.trim(), "note": "Use camera app + screen_record for capture"}).to_string())
 }
 
@@ -491,11 +668,18 @@ async fn adb_screen_record_async(node: &str, duration_ms: u64) -> Result<String,
     let remote = format!("/sdcard/rec_{}.mp4", timestamp);
     let local = format!("/tmp/adb_rec_{}.mp4", timestamp);
 
-    sh_async(&format!("adb -s {} shell screenrecord --time-limit {} {}", device, secs, remote)).await?;
+    sh_async(&format!(
+        "adb -s {} shell screenrecord --time-limit {} {}",
+        device, secs, remote
+    ))
+    .await?;
     sh_async(&format!("adb -s {} pull {} {}", device, remote, local)).await?;
     let _ = sh_async(&format!("adb -s {} shell rm {}", device, remote)).await;
 
-    Ok(json!({"node": node, "action": "screen_record", "duration_secs": secs, "path": local}).to_string())
+    Ok(
+        json!({"node": node, "action": "screen_record", "duration_secs": secs, "path": local})
+            .to_string(),
+    )
 }
 
 async fn adb_location_get_async(node: &str) -> Result<String, String> {
@@ -503,19 +687,32 @@ async fn adb_location_get_async(node: &str) -> Result<String, String> {
         ParsedNode::Adb { device } => device,
         _ => return Err("location_get only works with ADB nodes".to_string()),
     };
-    let out = sh_async(&format!("adb -s {} shell \"dumpsys location | grep -A2 'last location'\"", device)).await.unwrap_or_default();
-    let mock = sh_async(&format!("adb -s {} shell settings get secure mock_location", device)).await.unwrap_or_default();
+    let out = sh_async(&format!(
+        "adb -s {} shell \"dumpsys location | grep -A2 'last location'\"",
+        device
+    ))
+    .await
+    .unwrap_or_default();
+    let mock = sh_async(&format!(
+        "adb -s {} shell settings get secure mock_location",
+        device
+    ))
+    .await
+    .unwrap_or_default();
     Ok(json!({
         "node": node, "location_info": out.trim(),
         "mock_location": mock.trim() == "1"
-    }).to_string())
+    })
+    .to_string())
 }
 
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str())
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
 
     tracing::Span::current().record("action", action);
@@ -532,9 +729,16 @@ pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String>
             let command = get_command_array(args)?;
             node_run_sync(&node, &command)
         }
-        "pending" => Ok(json!({"pending": [], "note": "Direct connection nodes don't require pairing."}).to_string()),
-        "approve" | "reject" => Ok("Direct connection nodes don't require pairing approval.".to_string()),
-        _ => Err(format!("Sync nodes tool only supports: status, describe, run, pending. Use async for full support.")),
+        "pending" => Ok(
+            json!({"pending": [], "note": "Direct connection nodes don't require pairing."})
+                .to_string(),
+        ),
+        "approve" | "reject" => {
+            Ok("Direct connection nodes don't require pairing approval.".to_string())
+        }
+        _ => Err(format!(
+            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support."
+        )),
     }
 }
 
@@ -544,7 +748,9 @@ fn node_status_sync() -> Result<String, String> {
     for line in adb_out.lines().skip(1) {
         let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.len() >= 2 && parts[1] == "device" {
-            nodes.push(json!({"id": format!("adb:{}", parts[0]), "type": "adb", "status": "connected"}));
+            nodes.push(
+                json!({"id": format!("adb:{}", parts[0]), "type": "adb", "status": "connected"}),
+            );
         }
     }
     Ok(json!({
@@ -554,18 +760,23 @@ fn node_status_sync() -> Result<String, String> {
             "ssh": has_command("ssh"),
         },
         "note": "Sync mode - limited info"
-    }).to_string())
+    })
+    .to_string())
 }
 
 fn node_describe_sync(node: &str) -> Result<String, String> {
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
-            let out = sh(&format!("ssh -o ConnectTimeout=5 -o BatchMode=yes -p {} {}@{} 'uname -a'", port, user, host));
+            let out = sh(&format!(
+                "ssh -o ConnectTimeout=5 -o BatchMode=yes -p {} {}@{} 'uname -a'",
+                port, user, host
+            ));
             Ok(json!({
                 "node": node, "type": "ssh",
                 "status": if out.is_ok() { "reachable" } else { "unreachable" },
                 "info": out.unwrap_or_default()
-            }).to_string())
+            })
+            .to_string())
         }
         ParsedNode::Adb { device } => {
             let out = sh(&format!("adb -s {} shell getprop ro.product.model", device));
@@ -579,12 +790,28 @@ fn node_run_sync(node: &str, command: &[String]) -> Result<String, String> {
     let cmd_str = command.join(" ");
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
-            let out = sh(&format!("ssh -o ConnectTimeout=10 -p {} {}@{} '{}'", port, user, host, cmd_str.replace('\'', "'\\''")));
-            Ok(json!({"node": node, "command": cmd_str, "output": out.unwrap_or_default()}).to_string())
+            let out = sh(&format!(
+                "ssh -o ConnectTimeout=10 -p {} {}@{} '{}'",
+                port,
+                user,
+                host,
+                cmd_str.replace('\'', "'\\''")
+            ));
+            Ok(
+                json!({"node": node, "command": cmd_str, "output": out.unwrap_or_default()})
+                    .to_string(),
+            )
         }
         ParsedNode::Adb { device } => {
-            let out = sh(&format!("adb -s {} shell '{}'", device, cmd_str.replace('\'', "'\\''")));
-            Ok(json!({"node": node, "command": cmd_str, "output": out.unwrap_or_default()}).to_string())
+            let out = sh(&format!(
+                "adb -s {} shell '{}'",
+                device,
+                cmd_str.replace('\'', "'\\''")
+            ));
+            Ok(
+                json!({"node": node, "command": cmd_str, "output": out.unwrap_or_default()})
+                    .to_string(),
+            )
         }
         _ => Err("Sync run only supports SSH and ADB.".to_string()),
     }

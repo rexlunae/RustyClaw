@@ -82,10 +82,9 @@ impl ModelContext {
     /// A missing API key is treated as a warning (the provider may not need
     /// one — e.g. Ollama), not a hard error.
     pub fn resolve(config: &Config, secrets: &mut crate::secrets::SecretsManager) -> Result<Self> {
-        let mp = config
-            .model
-            .as_ref()
-            .context("No [model] section in config — run `rustyclaw onboard` or add one to config.toml")?;
+        let mp = config.model.as_ref().context(
+            "No [model] section in config — run `rustyclaw onboard` or add one to config.toml",
+        )?;
 
         let provider = mp.provider.clone();
         let model = mp.model.clone().unwrap_or_default();
@@ -95,9 +94,8 @@ impl ModelContext {
                 .to_string()
         });
 
-        let api_key = providers::secret_key_for_provider(&provider).and_then(|key_name| {
-            secrets.get_secret(key_name, true).ok().flatten()
-        });
+        let api_key = providers::secret_key_for_provider(&provider)
+            .and_then(|key_name| secrets.get_secret(key_name, true).ok().flatten());
 
         if api_key.is_none() && providers::secret_key_for_provider(&provider).is_some() {
             warn!(
@@ -120,10 +118,9 @@ impl ModelContext {
     /// passes just the provider key to the daemon via an environment
     /// variable, so the gateway never needs vault access).
     pub fn from_config(config: &Config, api_key: Option<String>) -> Result<Self> {
-        let mp = config
-            .model
-            .as_ref()
-            .context("No [model] section in config — run `rustyclaw onboard` or add one to config.toml")?;
+        let mp = config.model.as_ref().context(
+            "No [model] section in config — run `rustyclaw onboard` or add one to config.toml",
+        )?;
 
         let provider = mp.provider.clone();
         let model = mp.model.clone().unwrap_or_default();

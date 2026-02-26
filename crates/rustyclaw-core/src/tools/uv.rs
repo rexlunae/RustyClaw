@@ -22,7 +22,9 @@ pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> Result<
     match action {
         "setup" | "install" => {
             if is_uv_installed_async().await {
-                let version = sh_async("uv --version 2>&1").await.unwrap_or_else(|_| "unknown".into());
+                let version = sh_async("uv --version 2>&1")
+                    .await
+                    .unwrap_or_else(|_| "unknown".into());
                 return Ok(format!("uv is already installed ({}).", version.trim()));
             }
             sh_async("curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1").await
@@ -53,34 +55,48 @@ pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> Result<
             if !is_uv_installed_async().await {
                 return Err("uv is not installed.".into());
             }
-            let packages: Vec<String> = if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
-                vec![pkg.to_string()]
-            } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
-                pkgs.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-            } else {
-                return Err("Missing required parameter: package or packages.".into());
-            };
+            let packages: Vec<String> =
+                if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
+                    vec![pkg.to_string()]
+                } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
+                    pkgs.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                } else {
+                    return Err("Missing required parameter: package or packages.".into());
+                };
             if packages.is_empty() {
                 return Err("No packages specified.".into());
             }
-            sh_in_async(workspace_dir, &format!("uv pip install {} 2>&1", packages.join(" "))).await
+            sh_in_async(
+                workspace_dir,
+                &format!("uv pip install {} 2>&1", packages.join(" ")),
+            )
+            .await
         }
 
         "pip-uninstall" | "remove" | "rm" => {
             if !is_uv_installed_async().await {
                 return Err("uv is not installed.".into());
             }
-            let packages: Vec<String> = if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
-                vec![pkg.to_string()]
-            } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
-                pkgs.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-            } else {
-                return Err("Missing required parameter: package or packages.".into());
-            };
+            let packages: Vec<String> =
+                if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
+                    vec![pkg.to_string()]
+                } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
+                    pkgs.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                } else {
+                    return Err("Missing required parameter: package or packages.".into());
+                };
             if packages.is_empty() {
                 return Err("No packages specified.".into());
             }
-            sh_in_async(workspace_dir, &format!("uv pip uninstall {} -y 2>&1", packages.join(" "))).await
+            sh_in_async(
+                workspace_dir,
+                &format!("uv pip uninstall {} -y 2>&1", packages.join(" ")),
+            )
+            .await
         }
 
         "pip-list" | "list" | "ls" => {
@@ -114,7 +130,9 @@ pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> Result<
             if !is_uv_installed_async().await {
                 return Err("uv is not installed.".into());
             }
-            let command = args.get("command").and_then(|v| v.as_str())
+            let command = args
+                .get("command")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: command")?;
             sh_in_async(workspace_dir, &format!("uv run {} 2>&1", command)).await
         }
@@ -123,7 +141,9 @@ pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> Result<
             if !is_uv_installed_async().await {
                 return Err("uv is not installed.".into());
             }
-            let version = args.get("version").and_then(|v| v.as_str())
+            let version = args
+                .get("version")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: version")?;
             sh_async(&format!("uv python install {} 2>&1", version)).await
         }
@@ -179,7 +199,11 @@ async fn sh_async(script: &str) -> Result<String, String> {
 
 async fn sh_in_async(dir: &Path, script: &str) -> Result<String, String> {
     let full_script = if let Some(venv) = find_venv(dir) {
-        format!("source '{}' && {}", venv.join("bin/activate").display(), script)
+        format!(
+            "source '{}' && {}",
+            venv.join("bin/activate").display(),
+            script
+        )
     } else {
         script.to_string()
     };
@@ -268,7 +292,11 @@ fn sh(script: &str) -> Result<String, String> {
 
 fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
     let full_script = if let Some(venv) = find_venv(dir) {
-        format!("source '{}' && {}", venv.join("bin/activate").display(), script)
+        format!(
+            "source '{}' && {}",
+            venv.join("bin/activate").display(),
+            script
+        )
     } else {
         script.to_string()
     };
@@ -348,34 +376,46 @@ pub fn exec_uv_manage(args: &Value, workspace_dir: &Path) -> Result<String, Stri
             if !is_uv_installed() {
                 return Err("uv is not installed.".into());
             }
-            let packages: Vec<String> = if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
-                vec![pkg.to_string()]
-            } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
-                pkgs.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-            } else {
-                return Err("Missing required parameter: package or packages.".into());
-            };
+            let packages: Vec<String> =
+                if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
+                    vec![pkg.to_string()]
+                } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
+                    pkgs.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                } else {
+                    return Err("Missing required parameter: package or packages.".into());
+                };
             if packages.is_empty() {
                 return Err("No packages specified.".into());
             }
-            sh_in(workspace_dir, &format!("uv pip install {} 2>&1", packages.join(" ")))
+            sh_in(
+                workspace_dir,
+                &format!("uv pip install {} 2>&1", packages.join(" ")),
+            )
         }
 
         "pip-uninstall" | "remove" | "rm" => {
             if !is_uv_installed() {
                 return Err("uv is not installed.".into());
             }
-            let packages: Vec<String> = if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
-                vec![pkg.to_string()]
-            } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
-                pkgs.iter().filter_map(|v| v.as_str().map(String::from)).collect()
-            } else {
-                return Err("Missing required parameter: package or packages.".into());
-            };
+            let packages: Vec<String> =
+                if let Some(pkg) = args.get("package").and_then(|v| v.as_str()) {
+                    vec![pkg.to_string()]
+                } else if let Some(pkgs) = args.get("packages").and_then(|v| v.as_array()) {
+                    pkgs.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                } else {
+                    return Err("Missing required parameter: package or packages.".into());
+                };
             if packages.is_empty() {
                 return Err("No packages specified.".into());
             }
-            sh_in(workspace_dir, &format!("uv pip uninstall {} -y 2>&1", packages.join(" ")))
+            sh_in(
+                workspace_dir,
+                &format!("uv pip uninstall {} -y 2>&1", packages.join(" ")),
+            )
         }
 
         "pip-list" | "list" | "ls" => {
@@ -409,7 +449,9 @@ pub fn exec_uv_manage(args: &Value, workspace_dir: &Path) -> Result<String, Stri
             if !is_uv_installed() {
                 return Err("uv is not installed.".into());
             }
-            let command = args.get("command").and_then(|v| v.as_str())
+            let command = args
+                .get("command")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: command")?;
             sh_in(workspace_dir, &format!("uv run {} 2>&1", command))
         }
@@ -418,7 +460,9 @@ pub fn exec_uv_manage(args: &Value, workspace_dir: &Path) -> Result<String, Stri
             if !is_uv_installed() {
                 return Err("uv is not installed.".into());
             }
-            let version = args.get("version").and_then(|v| v.as_str())
+            let version = args
+                .get("version")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: version")?;
             sh(&format!("uv python install {} 2>&1", version))
         }

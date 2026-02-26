@@ -214,10 +214,7 @@ pub enum StopResult {
 fn kill_process(pid: u32) -> Result<()> {
     let sysinfo_pid = Pid::from_u32(pid);
     let mut sys = System::new();
-    sys.refresh_processes(
-        sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]),
-        true,
-    );
+    sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[sysinfo_pid]), true);
     let process = sys
         .process(sysinfo_pid)
         .context(format!("Process {} not found", pid))?;

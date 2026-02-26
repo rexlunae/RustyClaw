@@ -5,7 +5,7 @@
 // ollama (local model server).  Can be invoked via `/agent setup`,
 // the `rustyclaw setup` CLI, or as an agent-callable tool.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 /// `agent_setup` — install + verify uv, exo, and ollama in one shot.
@@ -17,7 +17,8 @@ pub fn exec_agent_setup(args: &Value, workspace_dir: &Path) -> Result<String, St
 
     // Which components to set up
     let all = ["uv", "exo", "ollama"];
-    let components: Vec<&str> = if let Some(arr) = args.get("components").and_then(|v| v.as_array()) {
+    let components: Vec<&str> = if let Some(arr) = args.get("components").and_then(|v| v.as_array())
+    {
         arr.iter().filter_map(|v| v.as_str()).collect()
     } else {
         all.to_vec()
@@ -28,18 +29,14 @@ pub fn exec_agent_setup(args: &Value, workspace_dir: &Path) -> Result<String, St
 
     for component in &components {
         match *component {
-            "uv" => {
-                match crate::tools::uv::exec_uv_manage(&setup_args, workspace_dir) {
-                    Ok(msg) => results.push(format!("✓ uv: {}", msg)),
-                    Err(e) => errors.push(format!("✗ uv: {}", e)),
-                }
-            }
-            "exo" => {
-                match crate::tools::exo_ai::exec_exo_manage(&setup_args, workspace_dir) {
-                    Ok(msg) => results.push(format!("✓ exo: {}", msg)),
-                    Err(e) => errors.push(format!("✗ exo: {}", e)),
-                }
-            }
+            "uv" => match crate::tools::uv::exec_uv_manage(&setup_args, workspace_dir) {
+                Ok(msg) => results.push(format!("✓ uv: {}", msg)),
+                Err(e) => errors.push(format!("✗ uv: {}", e)),
+            },
+            "exo" => match crate::tools::exo_ai::exec_exo_manage(&setup_args, workspace_dir) {
+                Ok(msg) => results.push(format!("✓ exo: {}", msg)),
+                Err(e) => errors.push(format!("✗ exo: {}", e)),
+            },
             "ollama" => {
                 match crate::tools::ollama::exec_ollama_manage(&setup_args, workspace_dir) {
                     Ok(msg) => results.push(format!("✓ ollama: {}", msg)),

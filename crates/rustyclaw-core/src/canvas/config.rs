@@ -49,7 +49,9 @@ impl Default for CanvasConfig {
 impl CanvasConfig {
     /// Get the canvas root directory, defaulting to workspace/canvas
     pub fn canvas_root(&self, workspace: &std::path::Path) -> PathBuf {
-        self.root.clone().unwrap_or_else(|| workspace.join("canvas"))
+        self.root
+            .clone()
+            .unwrap_or_else(|| workspace.join("canvas"))
     }
 
     /// Get the session canvas directory

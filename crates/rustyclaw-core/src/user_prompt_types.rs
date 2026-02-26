@@ -48,9 +48,7 @@ pub enum PromptType {
         default: Option<String>,
     },
     /// Multiple named text fields.
-    Form {
-        fields: Vec<FormField>,
-    },
+    Form { fields: Vec<FormField> },
 }
 
 fn default_true() -> bool {

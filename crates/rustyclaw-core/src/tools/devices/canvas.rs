@@ -1,7 +1,6 @@
 //! Canvas tool: UI presentation and page capture.
 
-use super::{sh, sh_async};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::sync::Mutex;
@@ -14,7 +13,9 @@ static CANVAS_URL: Mutex<Option<String>> = Mutex::new(None);
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str())
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
 
     tracing::Span::current().record("action", action);
@@ -24,7 +25,9 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
 
     match action {
         "present" => {
-            let url = args.get("url").and_then(|v| v.as_str())
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'url' for present action")?;
             let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(800);
             let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(600);
@@ -44,7 +47,8 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
                 "opened_in_browser": open_result.is_ok(),
                 "title": meta.0,
                 "description": meta.1,
-            }).to_string())
+            })
+            .to_string())
         }
 
         "hide" => {
@@ -55,7 +59,9 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
         }
 
         "navigate" => {
-            let url = args.get("url").and_then(|v| v.as_str())
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'url' for navigate action")?;
 
             if let Ok(mut guard) = CANVAS_URL.lock() {
@@ -71,14 +77,19 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
                 "opened_in_browser": open_result.is_ok(),
                 "title": meta.0,
                 "description": meta.1,
-            }).to_string())
+            })
+            .to_string())
         }
 
         "eval" => {
-            let js = args.get("javaScript").and_then(|v| v.as_str())
+            let js = args
+                .get("javaScript")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'javaScript' for eval action")?;
 
-            let current_url = CANVAS_URL.lock().ok()
+            let current_url = CANVAS_URL
+                .lock()
+                .ok()
                 .and_then(|g| g.clone())
                 .unwrap_or_else(|| "(none)".to_string());
 
@@ -103,13 +114,15 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
                         "node": node.unwrap_or("default"),
                         "content_length": content.len(),
                         "content": content,
-                    }).to_string())
+                    })
+                    .to_string())
                 }
                 None => Ok(json!({
                     "status": "no_canvas",
                     "node": node.unwrap_or("default"),
                     "note": "No canvas URL presented. Use 'present' first.",
-                }).to_string()),
+                })
+                .to_string()),
             }
         }
 
@@ -119,14 +132,18 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
                 "status": "a2ui_pushed",
                 "element_count": elements.and_then(|e| e.as_array()).map(|a| a.len()).unwrap_or(0),
                 "note": "A2UI elements registered.",
-            }).to_string())
+            })
+            .to_string())
         }
 
         "a2ui_reset" => {
             Ok(json!({"status": "a2ui_reset", "note": "A2UI state cleared."}).to_string())
         }
 
-        _ => Err(format!("Unknown action: {}. Valid: present, hide, navigate, eval, snapshot, a2ui_push, a2ui_reset", action)),
+        _ => Err(format!(
+            "Unknown action: {}. Valid: present, hide, navigate, eval, snapshot, a2ui_push, a2ui_reset",
+            action
+        )),
     }
 }
 
@@ -159,7 +176,13 @@ async fn fetch_page_meta_async(url: &str) -> (String, String) {
         Err(_) => return ("(fetch failed)".into(), String::new()),
     };
 
-    let body = match client.get(url).send().await.and_then(|r| Ok(r)).map(|r| r.text()) {
+    let body = match client
+        .get(url)
+        .send()
+        .await
+        .and_then(|r| Ok(r))
+        .map(|r| r.text())
+    {
         Ok(fut) => fut.await.unwrap_or_default(),
         Err(_) => return ("(fetch failed)".into(), String::new()),
     };
@@ -196,7 +219,9 @@ async fn fetch_page_text_async(url: &str, max_chars: usize) -> String {
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str())
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: action".to_string())?;
 
     tracing::Span::current().record("action", action);
@@ -206,7 +231,9 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
 
     match action {
         "present" => {
-            let url = args.get("url").and_then(|v| v.as_str())
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'url' for present action")?;
             let width = args.get("width").and_then(|v| v.as_u64()).unwrap_or(800);
             let height = args.get("height").and_then(|v| v.as_u64()).unwrap_or(600);
@@ -226,7 +253,8 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
                 "opened_in_browser": open_result.is_ok(),
                 "title": meta.0,
                 "description": meta.1,
-            }).to_string())
+            })
+            .to_string())
         }
 
         "hide" => {
@@ -237,7 +265,9 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
         }
 
         "navigate" => {
-            let url = args.get("url").and_then(|v| v.as_str())
+            let url = args
+                .get("url")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'url' for navigate action")?;
 
             if let Ok(mut guard) = CANVAS_URL.lock() {
@@ -253,14 +283,19 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
                 "opened_in_browser": open_result.is_ok(),
                 "title": meta.0,
                 "description": meta.1,
-            }).to_string())
+            })
+            .to_string())
         }
 
         "eval" => {
-            let js = args.get("javaScript").and_then(|v| v.as_str())
+            let js = args
+                .get("javaScript")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing 'javaScript' for eval action")?;
 
-            let current_url = CANVAS_URL.lock().ok()
+            let current_url = CANVAS_URL
+                .lock()
+                .ok()
                 .and_then(|g| g.clone())
                 .unwrap_or_else(|| "(none)".to_string());
 
@@ -269,7 +304,8 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
                 "canvas_url": current_url,
                 "script_length": js.len(),
                 "note": "JavaScript evaluation requires browser context.",
-            }).to_string())
+            })
+            .to_string())
         }
 
         "snapshot" => {
@@ -284,13 +320,15 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
                         "node": node.unwrap_or("default"),
                         "content_length": content.len(),
                         "content": content,
-                    }).to_string())
+                    })
+                    .to_string())
                 }
                 None => Ok(json!({
                     "status": "no_canvas",
                     "node": node.unwrap_or("default"),
                     "note": "No canvas URL presented.",
-                }).to_string()),
+                })
+                .to_string()),
             }
         }
 

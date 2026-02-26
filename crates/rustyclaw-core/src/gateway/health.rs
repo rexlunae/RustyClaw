@@ -4,13 +4,13 @@
 //! - /health - Simple health check (returns 200 OK if running)
 //! - /status - Detailed status with metrics
 
+use anyhow::{Context, Result};
 use serde_json::json;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
-use anyhow::{Context, Result};
 use tracing::{debug, info};
 
 /// Shared health statistics
@@ -51,22 +51,22 @@ impl HealthStats {
             .as_secs();
         now - self.start_time
     }
-    
+
     /// Record a model request
     pub fn record_model_request(&self) {
         self.model_requests.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     /// Record a model error
     pub fn record_model_error(&self) {
         self.model_errors.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     /// Record a tool call
     pub fn record_tool_call(&self) {
         self.tool_calls.fetch_add(1, Ordering::Relaxed);
     }
-    
+
     /// Record a tool error
     pub fn record_tool_error(&self) {
         self.tool_errors.fetch_add(1, Ordering::Relaxed);
@@ -177,7 +177,7 @@ async fn handle_health_request(
             let model_errs = stats.model_errors.load(Ordering::Relaxed);
             let tool_calls = stats.tool_calls.load(Ordering::Relaxed);
             let tool_errs = stats.tool_errors.load(Ordering::Relaxed);
-            
+
             let body = format!(
                 "# HELP rustyclaw_up Whether RustyClaw is running (1 = up)\n\
                  # TYPE rustyclaw_up gauge\n\
@@ -218,8 +218,15 @@ async fn handle_health_request(
                  # HELP rustyclaw_tool_errors_total Total tool execution errors\n\
                  # TYPE rustyclaw_tool_errors_total counter\n\
                  rustyclaw_tool_errors_total {}\n",
-                version, uptime, total_conn, active_conn, total_msgs,
-                model_reqs, model_errs, tool_calls, tool_errs
+                version,
+                uptime,
+                total_conn,
+                active_conn,
+                total_msgs,
+                model_reqs,
+                model_errs,
+                tool_calls,
+                tool_errs
             );
             ("200 OK", "text/plain; version=0.0.4; charset=utf-8", body)
         }

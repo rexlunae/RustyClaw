@@ -2,15 +2,24 @@
 //!
 //! Provides both sync and async implementations for file operations.
 
-use super::helpers::{resolve_path, expand_tilde, is_protected_path, display_path, should_visit, VAULT_ACCESS_DENIED};
+use super::helpers::{
+    VAULT_ACCESS_DENIED, display_path, expand_tilde, is_protected_path, resolve_path, should_visit,
+};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Stdio;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 /// Extensions that `textutil` (macOS) can convert to plain text.
 const TEXTUTIL_EXTENSIONS: &[&str] = &[
-    "doc", "docx", "rtf", "rtfd", "odt", "wordml", "webarchive", "html",
+    "doc",
+    "docx",
+    "rtf",
+    "rtfd",
+    "odt",
+    "wordml",
+    "webarchive",
+    "html",
 ];
 
 // ── Async implementations ───────────────────────────────────────────────────
@@ -62,7 +71,9 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<
                 }
             } else if ext == "pdf" {
                 let path_clone = path.clone();
-                if let Ok(Some(text)) = tokio::task::spawn_blocking(move || textutil_to_text(&path_clone)).await {
+                if let Ok(Some(text)) =
+                    tokio::task::spawn_blocking(move || textutil_to_text(&path_clone)).await
+                {
                     text
                 } else {
                     let path_clone = path.clone();
@@ -112,9 +123,13 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> Result
     debug!(path = %path.display(), bytes = content.len(), "Writing file");
 
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|e| format!("Failed to create directories for '{}': {}", path.display(), e))?;
+        tokio::fs::create_dir_all(parent).await.map_err(|e| {
+            format!(
+                "Failed to create directories for '{}': {}",
+                path.display(),
+                e
+            )
+        })?;
     }
 
     tokio::fs::write(&path, content)
@@ -183,7 +198,10 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
 /// List directory (async).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_list_directory_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_list_directory_async(
+    args: &Value,
+    workspace_dir: &Path,
+) -> Result<String, String> {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -203,7 +221,11 @@ pub async fn exec_list_directory_async(args: &Value, workspace_dir: &Path) -> Re
         .map_err(|e| format!("Failed to read directory '{}': {}", path.display(), e))?;
 
     let mut items: Vec<String> = Vec::new();
-    while let Some(entry) = entries.next_entry().await.map_err(|e| format!("Error reading entry: {}", e))? {
+    while let Some(entry) = entries
+        .next_entry()
+        .await
+        .map_err(|e| format!("Error reading entry: {}", e))?
+    {
         let name = entry.file_name().to_string_lossy().to_string();
         let ft = entry
             .file_type()
@@ -438,8 +460,13 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
     }
 
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create directories for '{}': {}", path.display(), e))?;
+        std::fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create directories for '{}': {}",
+                path.display(),
+                e
+            )
+        })?;
     }
 
     std::fs::write(&path, content)
@@ -603,7 +630,10 @@ fn exec_search_files_sync(args: &Value, workspace_dir: &Path) -> Result<String, 
         let count = results.len();
         let mut output = results.join("\n");
         if count >= max_results {
-            output.push_str(&format!("\n\n(Results truncated at {} matches)", max_results));
+            output.push_str(&format!(
+                "\n\n(Results truncated at {} matches)",
+                max_results
+            ));
         }
         Ok(output)
     }
@@ -640,9 +670,7 @@ fn exec_find_files_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
         let full_str = full.to_string_lossy();
 
         let mut results = Vec::new();
-        for entry in glob::glob(&full_str)
-            .map_err(|e| format!("Invalid glob pattern: {}", e))?
-        {
+        for entry in glob::glob(&full_str).map_err(|e| format!("Invalid glob pattern: {}", e))? {
             if results.len() >= max_results {
                 break;
             }

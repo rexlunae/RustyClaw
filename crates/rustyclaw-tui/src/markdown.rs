@@ -3,6 +3,7 @@
 //! Parses basic markdown and returns styled segments that can be rendered
 //! with iocraft Text elements.
 
+#[allow(unused_imports)]
 use iocraft::prelude::*;
 
 /// A styled text segment.

@@ -24,7 +24,9 @@ fn generate_session_id() -> SessionId {
         .as_millis();
 
     // Simple adjective-noun pattern for readability
-    let adjectives = ["warm", "cool", "swift", "calm", "bold", "keen", "bright", "quick"];
+    let adjectives = [
+        "warm", "cool", "swift", "calm", "bold", "keen", "bright", "quick",
+    ];
     let nouns = ["rook", "hawk", "wolf", "bear", "fox", "owl", "lynx", "crow"];
 
     let adj_idx = (timestamp % adjectives.len() as u128) as usize;
@@ -308,8 +310,6 @@ fn read_nonblocking<R: std::io::Read + std::os::unix::io::AsRawFd>(
     reader: &mut R,
     buf: &mut [u8],
 ) -> std::io::Result<usize> {
-    use std::os::unix::io::AsRawFd;
-
     let fd = reader.as_raw_fd();
 
     // Use poll() to check if data is available (more portable than fcntl tricks)
@@ -368,10 +368,7 @@ fn read_nonblocking<R: std::io::Read + std::os::windows::io::AsRawHandle>(
 
 /// Fallback for platforms without specific implementation.
 #[cfg(not(any(unix, windows)))]
-fn read_nonblocking<R: std::io::Read>(
-    _reader: &mut R,
-    _buf: &mut [u8],
-) -> std::io::Result<usize> {
+fn read_nonblocking<R: std::io::Read>(_reader: &mut R, _buf: &mut [u8]) -> std::io::Result<usize> {
     // Can't do non-blocking reads on unknown platform
     Ok(0)
 }

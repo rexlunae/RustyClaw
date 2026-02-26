@@ -3,26 +3,26 @@
 //!
 //! Split into submodules for maintainability.
 
-mod disk;
-mod monitor;
 mod apps;
+mod disk;
 mod media;
+mod monitor;
 mod security;
 mod text;
 
 // Re-export sync functions
-pub use disk::{exec_disk_usage, exec_classify_files};
-pub use monitor::{exec_system_monitor, exec_battery_health};
-pub use apps::{exec_app_index, exec_cloud_browse, exec_browser_cache};
-pub use media::{exec_screenshot, exec_clipboard};
+pub use apps::{exec_app_index, exec_browser_cache, exec_cloud_browse};
+pub use disk::{exec_classify_files, exec_disk_usage};
+pub use media::{exec_clipboard, exec_screenshot};
+pub use monitor::{exec_battery_health, exec_system_monitor};
 pub use security::{exec_audit_sensitive, exec_secure_delete};
 pub use text::exec_summarize_file;
 
 // Re-export async functions
-pub use disk::{exec_disk_usage_async, exec_classify_files_async};
-pub use monitor::{exec_system_monitor_async, exec_battery_health_async};
-pub use apps::{exec_app_index_async, exec_cloud_browse_async, exec_browser_cache_async};
-pub use media::{exec_screenshot_async, exec_clipboard_async};
+pub use apps::{exec_app_index_async, exec_browser_cache_async, exec_cloud_browse_async};
+pub use disk::{exec_classify_files_async, exec_disk_usage_async};
+pub use media::{exec_clipboard_async, exec_screenshot_async};
+pub use monitor::{exec_battery_health_async, exec_system_monitor_async};
 pub use security::{exec_audit_sensitive_async, exec_secure_delete_async};
 pub use text::exec_summarize_file_async;
 
@@ -62,6 +62,7 @@ pub(crate) fn expand_tilde(path_str: &str) -> std::path::PathBuf {
 }
 
 /// Check if a command exists (sync).
+#[allow(dead_code)]
 pub(crate) fn has_command(cmd: &str) -> bool {
     std::process::Command::new("which")
         .arg(cmd)
@@ -71,6 +72,7 @@ pub(crate) fn has_command(cmd: &str) -> bool {
 }
 
 /// Check if a command exists (async).
+#[allow(dead_code)]
 pub(crate) async fn has_command_async(cmd: &str) -> bool {
     tokio::process::Command::new("which")
         .arg(cmd)

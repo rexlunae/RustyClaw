@@ -47,7 +47,7 @@ mod tools;
 #[cfg(feature = "mcp")]
 pub use client::McpClient;
 #[cfg(feature = "mcp")]
-pub use config::{McpServerConfig, McpConfig};
+pub use config::{McpConfig, McpServerConfig};
 #[cfg(feature = "mcp")]
 pub use manager::McpManager;
 #[cfg(feature = "mcp")]

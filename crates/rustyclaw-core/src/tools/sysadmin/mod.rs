@@ -3,25 +3,25 @@
 //!
 //! Split into submodules for maintainability.
 
-mod pkg;
+mod firewall;
 mod net;
+mod pkg;
 mod service;
 mod user;
-mod firewall;
 
 // Re-export sync functions
-pub use pkg::exec_pkg_manage;
+pub use firewall::exec_firewall;
 pub use net::{exec_net_info, exec_net_scan};
+pub use pkg::exec_pkg_manage;
 pub use service::exec_service_manage;
 pub use user::exec_user_manage;
-pub use firewall::exec_firewall;
 
 // Re-export async functions
-pub use pkg::exec_pkg_manage_async;
+pub use firewall::exec_firewall_async;
 pub use net::{exec_net_info_async, exec_net_scan_async};
+pub use pkg::exec_pkg_manage_async;
 pub use service::exec_service_manage_async;
 pub use user::exec_user_manage_async;
-pub use firewall::exec_firewall_async;
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 

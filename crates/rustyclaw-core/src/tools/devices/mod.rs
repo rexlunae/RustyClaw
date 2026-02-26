@@ -2,21 +2,21 @@
 //!
 //! Split into submodules for maintainability.
 
-mod nodes;
 mod canvas;
+mod nodes;
 
 // Re-export sync functions
-pub use nodes::exec_nodes;
 pub use canvas::exec_canvas;
+pub use nodes::exec_nodes;
 
 // Re-export async functions
-pub use nodes::exec_nodes_async;
 pub use canvas::exec_canvas_async;
+pub use nodes::exec_nodes_async;
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
 use serde_json::Value;
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 /// Run a shell pipeline via `sh -c` (sync).
 pub(crate) fn sh(script: &str) -> Result<String, String> {
@@ -91,7 +91,10 @@ pub(crate) fn get_node(args: &Value) -> Result<String, String> {
 /// Extract command array from args.
 pub(crate) fn get_command_array(args: &Value) -> Result<Vec<String>, String> {
     if let Some(arr) = args.get("command").and_then(|v| v.as_array()) {
-        Ok(arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        Ok(arr
+            .iter()
+            .filter_map(|v| v.as_str().map(String::from))
+            .collect())
     } else if let Some(s) = args.get("command").and_then(|v| v.as_str()) {
         Ok(vec![s.to_string()])
     } else {
@@ -100,6 +103,7 @@ pub(crate) fn get_command_array(args: &Value) -> Result<Vec<String>, String> {
 }
 
 /// Shell-quote a command (simple version).
+#[allow(dead_code)]
 pub(crate) fn shell_quote(parts: &[String]) -> String {
     parts
         .iter()
@@ -116,6 +120,7 @@ pub(crate) fn shell_quote(parts: &[String]) -> String {
 
 /// Node type enumeration.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)]
 pub(crate) enum NodeType {
     Ssh,
     Adb,
@@ -124,6 +129,7 @@ pub(crate) enum NodeType {
 }
 
 /// Parse node identifier to determine type.
+#[allow(dead_code)]
 pub(crate) fn parse_node_type(node: &str) -> (NodeType, String) {
     if node.starts_with("adb:") {
         (NodeType::Adb, node[4..].to_string())

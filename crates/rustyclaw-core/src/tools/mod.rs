@@ -28,10 +28,10 @@ mod system_tools;
 pub mod uv;
 mod web;
 // UV tool
-use uv::{exec_uv_manage, exec_uv_manage_async};
+use uv::exec_uv_manage;
 
 // npm / Node.js tool
-use npm::{exec_npm_manage, exec_npm_manage_async};
+use npm::exec_npm_manage;
 
 // Agent setup orchestrator
 use agent_setup::exec_agent_setup;
@@ -46,16 +46,15 @@ pub use helpers::{
 
 // File operations
 use file::{
-    exec_edit_file, exec_edit_file_async, exec_find_files, exec_find_files_async,
-    exec_list_directory, exec_list_directory_async, exec_read_file, exec_read_file_async,
-    exec_search_files, exec_search_files_async, exec_write_file, exec_write_file_async,
+    exec_edit_file, exec_find_files, exec_list_directory, exec_read_file, exec_search_files,
+    exec_write_file,
 };
 
 // Runtime operations
-use runtime::{exec_execute_command, exec_execute_command_async, exec_process, exec_process_async};
+use runtime::{exec_execute_command, exec_process};
 
 // Web operations
-use web::{exec_web_fetch, exec_web_fetch_async, exec_web_search, exec_web_search_async};
+use web::{exec_web_fetch, exec_web_search};
 
 // Memory operations
 use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
@@ -73,13 +72,10 @@ use sessions_tools::{
 use patch::exec_apply_patch;
 
 // Gateway operations
-use gateway_tools::{
-    exec_gateway, exec_gateway_async, exec_image, exec_image_async, exec_message,
-    exec_message_async, exec_tts, exec_tts_async,
-};
+use gateway_tools::{exec_gateway, exec_image, exec_message, exec_tts};
 
 // Device operations
-use devices::{exec_canvas, exec_canvas_async, exec_nodes, exec_nodes_async};
+use devices::{exec_canvas, exec_nodes};
 
 // Browser automation (separate module with feature-gated implementation)
 use browser::exec_browser;
@@ -112,26 +108,22 @@ use secrets_tools::exec_secrets_stub;
 
 // System tools
 use system_tools::{
-    exec_app_index, exec_app_index_async, exec_audit_sensitive, exec_audit_sensitive_async,
-    exec_battery_health, exec_battery_health_async, exec_browser_cache, exec_browser_cache_async,
-    exec_classify_files, exec_classify_files_async, exec_clipboard, exec_clipboard_async,
-    exec_cloud_browse, exec_cloud_browse_async, exec_disk_usage, exec_disk_usage_async,
-    exec_screenshot, exec_screenshot_async, exec_secure_delete, exec_secure_delete_async,
-    exec_summarize_file, exec_summarize_file_async, exec_system_monitor, exec_system_monitor_async,
+    exec_app_index, exec_audit_sensitive, exec_battery_health, exec_browser_cache,
+    exec_classify_files, exec_clipboard, exec_cloud_browse, exec_disk_usage, exec_screenshot,
+    exec_secure_delete, exec_summarize_file, exec_system_monitor,
 };
 
 // System administration tools
 use sysadmin::{
-    exec_firewall, exec_firewall_async, exec_net_info, exec_net_info_async, exec_net_scan,
-    exec_net_scan_async, exec_pkg_manage, exec_pkg_manage_async, exec_service_manage,
-    exec_service_manage_async, exec_user_manage, exec_user_manage_async,
+    exec_firewall, exec_net_info, exec_net_scan, exec_pkg_manage, exec_service_manage,
+    exec_user_manage,
 };
 
 // Exo AI tools
-use exo_ai::{exec_exo_manage, exec_exo_manage_async};
+use exo_ai::exec_exo_manage;
 
 // Ollama tools
-use ollama::{exec_ollama_manage, exec_ollama_manage_async};
+use ollama::exec_ollama_manage;
 
 /// Stub executor for the `ask_user` tool — never called directly.
 /// Execution is intercepted by the gateway, which forwards the prompt

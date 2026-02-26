@@ -1,6 +1,6 @@
 //! Model management tools for the agent.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -8,8 +8,14 @@ use tracing::{debug, instrument};
 #[instrument(skip(args, _workspace_dir), fields(action = "list"))]
 pub fn exec_model_list(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     let tier = args.get("tier").and_then(|v| v.as_str());
-    let enabled_only = args.get("enabledOnly").and_then(|v| v.as_bool()).unwrap_or(false);
-    let usable_only = args.get("usableOnly").and_then(|v| v.as_bool()).unwrap_or(false);
+    let enabled_only = args
+        .get("enabledOnly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let usable_only = args
+        .get("usableOnly")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     debug!(?tier, enabled_only, usable_only, "Listing models");
 
@@ -22,13 +28,15 @@ pub fn exec_model_list(args: &Value, _workspace_dir: &Path) -> Result<String, St
             "enabledOnly": enabled_only,
             "usableOnly": usable_only,
         }
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Enable a model.
 #[instrument(skip(args, _workspace_dir), fields(action = "enable"))]
 pub fn exec_model_enable(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let model_id = args.get("id")
+    let model_id = args
+        .get("id")
         .or_else(|| args.get("model"))
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: id (model ID)")?;
@@ -39,13 +47,15 @@ pub fn exec_model_enable(args: &Value, _workspace_dir: &Path) -> Result<String, 
         "status": "stub",
         "note": "Model enable requires gateway connection.",
         "modelId": model_id,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Disable a model.
 #[instrument(skip(args, _workspace_dir), fields(action = "disable"))]
 pub fn exec_model_disable(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let model_id = args.get("id")
+    let model_id = args
+        .get("id")
         .or_else(|| args.get("model"))
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: id (model ID)")?;
@@ -56,13 +66,15 @@ pub fn exec_model_disable(args: &Value, _workspace_dir: &Path) -> Result<String,
         "status": "stub",
         "note": "Model disable requires gateway connection.",
         "modelId": model_id,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Set the active model.
 #[instrument(skip(args, _workspace_dir), fields(action = "set"))]
 pub fn exec_model_set(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let model_id = args.get("id")
+    let model_id = args
+        .get("id")
         .or_else(|| args.get("model"))
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: id (model ID)")?;
@@ -73,13 +85,15 @@ pub fn exec_model_set(args: &Value, _workspace_dir: &Path) -> Result<String, Str
         "status": "stub",
         "note": "Model set requires gateway connection.",
         "modelId": model_id,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Get model recommendation for a task complexity.
 #[instrument(skip(args, _workspace_dir), fields(action = "recommend"))]
 pub fn exec_model_recommend(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let complexity = args.get("complexity")
+    let complexity = args
+        .get("complexity")
         .and_then(|v| v.as_str())
         .unwrap_or("medium");
 
@@ -89,7 +103,8 @@ pub fn exec_model_recommend(args: &Value, _workspace_dir: &Path) -> Result<Strin
         "status": "stub",
         "note": "Model recommendation requires gateway connection.",
         "complexity": complexity,
-    }).to_string())
+    })
+    .to_string())
 }
 
 // ── Parameter definitions ───────────────────────────────────────────────────

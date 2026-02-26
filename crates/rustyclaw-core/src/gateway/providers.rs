@@ -4,8 +4,8 @@ use tracing::{debug, trace, warn};
 
 use super::protocol::server;
 use super::types::{
-    ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProviderRequest,
-    ProbeResult, ToolCallResult,
+    ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProbeResult,
+    ProviderRequest, ToolCallResult,
 };
 use super::{ServerFrame, ServerFrameType, ServerPayload, WsWriter};
 use crate::providers;
@@ -21,9 +21,7 @@ use crate::tools;
 ///
 /// This avoids hardcoding an IPv4 preference while still recovering from
 /// broken IPv6 connectivity — a common issue with some providers.
-pub async fn send_with_retry(
-    builder: reqwest::RequestBuilder,
-) -> Result<reqwest::Response> {
+pub async fn send_with_retry(builder: reqwest::RequestBuilder) -> Result<reqwest::Response> {
     match builder.try_clone() {
         Some(cloned) => {
             match builder.send().await {
@@ -64,7 +62,9 @@ pub async fn send_with_retry(
 
 /// Send a single chunk frame as binary.
 pub async fn send_chunk(writer: &mut WsWriter, delta: &str) -> Result<()> {
-    server::send_chunk(writer, delta).await.context("Failed to send chunk frame")
+    server::send_chunk(writer, delta)
+        .await
+        .context("Failed to send chunk frame")
 }
 
 /// Send a thinking_start frame as binary.
@@ -73,16 +73,22 @@ pub async fn send_thinking_start(writer: &mut WsWriter) -> Result<()> {
         frame_type: ServerFrameType::ThinkingStart,
         payload: ServerPayload::ThinkingStart,
     };
-    server::send_frame(writer, &frame).await.context("Failed to send thinking_start frame")
+    server::send_frame(writer, &frame)
+        .await
+        .context("Failed to send thinking_start frame")
 }
 
 /// Send a thinking_delta frame as binary.
 pub async fn send_thinking_delta(writer: &mut WsWriter, delta: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThinkingDelta,
-        payload: ServerPayload::ThinkingDelta { delta: delta.to_string() },
+        payload: ServerPayload::ThinkingDelta {
+            delta: delta.to_string(),
+        },
     };
-    server::send_frame(writer, &frame).await.context("Failed to send thinking_delta frame")
+    server::send_frame(writer, &frame)
+        .await
+        .context("Failed to send thinking_delta frame")
 }
 
 /// Send a thinking_end frame as binary.
@@ -91,12 +97,16 @@ pub async fn send_thinking_end(writer: &mut WsWriter, _summary: Option<&str>) ->
         frame_type: ServerFrameType::ThinkingEnd,
         payload: ServerPayload::ThinkingEnd,
     };
-    server::send_frame(writer, &frame).await.context("Failed to send thinking_end frame")
+    server::send_frame(writer, &frame)
+        .await
+        .context("Failed to send thinking_end frame")
 }
 
 /// Send the response_done sentinel frame as binary.
 pub async fn send_response_done(writer: &mut WsWriter) -> Result<()> {
-    server::send_response_done(writer, true).await.context("Failed to send response_done frame")
+    server::send_response_done(writer, true)
+        .await
+        .context("Failed to send response_done frame")
 }
 
 /// Attach GitHub-Copilot-required IDE headers to a request builder.
@@ -115,10 +125,7 @@ pub fn apply_copilot_headers(
     // Determine X-Initiator based on the last message role.
     // If the last message is from the user, it's user-initiated.
     // If the last message is from assistant/tool, it's agent-initiated.
-    let is_agent_call = messages
-        .last()
-        .map(|m| m.role != "user")
-        .unwrap_or(false);
+    let is_agent_call = messages.last().map(|m| m.role != "user").unwrap_or(false);
     let x_initiator = if is_agent_call { "agent" } else { "user" };
 
     // GitHub Copilot requires recognized IDE headers.
@@ -153,9 +160,7 @@ pub fn resolve_request(
         .base_url
         .or_else(|| ctx.map(|c| c.base_url.clone()))
         .ok_or_else(|| "No base_url specified and gateway has no model configured".to_string())?;
-    let api_key = req
-        .api_key
-        .or_else(|| ctx.and_then(|c| c.api_key.clone()));
+    let api_key = req.api_key.or_else(|| ctx.and_then(|c| c.api_key.clone()));
 
     Ok(ProviderRequest {
         messages: req.messages,
@@ -272,7 +277,10 @@ fn format_tool_results(provider: &str, results: &[ToolCallResult]) -> Vec<(Strin
                     })
                 })
                 .collect();
-            vec![("user".to_string(), serde_json::to_string(&blocks).unwrap_or_default())]
+            vec![(
+                "user".to_string(),
+                serde_json::to_string(&blocks).unwrap_or_default(),
+            )]
         }
         "google" => {
             // Google: single "user" message with array of functionResponse parts
@@ -287,7 +295,10 @@ fn format_tool_results(provider: &str, results: &[ToolCallResult]) -> Vec<(Strin
                     })
                 })
                 .collect();
-            vec![("user".to_string(), serde_json::to_string(&parts).unwrap_or_default())]
+            vec![(
+                "user".to_string(),
+                serde_json::to_string(&parts).unwrap_or_default(),
+            )]
         }
         _ => {
             // OpenAI-compatible: one "tool" message per result
@@ -430,7 +441,9 @@ pub async fn compact_conversation(
             old_tokens / 1000,
             new_tokens / 1000,
         ),
-    ).await.context("Failed to send compaction info frame")?;
+    )
+    .await
+    .context("Failed to send compaction info frame")?;
 
     Ok(())
 }
@@ -480,7 +493,8 @@ pub async fn validate_model_connection(
             "max_tokens": 1,
             "messages": [{"role": "user", "content": "Hi"}],
         });
-        let builder = http.post(&url)
+        let builder = http
+            .post(&url)
             .header("x-api-key", ctx.api_key.as_deref().unwrap_or(""))
             .header("anthropic-version", "2023-06-01")
             .json(&body);
@@ -586,9 +600,13 @@ fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
                                 content.push_str(c);
                             }
 
-                            if let Some(tc_array) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                            if let Some(tc_array) =
+                                delta.get("tool_calls").and_then(|v| v.as_array())
+                            {
                                 for tc in tc_array {
-                                    let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                    let index =
+                                        tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0)
+                                            as usize;
                                     while tool_calls.len() <= index {
                                         tool_calls.push(json!({
                                             "id": "",
@@ -600,13 +618,18 @@ fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
                                         tool_calls[index]["id"] = json!(id);
                                     }
                                     if let Some(func) = tc.get("function") {
-                                        if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
+                                        if let Some(name) =
+                                            func.get("name").and_then(|v| v.as_str())
+                                        {
                                             tool_calls[index]["function"]["name"] = json!(name);
                                         }
-                                        if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
-                                            let existing = tool_calls[index]["function"]["arguments"]
-                                                .as_str()
-                                                .unwrap_or("");
+                                        if let Some(args) =
+                                            func.get("arguments").and_then(|v| v.as_str())
+                                        {
+                                            let existing =
+                                                tool_calls[index]["function"]["arguments"]
+                                                    .as_str()
+                                                    .unwrap_or("");
                                             tool_calls[index]["function"]["arguments"] =
                                                 json!(format!("{}{}", existing, args));
                                         }
@@ -621,11 +644,14 @@ fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
     }
 
     // Count incomplete tool calls for debugging
-    let incomplete_count = tool_calls.iter().filter(|tc| {
-        let id = tc["id"].as_str().unwrap_or("");
-        let name = tc["function"]["name"].as_str().unwrap_or("");
-        id.is_empty() || name.is_empty()
-    }).count();
+    let incomplete_count = tool_calls
+        .iter()
+        .filter(|tc| {
+            let id = tc["id"].as_str().unwrap_or("");
+            let name = tc["function"]["name"].as_str().unwrap_or("");
+            id.is_empty() || name.is_empty()
+        })
+        .count();
 
     // Filter out incomplete tool calls (missing id or name)
     let tool_calls: Vec<serde_json::Value> = tool_calls
@@ -723,7 +749,11 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                 if let Some(data) = line.strip_prefix("data: ") {
                     if data.trim() == "[DONE]" {
                         // Stream complete — exit all loops
-                        trace!(content_len = content.len(), tool_calls = tool_calls.len(), "SSE received [DONE]");
+                        trace!(
+                            content_len = content.len(),
+                            tool_calls = tool_calls.len(),
+                            "SSE received [DONE]"
+                        );
                         break 'outer;
                     }
 
@@ -754,9 +784,15 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                                     }
 
                                     // Tool calls (streamed incrementally)
-                                    if let Some(tc_array) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                                    if let Some(tc_array) =
+                                        delta.get("tool_calls").and_then(|v| v.as_array())
+                                    {
                                         for tc in tc_array {
-                                            let index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+                                            let index = tc
+                                                .get("index")
+                                                .and_then(|v| v.as_u64())
+                                                .unwrap_or(0)
+                                                as usize;
 
                                             // Ensure tool_calls vec is big enough
                                             while tool_calls.len() <= index {
@@ -768,18 +804,25 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                                             }
 
                                             // Update tool call fields
-                                            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                                            if let Some(id) = tc.get("id").and_then(|v| v.as_str())
+                                            {
                                                 tool_calls[index]["id"] = json!(id);
                                             }
                                             if let Some(func) = tc.get("function") {
-                                                if let Some(name) = func.get("name").and_then(|v| v.as_str()) {
-                                                    tool_calls[index]["function"]["name"] = json!(name);
+                                                if let Some(name) =
+                                                    func.get("name").and_then(|v| v.as_str())
+                                                {
+                                                    tool_calls[index]["function"]["name"] =
+                                                        json!(name);
                                                 }
-                                                if let Some(args) = func.get("arguments").and_then(|v| v.as_str()) {
+                                                if let Some(args) =
+                                                    func.get("arguments").and_then(|v| v.as_str())
+                                                {
                                                     // Append to existing arguments
-                                                    let existing = tool_calls[index]["function"]["arguments"]
-                                                        .as_str()
-                                                        .unwrap_or("");
+                                                    let existing =
+                                                        tool_calls[index]["function"]["arguments"]
+                                                            .as_str()
+                                                            .unwrap_or("");
                                                     tool_calls[index]["function"]["arguments"] =
                                                         json!(format!("{}{}", existing, args));
                                                 }
@@ -789,10 +832,17 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                                 }
 
                                 // Check finish_reason AFTER extracting delta data
-                                if let Some(fr) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                                if let Some(fr) =
+                                    choice.get("finish_reason").and_then(|v| v.as_str())
+                                {
                                     finish_reason = Some(fr.to_string());
                                     // Terminal reasons mean the model is done
-                                    if fr == "stop" || fr == "tool_calls" || fr == "tool_use" || fr == "length" || fr == "end_turn" {
+                                    if fr == "stop"
+                                        || fr == "tool_calls"
+                                        || fr == "tool_use"
+                                        || fr == "length"
+                                        || fr == "end_turn"
+                                    {
                                         trace!(
                                             finish_reason = fr,
                                             content_len = content.len(),
@@ -816,11 +866,14 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
     }
 
     // Count incomplete tool calls for debugging
-    let incomplete_count = tool_calls.iter().filter(|tc| {
-        let id = tc["id"].as_str().unwrap_or("");
-        let name = tc["function"]["name"].as_str().unwrap_or("");
-        id.is_empty() || name.is_empty()
-    }).count();
+    let incomplete_count = tool_calls
+        .iter()
+        .filter(|tc| {
+            let id = tc["id"].as_str().unwrap_or("");
+            let name = tc["function"]["name"].as_str().unwrap_or("");
+            id.is_empty() || name.is_empty()
+        })
+        .count();
 
     // Filter out incomplete tool calls (missing id or name)
     let tool_calls: Vec<serde_json::Value> = tool_calls
@@ -1093,7 +1146,8 @@ pub async fn call_anthropic_with_tools(
     let mut current_tool_index = 0;
     let mut in_thinking_block = false;
     let mut thinking_content = String::new();
-    let mut tool_args_buffer: std::collections::HashMap<usize, String> = std::collections::HashMap::new();
+    let mut tool_args_buffer: std::collections::HashMap<usize, String> =
+        std::collections::HashMap::new();
 
     while let Some(chunk_result) = stream.next().await {
         let chunk = chunk_result.context("Stream read error")?;
@@ -1141,7 +1195,8 @@ pub async fn call_anthropic_with_tools(
                                 Some("tool_use") => {
                                     let id = block["id"].as_str().unwrap_or("").to_string();
                                     let name = block["name"].as_str().unwrap_or("").to_string();
-                                    current_tool_index = json["index"].as_u64().unwrap_or(0) as usize;
+                                    current_tool_index =
+                                        json["index"].as_u64().unwrap_or(0) as usize;
 
                                     // Initialize tool call
                                     result.tool_calls.push(ParsedToolCall {
@@ -1176,7 +1231,9 @@ pub async fn call_anthropic_with_tools(
                                 }
                                 Some("input_json_delta") => {
                                     if let Some(partial) = delta["partial_json"].as_str() {
-                                        if let Some(buf) = tool_args_buffer.get_mut(&current_tool_index) {
+                                        if let Some(buf) =
+                                            tool_args_buffer.get_mut(&current_tool_index)
+                                        {
                                             buf.push_str(partial);
                                         }
                                     }
@@ -1210,7 +1267,8 @@ pub async fn call_anthropic_with_tools(
                         if let Some(args_str) = tool_args_buffer.remove(&block_index) {
                             if !args_str.is_empty() {
                                 if let Some(tc) = result.tool_calls.get_mut(block_index) {
-                                    tc.arguments = serde_json::from_str(&args_str).unwrap_or(json!({}));
+                                    tc.arguments =
+                                        serde_json::from_str(&args_str).unwrap_or(json!({}));
                                 }
                             }
                         }
@@ -1231,9 +1289,7 @@ pub async fn call_anthropic_with_tools(
                         return Ok(result);
                     }
                     "error" => {
-                        let msg = json["error"]["message"]
-                            .as_str()
-                            .unwrap_or("Unknown error");
+                        let msg = json["error"]["message"].as_str().unwrap_or("Unknown error");
                         anyhow::bail!("Anthropic stream error: {}", msg);
                     }
                     _ => {
@@ -1327,7 +1383,11 @@ pub async fn call_google_with_tools(
         .iter()
         .filter(|m| m.role != "system")
         .map(|m| {
-            let role = if m.role == "assistant" { "model" } else { "user" };
+            let role = if m.role == "assistant" {
+                "model"
+            } else {
+                "user"
+            };
             if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&m.content) {
                 if parsed.is_array() {
                     return json!({ "role": role, "parts": parsed });
@@ -1347,9 +1407,7 @@ pub async fn call_google_with_tools(
         body["tools"] = json!([{ "function_declarations": tool_defs }]);
     }
 
-    let builder = http
-        .post(&url)
-        .json(&body);
+    let builder = http.post(&url).json(&body);
     let resp = send_with_retry(builder).await?;
 
     if !resp.status().is_success() {

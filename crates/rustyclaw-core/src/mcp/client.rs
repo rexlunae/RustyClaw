@@ -2,11 +2,10 @@
 
 use anyhow::{Context, Result};
 use rmcp::{
-    ServiceExt,
-    transport::TokioChildProcess,
+    RoleClient, ServiceExt,
     model::{CallToolRequestParams, ListToolsResult},
     service::RunningService,
-    RoleClient,
+    transport::TokioChildProcess,
 };
 use serde_json::Map as JsonMap;
 use std::sync::Arc;
@@ -15,7 +14,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use super::config::McpServerConfig;
-use super::tools::{McpTool, McpToolResult, McpContent};
+use super::tools::{McpContent, McpTool, McpToolResult};
 
 /// A connected MCP server client.
 pub struct McpClient {
@@ -61,12 +60,11 @@ impl McpClient {
         }
 
         // Create stdio transport - pass owned Command (rmcp 0.16 API)
-        let transport = TokioChildProcess::new(cmd)
-            .context("Failed to spawn MCP server process")?;
+        let transport =
+            TokioChildProcess::new(cmd).context("Failed to spawn MCP server process")?;
 
         // Connect and initialize - returns RunningService which derefs to Peer
-        let running = ().serve(transport).await
-            .context("Failed to initialize MCP connection")?;
+        let running = ().serve(transport).await.context("Failed to initialize MCP connection")?;
 
         // Store the running service
         *self.service.lock().await = Some(running);
@@ -95,13 +93,17 @@ impl McpClient {
     /// Refresh the list of available tools.
     pub async fn refresh_tools(&self) -> Result<Vec<McpTool>> {
         let service_guard = self.service.lock().await;
-        let service = service_guard.as_ref()
+        let service = service_guard
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to MCP server"))?;
 
-        let result: ListToolsResult = service.list_tools(None).await
+        let result: ListToolsResult = service
+            .list_tools(None)
+            .await
             .context("Failed to list tools")?;
 
-        let tools: Vec<McpTool> = result.tools
+        let tools: Vec<McpTool> = result
+            .tools
             .into_iter()
             .map(|t| McpTool {
                 name: t.name.to_string(),
@@ -125,9 +127,14 @@ impl McpClient {
     }
 
     /// Call a tool on this MCP server.
-    pub async fn call_tool(&self, tool_name: &str, arguments: serde_json::Value) -> Result<McpToolResult> {
+    pub async fn call_tool(
+        &self,
+        tool_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<McpToolResult> {
         let service_guard = self.service.lock().await;
-        let service = service_guard.as_ref()
+        let service = service_guard
+            .as_ref()
             .ok_or_else(|| anyhow::anyhow!("Not connected to MCP server"))?;
 
         debug!(server = %self.name, tool = tool_name, "Calling MCP tool");
@@ -151,14 +158,15 @@ impl McpClient {
         match service.call_tool(params).await {
             Ok(result) => {
                 use rmcp::model::RawContent;
-                
-                let content: Vec<McpContent> = result.content
+
+                let content: Vec<McpContent> = result
+                    .content
                     .into_iter()
                     .map(|c| {
                         // Annotated<RawContent> derefs to RawContent
                         match &*c {
-                            RawContent::Text(t) => McpContent::Text { 
-                                text: t.text.clone()
+                            RawContent::Text(t) => McpContent::Text {
+                                text: t.text.clone(),
                             },
                             RawContent::Image(i) => McpContent::Image {
                                 data: i.data.clone(),
@@ -167,18 +175,27 @@ impl McpClient {
                             RawContent::Resource(r) => {
                                 use rmcp::model::ResourceContents;
                                 match &r.resource {
-                                    ResourceContents::TextResourceContents { uri, mime_type, text, .. } => McpContent::Resource {
+                                    ResourceContents::TextResourceContents {
+                                        uri,
+                                        mime_type,
+                                        text,
+                                        ..
+                                    } => McpContent::Resource {
                                         uri: uri.clone(),
                                         mime_type: mime_type.clone(),
                                         text: Some(text.clone()),
                                     },
-                                    ResourceContents::BlobResourceContents { uri, mime_type, .. } => McpContent::Resource {
+                                    ResourceContents::BlobResourceContents {
+                                        uri,
+                                        mime_type,
+                                        ..
+                                    } => McpContent::Resource {
                                         uri: uri.clone(),
                                         mime_type: mime_type.clone(),
                                         text: None,
                                     },
                                 }
-                            },
+                            }
                             RawContent::Audio(a) => McpContent::Text {
                                 text: format!("[Audio: {} bytes, {}]", a.data.len(), a.mime_type),
                             },

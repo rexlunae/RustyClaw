@@ -83,6 +83,7 @@ pub(crate) enum GwEvent {
     /// Thread list update from gateway (unified tasks + threads)
     ThreadsUpdate {
         threads: Vec<crate::action::ThreadInfo>,
+        #[allow(dead_code)]
         foreground_id: Option<u64>,
     },
     /// Thread switch confirmed — clear messages and show context
@@ -144,6 +145,7 @@ pub(crate) enum UserInput {
     /// Switch to a different thread
     ThreadSwitch(u64),
     /// Create a new thread
+    #[allow(dead_code)]
     ThreadCreate(String),
     Quit,
 }
@@ -1415,7 +1417,7 @@ mod tui_component {
                                     }
                                     GwEvent::ThreadsUpdate {
                                         threads: thread_list,
-                                        foreground_id,
+                                        foreground_id: _,
                                     } => {
                                         threads.set(thread_list);
                                         // Update sidebar_selected to stay in bounds
@@ -1685,8 +1687,8 @@ mod tui_component {
                             KeyCode::Up | KeyCode::Char('k') => {
                                 if let Some(ref pt) = prompt_type {
                                     match pt {
-                                        rustyclaw_core::user_prompt_types::PromptType::Select { options, .. } |
-                                        rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. } => {
+                                        rustyclaw_core::user_prompt_types::PromptType::Select { options: _, .. } |
+                                        rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options: _, .. } => {
                                             let current = user_prompt_selected.get();
                                             if current > 0 {
                                                 user_prompt_selected.set(current - 1);
@@ -2101,6 +2103,19 @@ mod tui_component {
                             command_completions.set(Vec::new());
                             command_selected.set(None);
                         }
+                        KeyCode::Enter if sidebar_focused.get() => {
+                            let thread_list = threads.read().clone();
+                            if let Some(thread) = thread_list.get(sidebar_selected.get()) {
+                                // Send thread switch request
+                                if let Ok(guard) = tx_for_keys.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::ThreadSwitch(thread.id));
+                                    }
+                                }
+                            }
+                            // Return focus to input after selection
+                            sidebar_focused.set(false);
+                        }
                         KeyCode::Enter => {
                             let val = input_value.to_string();
                             if !val.is_empty() {
@@ -2147,17 +2162,6 @@ mod tui_component {
                             if thread_count > 0 {
                                 let current = sidebar_selected.get();
                                 sidebar_selected.set((current + 1).min(thread_count - 1));
-                            }
-                        }
-                        KeyCode::Enter if sidebar_focused.get() => {
-                            let thread_list = threads.read().clone();
-                            if let Some(thread) = thread_list.get(sidebar_selected.get()) {
-                                // Send thread switch request
-                                if let Ok(guard) = tx_for_keys.lock() {
-                                    if let Some(ref tx) = *guard {
-                                        let _ = tx.send(UserInput::ThreadSwitch(thread.id));
-                                    }
-                                }
                             }
                         }
                         KeyCode::Esc if sidebar_focused.get() => {

@@ -1,8 +1,8 @@
 //! Canvas tool execution handler for the gateway.
 
-use tracing::{debug, warn, instrument};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use tracing::{debug, instrument, warn};
 
 use crate::canvas::CanvasHost;
 
@@ -47,7 +47,11 @@ pub async fn execute_canvas_tool(
             if url.starts_with("http://") || url.starts_with("https://") {
                 Ok(format!("Navigated to external URL: {}", url))
             } else {
-                let canvas_url = format!("{}{}", host.canvas_url(session), url.trim_start_matches('/'));
+                let canvas_url = format!(
+                    "{}{}",
+                    host.canvas_url(session),
+                    url.trim_start_matches('/')
+                );
                 Ok(format!("Navigated to: {}", canvas_url))
             }
         }
@@ -64,7 +68,7 @@ pub async fn execute_canvas_tool(
 
             drop(host); // Release lock before async operation
             let host = canvas.lock().await;
-            
+
             match host.write_file(session, path, content.as_bytes()).await {
                 Ok(file_path) => Ok(format!("Wrote canvas file: {}", file_path.display())),
                 Err(e) => Err(format!("Failed to write canvas file: {}", e)),
@@ -72,12 +76,8 @@ pub async fn execute_canvas_tool(
         }
 
         "canvas_a2ui_push" => {
-            let text = args
-                .get("text")
-                .and_then(|v| v.as_str());
-            let jsonl = args
-                .get("jsonl")
-                .and_then(|v| v.as_str());
+            let text = args.get("text").and_then(|v| v.as_str());
+            let jsonl = args.get("jsonl").and_then(|v| v.as_str());
 
             drop(host); // Release lock
             let host = canvas.lock().await;
@@ -97,12 +97,10 @@ pub async fn execute_canvas_tool(
                     .collect();
 
                 match messages {
-                    Ok(msgs) => {
-                        match host.push_a2ui(session, msgs).await {
-                            Ok(()) => Ok("A2UI messages pushed".to_string()),
-                            Err(e) => Err(format!("Failed to push A2UI: {}", e)),
-                        }
-                    }
+                    Ok(msgs) => match host.push_a2ui(session, msgs).await {
+                        Ok(()) => Ok("A2UI messages pushed".to_string()),
+                        Err(e) => Err(format!("Failed to push A2UI: {}", e)),
+                    },
                     Err(e) => Err(format!("Invalid A2UI JSONL: {}", e)),
                 }
             } else {
@@ -113,7 +111,7 @@ pub async fn execute_canvas_tool(
         "canvas_a2ui_reset" => {
             drop(host);
             let host = canvas.lock().await;
-            
+
             match host.reset_a2ui(session).await {
                 Ok(()) => Ok("A2UI state reset".to_string()),
                 Err(e) => Err(format!("Failed to reset A2UI: {}", e)),
@@ -123,11 +121,12 @@ pub async fn execute_canvas_tool(
         "canvas_snapshot" => {
             drop(host);
             let host = canvas.lock().await;
-            
+
             match host.snapshot(session).await {
                 Ok(data) => {
                     // Return base64-encoded image
-                    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
+                    let b64 =
+                        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
                     Ok(format!("data:image/png;base64,{}", b64))
                 }
                 Err(e) => Err(format!("Snapshot failed: {}", e)),
@@ -159,5 +158,6 @@ Canvas provides an agent-controlled visual workspace for HTML, CSS, JS, and A2UI
 - **canvas_a2ui_reset**: Reset A2UI state for the session
 - **canvas_snapshot**: Capture canvas as image (returns base64 PNG)
 
-"#.to_string()
+"#
+    .to_string()
 }

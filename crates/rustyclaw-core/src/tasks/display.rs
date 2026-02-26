@@ -62,7 +62,7 @@ impl TaskIcon {
             Self::Failed => "\x1b[31m",       // Red
             Self::Cancelled => "\x1b[90m",    // Gray
             Self::WaitingInput => "\x1b[35m", // Magenta
-            Self::Background => "\x1b[34m",  // Blue
+            Self::Background => "\x1b[34m",   // Blue
         }
     }
 
@@ -89,16 +89,16 @@ impl std::fmt::Display for TaskIcon {
 pub struct TaskIndicator {
     /// The icon to show
     pub icon: TaskIcon,
-    
+
     /// Short label
     pub label: String,
-    
+
     /// Optional progress bar (width in chars)
     pub progress_bar: Option<String>,
-    
+
     /// Optional time remaining
     pub eta: Option<String>,
-    
+
     /// Whether this is the foreground task
     pub foreground: bool,
 }
@@ -108,17 +108,15 @@ impl TaskIndicator {
     pub fn from_task(task: &Task) -> Self {
         let icon = TaskIcon::from_status(&task.status);
         let label = task.display_label();
-        
-        let progress_bar = task.status.progress().map(|p| {
-            format_progress_bar(p, 10)
-        });
-        
+
+        let progress_bar = task.status.progress().map(|p| format_progress_bar(p, 10));
+
         let eta = if let TaskStatus::Running { .. } | TaskStatus::Background { .. } = &task.status {
             task.elapsed().map(|d| format_duration(d))
         } else {
             None
         };
-        
+
         Self {
             icon,
             label,
@@ -131,15 +129,15 @@ impl TaskIndicator {
     /// Format as a compact inline indicator for chat.
     pub fn inline(&self) -> String {
         let mut s = format!("{} {}", self.icon, self.label);
-        
+
         if let Some(ref bar) = self.progress_bar {
             s.push_str(&format!(" {}", bar));
         }
-        
+
         if let Some(ref eta) = self.eta {
             s.push_str(&format!(" ({})", eta));
         }
-        
+
         s
     }
 
@@ -157,7 +155,7 @@ impl TaskIndicator {
 pub fn format_progress_bar(fraction: f32, width: usize) -> String {
     let filled = (fraction * width as f32).round() as usize;
     let empty = width.saturating_sub(filled);
-    
+
     format!(
         "[{}{}] {}%",
         "█".repeat(filled),
@@ -169,7 +167,7 @@ pub fn format_progress_bar(fraction: f32, width: usize) -> String {
 /// Format a duration for display.
 pub fn format_duration(d: std::time::Duration) -> String {
     let secs = d.as_secs();
-    
+
     if secs < 60 {
         format!("{}s", secs)
     } else if secs < 3600 {
@@ -183,7 +181,7 @@ pub fn format_duration(d: std::time::Duration) -> String {
 pub fn format_task_status(task: &Task) -> String {
     let icon = TaskIcon::from_status(&task.status);
     let label = task.display_label();
-    
+
     let status_msg = match &task.status {
         TaskStatus::Pending => "Waiting to start".to_string(),
         TaskStatus::Running { message, progress } => {
@@ -229,11 +227,12 @@ pub fn format_task_status(task: &Task) -> String {
             format!("Waiting: {}", prompt)
         }
     };
-    
-    let elapsed = task.elapsed()
+
+    let elapsed = task
+        .elapsed()
         .map(|d| format!(" [{}]", format_duration(d)))
         .unwrap_or_default();
-    
+
     format!("{} {} — {}{}", icon, label, status_msg, elapsed)
 }
 
@@ -242,8 +241,9 @@ pub fn format_task_icons(tasks: &[Task]) -> String {
     if tasks.is_empty() {
         return String::new();
     }
-    
-    tasks.iter()
+
+    tasks
+        .iter()
         .map(|t| TaskIcon::from_status(&t.status).emoji())
         .collect::<Vec<_>>()
         .join("")
@@ -254,25 +254,28 @@ pub fn format_task_indicators(tasks: &[Task], max_display: usize) -> String {
     if tasks.is_empty() {
         return String::new();
     }
-    
-    let active: Vec<_> = tasks.iter()
+
+    let active: Vec<_> = tasks
+        .iter()
         .filter(|t| !t.status.is_terminal())
         .take(max_display)
         .collect();
-    
+
     if active.is_empty() {
         return String::new();
     }
-    
-    let indicators: Vec<_> = active.iter()
+
+    let indicators: Vec<_> = active
+        .iter()
         .map(|t| TaskIndicator::from_task(t).badge())
         .collect();
-    
-    let remaining = tasks.iter()
+
+    let remaining = tasks
+        .iter()
         .filter(|t| !t.status.is_terminal())
         .count()
         .saturating_sub(max_display);
-    
+
     if remaining > 0 {
         format!("{} +{}", indicators.join(" "), remaining)
     } else {

@@ -2,7 +2,7 @@
 
 use serde_json::Value;
 use std::path::Path;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 /// Cron job management.
 #[instrument(skip(args, workspace_dir), fields(action))]
@@ -55,9 +55,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                         format!(
                             "cron '{}'{}",
                             expr,
-                            tz.as_ref()
-                                .map(|t| format!(" ({})", t))
-                                .unwrap_or_default()
+                            tz.as_ref().map(|t| format!(" ({})", t)).unwrap_or_default()
                         )
                     }
                 };

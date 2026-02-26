@@ -100,7 +100,9 @@ impl McpToolResult {
     pub fn text(content: impl Into<String>) -> Self {
         Self {
             success: true,
-            content: vec![McpContent::Text { text: content.into() }],
+            content: vec![McpContent::Text {
+                text: content.into(),
+            }],
             error: None,
         }
     }
@@ -125,9 +127,9 @@ impl McpToolResult {
             .filter_map(|c| match c {
                 McpContent::Text { text } => Some(text.clone()),
                 McpContent::Image { mime_type, .. } => Some(format!("[Image: {}]", mime_type)),
-                McpContent::Resource { uri, text, .. } => {
-                    text.clone().or_else(|| Some(format!("[Resource: {}]", uri)))
-                }
+                McpContent::Resource { uri, text, .. } => text
+                    .clone()
+                    .or_else(|| Some(format!("[Resource: {}]", uri))),
             })
             .collect::<Vec<_>>()
             .join("\n")

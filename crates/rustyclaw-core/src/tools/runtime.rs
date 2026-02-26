@@ -3,21 +3,24 @@
 //! These tools use async I/O for process spawning and management.
 
 use super::helpers::{
-    command_references_credentials, is_protected_path, process_manager, resolve_path,
-    run_sandboxed_command, VAULT_ACCESS_DENIED,
+    VAULT_ACCESS_DENIED, command_references_credentials, is_protected_path, process_manager,
+    resolve_path, run_sandboxed_command,
 };
 use crate::process_manager::SessionStatus;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
 use tokio::process::Command;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 /// Execute a shell command with background support and optional sandboxing.
 ///
 /// This is an async function that uses tokio for process management.
 #[instrument(skip(args, workspace_dir), fields(command))]
-pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_execute_command_async(
+    args: &Value,
+    workspace_dir: &Path,
+) -> Result<String, String> {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -82,12 +85,10 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> R
         // run_sandboxed_command is still sync - run on blocking pool
         let cmd = command.to_string();
         let cwd_clone = cwd.clone();
-        let output = tokio::task::spawn_blocking(move || {
-            run_sandboxed_command(&cmd, &cwd_clone)
-        })
-        .await
-        .map_err(|e| format!("Task join error: {}", e))??;
-        
+        let output = tokio::task::spawn_blocking(move || run_sandboxed_command(&cmd, &cwd_clone))
+            .await
+            .map_err(|e| format!("Task join error: {}", e))??;
+
         return format_output(output, timeout_secs);
     }
 
@@ -180,20 +181,20 @@ async fn background_child(
     // Convert tokio child to std child by extracting the inner handle
     // This is a bit tricky - we need to spawn a std::process::Command instead
     // and transfer the session concept.
-    
+
     // Actually, we can't easily convert tokio::Child to std::Child.
     // Instead, let's create a new session in the ProcessManager using spawn.
     // But we need to kill this child first to avoid orphan.
-    
+
     // Better approach: The ProcessManager should also support tokio children.
     // For now, let's use a workaround: collect what output we have and return it
     // with a message that the process was backgrounded.
-    
+
     // For the MVP, we'll spawn a new background process via ProcessManager
     // and kill this async child. Not ideal but functional.
-    
+
     // TODO: Refactor ProcessManager to support tokio::process::Child
-    
+
     let manager = process_manager();
     let mut mgr = manager
         .lock()
@@ -276,10 +277,10 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
     // But this is called from spawn_blocking, so we need to be careful.
     // Actually, since execute_tool now uses spawn_blocking, this sync function
     // just does the original sync behavior.
-    
+
     // For the async path, execute_tool should call exec_execute_command_async directly.
     // This sync version is kept for compatibility but does the old sync implementation.
-    
+
     exec_execute_command_sync(args, workspace_dir)
 }
 
@@ -633,7 +634,9 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
         }
         "poll" => {
             let id = session_id.ok_or("Missing sessionId for poll action")?;
-            let session = mgr.get_mut(id).ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
             session.try_read_output();
             let exited = session.check_exit();
             let new_output = session.poll_output().to_string();
@@ -660,30 +663,58 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
         }
         "log" => {
             let id = session_id.ok_or("Missing sessionId for log action")?;
-            let session = mgr.get_mut(id).ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
             session.try_read_output();
-            let offset = args.get("offset").and_then(|v| v.as_u64()).map(|n| n as usize);
-            let limit = args.get("limit").and_then(|v| v.as_u64()).map(|n| n as usize).or(Some(50));
+            let offset = args
+                .get("offset")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize);
+            let limit = args
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .map(|n| n as usize)
+                .or(Some(50));
             let output = session.log_output(offset, limit);
-            if output.is_empty() { Ok("(no output)".to_string()) } else { Ok(output) }
+            if output.is_empty() {
+                Ok("(no output)".to_string())
+            } else {
+                Ok(output)
+            }
         }
         "write" => {
             let id = session_id.ok_or("Missing sessionId for write action")?;
-            let data = args.get("data").and_then(|v| v.as_str()).ok_or("Missing data for write action")?;
-            let session = mgr.get_mut(id).ok_or_else(|| format!("No session found: {}", id))?;
+            let data = args
+                .get("data")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing data for write action")?;
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
             session.write_stdin(data)?;
             Ok(format!("Wrote {} bytes to session {}", data.len(), id))
         }
         "send_keys" | "sendkeys" | "send-keys" => {
             let id = session_id.ok_or("Missing sessionId for send_keys action")?;
-            let keys = args.get("keys").and_then(|v| v.as_str()).ok_or("Missing 'keys' for send_keys action")?;
-            let session = mgr.get_mut(id).ok_or_else(|| format!("No session found: {}", id))?;
+            let keys = args
+                .get("keys")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'keys' for send_keys action")?;
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
             let bytes_sent = session.send_keys(keys)?;
-            Ok(format!("Sent keys [{}] ({} bytes) to session {}", keys, bytes_sent, id))
+            Ok(format!(
+                "Sent keys [{}] ({} bytes) to session {}",
+                keys, bytes_sent, id
+            ))
         }
         "kill" => {
             let id = session_id.ok_or("Missing sessionId for kill action")?;
-            let session = mgr.get_mut(id).ok_or_else(|| format!("No session found: {}", id))?;
+            let session = mgr
+                .get_mut(id)
+                .ok_or_else(|| format!("No session found: {}", id))?;
             session.kill()?;
             Ok(format!("Killed session {}", id))
         }
@@ -694,12 +725,17 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
         "remove" => {
             let id = session_id.ok_or("Missing sessionId for remove action")?;
             if let Some(mut session) = mgr.remove(id) {
-                if session.status == SessionStatus::Running { let _ = session.kill(); }
+                if session.status == SessionStatus::Running {
+                    let _ = session.kill();
+                }
                 Ok(format!("Removed session {}", id))
             } else {
                 Err(format!("No session found: {}", id))
             }
         }
-        _ => Err(format!("Unknown action: {}. Valid: list, poll, log, write, send_keys, kill, clear, remove", action))
+        _ => Err(format!(
+            "Unknown action: {}. Valid: list, poll, log, write, send_keys, kill, clear, remove",
+            action
+        )),
     }
 }

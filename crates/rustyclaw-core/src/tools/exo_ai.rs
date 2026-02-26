@@ -5,7 +5,7 @@
 //
 // Provides both sync and async implementations.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
 
@@ -20,10 +20,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
         .unwrap_or("status")
         .to_lowercase();
 
-    let port = args
-        .get("port")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(52415);
+    let port = args.get("port").and_then(|v| v.as_u64()).unwrap_or(52415);
 
     tracing::Span::current().record("action", &action);
     debug!("Executing exo_manage");
@@ -54,18 +51,30 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 match sh_async(&format!(
                     "cd '{}' && git pull --ff-only 2>&1",
                     existing.display()
-                )).await {
-                    Ok(msg) => steps.push(format!("✓ exo repo ({}) updated: {}", existing.display(), msg)),
-                    Err(_) => steps.push(format!("✓ exo repo found at {} (pull skipped)", existing.display())),
+                ))
+                .await
+                {
+                    Ok(msg) => steps.push(format!(
+                        "✓ exo repo ({}) updated: {}",
+                        existing.display(),
+                        msg
+                    )),
+                    Err(_) => steps.push(format!(
+                        "✓ exo repo found at {} (pull skipped)",
+                        existing.display()
+                    )),
                 }
                 existing
             } else {
                 let target = exo_repo_dir();
-                let _ = tokio::fs::create_dir_all(target.parent().unwrap_or(Path::new("/tmp"))).await;
+                let _ =
+                    tokio::fs::create_dir_all(target.parent().unwrap_or(Path::new("/tmp"))).await;
                 match sh_async(&format!(
                     "git clone https://github.com/exo-explore/exo '{}' 2>&1",
                     target.display()
-                )).await {
+                ))
+                .await
+                {
                     Ok(msg) => steps.push(format!("✓ Cloned exo repo: {}", msg)),
                     Err(e) => return Err(format!("Failed to clone exo: {}", e)),
                 }
@@ -149,7 +158,9 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                     match sh_async(&format!(
                         "cd '{}' && npm install --no-fund --no-audit 2>&1 && npm run build 2>&1",
                         dashboard_dir.display()
-                    )).await {
+                    ))
+                    .await
+                    {
                         Ok(_) => steps.push("✓ Dashboard built".into()),
                         Err(e) => steps.push(format!("⚠ Dashboard build failed: {}", e)),
                     }
@@ -224,19 +235,32 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 cmd_parts.push("--api-port".into());
                 cmd_parts.push(port.to_string());
             }
-            if args.get("no_worker").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if args
+                .get("no_worker")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 cmd_parts.push("--no-worker".into());
             }
-            if args.get("offline").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if args
+                .get("offline")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 cmd_parts.push("--offline".into());
             }
-            if args.get("verbose").and_then(|v| v.as_bool()).unwrap_or(false) {
+            if args
+                .get("verbose")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
                 cmd_parts.push("-v".into());
             }
 
             let log_file = std::fs::File::create(&log_path)
                 .map_err(|e| format!("Cannot create log file: {}", e))?;
-            let log_err = log_file.try_clone()
+            let log_err = log_file
+                .try_clone()
                 .map_err(|e| format!("Cannot clone log handle: {}", e))?;
 
             let mut cmd = std::process::Command::new(&cmd_parts[0]);
@@ -257,19 +281,23 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 }
             }
 
-            cmd.spawn().map_err(|e| format!("Failed to spawn exo: {}", e))?;
+            cmd.spawn()
+                .map_err(|e| format!("Failed to spawn exo: {}", e))?;
 
             for i in 0..15 {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 if is_exo_running_async().await {
                     return Ok(format!(
                         "exo started (after ~{}s). Dashboard: http://localhost:{}",
-                        i + 1, port
+                        i + 1,
+                        port
                     ));
                 }
             }
 
-            let tail = tokio::fs::read_to_string(&log_path).await.unwrap_or_default();
+            let tail = tokio::fs::read_to_string(&log_path)
+                .await
+                .unwrap_or_default();
             let last_lines: String = tail
                 .lines()
                 .rev()
@@ -282,7 +310,11 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
 
             Err(format!(
                 "exo failed to start within 15s. Log:\n{}",
-                if last_lines.is_empty() { "(empty)".into() } else { last_lines }
+                if last_lines.is_empty() {
+                    "(empty)".into()
+                } else {
+                    last_lines
+                }
             ))
         }
 
@@ -290,12 +322,15 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             if !is_exo_running_async().await {
                 return Ok("exo is not running.".into());
             }
-            sh_async("pkill -INT -f '[e]xo\\.main' 2>/dev/null; \
+            sh_async(
+                "pkill -INT -f '[e]xo\\.main' 2>/dev/null; \
                 pkill -INT -f '[u]v run exo' 2>/dev/null; \
                 sleep 1; \
                 pkill -f '[e]xo\\.main' 2>/dev/null; \
                 pkill -f '[u]v run exo' 2>/dev/null; \
-                echo 'exo stopped.'").await
+                echo 'exo stopped.'",
+            )
+            .await
         }
 
         "status" => {
@@ -310,16 +345,29 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
 
             let mut out: Vec<String> = Vec::new();
             out.push("═══ exo status ═══".into());
-            out.push(format!("Repo cloned:      {}", if cloned { "✓" } else { "✗" }));
-            out.push(format!("Binary installed:  {}", if installed { "✓" } else { "✗" }));
+            out.push(format!(
+                "Repo cloned:      {}",
+                if cloned { "✓" } else { "✗" }
+            ));
+            out.push(format!(
+                "Binary installed:  {}",
+                if installed { "✓" } else { "✗" }
+            ));
             out.push(format!("Binary path:       {}", exo_bin));
             out.push(format!("Repo path:         {}", repo_path.display()));
-            out.push(format!("Dashboard built:   {}", if dashboard_built { "✓" } else { "✗" }));
-            out.push(format!("Running:           {}", if running { "✓ yes" } else { "✗ no" }));
+            out.push(format!(
+                "Dashboard built:   {}",
+                if dashboard_built { "✓" } else { "✗" }
+            ));
+            out.push(format!(
+                "Running:           {}",
+                if running { "✓ yes" } else { "✗ no" }
+            ));
             out.push(format!("API port:          {}", port));
 
             if running {
-                let node_id = exo_api_async("GET", "/node_id", port, None).await
+                let node_id = exo_api_async("GET", "/node_id", port, None)
+                    .await
                     .unwrap_or_else(|_| "unknown".into());
                 out.push(format!("Node ID:           {}", node_id));
 
@@ -483,7 +531,9 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             if !is_exo_running_async().await {
                 return Err("exo is not running.".into());
             }
-            let model = args.get("model").and_then(|v| v.as_str())
+            let model = args
+                .get("model")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: model")?;
 
             let path = format!("/instance/previews?model_id={}", model);
@@ -503,11 +553,14 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             if !is_exo_running_async().await {
                 return Err("exo is not running.".into());
             }
-            let model = args.get("model").and_then(|v| v.as_str())
+            let model = args
+                .get("model")
+                .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: model")?;
 
             let preview_path = format!("/instance/previews?model_id={}", model);
-            let previews_resp = exo_api_async("GET", &preview_path, port, None).await
+            let previews_resp = exo_api_async("GET", &preview_path, port, None)
+                .await
                 .map_err(|e| format!("Failed to get placements: {}", e))?;
 
             let previews: Value = serde_json::from_str(&previews_resp)
@@ -516,7 +569,10 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             let instance = previews
                 .get("previews")
                 .and_then(|p| p.as_array())
-                .and_then(|arr| arr.iter().find(|p| p.get("error").map_or(true, |e| e.is_null())))
+                .and_then(|arr| {
+                    arr.iter()
+                        .find(|p| p.get("error").map_or(true, |e| e.is_null()))
+                })
                 .and_then(|p| p.get("instance"))
                 .ok_or(format!("No valid placement found for '{}'", model))?;
 
@@ -539,9 +595,13 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                     Err(e) => Err(format!("Failed to delete instance: {}", e)),
                 }
             } else if let Some(model) = args.get("model").and_then(|v| v.as_str()) {
-                let state_resp = exo_api_async("GET", "/state", port, None).await
+                let state_resp = exo_api_async("GET", "/state", port, None)
+                    .await
                     .map_err(|e| format!("Failed to query state: {}", e))?;
-                Ok(format!("To unload '{}', provide instance_id. State:\n{}", model, state_resp))
+                Ok(format!(
+                    "To unload '{}', provide instance_id. State:\n{}",
+                    model, state_resp
+                ))
             } else {
                 Err("Missing instance_id or model.".into())
             }
@@ -565,7 +625,9 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                     match sh_async(&format!(
                         "cd '{}' && npm install --no-fund --no-audit 2>&1 && npm run build 2>&1",
                         dashboard_dir.display()
-                    )).await {
+                    ))
+                    .await
+                    {
                         Ok(_) => results.push("✓ Dashboard rebuilt".into()),
                         Err(e) => results.push(format!("⚠ Dashboard build failed: {}", e)),
                     }
@@ -627,7 +689,12 @@ async fn sh_async(script: &str) -> Result<String, String> {
     }
 }
 
-async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) -> Result<String, String> {
+async fn exo_api_async(
+    method: &str,
+    path: &str,
+    port: u64,
+    body: Option<&str>,
+) -> Result<String, String> {
     let url = format!("http://localhost:{}{}", port, path);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -639,7 +706,9 @@ async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) 
         "POST" => {
             let mut req = client.post(&url);
             if let Some(b) = body {
-                req = req.header("Content-Type", "application/json").body(b.to_string());
+                req = req
+                    .header("Content-Type", "application/json")
+                    .body(b.to_string());
             }
             req
         }
@@ -647,7 +716,9 @@ async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) 
         _ => return Err(format!("Unsupported method: {}", method)),
     };
 
-    let response = request.send().await
+    let response = request
+        .send()
+        .await
         .map_err(|e| format!("Request failed: {}", e))?;
 
     if !response.status().is_success() {
@@ -656,7 +727,10 @@ async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) 
         return Err(format!("API error ({}): {}", status, error));
     }
 
-    response.text().await.map_err(|e| format!("Failed to read response: {}", e))
+    response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response: {}", e))
 }
 
 async fn is_uv_installed_async() -> bool {
@@ -699,11 +773,17 @@ fn format_bytes(bytes: u64) -> String {
     const GB: f64 = MB * 1024.0;
     const TB: f64 = GB * 1024.0;
     let b = bytes as f64;
-    if b >= TB { format!("{:.2} TB", b / TB) }
-    else if b >= GB { format!("{:.2} GB", b / GB) }
-    else if b >= MB { format!("{:.1} MB", b / MB) }
-    else if b >= KB { format!("{:.0} KB", b / KB) }
-    else { format!("{} B", bytes) }
+    if b >= TB {
+        format!("{:.2} TB", b / TB)
+    } else if b >= GB {
+        format!("{:.2} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.0} KB", b / KB)
+    } else {
+        format!("{} B", bytes)
+    }
 }
 
 fn parse_downloads_from_state(state: &Value) -> String {
@@ -720,18 +800,45 @@ fn parse_downloads_from_state(state: &Value) -> String {
             if let Some(arr) = entries.as_array() {
                 for entry in arr {
                     if let Some(dp) = entry.get("DownloadPending") {
-                        let model_id = dp.pointer("/shardMetadata/PipelineShardMetadata/modelCard/modelId")
-                            .and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let downloaded = dp.pointer("/downloaded/inBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                        let total = dp.pointer("/total/inBytes").and_then(|v| v.as_u64()).unwrap_or(1);
-                        let pct = if total > 0 { (downloaded as f64 / total as f64) * 100.0 } else { 0.0 };
+                        let model_id = dp
+                            .pointer("/shardMetadata/PipelineShardMetadata/modelCard/modelId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let downloaded = dp
+                            .pointer("/downloaded/inBytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let total = dp
+                            .pointer("/total/inBytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(1);
+                        let pct = if total > 0 {
+                            (downloaded as f64 / total as f64) * 100.0
+                        } else {
+                            0.0
+                        };
                         let filled = (pct / 5.0) as usize;
-                        let bar = format!("{}{}", "█".repeat(filled), "░".repeat(20_usize.saturating_sub(filled)));
-                        pending.push(format!("  ⏳ {} [{bar}] {:.1}%  ({} / {})", model_id, pct, format_bytes(downloaded), format_bytes(total)));
+                        let bar = format!(
+                            "{}{}",
+                            "█".repeat(filled),
+                            "░".repeat(20_usize.saturating_sub(filled))
+                        );
+                        pending.push(format!(
+                            "  ⏳ {} [{bar}] {:.1}%  ({} / {})",
+                            model_id,
+                            pct,
+                            format_bytes(downloaded),
+                            format_bytes(total)
+                        ));
                     } else if let Some(dc) = entry.get("DownloadCompleted") {
-                        let model_id = dc.pointer("/shardMetadata/PipelineShardMetadata/modelCard/modelId")
-                            .and_then(|v| v.as_str()).unwrap_or("unknown");
-                        let total = dc.pointer("/total/inBytes").and_then(|v| v.as_u64()).unwrap_or(0);
+                        let model_id = dc
+                            .pointer("/shardMetadata/PipelineShardMetadata/modelCard/modelId")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("unknown");
+                        let total = dc
+                            .pointer("/total/inBytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
                         completed.push(format!("  ✅ {} ({})", model_id, format_bytes(total)));
                     }
                 }
@@ -765,8 +872,15 @@ fn parse_runner_errors(state: &Value) -> Vec<String> {
     if let Some(runners) = state.get("runners").and_then(|r| r.as_object()) {
         for (runner_id, info) in runners {
             if let Some(failed) = info.get("RunnerFailed") {
-                let msg = failed.get("errorMessage").and_then(|v| v.as_str()).unwrap_or("unknown error");
-                errors.push(format!("  ⚠ Runner {}: {}", &runner_id[..8.min(runner_id.len())], msg));
+                let msg = failed
+                    .get("errorMessage")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error");
+                errors.push(format!(
+                    "  ⚠ Runner {}: {}",
+                    &runner_id[..8.min(runner_id.len())],
+                    msg
+                ));
             }
         }
     }
@@ -777,9 +891,15 @@ fn parse_instances(state: &Value) -> Vec<String> {
     let mut instances = Vec::new();
     if let Some(inst_map) = state.get("instances").and_then(|i| i.as_object()) {
         for (id, info) in inst_map {
-            let model_id = info.pointer("/MlxRingInstance/shardAssignments/modelId")
-                .and_then(|v| v.as_str()).unwrap_or("unknown");
-            instances.push(format!("  🟢 {} (instance: {})", model_id, &id[..8.min(id.len())]));
+            let model_id = info
+                .pointer("/MlxRingInstance/shardAssignments/modelId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            instances.push(format!(
+                "  🟢 {} (instance: {})",
+                model_id,
+                &id[..8.min(id.len())]
+            ));
         }
     }
     instances
@@ -789,27 +909,55 @@ fn parse_node_info(state: &Value) -> Vec<String> {
     let mut nodes = Vec::new();
     if let Some(identities) = state.get("nodeIdentities").and_then(|n| n.as_object()) {
         for (node_id, info) in identities {
-            let name = info.get("friendlyName").and_then(|v| v.as_str()).unwrap_or("unknown");
+            let name = info
+                .get("friendlyName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
             let chip = info.get("chipId").and_then(|v| v.as_str()).unwrap_or("");
             let short_id = &node_id[..12.min(node_id.len())];
 
-            let mem_info = state.pointer(&format!("/nodeMemory/{}", node_id))
+            let mem_info = state
+                .pointer(&format!("/nodeMemory/{}", node_id))
                 .map(|m| {
-                    let ram_total = m.pointer("/ramTotal/inBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let ram_avail = m.pointer("/ramAvailable/inBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                    format!(" — RAM: {} / {}", format_bytes(ram_avail), format_bytes(ram_total))
+                    let ram_total = m
+                        .pointer("/ramTotal/inBytes")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let ram_avail = m
+                        .pointer("/ramAvailable/inBytes")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    format!(
+                        " — RAM: {} / {}",
+                        format_bytes(ram_avail),
+                        format_bytes(ram_total)
+                    )
                 })
                 .unwrap_or_default();
 
-            let disk_info = state.pointer(&format!("/nodeDisk/{}", node_id))
+            let disk_info = state
+                .pointer(&format!("/nodeDisk/{}", node_id))
                 .map(|d| {
-                    let disk_avail = d.pointer("/available/inBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                    let disk_total = d.pointer("/total/inBytes").and_then(|v| v.as_u64()).unwrap_or(0);
-                    format!(" — Disk: {} / {}", format_bytes(disk_avail), format_bytes(disk_total))
+                    let disk_avail = d
+                        .pointer("/available/inBytes")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    let disk_total = d
+                        .pointer("/total/inBytes")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0);
+                    format!(
+                        " — Disk: {} / {}",
+                        format_bytes(disk_avail),
+                        format_bytes(disk_total)
+                    )
                 })
                 .unwrap_or_default();
 
-            nodes.push(format!("  📱 {} ({}) [{}…]{}{}", name, chip, short_id, mem_info, disk_info));
+            nodes.push(format!(
+                "  📱 {} ({}) [{}…]{}{}",
+                name, chip, short_id, mem_info, disk_info
+            ));
         }
     }
     nodes
@@ -848,23 +996,33 @@ fn is_exo_installed() -> bool {
 }
 
 fn is_dashboard_built() -> bool {
-    find_exo_repo().map(|r| r.join("dashboard").join("build").exists()).unwrap_or(false)
+    find_exo_repo()
+        .map(|r| r.join("dashboard").join("build").exists())
+        .unwrap_or(false)
 }
 
 fn find_exo_bin() -> Option<PathBuf> {
     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
     let home = PathBuf::from(home);
     let venv_candidates = [
-        home.join(".rustyclaw").join("exo").join(".venv").join("bin").join("exo"),
+        home.join(".rustyclaw")
+            .join("exo")
+            .join(".venv")
+            .join("bin")
+            .join("exo"),
         home.join("exo").join(".venv").join("bin").join("exo"),
     ];
     for p in &venv_candidates {
-        if p.exists() { return Some(p.clone()); }
+        if p.exists() {
+            return Some(p.clone());
+        }
     }
     if let Ok(out) = std::process::Command::new("which").arg("exo").output() {
         if out.status.success() {
             let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            if !path.is_empty() { return Some(PathBuf::from(path)); }
+            if !path.is_empty() {
+                return Some(PathBuf::from(path));
+            }
         }
     }
     None
@@ -883,9 +1041,13 @@ fn sh(script: &str) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 
     if !output.status.success() {
-        let detail = if !stderr.is_empty() { stderr }
-        else if !stdout.is_empty() { stdout }
-        else { format!("Command exited with {}", output.status) };
+        let detail = if !stderr.is_empty() {
+            stderr
+        } else if !stdout.is_empty() {
+            stdout
+        } else {
+            format!("Command exited with {}", output.status)
+        };
         return Err(detail);
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -907,7 +1069,11 @@ fn exo_api_port(method: &str, path: &str, port: u64, body: Option<&str>) -> Resu
         "GET" => format!("curl -sf --max-time 5 '{}'", url),
         "POST" => {
             if let Some(b) = body {
-                format!("curl -sf --max-time 30 -X POST -H 'Content-Type: application/json' -d '{}' '{}'", b.replace('\'', "'\\''"), url)
+                format!(
+                    "curl -sf --max-time 30 -X POST -H 'Content-Type: application/json' -d '{}' '{}'",
+                    b.replace('\'', "'\\''"),
+                    url
+                )
             } else {
                 format!("curl -sf --max-time 30 -X POST '{}'", url)
             }
@@ -926,7 +1092,9 @@ fn is_exo_running() -> bool {
         .status()
         .map(|s| s.success())
         .unwrap_or(false);
-    if proc_check { return true; }
+    if proc_check {
+        return true;
+    }
     exo_api("GET", "/node_id").is_ok()
 }
 
@@ -934,8 +1102,11 @@ fn is_exo_running() -> bool {
 pub fn exec_exo_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     // For sync, we just call a simplified version or error out
     // In practice, the async version will be used via execute_tool
-    let action = args.get("action").and_then(|v| v.as_str()).unwrap_or("status");
-    
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .unwrap_or("status");
+
     // Basic sync implementations for critical paths
     match action {
         "status" => {

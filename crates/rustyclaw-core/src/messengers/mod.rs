@@ -151,15 +151,15 @@ impl Default for MessengerManager {
 
 // ── Built-in messengers ─────────────────────────────────────────────────────
 
-mod webhook;
 mod console;
 mod discord;
 mod telegram;
+mod webhook;
 
-pub use webhook::WebhookMessenger;
 pub use console::ConsoleMessenger;
 pub use discord::DiscordMessenger;
 pub use telegram::TelegramMessenger;
+pub use webhook::WebhookMessenger;
 
 // ── Additional messengers ───────────────────────────────────────────────────
 // Note: These are deprecated in favor of skill-based messaging (see module docs).

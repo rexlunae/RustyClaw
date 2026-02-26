@@ -136,7 +136,7 @@ impl Messenger for TelegramMessenger {
         let mut messages = Vec::new();
         for update in updates {
             let _update_id = update["update_id"].as_i64().unwrap_or(0);
-            
+
             if let Some(msg) = update.get("message") {
                 let id = msg["message_id"].to_string();
                 let sender = msg["from"]["id"].to_string();

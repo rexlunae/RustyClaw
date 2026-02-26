@@ -19,7 +19,8 @@ pub fn read_file_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "start_line".into(),
-            description: "First line to read (1-based, inclusive). Omit to start from the beginning.".into(),
+            description:
+                "First line to read (1-based, inclusive). Omit to start from the beginning.".into(),
             param_type: "integer".into(),
             required: false,
         },
@@ -158,7 +159,9 @@ pub fn execute_command_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "background".into(),
-            description: "Run in background immediately. Returns a sessionId for use with process tool.".into(),
+            description:
+                "Run in background immediately. Returns a sessionId for use with process tool."
+                    .into(),
             param_type: "boolean".into(),
             required: false,
         },
@@ -584,7 +587,8 @@ pub fn image_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "prompt".into(),
-            description: "Question or instruction about the image. Default: 'Describe the image.'".into(),
+            description: "Question or instruction about the image. Default: 'Describe the image.'"
+                .into(),
             param_type: "string".into(),
             required: false,
         },
@@ -736,7 +740,8 @@ pub fn cron_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "action".into(),
-            description: "Action: 'status', 'list', 'add', 'update', 'remove', 'run', 'runs'.".into(),
+            description: "Action: 'status', 'list', 'add', 'update', 'remove', 'run', 'runs'."
+                .into(),
             param_type: "string".into(),
             required: true,
         },
@@ -1093,7 +1098,9 @@ pub fn classify_files_params() -> Vec<ToolParam> {
 pub fn system_monitor_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "metric".into(),
-        description: "Which metric to query: 'cpu', 'memory', 'disk', 'network', or 'all' (default 'all').".into(),
+        description:
+            "Which metric to query: 'cpu', 'memory', 'disk', 'network', or 'all' (default 'all')."
+                .into(),
         param_type: "string".into(),
         required: false,
     }]
@@ -1227,7 +1234,8 @@ pub fn secure_delete_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "confirm".into(),
-            description: "Must be true to proceed. First call without confirm returns file info.".into(),
+            description: "Must be true to proceed. First call without confirm returns file info."
+                .into(),
             param_type: "boolean".into(),
             required: false,
         },
@@ -1487,8 +1495,7 @@ pub fn firewall_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "action".into(),
-            description: "Action: 'status', 'rules', 'allow', 'deny', 'enable', 'disable'."
-                .into(),
+            description: "Action: 'status', 'rules', 'allow', 'deny', 'enable', 'disable'.".into(),
             param_type: "string".into(),
             required: true,
         },
@@ -1522,7 +1529,8 @@ pub fn ollama_manage_params() -> Vec<ToolParam> {
         ToolParam {
             name: "model".into(),
             description: "Model name for pull/rm/show/load/unload/copy \
-                          (e.g. 'llama3.1', 'mistral:7b-instruct').".into(),
+                          (e.g. 'llama3.1', 'mistral:7b-instruct')."
+                .into(),
             param_type: "string".into(),
             required: false,
         },
@@ -1717,14 +1725,12 @@ pub fn npm_manage_params() -> Vec<ToolParam> {
 }
 
 pub fn agent_setup_params() -> Vec<ToolParam> {
-    vec![
-        ToolParam {
-            name: "components".into(),
-            description: "Array of components to set up: 'uv', 'exo', 'ollama'. \
+    vec![ToolParam {
+        name: "components".into(),
+        description: "Array of components to set up: 'uv', 'exo', 'ollama'. \
                           Defaults to all three if omitted."
-                .into(),
-            param_type: "array".into(),
-            required: false,
-        },
-    ]
+            .into(),
+        param_type: "array".into(),
+        required: false,
+    }]
 }

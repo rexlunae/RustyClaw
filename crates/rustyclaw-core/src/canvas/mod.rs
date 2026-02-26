@@ -19,10 +19,10 @@
 //! - `canvas.snapshot` — capture current state as image
 //! - `canvas.a2ui_push` — push A2UI updates
 
+mod a2ui;
 mod config;
 mod host;
-mod a2ui;
 
+pub use a2ui::{A2UIComponent, A2UIMessage, A2UISurface};
 pub use config::CanvasConfig;
 pub use host::CanvasHost;
-pub use a2ui::{A2UIMessage, A2UISurface, A2UIComponent};

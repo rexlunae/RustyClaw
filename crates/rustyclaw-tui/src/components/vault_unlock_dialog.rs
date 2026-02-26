@@ -1,7 +1,7 @@
 // ── Vault unlock dialog — password entry overlay ────────────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct VaultUnlockDialogProps {

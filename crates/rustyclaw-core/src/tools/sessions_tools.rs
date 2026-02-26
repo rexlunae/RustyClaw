@@ -14,10 +14,7 @@ pub fn exec_sessions_list(args: &Value, _workspace_dir: &Path) -> Result<String,
         .lock()
         .map_err(|_| "Failed to acquire session manager lock".to_string())?;
 
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(20) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     debug!(limit, "Listing sessions");
 
@@ -105,8 +102,7 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> Result<String
         ),
     };
 
-    serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize result: {}", e))
+    serde_json::to_string_pretty(&result).map_err(|e| format!("Failed to serialize result: {}", e))
 }
 
 /// Send a message to a session.
@@ -122,7 +118,12 @@ pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> Result<String,
     let session_key = args.get("sessionKey").and_then(|v| v.as_str());
     let label = args.get("label").and_then(|v| v.as_str());
 
-    debug!(session_key, label, message_len = message.len(), "Sending message to session");
+    debug!(
+        session_key,
+        label,
+        message_len = message.len(),
+        "Sending message to session"
+    );
 
     let manager = session_manager();
     let mut mgr = manager
@@ -155,17 +156,17 @@ pub fn exec_sessions_history(args: &Value, _workspace_dir: &Path) -> Result<Stri
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: sessionKey".to_string())?;
 
-    let limit = args
-        .get("limit")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(20) as usize;
+    let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
 
     let include_tools = args
         .get("includeTools")
         .and_then(|v| v.as_bool())
         .unwrap_or(false);
 
-    debug!(session_key, limit, include_tools, "Fetching session history");
+    debug!(
+        session_key,
+        limit, include_tools, "Fetching session history"
+    );
 
     let manager = session_manager();
     let mgr = manager

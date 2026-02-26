@@ -1,7 +1,7 @@
 // ── Tool permissions dialog — interactive tool permission control ────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Debug, Clone, Default)]
 pub struct ToolPermInfo {
@@ -20,8 +20,16 @@ pub struct ToolPermsDialogProps {
 #[component]
 pub fn ToolPermsDialog(props: &ToolPermsDialogProps) -> impl Into<AnyElement<'static>> {
     let total = props.tools.len();
-    let allowed = props.tools.iter().filter(|t| t.permission == "ALLOW").count();
-    let denied = props.tools.iter().filter(|t| t.permission == "DENY").count();
+    let allowed = props
+        .tools
+        .iter()
+        .filter(|t| t.permission == "ALLOW")
+        .count();
+    let denied = props
+        .tools
+        .iter()
+        .filter(|t| t.permission == "DENY")
+        .count();
     let ask = props.tools.iter().filter(|t| t.permission == "ASK").count();
     let sel = props.selected.unwrap_or(0);
 

@@ -169,7 +169,10 @@ impl Default for SandboxPolicy {
 
 impl SandboxPolicy {
     /// Create a policy that protects the credentials directory.
-    pub fn protect_credentials(credentials_dir: impl Into<PathBuf>, workspace: impl Into<PathBuf>) -> Self {
+    pub fn protect_credentials(
+        credentials_dir: impl Into<PathBuf>,
+        workspace: impl Into<PathBuf>,
+    ) -> Self {
         let cred_dir = credentials_dir.into();
         Self {
             deny_read: vec![cred_dir.clone()],
@@ -207,8 +210,7 @@ impl SandboxPolicy {
 // ── Sandbox Mode ────────────────────────────────────────────────────────────
 
 /// Sandbox mode for command execution.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SandboxMode {
     /// No sandboxing
     None,
@@ -229,7 +231,6 @@ pub enum SandboxMode {
     Auto,
 }
 
-
 impl std::str::FromStr for SandboxMode {
     type Err = String;
 
@@ -239,7 +240,9 @@ impl std::str::FromStr for SandboxMode {
             "path" | "pathvalidation" | "soft" => Ok(Self::PathValidation),
             "bwrap" | "bubblewrap" | "namespace" => Ok(Self::Bubblewrap),
             "landlock" | "kernel" => Ok(Self::Landlock),
-            "landlock+bwrap" | "landlock-bwrap" | "combined" | "lockwrap" => Ok(Self::LandlockBwrap),
+            "landlock+bwrap" | "landlock-bwrap" | "combined" | "lockwrap" => {
+                Ok(Self::LandlockBwrap)
+            }
             "docker" | "container" => Ok(Self::Docker),
             "macos" | "seatbelt" | "sandbox-exec" => Ok(Self::MacOSSandbox),
             "auto" | "" => Ok(Self::Auto),
@@ -309,23 +312,26 @@ pub fn wrap_with_bwrap(command: &str, policy: &SandboxPolicy) -> (String, Vec<St
 
     // Helper to check if a path should be denied for read access
     let is_read_denied = |path: &Path| -> bool {
-        policy.deny_read.iter().any(|deny| {
-            path.starts_with(deny) || deny.starts_with(path)
-        })
+        policy
+            .deny_read
+            .iter()
+            .any(|deny| path.starts_with(deny) || deny.starts_with(path))
     };
 
     // Helper to check if a path should be denied for write access
     let is_write_denied = |path: &Path| -> bool {
-        policy.deny_write.iter().any(|deny| {
-            path.starts_with(deny) || deny.starts_with(path)
-        })
+        policy
+            .deny_write
+            .iter()
+            .any(|deny| path.starts_with(deny) || deny.starts_with(path))
     };
 
     // Helper to check if a path should be denied for execute access
     let is_exec_denied = |path: &Path| -> bool {
-        policy.deny_exec.iter().any(|deny| {
-            path.starts_with(deny) || deny.starts_with(path)
-        })
+        policy
+            .deny_exec
+            .iter()
+            .any(|deny| path.starts_with(deny) || deny.starts_with(path))
     };
 
     // Basic namespace isolation
@@ -487,7 +493,7 @@ pub fn wrap_with_macos_sandbox(_command: &str, _policy: &SandboxPolicy) -> (Stri
 #[cfg(target_os = "linux")]
 pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
     use landlock::{
-        Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr, ABI,
+        ABI, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
     };
 
     let abi = ABI::V2;
@@ -502,22 +508,13 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
 
     // Define standard system paths that should be readable
     let system_read_paths = [
-        "/usr",
-        "/lib",
-        "/lib64",
-        "/bin",
-        "/sbin",
-        "/etc",  // Needed for DNS resolution, SSL certs, etc.
-        "/proc",
-        "/sys",
-        "/dev",
+        "/usr", "/lib", "/lib64", "/bin", "/sbin",
+        "/etc", // Needed for DNS resolution, SSL certs, etc.
+        "/proc", "/sys", "/dev",
     ];
 
     // Define paths that should be read+write
-    let system_rw_paths = [
-        "/tmp",
-        "/var/tmp",
-    ];
+    let system_rw_paths = ["/tmp", "/var/tmp"];
 
     // Allow read access to system paths
     for path_str in &system_read_paths {
@@ -722,7 +719,9 @@ pub fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
                 if in_quotes && ch == quote_char {
                     // End of quoted string
                     in_quotes = false;
-                    if !current_token.is_empty() && (current_token.starts_with('/') || current_token.starts_with("~/")) {
+                    if !current_token.is_empty()
+                        && (current_token.starts_with('/') || current_token.starts_with("~/"))
+                    {
                         paths.push(PathBuf::from(&current_token));
                     }
                     current_token.clear();
@@ -734,7 +733,9 @@ pub fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
             }
             ' ' | '\t' | '\n' | ';' | '&' | '|' | '(' | ')' | '<' | '>' if !in_quotes => {
                 // Token boundary
-                if !current_token.is_empty() && (current_token.starts_with('/') || current_token.starts_with("~/")) {
+                if !current_token.is_empty()
+                    && (current_token.starts_with('/') || current_token.starts_with("~/"))
+                {
                     paths.push(PathBuf::from(&current_token));
                 }
                 current_token.clear();
@@ -746,14 +747,19 @@ pub fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
     }
 
     // Handle final token
-    if !current_token.is_empty() && (current_token.starts_with('/') || current_token.starts_with("~/")) {
+    if !current_token.is_empty()
+        && (current_token.starts_with('/') || current_token.starts_with("~/"))
+    {
         paths.push(PathBuf::from(&current_token));
     }
 
     paths
 }
 
-fn run_with_path_validation(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_path_validation(
+    command: &str,
+    policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     // Extract explicit paths from command
     let paths = extract_paths_from_command(command);
 
@@ -769,10 +775,15 @@ fn run_with_path_validation(command: &str, policy: &SandboxPolicy) -> Result<std
         let cmd_path = Path::new(first_token);
 
         // Only check if it looks like a path (absolute, ./, or ~/)
-        if first_token.starts_with('/') || first_token.starts_with("./") || first_token.starts_with("~/") {
+        if first_token.starts_with('/')
+            || first_token.starts_with("./")
+            || first_token.starts_with("~/")
+        {
             // Check against deny_exec list
             for denied in &policy.deny_exec {
-                if let (Ok(cmd_canon), Ok(denied_canon)) = (cmd_path.canonicalize(), denied.canonicalize()) {
+                if let (Ok(cmd_canon), Ok(denied_canon)) =
+                    (cmd_path.canonicalize(), denied.canonicalize())
+                {
                     if cmd_canon.starts_with(&denied_canon) {
                         return Err(format!(
                             "Execution denied: {} is in protected area (deny_exec)",
@@ -796,7 +807,10 @@ fn run_with_path_validation(command: &str, policy: &SandboxPolicy) -> Result<std
 }
 
 #[cfg(target_os = "linux")]
-fn run_with_bubblewrap(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_bubblewrap(
+    command: &str,
+    policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     let (cmd, args) = wrap_with_bwrap(command, policy);
 
     let mut proc = std::process::Command::new(&cmd);
@@ -821,12 +835,18 @@ fn run_with_bubblewrap(command: &str, policy: &SandboxPolicy) -> Result<std::pro
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_with_bubblewrap(_command: &str, _policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_bubblewrap(
+    _command: &str,
+    _policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     Err("Bubblewrap is only available on Linux".to_string())
 }
 
 #[cfg(target_os = "macos")]
-fn run_with_macos_sandbox(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_macos_sandbox(
+    command: &str,
+    policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     let (cmd, args) = wrap_with_macos_sandbox(command, policy);
 
     std::process::Command::new(&cmd)
@@ -836,7 +856,10 @@ fn run_with_macos_sandbox(command: &str, policy: &SandboxPolicy) -> Result<std::
 }
 
 #[cfg(not(target_os = "macos"))]
-fn run_with_macos_sandbox(_command: &str, _policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_macos_sandbox(
+    _command: &str,
+    _policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     Err("macOS sandbox is only available on macOS".to_string())
 }
 
@@ -860,11 +883,14 @@ fn wrap_with_combined_bwrap(command: &str, policy: &SandboxPolicy) -> (String, V
 
     // Helper to check if a path should be completely blocked
     let is_blocked = |path: &Path| -> bool {
-        policy.deny_read.iter().any(|deny| {
-            path.starts_with(deny) || deny.starts_with(path)
-        }) || policy.deny_exec.iter().any(|deny| {
-            path.starts_with(deny) || deny.starts_with(path)
-        })
+        policy
+            .deny_read
+            .iter()
+            .any(|deny| path.starts_with(deny) || deny.starts_with(path))
+            || policy
+                .deny_exec
+                .iter()
+                .any(|deny| path.starts_with(deny) || deny.starts_with(path))
     };
 
     // Mount minimal root - only if not blocked
@@ -886,12 +912,16 @@ fn wrap_with_combined_bwrap(command: &str, policy: &SandboxPolicy) -> (String, V
     }
 
     // Workspace: read-only if in deny_write, writable otherwise, skip if in deny_read
-    if !policy.deny_read.iter().any(|deny| {
-        policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace)
-    }) {
-        if policy.deny_write.iter().any(|deny| {
-            policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace)
-        }) {
+    if !policy
+        .deny_read
+        .iter()
+        .any(|deny| policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace))
+    {
+        if policy
+            .deny_write
+            .iter()
+            .any(|deny| policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace))
+        {
             args.push("--ro-bind".to_string());
         } else {
             args.push("--bind".to_string());
@@ -940,7 +970,10 @@ fn wrap_with_combined_bwrap(command: &str, policy: &SandboxPolicy) -> (String, V
 /// **Defense-in-depth**: Even if one layer is compromised, the other provides protection.
 /// This matches the security model of IronClaw and other security-focused agents.
 #[cfg(target_os = "linux")]
-fn run_with_landlock_bwrap(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_landlock_bwrap(
+    command: &str,
+    policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     // Generate extra-restrictive bwrap configuration
     let (cmd, args) = wrap_with_combined_bwrap(command, policy);
 
@@ -972,7 +1005,10 @@ fn run_with_landlock_bwrap(command: &str, policy: &SandboxPolicy) -> Result<std:
 }
 
 #[cfg(not(target_os = "linux"))]
-fn run_with_landlock_bwrap(_command: &str, _policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_landlock_bwrap(
+    _command: &str,
+    _policy: &SandboxPolicy,
+) -> Result<std::process::Output, String> {
     Err("Landlock+Bubblewrap is only available on Linux".to_string())
 }
 
@@ -1029,14 +1065,16 @@ fn run_with_docker(command: &str, policy: &SandboxPolicy) -> Result<std::process
     let workspace_str = policy.workspace.display().to_string();
 
     // Check if workspace is in deny lists
-    let workspace_denied = policy.deny_read.iter().any(|deny| {
-        policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace)
-    });
+    let workspace_denied = policy
+        .deny_read
+        .iter()
+        .any(|deny| policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace));
 
     if !workspace_denied {
-        let write_allowed = !policy.deny_write.iter().any(|deny| {
-            policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace)
-        });
+        let write_allowed = !policy
+            .deny_write
+            .iter()
+            .any(|deny| policy.workspace.starts_with(deny) || deny.starts_with(&policy.workspace));
 
         let mount_mode = if write_allowed { "rw" } else { "ro" };
         docker_args.push("--volume".to_string());
@@ -1151,7 +1189,10 @@ mod tests {
     fn test_capabilities_detect() {
         let caps = SandboxCapabilities::detect();
         // Should always have at least path validation
-        assert!(caps.best_mode() != SandboxMode::None || caps.best_mode() == SandboxMode::PathValidation);
+        assert!(
+            caps.best_mode() != SandboxMode::None
+                || caps.best_mode() == SandboxMode::PathValidation
+        );
     }
 
     #[test]
@@ -1188,8 +1229,14 @@ mod tests {
     fn test_sandbox_mode_parsing() {
         assert_eq!("none".parse::<SandboxMode>().unwrap(), SandboxMode::None);
         assert_eq!("auto".parse::<SandboxMode>().unwrap(), SandboxMode::Auto);
-        assert_eq!("bwrap".parse::<SandboxMode>().unwrap(), SandboxMode::Bubblewrap);
-        assert_eq!("macos".parse::<SandboxMode>().unwrap(), SandboxMode::MacOSSandbox);
+        assert_eq!(
+            "bwrap".parse::<SandboxMode>().unwrap(),
+            SandboxMode::Bubblewrap
+        );
+        assert_eq!(
+            "macos".parse::<SandboxMode>().unwrap(),
+            SandboxMode::MacOSSandbox
+        );
     }
 
     #[test]
@@ -1284,7 +1331,8 @@ mod tests {
         std::fs::create_dir_all("/tmp/test_workspace2").ok();
 
         // This should succeed because /tmp/test_workspace2 is not protected
-        let result = run_with_path_validation("echo hello > /tmp/test_workspace2/file.txt", &policy);
+        let result =
+            run_with_path_validation("echo hello > /tmp/test_workspace2/file.txt", &policy);
         // Note: This will likely fail with "command failed" but NOT "Access denied"
         // because the shell redirection happens before echo runs
         if result.is_err() {

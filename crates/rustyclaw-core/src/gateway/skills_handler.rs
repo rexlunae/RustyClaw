@@ -1,4 +1,4 @@
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 use super::SharedSkillManager;
 
@@ -35,10 +35,7 @@ pub async fn exec_gw_skill_list(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
 ) -> Result<String, String> {
-    let filter = args
-        .get("filter")
-        .and_then(|v| v.as_str())
-        .unwrap_or("all");
+    let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
 
     debug!(filter, "Listing skills");
 
@@ -79,7 +76,7 @@ pub async fn exec_gw_skill_list(
         } else {
             format!(" [secrets: {}]", s.linked_secrets.join(", "))
         };
-        
+
         // Check availability (gate status)
         let gate_result = mgr.check_gates(s);
         let availability = if gate_result.passed {
@@ -90,10 +87,16 @@ pub async fn exec_gw_skill_list(
                 missing.push("wrong OS".to_string());
             }
             if !gate_result.missing_bins.is_empty() {
-                missing.push(format!("missing bins: {}", gate_result.missing_bins.join(", ")));
+                missing.push(format!(
+                    "missing bins: {}",
+                    gate_result.missing_bins.join(", ")
+                ));
             }
             if !gate_result.missing_env.is_empty() {
-                missing.push(format!("missing env: {}", gate_result.missing_env.join(", ")));
+                missing.push(format!(
+                    "missing env: {}",
+                    gate_result.missing_env.join(", ")
+                ));
             }
             if missing.is_empty() {
                 "unavailable".to_string()
@@ -101,7 +104,7 @@ pub async fn exec_gw_skill_list(
                 format!("unavailable ({})", missing.join("; "))
             }
         };
-        
+
         lines.push(format!(
             "  {} {} ({}) — {}{} [{}]\n",
             status,
@@ -149,8 +152,16 @@ pub async fn exec_gw_skill_search(
             format!(" (needs: {})", r.required_secrets.join(", "))
         };
         // Use display_name if available, otherwise name
-        let display = if r.display_name.is_empty() { &r.name } else { &r.display_name };
-        let version_str = if r.version.is_empty() { "latest".to_string() } else { format!("v{}", r.version) };
+        let display = if r.display_name.is_empty() {
+            &r.name
+        } else {
+            &r.display_name
+        };
+        let version_str = if r.version.is_empty() {
+            "latest".to_string()
+        } else {
+            format!("v{}", r.version)
+        };
         lines.push(format!(
             "  • {} ({}) {} — {}{}\n",
             display, r.name, version_str, r.description, secrets_note,
@@ -172,7 +183,11 @@ pub async fn exec_gw_skill_install(
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
     let version = args.get("version").and_then(|v| v.as_str());
 
-    debug!(skill = name, version = version.unwrap_or("latest"), "Installing skill from registry");
+    debug!(
+        skill = name,
+        version = version.unwrap_or("latest"),
+        "Installing skill from registry"
+    );
 
     let mut mgr = skill_mgr.lock().await;
     mgr.install_from_registry(name, version).map_err(|e| {
@@ -210,11 +225,10 @@ pub async fn exec_gw_skill_info(
     debug!(skill = name, "Getting skill info");
 
     let mgr = skill_mgr.lock().await;
-    mgr.skill_info(name)
-        .ok_or_else(|| {
-            debug!(skill = name, "Skill not found");
-            format!("Skill '{}' not found.", name)
-        })
+    mgr.skill_info(name).ok_or_else(|| {
+        debug!(skill = name, "Skill not found");
+        format!("Skill '{}' not found.", name)
+    })
 }
 
 /// Enable or disable a skill.
@@ -235,11 +249,10 @@ pub async fn exec_gw_skill_enable(
     debug!(skill = name, enabled, "Setting skill enabled state");
 
     let mut mgr = skill_mgr.lock().await;
-    mgr.set_skill_enabled(name, enabled)
-        .map_err(|e| {
-            warn!(skill = name, error = %e, "Failed to set skill enabled state");
-            e.to_string()
-        })?;
+    mgr.set_skill_enabled(name, enabled).map_err(|e| {
+        warn!(skill = name, error = %e, "Failed to set skill enabled state");
+        e.to_string()
+    })?;
 
     let state = if enabled { "enabled" } else { "disabled" };
     debug!(skill = name, state, "Skill state changed");
@@ -275,10 +288,7 @@ pub async fn exec_gw_skill_link_secret(
                 e.to_string()
             })?;
             debug!(skill, secret, "Secret linked");
-            Ok(format!(
-                "Secret '{}' linked to skill '{}'.",
-                secret, skill,
-            ))
+            Ok(format!("Secret '{}' linked to skill '{}'.", secret, skill,))
         }
         "unlink" => {
             mgr.unlink_secret(skill, secret).map_err(|e| {

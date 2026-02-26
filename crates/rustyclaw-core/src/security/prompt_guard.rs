@@ -107,7 +107,10 @@ impl PromptGuard {
         static SYSTEM_OVERRIDE_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
         let regexes = SYSTEM_OVERRIDE_PATTERNS.get_or_init(|| {
             vec![
-                Regex::new(r"(?i)ignore\s+(previous|all|above|prior)\s+(instructions?|prompts?|commands?)").unwrap(),
+                Regex::new(
+                    r"(?i)ignore\s+(previous|all|above|prior)\s+(instructions?|prompts?|commands?)",
+                )
+                .unwrap(),
                 Regex::new(r"(?i)disregard\s+(previous|all|above|prior)").unwrap(),
                 Regex::new(r"(?i)forget\s+(previous|all|everything|above)").unwrap(),
                 Regex::new(r"(?i)new\s+(instructions?|rules?|system\s+prompt)").unwrap(),
@@ -130,10 +133,14 @@ impl PromptGuard {
         static ROLE_CONFUSION_PATTERNS: OnceLock<Vec<Regex>> = OnceLock::new();
         let regexes = ROLE_CONFUSION_PATTERNS.get_or_init(|| {
             vec![
-                Regex::new(r"(?i)(you\s+are\s+now|act\s+as|pretend\s+(you're|to\s+be))\s+(a|an|the)?").unwrap(),
+                Regex::new(
+                    r"(?i)(you\s+are\s+now|act\s+as|pretend\s+(you're|to\s+be))\s+(a|an|the)?",
+                )
+                .unwrap(),
                 Regex::new(r"(?i)(your\s+new\s+role|you\s+have\s+become|you\s+must\s+be)").unwrap(),
                 Regex::new(r"(?i)from\s+now\s+on\s+(you\s+are|act\s+as|pretend)").unwrap(),
-                Regex::new(r"(?i)(assistant|AI|system|model):\s*\[?(system|override|new\s+role)").unwrap(),
+                Regex::new(r"(?i)(assistant|AI|system|model):\s*\[?(system|override|new\s+role)")
+                    .unwrap(),
             ]
         });
 
@@ -206,7 +213,10 @@ impl PromptGuard {
             if content.contains(pattern) {
                 // Context check: these are common in legitimate shell discussions
                 let lower = content.to_lowercase();
-                if !lower.contains("example") && !lower.contains("how to") && !lower.contains("explain") {
+                if !lower.contains("example")
+                    && !lower.contains("how to")
+                    && !lower.contains("explain")
+                {
                     patterns.push(format!("command_injection_{}", name));
                     score += 0.3;
                 }
@@ -225,7 +235,8 @@ impl PromptGuard {
                 Regex::new(r"(?i)(developer|admin|root)\s+mode").unwrap(),
                 Regex::new(r"(?i)bypass\s+(restrictions?|limitations?|rules?)").unwrap(),
                 Regex::new(r"(?i)unlock\s+(all|full)\s+(capabilities|features)").unwrap(),
-                Regex::new(r"(?i)(disable|remove|turn\s+off)\s+(safety|guardrails|filters?)").unwrap(),
+                Regex::new(r"(?i)(disable|remove|turn\s+off)\s+(safety|guardrails|filters?)")
+                    .unwrap(),
             ]
         });
 
@@ -354,9 +365,19 @@ mod tests {
 
         // Sanitize replaces $( with \$(
         // Check that the dangerous pattern is escaped
-        assert!(sanitized.contains("\\$("), "Sanitized string doesn't contain \\$( : {}", sanitized);
-        assert!(sanitized.contains("cat"), "Sanitized string should still contain 'cat'");
+        assert!(
+            sanitized.contains("\\$("),
+            "Sanitized string doesn't contain \\$( : {}",
+            sanitized
+        );
+        assert!(
+            sanitized.contains("cat"),
+            "Sanitized string should still contain 'cat'"
+        );
         // Verify the string was actually changed
-        assert_ne!(malicious, sanitized, "Sanitization didn't modify the string");
+        assert_ne!(
+            malicious, sanitized,
+            "Sanitization didn't modify the string"
+        );
     }
 }

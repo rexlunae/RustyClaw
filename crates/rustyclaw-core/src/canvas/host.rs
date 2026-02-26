@@ -77,7 +77,10 @@ impl CanvasHost {
 
     /// Get the A2UI URL for a session.
     pub fn a2ui_url(&self, session: &str) -> String {
-        format!("http://localhost:{}/__rustyclaw__/a2ui/{}/", self.config.port, session)
+        format!(
+            "http://localhost:{}/__rustyclaw__/a2ui/{}/",
+            self.config.port, session
+        )
     }
 
     // ── Session management ──────────────────────────────────────────────────
@@ -122,9 +125,9 @@ impl CanvasHost {
 
         for msg in messages {
             match &msg {
-                A2UIMessage::BeginRendering { surface_id, .. } |
-                A2UIMessage::SurfaceUpdate { surface_id, .. } |
-                A2UIMessage::DataModelUpdate { surface_id, .. } => {
+                A2UIMessage::BeginRendering { surface_id, .. }
+                | A2UIMessage::SurfaceUpdate { surface_id, .. }
+                | A2UIMessage::DataModelUpdate { surface_id, .. } => {
                     let surface = session_surfaces
                         .entry(surface_id.clone())
                         .or_insert_with(|| A2UISurface::new(surface_id));
@@ -136,13 +139,17 @@ impl CanvasHost {
             }
         }
 
-        debug!(session, count = session_surfaces.len(), "A2UI surfaces updated");
+        debug!(
+            session,
+            count = session_surfaces.len(),
+            "A2UI surfaces updated"
+        );
         Ok(())
     }
 
     /// Push simple text to A2UI.
     pub async fn push_text(&self, session: &str, text: &str) -> Result<()> {
-        use super::a2ui::{A2UIComponent, A2UIComponentDef, A2UITextValue, A2UIChildren};
+        use super::a2ui::{A2UIChildren, A2UIComponent, A2UIComponentDef, A2UITextValue};
 
         let messages = vec![
             A2UIMessage::SurfaceUpdate {

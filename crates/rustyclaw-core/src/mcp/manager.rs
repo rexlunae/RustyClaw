@@ -87,7 +87,8 @@ impl McpManager {
     /// Get tools from a specific server.
     pub async fn list_tools(&self, server_name: &str) -> Result<Vec<McpTool>> {
         let clients = self.clients.read().await;
-        let client = clients.get(server_name)
+        let client = clients
+            .get(server_name)
             .ok_or_else(|| anyhow::anyhow!("MCP server '{}' not connected", server_name))?;
 
         Ok(client.get_tools().await)
@@ -105,7 +106,11 @@ impl McpManager {
     }
 
     /// Call a tool by its prefixed name (e.g., "mcp_filesystem_read_file").
-    pub async fn call_tool_by_name(&self, prefixed_name: &str, arguments: serde_json::Value) -> Result<McpToolResult> {
+    pub async fn call_tool_by_name(
+        &self,
+        prefixed_name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<McpToolResult> {
         let call = McpToolCall::from_prefixed_name(prefixed_name, arguments)
             .ok_or_else(|| anyhow::anyhow!("Invalid MCP tool name: {}", prefixed_name))?;
 
@@ -115,10 +120,13 @@ impl McpManager {
     /// Call a tool.
     pub async fn call_tool(&self, call: &McpToolCall) -> Result<McpToolResult> {
         let clients = self.clients.read().await;
-        let client = clients.get(&call.server_name)
+        let client = clients
+            .get(&call.server_name)
             .ok_or_else(|| anyhow::anyhow!("MCP server '{}' not connected", call.server_name))?;
 
-        client.call_tool(&call.tool_name, call.arguments.clone()).await
+        client
+            .call_tool(&call.tool_name, call.arguments.clone())
+            .await
     }
 
     /// Check if a tool name is an MCP tool (starts with "mcp_").

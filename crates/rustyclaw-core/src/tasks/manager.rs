@@ -127,6 +127,8 @@ pub enum TaskEvent {
         old: TaskStatus,
         new: TaskStatus,
     },
+    /// Task description changed
+    DescriptionChanged { id: TaskId, description: String },
     /// Task produced output
     Output { id: TaskId, output: TaskOutput },
     /// Task was foregrounded
@@ -423,6 +425,10 @@ impl TaskManager {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(&id) {
             task.description = Some(description.to_string());
+            let _ = self.events_tx.send(TaskEvent::DescriptionChanged {
+                id,
+                description: description.to_string(),
+            });
             info!(task_id = %id, description, "Task description updated");
             Ok(())
         } else {

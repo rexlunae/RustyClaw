@@ -3,8 +3,8 @@
 // Floating completion popup for `/` slash commands. Rendered just above the
 // input bar with the list of matching commands and a highlighted selection.
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct CommandMenuProps {
@@ -50,5 +50,6 @@ pub fn CommandMenu(props: &CommandMenuProps) -> impl Into<AnyElement<'static>> {
                 }
             }))
         }
-    }.into_any()
+    }
+    .into_any()
 }

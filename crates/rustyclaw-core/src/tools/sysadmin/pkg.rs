@@ -1,9 +1,9 @@
 //! Package management: install, uninstall, upgrade, search, list, info.
 
-use super::{sh, sh_async, detect_pkg_manager, detect_pkg_manager_async};
-use serde_json::{json, Value};
+use super::{detect_pkg_manager, detect_pkg_manager_async, sh, sh_async};
+use serde_json::{Value, json};
 use std::path::Path;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 // ── Async implementation ────────────────────────────────────────────────────
 
@@ -19,7 +19,11 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
     let package = args.get("package").and_then(|v| v.as_str());
     let manager_override = args.get("manager").and_then(|v| v.as_str());
 
-    debug!(package, manager = manager_override, "Package management request");
+    debug!(
+        package,
+        manager = manager_override,
+        "Package management request"
+    );
 
     let (mgr, mgr_name) = if let Some(m) = manager_override {
         (m, m)
@@ -92,7 +96,9 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             } else {
                 match mgr {
                     "brew" => "brew upgrade".to_string(),
-                    "apt" | "apt-get" => "sudo apt-get update && sudo apt-get upgrade -y".to_string(),
+                    "apt" | "apt-get" => {
+                        "sudo apt-get update && sudo apt-get upgrade -y".to_string()
+                    }
                     "dnf" => "sudo dnf upgrade -y".to_string(),
                     "yum" => "sudo yum update -y".to_string(),
                     "pacman" => "sudo pacman -Syu --noconfirm".to_string(),
@@ -128,8 +134,12 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
         "list" => {
             let cmd = match mgr {
                 "brew" => "brew list --versions".to_string(),
-                "apt" | "apt-get" => "dpkg -l | tail -n +6 | awk '{print $2, $3}' | head -100".to_string(),
-                "dnf" | "yum" => "rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}\n' | sort | head -100".to_string(),
+                "apt" | "apt-get" => {
+                    "dpkg -l | tail -n +6 | awk '{print $2, $3}' | head -100".to_string()
+                }
+                "dnf" | "yum" => {
+                    "rpm -qa --qf '%{NAME} %{VERSION}-%{RELEASE}\n' | sort | head -100".to_string()
+                }
                 "pacman" => "pacman -Q | head -100".to_string(),
                 "zypper" => "zypper se --installed-only | head -100".to_string(),
                 "apk" => "apk list --installed 2>/dev/null | head -100".to_string(),
@@ -148,7 +158,10 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 "apt" | "apt-get" => format!("apt-cache show {} 2>/dev/null | head -40", pkg),
                 "dnf" => format!("dnf info {} 2>/dev/null", pkg),
                 "yum" => format!("yum info {} 2>/dev/null", pkg),
-                "pacman" => format!("pacman -Si {} 2>/dev/null || pacman -Qi {} 2>/dev/null", pkg, pkg),
+                "pacman" => format!(
+                    "pacman -Si {} 2>/dev/null || pacman -Qi {} 2>/dev/null",
+                    pkg, pkg
+                ),
                 "zypper" => format!("zypper info {}", pkg),
                 "apk" => format!("apk info {} 2>/dev/null", pkg),
                 "snap" => format!("snap info {}", pkg),
@@ -156,14 +169,20 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 _ => return Err(format!("Unknown package manager: {}", mgr)),
             };
             let output = sh_async(&cmd).await?;
-            Ok(json!({ "action": "info", "package": pkg, "manager": mgr_name, "details": output }).to_string())
+            Ok(
+                json!({ "action": "info", "package": pkg, "manager": mgr_name, "details": output })
+                    .to_string(),
+            )
         }
 
         "detect" => {
             Ok(json!({ "action": "detect", "manager": mgr_name, "command": mgr }).to_string())
         }
 
-        _ => Err(format!("Unknown action: {}. Valid: install, uninstall, upgrade, search, list, info, detect", action)),
+        _ => Err(format!(
+            "Unknown action: {}. Valid: install, uninstall, upgrade, search, list, info, detect",
+            action
+        )),
     }
 }
 
@@ -204,7 +223,12 @@ pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> Result<String, St
             let output = sh(&cmd)?;
             Ok(json!({ "action": "install", "package": pkg, "manager": mgr_name, "output": output }).to_string())
         }
-        "detect" => Ok(json!({ "action": "detect", "manager": mgr_name, "command": mgr }).to_string()),
-        _ => Err(format!("Sync not fully supported for '{}'. Use async.", action)),
+        "detect" => {
+            Ok(json!({ "action": "detect", "manager": mgr_name, "command": mgr }).to_string())
+        }
+        _ => Err(format!(
+            "Sync not fully supported for '{}'. Use async.",
+            action
+        )),
     }
 }

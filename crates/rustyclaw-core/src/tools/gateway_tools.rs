@@ -5,7 +5,7 @@
 use super::helpers::resolve_path;
 use serde_json::Value;
 use std::path::Path;
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
 // ── Async implementations ───────────────────────────────────────────────────
 
@@ -191,7 +191,7 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .or_else(|| std::env::var("WEBHOOK_URL").ok());
-                    
+
                     match webhook_url {
                         Some(url) => send_webhook_async(&url, target, message).await,
                         None => Err("Missing webhookUrl for webhook channel".to_string()),
@@ -223,7 +223,11 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
             let targets = args
                 .get("targets")
                 .and_then(|v| v.as_array())
-                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
 
             if targets.is_empty() {
@@ -245,13 +249,13 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 results.push(format!("{}: {}", target, result.unwrap_or_else(|e| e)));
             }
 
-            Ok(format!(
-                "Broadcast results:\n{}",
-                results.join("\n")
-            ))
+            Ok(format!("Broadcast results:\n{}", results.join("\n")))
         }
 
-        _ => Err(format!("Unknown action: {}. Valid: send, broadcast", action)),
+        _ => Err(format!(
+            "Unknown action: {}. Valid: send, broadcast",
+            action
+        )),
     }
 }
 
@@ -386,48 +390,52 @@ pub async fn exec_image_async(args: &Value, workspace_dir: &Path) -> Result<Stri
                 return Err(format!(
                     "Unsupported image format: {}. Supported: jpg, jpeg, png, gif, webp",
                     ext
-                ))
+                ));
             }
         };
 
         let bytes = tokio::fs::read(&full_path)
             .await
             .map_err(|e| format!("Failed to read image: {}", e))?;
-        
+
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         let base64_data = STANDARD.encode(&bytes);
-        
-        (format!("data:{};base64,{}", mime_type, base64_data), mime_type.to_string())
+
+        (
+            format!("data:{};base64,{}", mime_type, base64_data),
+            mime_type.to_string(),
+        )
     };
 
     if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
         return call_openai_vision_async(&api_key, &image_data, is_url, prompt).await;
     }
-    
+
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
-        return call_anthropic_vision_async(&api_key, &image_data, is_url, &media_type, prompt).await;
+        return call_anthropic_vision_async(&api_key, &image_data, is_url, &media_type, prompt)
+            .await;
     }
-    
+
     if let Ok(api_key) = std::env::var("GOOGLE_API_KEY") {
         return call_google_vision_async(&api_key, &image_data, is_url, prompt).await;
     }
 
     Ok(format!(
         "Image analysis requested:\n- Image: {}\n- Prompt: {}\n- Is URL: {}\n\nNote: Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY to enable vision analysis.",
-        image_path,
-        prompt,
-        is_url
+        image_path, prompt, is_url
     ))
 }
 
 // ── Async helper functions ──────────────────────────────────────────────────
 
 async fn send_discord_async(channel_id: &str, content: &str) -> Result<String, String> {
-    let token = std::env::var("DISCORD_BOT_TOKEN")
-        .map_err(|_| "DISCORD_BOT_TOKEN not set")?;
+    let token = std::env::var("DISCORD_BOT_TOKEN").map_err(|_| "DISCORD_BOT_TOKEN not set")?;
 
     let client = reqwest::Client::new();
-    let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages",
+        channel_id
+    );
 
     let response = client
         .post(&url)
@@ -441,7 +449,10 @@ async fn send_discord_async(channel_id: &str, content: &str) -> Result<String, S
     if response.status().is_success() {
         let data: Value = response.json().await.unwrap_or_default();
         let msg_id = data["id"].as_str().unwrap_or("unknown");
-        Ok(format!("Message sent to Discord channel {}. ID: {}", channel_id, msg_id))
+        Ok(format!(
+            "Message sent to Discord channel {}. ID: {}",
+            channel_id, msg_id
+        ))
     } else {
         let status = response.status();
         let error = response.text().await.unwrap_or_default();
@@ -450,8 +461,7 @@ async fn send_discord_async(channel_id: &str, content: &str) -> Result<String, S
 }
 
 async fn send_telegram_async(chat_id: &str, content: &str) -> Result<String, String> {
-    let token = std::env::var("TELEGRAM_BOT_TOKEN")
-        .map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
+    let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
 
     let client = reqwest::Client::new();
     let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
@@ -472,9 +482,15 @@ async fn send_telegram_async(chat_id: &str, content: &str) -> Result<String, Str
         let data: Value = response.json().await.unwrap_or_default();
         if data["ok"].as_bool() == Some(true) {
             let msg_id = data["result"]["message_id"].as_i64().unwrap_or(0);
-            Ok(format!("Message sent to Telegram chat {}. ID: {}", chat_id, msg_id))
+            Ok(format!(
+                "Message sent to Telegram chat {}. ID: {}",
+                chat_id, msg_id
+            ))
         } else {
-            Err(format!("Telegram API error: {}", data["description"].as_str().unwrap_or("unknown")))
+            Err(format!(
+                "Telegram API error: {}",
+                data["description"].as_str().unwrap_or("unknown")
+            ))
         }
     } else {
         let status = response.status();
@@ -506,9 +522,14 @@ async fn send_webhook_async(url: &str, target: &str, content: &str) -> Result<St
     }
 }
 
-async fn call_openai_vision_async(api_key: &str, image_data: &str, _is_url: bool, prompt: &str) -> Result<String, String> {
+async fn call_openai_vision_async(
+    api_key: &str,
+    image_data: &str,
+    _is_url: bool,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     let image_content = serde_json::json!({
         "type": "image_url",
         "image_url": { "url": image_data }
@@ -551,9 +572,15 @@ async fn call_openai_vision_async(api_key: &str, image_data: &str, _is_url: bool
     Ok(content.to_string())
 }
 
-async fn call_anthropic_vision_async(api_key: &str, image_data: &str, is_url: bool, media_type: &str, prompt: &str) -> Result<String, String> {
+async fn call_anthropic_vision_async(
+    api_key: &str,
+    image_data: &str,
+    is_url: bool,
+    media_type: &str,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     let image_content = if is_url {
         serde_json::json!({
             "type": "image",
@@ -563,10 +590,7 @@ async fn call_anthropic_vision_async(api_key: &str, image_data: &str, is_url: bo
             }
         })
     } else {
-        let base64_data = image_data
-            .split(',')
-            .nth(1)
-            .unwrap_or(image_data);
+        let base64_data = image_data.split(',').nth(1).unwrap_or(image_data);
         serde_json::json!({
             "type": "image",
             "source": {
@@ -615,9 +639,14 @@ async fn call_anthropic_vision_async(api_key: &str, image_data: &str, is_url: bo
     Ok(content.to_string())
 }
 
-async fn call_google_vision_async(api_key: &str, image_data: &str, is_url: bool, prompt: &str) -> Result<String, String> {
+async fn call_google_vision_async(
+    api_key: &str,
+    image_data: &str,
+    is_url: bool,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::Client::new();
-    
+
     let image_part = if is_url {
         serde_json::json!({
             "file_data": {
@@ -628,11 +657,12 @@ async fn call_google_vision_async(api_key: &str, image_data: &str, is_url: bool,
     } else {
         let parts: Vec<&str> = image_data.split(',').collect();
         let base64_data = parts.get(1).unwrap_or(&"");
-        let mime_type = parts.first()
+        let mime_type = parts
+            .first()
             .and_then(|p| p.strip_prefix("data:"))
             .and_then(|p| p.split(';').next())
             .unwrap_or("image/jpeg");
-        
+
         serde_json::json!({
             "inline_data": {
                 "mime_type": mime_type,
@@ -875,7 +905,7 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
                         .and_then(|v| v.as_str())
                         .map(|s| s.to_string())
                         .or_else(|| std::env::var("WEBHOOK_URL").ok());
-                    
+
                     match webhook_url {
                         Some(url) => send_webhook_sync(&url, target, message),
                         None => Err("Missing webhookUrl for webhook channel".to_string()),
@@ -929,13 +959,13 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
                 results.push(format!("{}: {}", target, result.unwrap_or_else(|e| e)));
             }
 
-            Ok(format!(
-                "Broadcast results:\n{}",
-                results.join("\n")
-            ))
+            Ok(format!("Broadcast results:\n{}", results.join("\n")))
         }
 
-        _ => Err(format!("Unknown action: {}. Valid: send, broadcast", action)),
+        _ => Err(format!(
+            "Unknown action: {}. Valid: send, broadcast",
+            action
+        )),
     }
 }
 
@@ -1072,47 +1102,49 @@ pub fn exec_image(args: &Value, workspace_dir: &Path) -> Result<String, String> 
                 return Err(format!(
                     "Unsupported image format: {}. Supported: jpg, jpeg, png, gif, webp",
                     ext
-                ))
+                ));
             }
         };
 
-        let bytes = fs::read(&full_path)
-            .map_err(|e| format!("Failed to read image: {}", e))?;
-        
+        let bytes = fs::read(&full_path).map_err(|e| format!("Failed to read image: {}", e))?;
+
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         let base64_data = STANDARD.encode(&bytes);
-        
-        (format!("data:{};base64,{}", mime_type, base64_data), mime_type.to_string())
+
+        (
+            format!("data:{};base64,{}", mime_type, base64_data),
+            mime_type.to_string(),
+        )
     };
 
     if let Ok(api_key) = std::env::var("OPENAI_API_KEY") {
         return call_openai_vision_sync(&api_key, &image_data, is_url, prompt);
     }
-    
+
     if let Ok(api_key) = std::env::var("ANTHROPIC_API_KEY") {
         return call_anthropic_vision_sync(&api_key, &image_data, is_url, &media_type, prompt);
     }
-    
+
     if let Ok(api_key) = std::env::var("GOOGLE_API_KEY") {
         return call_google_vision_sync(&api_key, &image_data, is_url, prompt);
     }
 
     Ok(format!(
         "Image analysis requested:\n- Image: {}\n- Prompt: {}\n- Is URL: {}\n\nNote: Set OPENAI_API_KEY, ANTHROPIC_API_KEY, or GOOGLE_API_KEY to enable vision analysis.",
-        image_path,
-        prompt,
-        is_url
+        image_path, prompt, is_url
     ))
 }
 
 // ── Sync helper functions ───────────────────────────────────────────────────
 
 fn send_discord_sync(channel_id: &str, content: &str) -> Result<String, String> {
-    let token = std::env::var("DISCORD_BOT_TOKEN")
-        .map_err(|_| "DISCORD_BOT_TOKEN not set")?;
+    let token = std::env::var("DISCORD_BOT_TOKEN").map_err(|_| "DISCORD_BOT_TOKEN not set")?;
 
     let client = reqwest::blocking::Client::new();
-    let url = format!("https://discord.com/api/v10/channels/{}/messages", channel_id);
+    let url = format!(
+        "https://discord.com/api/v10/channels/{}/messages",
+        channel_id
+    );
 
     let response = client
         .post(&url)
@@ -1125,7 +1157,10 @@ fn send_discord_sync(channel_id: &str, content: &str) -> Result<String, String> 
     if response.status().is_success() {
         let data: Value = response.json().unwrap_or_default();
         let msg_id = data["id"].as_str().unwrap_or("unknown");
-        Ok(format!("Message sent to Discord channel {}. ID: {}", channel_id, msg_id))
+        Ok(format!(
+            "Message sent to Discord channel {}. ID: {}",
+            channel_id, msg_id
+        ))
     } else {
         let status = response.status();
         let error = response.text().unwrap_or_default();
@@ -1134,8 +1169,7 @@ fn send_discord_sync(channel_id: &str, content: &str) -> Result<String, String> 
 }
 
 fn send_telegram_sync(chat_id: &str, content: &str) -> Result<String, String> {
-    let token = std::env::var("TELEGRAM_BOT_TOKEN")
-        .map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
+    let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
 
     let client = reqwest::blocking::Client::new();
     let url = format!("https://api.telegram.org/bot{}/sendMessage", token);
@@ -1155,9 +1189,15 @@ fn send_telegram_sync(chat_id: &str, content: &str) -> Result<String, String> {
         let data: Value = response.json().unwrap_or_default();
         if data["ok"].as_bool() == Some(true) {
             let msg_id = data["result"]["message_id"].as_i64().unwrap_or(0);
-            Ok(format!("Message sent to Telegram chat {}. ID: {}", chat_id, msg_id))
+            Ok(format!(
+                "Message sent to Telegram chat {}. ID: {}",
+                chat_id, msg_id
+            ))
         } else {
-            Err(format!("Telegram API error: {}", data["description"].as_str().unwrap_or("unknown")))
+            Err(format!(
+                "Telegram API error: {}",
+                data["description"].as_str().unwrap_or("unknown")
+            ))
         }
     } else {
         let status = response.status();
@@ -1188,9 +1228,14 @@ fn send_webhook_sync(url: &str, target: &str, content: &str) -> Result<String, S
     }
 }
 
-fn call_openai_vision_sync(api_key: &str, image_data: &str, _is_url: bool, prompt: &str) -> Result<String, String> {
+fn call_openai_vision_sync(
+    api_key: &str,
+    image_data: &str,
+    _is_url: bool,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
-    
+
     let image_content = serde_json::json!({
         "type": "image_url",
         "image_url": { "url": image_data }
@@ -1231,9 +1276,15 @@ fn call_openai_vision_sync(api_key: &str, image_data: &str, _is_url: bool, promp
     Ok(content.to_string())
 }
 
-fn call_anthropic_vision_sync(api_key: &str, image_data: &str, is_url: bool, media_type: &str, prompt: &str) -> Result<String, String> {
+fn call_anthropic_vision_sync(
+    api_key: &str,
+    image_data: &str,
+    is_url: bool,
+    media_type: &str,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
-    
+
     let image_content = if is_url {
         serde_json::json!({
             "type": "image",
@@ -1243,10 +1294,7 @@ fn call_anthropic_vision_sync(api_key: &str, image_data: &str, is_url: bool, med
             }
         })
     } else {
-        let base64_data = image_data
-            .split(',')
-            .nth(1)
-            .unwrap_or(image_data);
+        let base64_data = image_data.split(',').nth(1).unwrap_or(image_data);
         serde_json::json!({
             "type": "image",
             "source": {
@@ -1293,9 +1341,14 @@ fn call_anthropic_vision_sync(api_key: &str, image_data: &str, is_url: bool, med
     Ok(content.to_string())
 }
 
-fn call_google_vision_sync(api_key: &str, image_data: &str, is_url: bool, prompt: &str) -> Result<String, String> {
+fn call_google_vision_sync(
+    api_key: &str,
+    image_data: &str,
+    is_url: bool,
+    prompt: &str,
+) -> Result<String, String> {
     let client = reqwest::blocking::Client::new();
-    
+
     let image_part = if is_url {
         serde_json::json!({
             "file_data": {
@@ -1306,11 +1359,12 @@ fn call_google_vision_sync(api_key: &str, image_data: &str, is_url: bool, prompt
     } else {
         let parts: Vec<&str> = image_data.split(',').collect();
         let base64_data = parts.get(1).unwrap_or(&"");
-        let mime_type = parts.first()
+        let mime_type = parts
+            .first()
             .and_then(|p| p.strip_prefix("data:"))
             .and_then(|p| p.split(';').next())
             .unwrap_or("image/jpeg");
-        
+
         serde_json::json!({
             "inline_data": {
                 "mime_type": mime_type,

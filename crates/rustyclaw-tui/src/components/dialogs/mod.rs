@@ -19,7 +19,12 @@ pub struct ToolApprovalState {
 
 impl ToolApprovalState {
     pub fn new(id: String, name: String, arguments: String) -> Self {
-        Self { id, name, arguments, selected_allow: true }
+        Self {
+            id,
+            name,
+            arguments,
+            selected_allow: true,
+        }
     }
 }
 
@@ -81,9 +86,17 @@ pub struct TotpDialogState {
 
 #[derive(Debug, Clone)]
 pub enum TotpDialogPhase {
-    Setup { qr_lines: Vec<String>, secret: String },
-    Verify { input: String, error: Option<String> },
-    Remove { confirmed: bool },
+    Setup {
+        qr_lines: Vec<String>,
+        secret: String,
+    },
+    Verify {
+        input: String,
+        error: Option<String>,
+    },
+    Remove {
+        confirmed: bool,
+    },
 }
 
 // ── Auth / vault ────────────────────────────────────────────────────────────
@@ -148,9 +161,14 @@ impl UserPromptState {
             PromptType::MultiSelect { defaults, options } => {
                 let mut selected = vec![false; options.len()];
                 for &i in defaults {
-                    if i < selected.len() { selected[i] = true; }
+                    if i < selected.len() {
+                        selected[i] = true;
+                    }
                 }
-                UserPromptPhase::MultiSelect { cursor: 0, selected }
+                UserPromptPhase::MultiSelect {
+                    cursor: 0,
+                    selected,
+                }
             }
             PromptType::Confirm { default } => UserPromptPhase::Confirm { yes: *default },
             PromptType::TextInput { default, .. } => UserPromptPhase::TextInput {
@@ -158,7 +176,10 @@ impl UserPromptState {
             },
             PromptType::Form { fields } => UserPromptPhase::Form {
                 cursor: 0,
-                inputs: fields.iter().map(|f| f.default.clone().unwrap_or_default()).collect(),
+                inputs: fields
+                    .iter()
+                    .map(|f| f.default.clone().unwrap_or_default())
+                    .collect(),
             },
         };
         Self { prompt, phase }

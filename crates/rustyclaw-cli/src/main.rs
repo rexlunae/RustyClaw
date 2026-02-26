@@ -1,20 +1,20 @@
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};
-#[cfg(feature = "tui")]
-use rustyclaw_tui::app::App;
 use rustyclaw_core::args::CommonArgs;
-use rustyclaw_core::commands::{handle_command, CommandAction, CommandContext};
+use rustyclaw_core::commands::{CommandAction, CommandContext, handle_command};
 use rustyclaw_core::config::Config;
-#[cfg(feature = "tui")]
-use rustyclaw_tui::onboard::run_onboard_wizard;
 use rustyclaw_core::gateway::{
-    deserialize_frame, serialize_frame, ClientFrame, ClientFrameType, ClientPayload,
-    ServerFrame, ServerFrameType, ServerPayload,
+    ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerFrameType, ServerPayload,
+    deserialize_frame, serialize_frame,
 };
 use rustyclaw_core::providers;
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
+#[cfg(feature = "tui")]
+use rustyclaw_tui::app::App;
+#[cfg(feature = "tui")]
+use rustyclaw_tui::onboard::run_onboard_wizard;
 use std::path::PathBuf;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
@@ -320,7 +320,13 @@ struct CommandArgs {
     #[arg(value_name = "COMMAND", trailing_var_arg = true)]
     command: Vec<String>,
     /// Gateway WebSocket URL (ws://…)
-    #[arg(long = "gateway", alias = "url", alias = "ws", value_name = "WS_URL", env = "RUSTYCLAW_GATEWAY")]
+    #[arg(
+        long = "gateway",
+        alias = "url",
+        alias = "ws",
+        value_name = "WS_URL",
+        env = "RUSTYCLAW_GATEWAY"
+    )]
     gateway: Option<String>,
 }
 
@@ -537,14 +543,22 @@ async fn main() -> Result<()> {
                     run_onboard_wizard(&mut config, &mut secrets, false)?;
                     // Optional agent setup step
                     let ws_dir = config.workspace_dir();
-                    match rustyclaw_core::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                    match rustyclaw_core::tools::agent_setup::exec_agent_setup(
+                        &serde_json::json!({}),
+                        &ws_dir,
+                    ) {
                         Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                        Err(e) => println!("{}", rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                        Err(e) => println!(
+                            "{}",
+                            rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
+                        ),
                     }
                 }
                 #[cfg(not(feature = "tui"))]
                 {
-                    eprintln!("Onboarding wizard is not available in this build. Build with --features tui to enable.");
+                    eprintln!(
+                        "Onboarding wizard is not available in this build. Build with --features tui to enable."
+                    );
                     std::process::exit(1);
                 }
             } else {
@@ -554,14 +568,24 @@ async fn main() -> Result<()> {
                 }
                 config.ensure_dirs()?;
                 config.save(None)?;
-                println!("{}", rustyclaw_core::theme::icon_ok(
-                    &format!("Initialised config + workspace at {}", rustyclaw_core::theme::info(&config.settings_dir.display().to_string()))
-                ));
+                println!(
+                    "{}",
+                    rustyclaw_core::theme::icon_ok(&format!(
+                        "Initialised config + workspace at {}",
+                        rustyclaw_core::theme::info(&config.settings_dir.display().to_string())
+                    ))
+                );
                 // Optional agent setup step
                 let ws_dir = config.workspace_dir();
-                match rustyclaw_core::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                match rustyclaw_core::tools::agent_setup::exec_agent_setup(
+                    &serde_json::json!({}),
+                    &ws_dir,
+                ) {
                     Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                    Err(e) => println!("{}", rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                    Err(e) => println!(
+                        "{}",
+                        rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
+                    ),
                 }
             }
         }
@@ -574,14 +598,22 @@ async fn main() -> Result<()> {
                 run_onboard_wizard(&mut config, &mut secrets, _args.reset)?;
                 // Optional agent setup step
                 let ws_dir = config.workspace_dir();
-                match rustyclaw_core::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+                match rustyclaw_core::tools::agent_setup::exec_agent_setup(
+                    &serde_json::json!({}),
+                    &ws_dir,
+                ) {
                     Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                    Err(e) => println!("{}", rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                    Err(e) => println!(
+                        "{}",
+                        rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
+                    ),
                 }
             }
             #[cfg(not(feature = "tui"))]
             {
-                eprintln!("Onboarding wizard is not available in this build. Build with --features tui to enable.");
+                eprintln!(
+                    "Onboarding wizard is not available in this build. Build with --features tui to enable."
+                );
                 std::process::exit(1);
             }
         }
@@ -591,9 +623,15 @@ async fn main() -> Result<()> {
             run_import(&args, &mut config)?;
             // Optional agent setup step
             let ws_dir = config.workspace_dir();
-            match rustyclaw_core::tools::agent_setup::exec_agent_setup(&serde_json::json!({}), &ws_dir) {
+            match rustyclaw_core::tools::agent_setup::exec_agent_setup(
+                &serde_json::json!({}),
+                &ws_dir,
+            ) {
                 Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                Err(e) => println!("{}", rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))),
+                Err(e) => println!(
+                    "{}",
+                    rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
+                ),
             }
         }
 
@@ -611,34 +649,43 @@ async fn main() -> Result<()> {
             }
             #[cfg(not(feature = "tui"))]
             {
-                eprintln!("Configuration wizard is not available in this build. Build with --features tui to enable.");
+                eprintln!(
+                    "Configuration wizard is not available in this build. Build with --features tui to enable."
+                );
                 std::process::exit(1);
             }
         }
 
         // ── Config get / set / unset ────────────────────────────
-        Commands::Config(sub) => {
-            match sub {
-                ConfigCommands::Get { path } => {
-                    let value = config_get(&config, &path);
-                    println!("{}", value);
-                }
-                ConfigCommands::Set { path, value } => {
-                    config_set(&mut config, &path, &value)?;
-                    config.save(None)?;
-                    println!("{}", rustyclaw_core::theme::icon_ok(
-                        &format!("Set {} = {}", rustyclaw_core::theme::accent_bright(&path), rustyclaw_core::theme::info(&value))
-                    ));
-                }
-                ConfigCommands::Unset { path } => {
-                    config_unset(&mut config, &path)?;
-                    config.save(None)?;
-                    println!("{}", rustyclaw_core::theme::icon_ok(
-                        &format!("Unset {}", rustyclaw_core::theme::accent_bright(&path))
-                    ));
-                }
+        Commands::Config(sub) => match sub {
+            ConfigCommands::Get { path } => {
+                let value = config_get(&config, &path);
+                println!("{}", value);
             }
-        }
+            ConfigCommands::Set { path, value } => {
+                config_set(&mut config, &path, &value)?;
+                config.save(None)?;
+                println!(
+                    "{}",
+                    rustyclaw_core::theme::icon_ok(&format!(
+                        "Set {} = {}",
+                        rustyclaw_core::theme::accent_bright(&path),
+                        rustyclaw_core::theme::info(&value)
+                    ))
+                );
+            }
+            ConfigCommands::Unset { path } => {
+                config_unset(&mut config, &path)?;
+                config.save(None)?;
+                println!(
+                    "{}",
+                    rustyclaw_core::theme::icon_ok(&format!(
+                        "Unset {}",
+                        rustyclaw_core::theme::accent_bright(&path)
+                    ))
+                );
+            }
+        },
 
         // ── Doctor ──────────────────────────────────────────────
         Commands::Doctor(_args) => {
@@ -647,7 +694,10 @@ async fn main() -> Result<()> {
             let sp = t::spinner("Running health checks…");
 
             let checks = vec![
-                ("Config file", config.settings_dir.join("config.toml").exists()),
+                (
+                    "Config file",
+                    config.settings_dir.join("config.toml").exists(),
+                ),
                 ("Workspace dir", config.workspace_dir().exists()),
                 ("Credentials dir", config.credentials_dir().exists()),
                 ("SOUL.md", config.soul_path().exists()),
@@ -672,7 +722,8 @@ async fn main() -> Result<()> {
                 println!("{}", t::success("All checks passed."));
             } else {
                 println!("{}", t::warn("Some checks failed."));
-                println!("  Run {} or {} to fix.",
+                println!(
+                    "  Run {} or {} to fix.",
                     t::accent_bright("`rustyclaw setup`"),
                     t::accent_bright("`rustyclaw onboard`"),
                 );
@@ -699,7 +750,9 @@ async fn main() -> Result<()> {
             }
             #[cfg(not(feature = "tui"))]
             {
-                eprintln!("TUI is not available in this build. Build with --features tui to enable.");
+                eprintln!(
+                    "TUI is not available in this build. Build with --features tui to enable."
+                );
                 std::process::exit(1);
             }
         }
@@ -751,20 +804,35 @@ async fn main() -> Result<()> {
                         config.tls_key.as_deref(),
                     ) {
                         Ok(pid) => {
-                            let scheme = if config.tls_cert.is_some() { "wss" } else { "ws" };
-                            t::spinner_ok(&sp, &format!(
-                                "Gateway started (PID {}, {})",
-                                pid,
-                                t::info(&format!("{}://{}:{}",
-                                    scheme,
-                                    if bind == "loopback" { "127.0.0.1" } else { bind },
-                                    port
-                                )),
-                            ));
-                            println!("  {}", t::muted(&format!(
-                                "Logs: {}",
-                                daemon::log_path(&config.settings_dir).display()
-                            )));
+                            let scheme = if config.tls_cert.is_some() {
+                                "wss"
+                            } else {
+                                "ws"
+                            };
+                            t::spinner_ok(
+                                &sp,
+                                &format!(
+                                    "Gateway started (PID {}, {})",
+                                    pid,
+                                    t::info(&format!(
+                                        "{}://{}:{}",
+                                        scheme,
+                                        if bind == "loopback" {
+                                            "127.0.0.1"
+                                        } else {
+                                            bind
+                                        },
+                                        port
+                                    )),
+                                ),
+                            );
+                            println!(
+                                "  {}",
+                                t::muted(&format!(
+                                    "Logs: {}",
+                                    daemon::log_path(&config.settings_dir).display()
+                                ))
+                            );
                         }
                         Err(e) => {
                             t::spinner_fail(&sp, &format!("Failed to start gateway: {}", e));
@@ -782,9 +850,10 @@ async fn main() -> Result<()> {
                             t::spinner_ok(&sp, &format!("Gateway stopped (was PID {})", pid));
                         }
                         daemon::StopResult::WasStale { pid } => {
-                            t::spinner_warn(&sp, &format!(
-                                "Cleaned up stale PID file (PID {} was not running)", pid
-                            ));
+                            t::spinner_warn(
+                                &sp,
+                                &format!("Cleaned up stale PID file (PID {} was not running)", pid),
+                            );
                         }
                         daemon::StopResult::WasNotRunning => {
                             t::spinner_warn(&sp, "Gateway is not running");
@@ -832,16 +901,28 @@ async fn main() -> Result<()> {
                         config.tls_key.as_deref(),
                     ) {
                         Ok(pid) => {
-                            let scheme = if config.tls_cert.is_some() { "wss" } else { "ws" };
-                            t::spinner_ok(&sp, &format!(
-                                "Gateway restarted (PID {}, {})",
-                                pid,
-                                t::info(&format!("{}://{}:{}",
-                                    scheme,
-                                    if bind == "loopback" { "127.0.0.1" } else { bind },
-                                    port
-                                )),
-                            ));
+                            let scheme = if config.tls_cert.is_some() {
+                                "wss"
+                            } else {
+                                "ws"
+                            };
+                            t::spinner_ok(
+                                &sp,
+                                &format!(
+                                    "Gateway restarted (PID {}, {})",
+                                    pid,
+                                    t::info(&format!(
+                                        "{}://{}:{}",
+                                        scheme,
+                                        if bind == "loopback" {
+                                            "127.0.0.1"
+                                        } else {
+                                            bind
+                                        },
+                                        port
+                                    )),
+                                ),
+                            );
                         }
                         Err(e) => {
                             t::spinner_fail(&sp, &format!("Failed to start: {}", e));
@@ -852,7 +933,10 @@ async fn main() -> Result<()> {
                     use rustyclaw_core::daemon;
                     use rustyclaw_core::theme as t;
 
-                    let url = config.gateway_url.as_deref().unwrap_or("ws://127.0.0.1:9001");
+                    let url = config
+                        .gateway_url
+                        .as_deref()
+                        .unwrap_or("ws://127.0.0.1:9001");
                     let status = daemon::status(&config.settings_dir);
 
                     if json {
@@ -870,38 +954,58 @@ async fn main() -> Result<()> {
                         println!("{}", t::label_value("Gateway URL", url));
                         match status {
                             daemon::DaemonStatus::Running { pid } => {
-                                println!("{}", t::label_value("Status     ",
-                                    &t::success(&format!("running (PID {})", pid))));
+                                println!(
+                                    "{}",
+                                    t::label_value(
+                                        "Status     ",
+                                        &t::success(&format!("running (PID {})", pid))
+                                    )
+                                );
                             }
                             daemon::DaemonStatus::Stale { pid } => {
-                                println!("{}", t::label_value("Status     ",
-                                    &t::warn(&format!("stale PID file (PID {} not running)", pid))));
+                                println!(
+                                    "{}",
+                                    t::label_value(
+                                        "Status     ",
+                                        &t::warn(&format!(
+                                            "stale PID file (PID {} not running)",
+                                            pid
+                                        ))
+                                    )
+                                );
                             }
                             daemon::DaemonStatus::Stopped => {
-                                println!("{}", t::label_value("Status     ",
-                                    &t::muted("stopped")));
+                                println!("{}", t::label_value("Status     ", &t::muted("stopped")));
                             }
                         }
                         let log = daemon::log_path(&config.settings_dir);
                         if log.exists() {
-                            println!("{}", t::label_value("Log        ",
-                                &log.display().to_string()));
+                            println!(
+                                "{}",
+                                t::label_value("Log        ", &log.display().to_string())
+                            );
                         }
                     }
                 }
                 GatewayCommands::Reload => {
                     use rustyclaw_core::theme as t;
 
-                    let url = config.gateway_url.as_deref().unwrap_or("ws://127.0.0.1:9001");
+                    let url = config
+                        .gateway_url
+                        .as_deref()
+                        .unwrap_or("ws://127.0.0.1:9001");
                     let sp = t::spinner("Reloading gateway configuration\u{2026}");
 
                     match send_gateway_reload(url, config.totp_enabled).await {
                         Ok((provider, model)) => {
-                            t::spinner_ok(&sp, &format!(
-                                "Gateway reloaded: {} / {}",
-                                t::info(&provider),
-                                t::info(&model),
-                            ));
+                            t::spinner_ok(
+                                &sp,
+                                &format!(
+                                    "Gateway reloaded: {} / {}",
+                                    t::info(&provider),
+                                    t::info(&model),
+                                ),
+                            );
                         }
                         Err(e) => {
                             t::spinner_fail(&sp, &format!("Reload failed: {}", e));
@@ -909,7 +1013,7 @@ async fn main() -> Result<()> {
                     }
                 }
                 GatewayCommands::Run(args) => {
-                    use rustyclaw_core::gateway::{run_gateway, GatewayOptions, ModelContext};
+                    use rustyclaw_core::gateway::{GatewayOptions, ModelContext, run_gateway};
                     use rustyclaw_core::secrets::SecretsManager;
                     use tokio_util::sync::CancellationToken;
 
@@ -922,16 +1026,21 @@ async fn main() -> Result<()> {
                     let tls_cert = config.tls_cert.clone();
                     let tls_key = config.tls_key.clone();
                     let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
-                    println!("{}", rustyclaw_core::theme::icon_ok(
-                        &format!("RustyClaw gateway listening on {}", rustyclaw_core::theme::info(&format!("{}://{}", scheme, listen)))
-                    ));
+                    println!(
+                        "{}",
+                        rustyclaw_core::theme::icon_ok(&format!(
+                            "RustyClaw gateway listening on {}",
+                            rustyclaw_core::theme::info(&format!("{}://{}", scheme, listen))
+                        ))
+                    );
 
                     // Open the secrets vault — the gateway owns it.
                     let creds_dir = config.credentials_dir();
                     let vault = if config.secrets_password_protected {
-                        let password = rpassword::prompt_password(
-                            format!("{} Vault password: ", rustyclaw_core::theme::info("🔑")),
-                        )
+                        let password = rpassword::prompt_password(format!(
+                            "{} Vault password: ",
+                            rustyclaw_core::theme::info("🔑")
+                        ))
                         .unwrap_or_default();
                         SecretsManager::with_password(&creds_dir, password)
                     } else {
@@ -978,7 +1087,21 @@ async fn main() -> Result<()> {
                     let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
                         std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
-                    run_gateway(config, GatewayOptions { listen, tls_cert, tls_key }, model_ctx, shared_vault, shared_skills, None, None, cancel).await?;
+                    run_gateway(
+                        config,
+                        GatewayOptions {
+                            listen,
+                            tls_cert,
+                            tls_key,
+                        },
+                        model_ctx,
+                        shared_vault,
+                        shared_skills,
+                        None,
+                        None,
+                        cancel,
+                    )
+                    .await?;
                 }
             }
         }
@@ -1008,12 +1131,19 @@ async fn main() -> Result<()> {
                     }
                 }
                 SkillsCommands::Info { name } => {
-                    println!("{}", rustyclaw_core::theme::muted(
-                        &format!("Skill info for '{}' is not yet implemented.", name)
-                    ));
+                    println!(
+                        "{}",
+                        rustyclaw_core::theme::muted(&format!(
+                            "Skill info for '{}' is not yet implemented.",
+                            name
+                        ))
+                    );
                 }
                 SkillsCommands::Check => {
-                    println!("{}", rustyclaw_core::theme::muted("Skill check is not yet implemented."));
+                    println!(
+                        "{}",
+                        rustyclaw_core::theme::muted("Skill check is not yet implemented.")
+                    );
                 }
             }
         }
@@ -1044,42 +1174,74 @@ async fn main() -> Result<()> {
                         Err(_) => println!("  Auth: {}", t::muted("unknown")),
                     }
                     println!();
-                    println!("  {} search <query>        Search for skills", t::muted("rustyclaw clawhub"));
-                    println!("  {} trending [category]   Browse trending skills", t::muted("rustyclaw clawhub"));
-                    println!("  {} categories            List skill categories", t::muted("rustyclaw clawhub"));
-                    println!("  {} info <name>           Show skill details", t::muted("rustyclaw clawhub"));
-                    println!("  {} browse                Open ClawHub in browser", t::muted("rustyclaw clawhub"));
-                    println!("  {} auth login <token>    Authenticate", t::muted("rustyclaw clawhub"));
-                    println!("  {} profile               Show your profile", t::muted("rustyclaw clawhub"));
-                    println!("  {} starred                List starred skills", t::muted("rustyclaw clawhub"));
-                    println!("  {} install <name>        Install a skill", t::muted("rustyclaw clawhub"));
-                    println!("  {} publish <name>        Publish a skill", t::muted("rustyclaw clawhub"));
+                    println!(
+                        "  {} search <query>        Search for skills",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} trending [category]   Browse trending skills",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} categories            List skill categories",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} info <name>           Show skill details",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} browse                Open ClawHub in browser",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} auth login <token>    Authenticate",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} profile               Show your profile",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} starred                List starred skills",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} install <name>        Install a skill",
+                        t::muted("rustyclaw clawhub")
+                    );
+                    println!(
+                        "  {} publish <name>        Publish a skill",
+                        t::muted("rustyclaw clawhub")
+                    );
                 }
                 Some(ClawHubSub::Auth(auth_cmd)) => match auth_cmd {
-                    ClawHubAuthCommands::Login { token } => {
-                        match sm.auth_token(&token) {
-                            Ok(resp) if resp.ok => {
-                                config.clawhub_token = Some(token);
-                                config.save(None)?;
-                                let user = resp.username.unwrap_or_else(|| "unknown".into());
-                                println!("{}", t::icon_ok(&format!("Authenticated as '{}' on ClawHub.", user)));
-                            }
-                            Ok(_) => {
-                                println!("{}", t::icon_fail("Token is invalid."));
-                                std::process::exit(1);
-                            }
-                            Err(e) => {
-                                println!("{}", t::icon_fail(&format!("Auth failed: {}", e)));
-                                std::process::exit(1);
-                            }
+                    ClawHubAuthCommands::Login { token } => match sm.auth_token(&token) {
+                        Ok(resp) if resp.ok => {
+                            config.clawhub_token = Some(token);
+                            config.save(None)?;
+                            let user = resp.username.unwrap_or_else(|| "unknown".into());
+                            println!(
+                                "{}",
+                                t::icon_ok(&format!("Authenticated as '{}' on ClawHub.", user))
+                            );
                         }
-                    }
-                    ClawHubAuthCommands::Status => {
-                        match sm.auth_status() {
-                            Ok(msg) => println!("{}", msg),
-                            Err(e) => println!("{}", t::icon_fail(&format!("Auth status check failed: {}", e))),
+                        Ok(_) => {
+                            println!("{}", t::icon_fail("Token is invalid."));
+                            std::process::exit(1);
                         }
-                    }
+                        Err(e) => {
+                            println!("{}", t::icon_fail(&format!("Auth failed: {}", e)));
+                            std::process::exit(1);
+                        }
+                    },
+                    ClawHubAuthCommands::Status => match sm.auth_status() {
+                        Ok(msg) => println!("{}", msg),
+                        Err(e) => println!(
+                            "{}",
+                            t::icon_fail(&format!("Auth status check failed: {}", e))
+                        ),
+                    },
                     ClawHubAuthCommands::Logout => {
                         config.clawhub_token = None;
                         config.save(None)?;
@@ -1089,13 +1251,19 @@ async fn main() -> Result<()> {
                 Some(ClawHubSub::Search { query }) => {
                     let q = query.join(" ");
                     if q.is_empty() {
-                        println!("{}", t::icon_fail("Usage: rustyclaw clawhub search <query>"));
+                        println!(
+                            "{}",
+                            t::icon_fail("Usage: rustyclaw clawhub search <query>")
+                        );
                         std::process::exit(1);
                     }
                     match sm.search_registry(&q) {
                         Ok(results) => {
                             if results.is_empty() {
-                                println!("{}", t::muted(&format!("No skills found matching '{}'.", q)));
+                                println!(
+                                    "{}",
+                                    t::muted(&format!("No skills found matching '{}'.", q))
+                                );
                             } else {
                                 println!("{} result(s) for '{}':", results.len(), q);
                                 for r in &results {
@@ -1106,11 +1274,19 @@ async fn main() -> Result<()> {
                                     };
                                     println!(
                                         "  {} {} v{} by {} — {}{}",
-                                        t::icon_ok(""), r.name, r.version, r.author, r.description, dl,
+                                        t::icon_ok(""),
+                                        r.name,
+                                        r.version,
+                                        r.author,
+                                        r.description,
+                                        dl,
                                     );
                                 }
                                 println!();
-                                println!("Install with: {} install <name>", t::muted("rustyclaw clawhub"));
+                                println!(
+                                    "Install with: {} install <name>",
+                                    t::muted("rustyclaw clawhub")
+                                );
                             }
                         }
                         Err(e) => {
@@ -1133,75 +1309,90 @@ async fn main() -> Result<()> {
                                 for (i, e) in entries.iter().enumerate() {
                                     println!(
                                         "  {}. {} — {} (★{} ↓{})",
-                                        i + 1, e.name, e.description, e.stars, e.downloads,
+                                        i + 1,
+                                        e.name,
+                                        e.description,
+                                        e.stars,
+                                        e.downloads,
                                     );
                                 }
                             }
                         }
                         Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Failed to fetch trending: {}", e)));
+                            println!(
+                                "{}",
+                                t::icon_fail(&format!("Failed to fetch trending: {}", e))
+                            );
                             std::process::exit(1);
                         }
                     }
                 }
-                Some(ClawHubSub::Categories) => {
-                    match sm.categories() {
-                        Ok(cats) => {
-                            if cats.is_empty() {
-                                println!("{}", t::muted("No categories found."));
-                            } else {
-                                println!("{}", t::accent_bright("ClawHub skill categories:"));
-                                for c in &cats {
-                                    let count = if c.count > 0 {
-                                        format!(" ({})", c.count)
-                                    } else {
-                                        String::new()
-                                    };
-                                    println!("  • {}{} — {}", c.name, count, c.description);
-                                }
-                                println!();
-                                println!("Browse by category: {} trending <category>", t::muted("rustyclaw clawhub"));
+                Some(ClawHubSub::Categories) => match sm.categories() {
+                    Ok(cats) => {
+                        if cats.is_empty() {
+                            println!("{}", t::muted("No categories found."));
+                        } else {
+                            println!("{}", t::accent_bright("ClawHub skill categories:"));
+                            for c in &cats {
+                                let count = if c.count > 0 {
+                                    format!(" ({})", c.count)
+                                } else {
+                                    String::new()
+                                };
+                                println!("  • {}{} — {}", c.name, count, c.description);
                             }
-                        }
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Failed to fetch categories: {}", e)));
-                            std::process::exit(1);
+                            println!();
+                            println!(
+                                "Browse by category: {} trending <category>",
+                                t::muted("rustyclaw clawhub")
+                            );
                         }
                     }
-                }
-                Some(ClawHubSub::Info { name }) => {
-                    match sm.registry_info(&name) {
-                        Ok(detail) => {
-                            println!("{}", t::accent_bright(&format!("{}  v{}", detail.name, detail.version)));
-                            if !detail.description.is_empty() {
-                                println!("  {}", detail.description);
-                            }
-                            if !detail.author.is_empty() {
-                                println!("  Author: {}", detail.author);
-                            }
-                            if !detail.license.is_empty() {
-                                println!("  License: {}", detail.license);
-                            }
-                            println!("  ★ {}  ↓ {}", detail.stars, detail.downloads);
-                            if let Some(ref repo) = detail.repository {
-                                println!("  Repo: {}", repo);
-                            }
-                            if !detail.categories.is_empty() {
-                                println!("  Categories: {}", detail.categories.join(", "));
-                            }
-                            if !detail.required_secrets.is_empty() {
-                                println!("  Requires secrets: {}", detail.required_secrets.join(", "));
-                            }
-                            if !detail.updated_at.is_empty() {
-                                println!("  Updated: {}", detail.updated_at);
-                            }
+                    Err(e) => {
+                        println!(
+                            "{}",
+                            t::icon_fail(&format!("Failed to fetch categories: {}", e))
+                        );
+                        std::process::exit(1);
+                    }
+                },
+                Some(ClawHubSub::Info { name }) => match sm.registry_info(&name) {
+                    Ok(detail) => {
+                        println!(
+                            "{}",
+                            t::accent_bright(&format!("{}  v{}", detail.name, detail.version))
+                        );
+                        if !detail.description.is_empty() {
+                            println!("  {}", detail.description);
                         }
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Failed to fetch skill info: {}", e)));
-                            std::process::exit(1);
+                        if !detail.author.is_empty() {
+                            println!("  Author: {}", detail.author);
+                        }
+                        if !detail.license.is_empty() {
+                            println!("  License: {}", detail.license);
+                        }
+                        println!("  ★ {}  ↓ {}", detail.stars, detail.downloads);
+                        if let Some(ref repo) = detail.repository {
+                            println!("  Repo: {}", repo);
+                        }
+                        if !detail.categories.is_empty() {
+                            println!("  Categories: {}", detail.categories.join(", "));
+                        }
+                        if !detail.required_secrets.is_empty() {
+                            println!("  Requires secrets: {}", detail.required_secrets.join(", "));
+                        }
+                        if !detail.updated_at.is_empty() {
+                            println!("  Updated: {}", detail.updated_at);
                         }
                     }
-                }
+                    Err(e) => {
+                        println!(
+                            "{}",
+                            t::icon_fail(&format!("Failed to fetch skill info: {}", e))
+                        );
+                        std::process::exit(1);
+                    }
+                },
                 Some(ClawHubSub::Browse) => {
                     let url = sm.registry_url().to_string();
                     println!("Opening {} …", t::info(&url));
@@ -1210,73 +1401,88 @@ async fn main() -> Result<()> {
                     #[cfg(target_os = "linux")]
                     let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
                     #[cfg(target_os = "windows")]
-                    let _ = std::process::Command::new("cmd").args(["/C", "start", &url]).spawn();
+                    let _ = std::process::Command::new("cmd")
+                        .args(["/C", "start", &url])
+                        .spawn();
                 }
-                Some(ClawHubSub::Profile) => {
-                    match sm.profile() {
-                        Ok(p) => {
-                            println!("{}", t::accent_bright(&format!("ClawHub profile: {}", p.username)));
-                            if !p.display_name.is_empty() {
-                                println!("  Name: {}", p.display_name);
-                            }
-                            if !p.bio.is_empty() {
-                                println!("  Bio: {}", p.bio);
-                            }
-                            println!("  Published: {}  Starred: {}", p.published_count, p.starred_count);
-                            if !p.joined.is_empty() {
-                                println!("  Joined: {}", p.joined);
-                            }
+                Some(ClawHubSub::Profile) => match sm.profile() {
+                    Ok(p) => {
+                        println!(
+                            "{}",
+                            t::accent_bright(&format!("ClawHub profile: {}", p.username))
+                        );
+                        if !p.display_name.is_empty() {
+                            println!("  Name: {}", p.display_name);
                         }
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Failed to fetch profile: {}", e)));
-                            std::process::exit(1);
+                        if !p.bio.is_empty() {
+                            println!("  Bio: {}", p.bio);
+                        }
+                        println!(
+                            "  Published: {}  Starred: {}",
+                            p.published_count, p.starred_count
+                        );
+                        if !p.joined.is_empty() {
+                            println!("  Joined: {}", p.joined);
                         }
                     }
-                }
-                Some(ClawHubSub::Starred) => {
-                    match sm.starred() {
-                        Ok(entries) => {
-                            if entries.is_empty() {
-                                println!("{}", t::muted("No starred skills."));
-                                println!("Star skills with: {} star <name>", t::muted("rustyclaw clawhub"));
-                            } else {
-                                println!("{} starred skill(s):", entries.len());
-                                for e in &entries {
-                                    println!(
-                                        "  ★ {} v{} by {} — {}",
-                                        e.name, e.version, e.author, e.description,
-                                    );
-                                }
+                    Err(e) => {
+                        println!(
+                            "{}",
+                            t::icon_fail(&format!("Failed to fetch profile: {}", e))
+                        );
+                        std::process::exit(1);
+                    }
+                },
+                Some(ClawHubSub::Starred) => match sm.starred() {
+                    Ok(entries) => {
+                        if entries.is_empty() {
+                            println!("{}", t::muted("No starred skills."));
+                            println!(
+                                "Star skills with: {} star <name>",
+                                t::muted("rustyclaw clawhub")
+                            );
+                        } else {
+                            println!("{} starred skill(s):", entries.len());
+                            for e in &entries {
+                                println!(
+                                    "  ★ {} v{} by {} — {}",
+                                    e.name, e.version, e.author, e.description,
+                                );
                             }
                         }
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Failed to fetch starred: {}", e)));
-                            std::process::exit(1);
-                        }
                     }
-                }
-                Some(ClawHubSub::Star { name }) => {
-                    match sm.star(&name) {
-                        Ok(msg) => println!("{}", t::icon_ok(&msg)),
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Star failed: {}", e)));
-                            std::process::exit(1);
-                        }
+                    Err(e) => {
+                        println!(
+                            "{}",
+                            t::icon_fail(&format!("Failed to fetch starred: {}", e))
+                        );
+                        std::process::exit(1);
                     }
-                }
-                Some(ClawHubSub::Unstar { name }) => {
-                    match sm.unstar(&name) {
-                        Ok(msg) => println!("{}", t::icon_ok(&msg)),
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Unstar failed: {}", e)));
-                            std::process::exit(1);
-                        }
+                },
+                Some(ClawHubSub::Star { name }) => match sm.star(&name) {
+                    Ok(msg) => println!("{}", t::icon_ok(&msg)),
+                    Err(e) => {
+                        println!("{}", t::icon_fail(&format!("Star failed: {}", e)));
+                        std::process::exit(1);
                     }
-                }
+                },
+                Some(ClawHubSub::Unstar { name }) => match sm.unstar(&name) {
+                    Ok(msg) => println!("{}", t::icon_ok(&msg)),
+                    Err(e) => {
+                        println!("{}", t::icon_fail(&format!("Unstar failed: {}", e)));
+                        std::process::exit(1);
+                    }
+                },
                 Some(ClawHubSub::Install { name, version }) => {
                     match sm.install_from_registry(&name, version.as_deref()) {
                         Ok(skill) => {
-                            println!("{}", t::icon_ok(&format!("Skill '{}' installed from ClawHub.", skill.name)));
+                            println!(
+                                "{}",
+                                t::icon_ok(&format!(
+                                    "Skill '{}' installed from ClawHub.",
+                                    skill.name
+                                ))
+                            );
                         }
                         Err(e) => {
                             println!("{}", t::icon_fail(&format!("Install failed: {}", e)));
@@ -1284,15 +1490,13 @@ async fn main() -> Result<()> {
                         }
                     }
                 }
-                Some(ClawHubSub::Publish { name }) => {
-                    match sm.publish_to_registry(&name) {
-                        Ok(msg) => println!("{}", t::icon_ok(&msg)),
-                        Err(e) => {
-                            println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
-                            std::process::exit(1);
-                        }
+                Some(ClawHubSub::Publish { name }) => match sm.publish_to_registry(&name) {
+                    Ok(msg) => println!("{}", t::icon_ok(&msg)),
+                    Err(e) => {
+                        println!("{}", t::icon_fail(&format!("Publish failed: {}", e)));
+                        std::process::exit(1);
                     }
-                }
+                },
             }
         }
     }
@@ -1373,8 +1577,7 @@ fn prompt_password(prompt: &str) -> Result<String> {
     use std::io::{self, Write};
     print!("{}", prompt);
     io::stdout().flush()?;
-    let input = rpassword::read_password()
-        .context("Failed to read password")?;
+    let input = rpassword::read_password().context("Failed to read password")?;
     Ok(input.trim().to_string())
 }
 
@@ -1385,7 +1588,10 @@ fn print_status(config: &Config, args: &StatusArgs) {
         // Minimal JSON blob — extend as features land.
         println!("{{");
         println!("  \"settings_dir\": \"{}\",", config.settings_dir.display());
-        println!("  \"workspace_dir\": \"{}\",", config.workspace_dir().display());
+        println!(
+            "  \"workspace_dir\": \"{}\",",
+            config.workspace_dir().display()
+        );
         if let Some(m) = &config.model {
             println!("  \"provider\": \"{}\",", m.provider);
             if let Some(model) = &m.model {
@@ -1399,24 +1605,51 @@ fn print_status(config: &Config, args: &StatusArgs) {
     } else {
         use rustyclaw_core::theme as t;
         println!("{}\n", t::heading("RustyClaw status"));
-        println!("{}", t::label_value("Settings dir", &config.settings_dir.display().to_string()));
-        println!("{}", t::label_value("Workspace   ", &config.workspace_dir().display().to_string()));
+        println!(
+            "{}",
+            t::label_value("Settings dir", &config.settings_dir.display().to_string())
+        );
+        println!(
+            "{}",
+            t::label_value(
+                "Workspace   ",
+                &config.workspace_dir().display().to_string()
+            )
+        );
         if let Some(m) = &config.model {
             println!("{}", t::label_value("Provider    ", &m.provider));
             if let Some(model) = &m.model {
                 println!("{}", t::label_value("Model       ", model));
             }
         } else {
-            println!("  {} : {}", t::muted("Provider    "),
-                t::warn(&format!("(not configured — run {})", t::accent_bright("`rustyclaw onboard`"))));
+            println!(
+                "  {} : {}",
+                t::muted("Provider    "),
+                t::warn(&format!(
+                    "(not configured — run {})",
+                    t::accent_bright("`rustyclaw onboard`")
+                ))
+            );
         }
         if let Some(gw) = &config.gateway_url {
             println!("{}", t::label_value("Gateway URL ", gw));
         }
         if args.verbose || args.all {
-            println!("{}", t::label_value("SOUL.md     ", &config.soul_path().display().to_string()));
-            println!("{}", t::label_value("Skills dir  ", &config.skills_dir().display().to_string()));
-            println!("{}", t::label_value("Credentials ", &config.credentials_dir().display().to_string()));
+            println!(
+                "{}",
+                t::label_value("SOUL.md     ", &config.soul_path().display().to_string())
+            );
+            println!(
+                "{}",
+                t::label_value("Skills dir  ", &config.skills_dir().display().to_string())
+            );
+            println!(
+                "{}",
+                t::label_value(
+                    "Credentials ",
+                    &config.credentials_dir().display().to_string()
+                )
+            );
         }
     }
 }
@@ -1464,19 +1697,23 @@ fn config_set(config: &mut Config, path: &str, value: &str) -> Result<()> {
             config.gateway_url = Some(value.to_string());
         }
         "model.provider" | "provider" => {
-            let m = config.model.get_or_insert_with(|| rustyclaw_core::config::ModelProvider {
-                provider: String::new(),
-                model: None,
-                base_url: None,
-            });
+            let m = config
+                .model
+                .get_or_insert_with(|| rustyclaw_core::config::ModelProvider {
+                    provider: String::new(),
+                    model: None,
+                    base_url: None,
+                });
             m.provider = value.to_string();
         }
         "model.model" | "model" => {
-            let m = config.model.get_or_insert_with(|| rustyclaw_core::config::ModelProvider {
-                provider: String::new(),
-                model: None,
-                base_url: None,
-            });
+            let m = config
+                .model
+                .get_or_insert_with(|| rustyclaw_core::config::ModelProvider {
+                    provider: String::new(),
+                    model: None,
+                    base_url: None,
+                });
             m.model = Some(value.to_string());
         }
         _ => anyhow::bail!("Unknown config path: {}", path),
@@ -1520,8 +1757,8 @@ fn run_refresh_token(args: &RefreshTokenArgs, config: &mut Config) -> Result<()>
     let content = fs::read_to_string(&token_file)
         .with_context(|| format!("Failed to read {}", token_file.display()))?;
 
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .with_context(|| "Failed to parse token file as JSON")?;
+    let json: serde_json::Value =
+        serde_json::from_str(&content).with_context(|| "Failed to parse token file as JSON")?;
 
     let token = json
         .get("token")
@@ -1541,9 +1778,7 @@ fn run_refresh_token(args: &RefreshTokenArgs, config: &mut Config) -> Result<()>
         .as_secs() as i64;
 
     if expires_at_secs <= now + 60 {
-        anyhow::bail!(
-            "OpenClaw token has expired. Run `openclaw onboard` to re-authenticate."
-        );
+        anyhow::bail!("OpenClaw token has expired. Run `openclaw onboard` to re-authenticate.");
     }
 
     let hours_left = (expires_at_secs - now) / 3600;
@@ -1576,7 +1811,11 @@ fn run_refresh_token(args: &RefreshTokenArgs, config: &mut Config) -> Result<()>
                         unsafe {
                             libc::kill(pid, libc::SIGHUP);
                         }
-                        println!("{} Sent reload signal to gateway (pid {})", "✓".green(), pid);
+                        println!(
+                            "{} Sent reload signal to gateway (pid {})",
+                            "✓".green(),
+                            pid
+                        );
                     }
                     #[cfg(not(unix))]
                     {
@@ -1667,7 +1906,10 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
         println!("    {} Configuration (model, settings)", "•".cyan());
     }
     if has_workspace {
-        println!("    {} Workspace files (SOUL.md, memory/, etc.)", "•".cyan());
+        println!(
+            "    {} Workspace files (SOUL.md, memory/, etc.)",
+            "•".cyan()
+        );
     }
     if has_credentials {
         println!("    {} API credentials", "•".cyan());
@@ -1691,7 +1933,8 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
     if !args.dry_run {
         fs::create_dir_all(&target_dir).context("Failed to create target directory")?;
         fs::create_dir_all(&target_workspace).context("Failed to create workspace directory")?;
-        fs::create_dir_all(&target_credentials).context("Failed to create credentials directory")?;
+        fs::create_dir_all(&target_credentials)
+            .context("Failed to create credentials directory")?;
     }
 
     let mut imported_count = 0;
@@ -1732,7 +1975,10 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
         println!("{}", "Workspace Files".cyan().bold());
         println!("{}", "━".repeat(60).dimmed());
 
-        print!("{} ", "Import workspace files (SOUL.md, AGENTS.md, memory/, etc.)? [Y/n]:".cyan());
+        print!(
+            "{} ",
+            "Import workspace files (SOUL.md, AGENTS.md, memory/, etc.)? [Y/n]:".cyan()
+        );
         std::io::stdout().flush()?;
         let mut response = String::new();
         reader.read_line(&mut response)?;
@@ -1754,7 +2000,11 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
 
                 if src.exists() {
                     if dst.exists() && !args.force {
-                        println!("  {} {} (exists, use --force to overwrite)", "⊘".yellow(), file);
+                        println!(
+                            "  {} {} (exists, use --force to overwrite)",
+                            "⊘".yellow(),
+                            file
+                        );
                         skipped_count += 1;
                     } else {
                         if !args.dry_run {
@@ -1955,7 +2205,10 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                 println!("  Your credentials will be stored in an encrypted vault.");
                 println!("  You can add a password for additional security.");
                 println!();
-                println!("  {}  With a password, you'll need to enter it each time", "⚠".yellow());
+                println!(
+                    "  {}  With a password, you'll need to enter it each time",
+                    "⚠".yellow()
+                );
                 println!("     you start the agent. Without one, an auto-generated");
                 println!("     key file protects the vault instead.");
                 println!();
@@ -2046,7 +2299,10 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                                     println!("  {}", "⚠ Invalid code. Try again:".yellow());
                                 }
                                 Err(e) => {
-                                    println!("  {}", format!("⚠ Error: {}. 2FA not enabled.", e).yellow());
+                                    println!(
+                                        "  {}",
+                                        format!("⚠ Error: {}. 2FA not enabled.", e).yellow()
+                                    );
                                     secrets.remove_totp()?;
                                     break;
                                 }
@@ -2077,7 +2333,9 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                         let src = source_credentials.join(file);
                         if src.exists() {
                             if let Ok(content) = fs::read_to_string(&src) {
-                                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                                if let Ok(json) =
+                                    serde_json::from_str::<serde_json::Value>(&content)
+                                {
                                     let token = json.get("token").and_then(|v| v.as_str());
                                     let expires_at = json.get("expiresAt").and_then(|v| v.as_i64());
 
@@ -2087,7 +2345,8 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                                         let now = std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
                                             .unwrap_or_default()
-                                            .as_secs() as i64;
+                                            .as_secs()
+                                            as i64;
 
                                         if expires_at_secs > now + 300 {
                                             // Token still valid for at least 5 minutes
@@ -2097,14 +2356,26 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                                                 "expires_at": expires_at_secs,
                                             });
                                             if !args.dry_run {
-                                                secrets.store_secret("GITHUB_COPILOT_SESSION", &session_data.to_string())?;
+                                                secrets.store_secret(
+                                                    "GITHUB_COPILOT_SESSION",
+                                                    &session_data.to_string(),
+                                                )?;
                                             }
                                             let hours_left = (expires_at_secs - now) / 3600;
-                                            println!("  {} {} (session token, ~{}h remaining)", "✓".green(), secret_name, hours_left);
+                                            println!(
+                                                "  {} {} (session token, ~{}h remaining)",
+                                                "✓".green(),
+                                                secret_name,
+                                                hours_left
+                                            );
                                             imported_count += 1;
                                             continue;
                                         } else {
-                                            println!("  {} {} (session expired, needs re-auth)", "⊘".yellow(), secret_name);
+                                            println!(
+                                                "  {} {} (session expired, needs re-auth)",
+                                                "⊘".yellow(),
+                                                secret_name
+                                            );
                                         }
                                     }
                                 }
@@ -2174,21 +2445,32 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                             println!("  2. Enter code: {}", auth_response.user_code.cyan().bold());
                             println!();
 
-                            print!("{} ", "Press Enter after completing authorization (or type 'cancel'):".cyan());
+                            print!(
+                                "{} ",
+                                "Press Enter after completing authorization (or type 'cancel'):"
+                                    .cyan()
+                            );
                             std::io::stdout().flush()?;
                             let mut response = String::new();
                             reader.read_line(&mut response)?;
 
-                            if !response.trim().eq_ignore_ascii_case("cancel") && !response.trim().eq_ignore_ascii_case("c") {
+                            if !response.trim().eq_ignore_ascii_case("cancel")
+                                && !response.trim().eq_ignore_ascii_case("c")
+                            {
                                 println!("  {}", "Waiting for authorization...".dimmed());
 
-                                let interval = std::time::Duration::from_secs(auth_response.interval);
-                                let max_attempts = (auth_response.expires_in / auth_response.interval).max(10);
+                                let interval =
+                                    std::time::Duration::from_secs(auth_response.interval);
+                                let max_attempts =
+                                    (auth_response.expires_in / auth_response.interval).max(10);
 
                                 let mut token: Option<String> = None;
                                 for _attempt in 0..max_attempts {
                                     match tokio::task::block_in_place(|| {
-                                        handle.block_on(providers::poll_device_token(device_config, &auth_response.device_code))
+                                        handle.block_on(providers::poll_device_token(
+                                            device_config,
+                                            &auth_response.device_code,
+                                        ))
                                     }) {
                                         Ok(Some(access_token)) => {
                                             token = Some(access_token);
@@ -2201,7 +2483,10 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                                         }
                                         Err(e) => {
                                             println!();
-                                            println!("  {}", format!("⚠ Authentication failed: {}", e).yellow());
+                                            println!(
+                                                "  {}",
+                                                format!("⚠ Authentication failed: {}", e).yellow()
+                                            );
                                             break;
                                         }
                                     }
@@ -2210,7 +2495,8 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
 
                                 if let Some(access_token) = token {
                                     if !args.dry_run {
-                                        secrets.store_secret("GITHUB_COPILOT_TOKEN", &access_token)?;
+                                        secrets
+                                            .store_secret("GITHUB_COPILOT_TOKEN", &access_token)?;
                                     }
                                     println!("  {}", "✓ GitHub Copilot authenticated!".green());
                                     imported_count += 1;
@@ -2222,7 +2508,10 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                             }
                         }
                         Err(e) => {
-                            println!("  {}", format!("⚠ Failed to start device flow: {}", e).yellow());
+                            println!(
+                                "  {}",
+                                format!("⚠ Failed to start device flow: {}", e).yellow()
+                            );
                         }
                     }
                 } else {
@@ -2264,7 +2553,11 @@ fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
         println!("{}", "Run without --dry-run to apply changes.".dimmed());
     } else {
         println!();
-        println!("{} Saved to {}", "✓".green(), target_dir.join("config.toml").display());
+        println!(
+            "{} Saved to {}",
+            "✓".green(),
+            target_dir.join("config.toml").display()
+        );
         println!();
         println!(
             "{} Run {} to launch your agent!",
@@ -2349,20 +2642,29 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                         match frame.frame_type {
                             ServerFrameType::AuthChallenge => {
                                 if let ServerPayload::AuthChallenge { method: _ } = frame.payload {
-                                    let code = rpassword::prompt_password(
-                                        format!("{} 2FA code: ", rustyclaw_core::theme::info("🔑")),
-                                    )
+                                    let code = rpassword::prompt_password(format!(
+                                        "{} 2FA code: ",
+                                        rustyclaw_core::theme::info("🔑")
+                                    ))
                                     .unwrap_or_default();
                                     let auth_frame = ClientFrame {
                                         frame_type: ClientFrameType::AuthResponse,
-                                        payload: ClientPayload::AuthResponse { code: code.trim().to_string() },
+                                        payload: ClientPayload::AuthResponse {
+                                            code: code.trim().to_string(),
+                                        },
                                     };
-                                    let bytes = serialize_frame(&auth_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+                                    let bytes = serialize_frame(&auth_frame)
+                                        .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
                                     writer.send(Message::Binary(bytes.into())).await?;
                                 }
                             }
                             ServerFrameType::AuthResult => {
-                                if let ServerPayload::AuthResult { ok, message, retry: _ } = frame.payload {
+                                if let ServerPayload::AuthResult {
+                                    ok,
+                                    message,
+                                    retry: _,
+                                } = frame.payload
+                                {
                                     if !ok {
                                         let msg = message.as_deref().unwrap_or("Auth failed");
                                         anyhow::bail!("{}", msg);
@@ -2382,22 +2684,29 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(text.as_ref()) {
                         let frame_type = val.get("type").and_then(|t| t.as_str());
                         if frame_type == Some("auth_challenge") {
-                            let code = rpassword::prompt_password(
-                                format!("{} 2FA code: ", rustyclaw_core::theme::info("🔑")),
-                            )
+                            let code = rpassword::prompt_password(format!(
+                                "{} 2FA code: ",
+                                rustyclaw_core::theme::info("🔑")
+                            ))
                             .unwrap_or_default();
                             let auth_frame = ClientFrame {
                                 frame_type: ClientFrameType::AuthResponse,
-                                payload: ClientPayload::AuthResponse { code: code.trim().to_string() },
+                                payload: ClientPayload::AuthResponse {
+                                    code: code.trim().to_string(),
+                                },
                             };
-                            let bytes = serialize_frame(&auth_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                                    writer.send(Message::Binary(bytes.into())).await?;
+                            let bytes = serialize_frame(&auth_frame)
+                                .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+                            writer.send(Message::Binary(bytes.into())).await?;
                             continue;
                         }
                         if frame_type == Some("auth_result") {
                             let ok = val.get("ok").and_then(|o| o.as_bool()).unwrap_or(false);
                             if !ok {
-                                let msg = val.get("message").and_then(|m| m.as_str()).unwrap_or("Auth failed");
+                                let msg = val
+                                    .get("message")
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("Auth failed");
                                 anyhow::bail!("{}", msg);
                             }
                             break;
@@ -2421,7 +2730,10 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                 if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
                     match frame.frame_type {
                         ServerFrameType::Hello => {
-                            if let ServerPayload::Hello { provider, model, .. } = frame.payload {
+                            if let ServerPayload::Hello {
+                                provider, model, ..
+                            } = frame.payload
+                            {
                                 _result_provider = provider.unwrap_or_default();
                                 _result_model = model.unwrap_or_default();
                                 break;
@@ -2430,16 +2742,20 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                         ServerFrameType::AuthChallenge => {
                             // Handle TOTP even when totp_enabled was false in config
                             if totp_enabled {
-                                let code = rpassword::prompt_password(
-                                    format!("{} 2FA code: ", rustyclaw_core::theme::info("🔑")),
-                                )
+                                let code = rpassword::prompt_password(format!(
+                                    "{} 2FA code: ",
+                                    rustyclaw_core::theme::info("🔑")
+                                ))
                                 .unwrap_or_default();
                                 let auth_frame = ClientFrame {
                                     frame_type: ClientFrameType::AuthResponse,
-                                    payload: ClientPayload::AuthResponse { code: code.trim().to_string() },
+                                    payload: ClientPayload::AuthResponse {
+                                        code: code.trim().to_string(),
+                                    },
                                 };
-                                let bytes = serialize_frame(&auth_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                                    writer.send(Message::Binary(bytes.into())).await?;
+                                let bytes = serialize_frame(&auth_frame)
+                                    .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+                                writer.send(Message::Binary(bytes.into())).await?;
                             }
                         }
                         _ => {}
@@ -2452,20 +2768,32 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                     let frame_type = val.get("type").and_then(|t| t.as_str());
                     if frame_type == Some("hello") || frame_type == Some("auth_challenge") {
                         if frame_type == Some("auth_challenge") && !totp_enabled {
-                            let code = rpassword::prompt_password(
-                                format!("{} 2FA code: ", rustyclaw_core::theme::info("🔑")),
-                            )
+                            let code = rpassword::prompt_password(format!(
+                                "{} 2FA code: ",
+                                rustyclaw_core::theme::info("🔑")
+                            ))
                             .unwrap_or_default();
                             let auth_frame = ClientFrame {
                                 frame_type: ClientFrameType::AuthResponse,
-                                payload: ClientPayload::AuthResponse { code: code.trim().to_string() },
+                                payload: ClientPayload::AuthResponse {
+                                    code: code.trim().to_string(),
+                                },
                             };
-                            let bytes = serialize_frame(&auth_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                                    writer.send(Message::Binary(bytes.into())).await?;
+                            let bytes = serialize_frame(&auth_frame)
+                                .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+                            writer.send(Message::Binary(bytes.into())).await?;
                             continue;
                         }
-                        let provider = val.get("provider").and_then(|p| p.as_str()).unwrap_or("").to_string();
-                        let model = val.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string();
+                        let provider = val
+                            .get("provider")
+                            .and_then(|p| p.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let model = val
+                            .get("model")
+                            .and_then(|m| m.as_str())
+                            .unwrap_or("")
+                            .to_string();
                         _result_provider = provider;
                         _result_model = model;
                         break;
@@ -2512,8 +2840,11 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
         frame_type: ClientFrameType::Reload,
         payload: ClientPayload::Reload,
     };
-    let bytes = serialize_frame(&reload_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-    writer.send(Message::Binary(bytes.into())).await
+    let bytes =
+        serialize_frame(&reload_frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+    writer
+        .send(Message::Binary(bytes.into()))
+        .await
         .context("Failed to send reload command")?;
 
     // Wait for reload_result

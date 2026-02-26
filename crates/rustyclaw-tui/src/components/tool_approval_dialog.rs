@@ -1,7 +1,7 @@
 // ── Tool approval dialog — ask user to approve/deny a tool call ─────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
 
 #[derive(Default, Props)]
 pub struct ToolApprovalDialogProps {
@@ -15,8 +15,16 @@ pub struct ToolApprovalDialogProps {
 
 #[component]
 pub fn ToolApprovalDialog(props: &ToolApprovalDialogProps) -> impl Into<AnyElement<'static>> {
-    let allow_color = if props.selected_allow { theme::SUCCESS } else { theme::MUTED };
-    let deny_color = if props.selected_allow { theme::MUTED } else { theme::ERROR };
+    let allow_color = if props.selected_allow {
+        theme::SUCCESS
+    } else {
+        theme::MUTED
+    };
+    let deny_color = if props.selected_allow {
+        theme::MUTED
+    } else {
+        theme::ERROR
+    };
     let allow_indicator = if props.selected_allow { "▸ " } else { "  " };
     let deny_indicator = if props.selected_allow { "  " } else { "▸ " };
 

@@ -5,7 +5,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use rustyclaw_core::args::CommonArgs;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::daemon;
-use rustyclaw_core::gateway::{run_gateway, GatewayOptions, ModelContext};
+use rustyclaw_core::gateway::{GatewayOptions, ModelContext, run_gateway};
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::theme as t;
 use tokio_util::sync::CancellationToken;
@@ -118,12 +118,18 @@ async fn main() -> Result<()> {
     let args = match cli.command {
         Some(GatewayCommands::Run(args)) => args,
         Some(GatewayCommands::Status { json }) => {
-            let url = config.gateway_url.as_deref().unwrap_or("ws://127.0.0.1:9001");
+            let url = config
+                .gateway_url
+                .as_deref()
+                .unwrap_or("ws://127.0.0.1:9001");
             if json {
                 println!("{{ \"gateway_url\": \"{}\" }}", url);
             } else {
                 println!("{}", t::label_value("Gateway URL", url));
-                println!("  {}", t::muted("(detailed status probe not yet implemented)"));
+                println!(
+                    "  {}",
+                    t::muted("(detailed status probe not yet implemented)")
+                );
             }
             return Ok(());
         }
@@ -145,7 +151,13 @@ async fn main() -> Result<()> {
     let tls_key = args.tls_key.or(config.tls_key.clone());
     let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
 
-    println!("{}", t::icon_ok(&format!("Gateway listening on {}", t::info(&format!("{}://{}", scheme, listen)))));
+    println!(
+        "{}",
+        t::icon_ok(&format!(
+            "Gateway listening on {}",
+            t::info(&format!("{}://{}", scheme, listen))
+        ))
+    );
 
     // ── Open the secrets vault ───────────────────────────────────────────
     //
@@ -165,7 +177,9 @@ async fn main() -> Result<()> {
         let env_password = std::env::var("RUSTYCLAW_VAULT_PASSWORD").ok();
         if env_password.is_some() {
             // SAFETY: single-threaded at this point.
-            unsafe { std::env::remove_var("RUSTYCLAW_VAULT_PASSWORD"); }
+            unsafe {
+                std::env::remove_var("RUSTYCLAW_VAULT_PASSWORD");
+            }
         }
 
         if config.secrets_password_protected {
@@ -174,14 +188,16 @@ async fn main() -> Result<()> {
                 SecretsManager::with_password(&creds_dir, pw)
             } else if std::io::stdin().is_terminal() {
                 // Interactive foreground mode — prompt for password.
-                let password = rpassword::prompt_password(
-                    format!("{} Vault password: ", t::info("🔑")),
-                )
-                .unwrap_or_default();
+                let password =
+                    rpassword::prompt_password(format!("{} Vault password: ", t::info("🔑")))
+                        .unwrap_or_default();
                 SecretsManager::with_password(&creds_dir, password)
             } else {
                 // Daemon mode with no password — start locked.
-                println!("  {} Vault locked (no password provided — clients can unlock via WebSocket)", t::muted("🔒"));
+                println!(
+                    "  {} Vault locked (no password provided — clients can unlock via WebSocket)",
+                    t::muted("🔒")
+                );
                 SecretsManager::locked(&creds_dir)
             }
         } else {
@@ -206,9 +222,15 @@ async fn main() -> Result<()> {
         if let Some(ref key) = env_key {
             // Key was injected by the parent process — use it directly.
             // SAFETY: single-threaded at this point.
-            unsafe { std::env::remove_var("RUSTYCLAW_MODEL_API_KEY"); }
+            unsafe {
+                std::env::remove_var("RUSTYCLAW_MODEL_API_KEY");
+            }
 
-            let api_key = if key.is_empty() { None } else { Some(key.clone()) };
+            let api_key = if key.is_empty() {
+                None
+            } else {
+                Some(key.clone())
+            };
             match ModelContext::from_config(&config, api_key) {
                 Ok(ctx) => {
                     println!(
@@ -246,11 +268,7 @@ async fn main() -> Result<()> {
                     Some(ctx)
                 }
                 Err(err) => {
-                    eprintln!(
-                        "{} Could not resolve model context: {}",
-                        t::muted("⚠"),
-                        err,
-                    );
+                    eprintln!("{} Could not resolve model context: {}", t::muted("⚠"), err,);
                     eprintln!(
                         "  {}",
                         t::muted("The gateway will rely on clients sending full credentials."),
@@ -283,7 +301,7 @@ async fn main() -> Result<()> {
         let cancel_for_term = cancel.clone();
         let settings_dir_term = settings_dir.clone();
         tokio::spawn(async move {
-            use tokio::signal::unix::{signal, SignalKind};
+            use tokio::signal::unix::{SignalKind, signal};
             if let Ok(mut sig) = signal(SignalKind::terminate()) {
                 sig.recv().await;
                 cancel_for_term.cancel();
@@ -305,7 +323,21 @@ async fn main() -> Result<()> {
         let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
             std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
-        run_gateway(config, GatewayOptions { listen, tls_cert, tls_key }, model_ctx, shared_vault, shared_skills, None, None, cancel).await
+        run_gateway(
+            config,
+            GatewayOptions {
+                listen,
+                tls_cert,
+                tls_key,
+            },
+            model_ctx,
+            shared_vault,
+            shared_skills,
+            None,
+            None,
+            cancel,
+        )
+        .await
     };
     daemon::remove_pid(&settings_dir);
 

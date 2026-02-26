@@ -22,7 +22,12 @@ pub fn process_manager() -> &'static SharedProcessManager {
 static SANDBOX: OnceLock<Sandbox> = OnceLock::new();
 
 /// Called once from the gateway to initialize the sandbox.
-pub fn init_sandbox(mode: SandboxMode, workspace: PathBuf, credentials_dir: PathBuf, deny_paths: Vec<PathBuf>) {
+pub fn init_sandbox(
+    mode: SandboxMode,
+    workspace: PathBuf,
+    credentials_dir: PathBuf,
+    deny_paths: Vec<PathBuf>,
+) {
     debug!(?mode, ?workspace, "Initializing sandbox");
     let mut policy = SandboxPolicy::protect_credentials(&credentials_dir, &workspace);
     for path in deny_paths {
@@ -120,8 +125,7 @@ pub fn is_protected_path(path: &Path) -> bool {
 }
 
 /// Standard denial message when a tool tries to touch the vault.
-pub const VAULT_ACCESS_DENIED: &str =
-    "Access denied: the credentials directory is protected. Use the secrets_list / secrets_get / secrets_store tools instead.";
+pub const VAULT_ACCESS_DENIED: &str = "Access denied: the credentials directory is protected. Use the secrets_list / secrets_get / secrets_store tools instead.";
 
 // ── Path helpers ────────────────────────────────────────────────────────────
 
@@ -167,8 +171,7 @@ pub fn should_visit(entry: &walkdir::DirEntry) -> bool {
     if entry.file_type().is_dir() {
         if matches!(
             name.as_ref(),
-            ".git" | "node_modules" | "target" | ".hg" | ".svn"
-                | "__pycache__" | "dist" | "build"
+            ".git" | "node_modules" | "target" | ".hg" | ".svn" | "__pycache__" | "dist" | "build"
         ) {
             return false;
         }
@@ -194,21 +197,22 @@ fn is_likely_garbage(s: &str) -> bool {
     if lower.contains("<!doctype") || lower.contains("<html") {
         return true;
     }
-    
+
     // Check for base64-encoded data URIs
     if s.contains("data:image/") || s.contains("data:application/") {
         return true;
     }
-    
+
     // Check for excessive base64-like content (long strings without spaces)
     let lines: Vec<&str> = s.lines().collect();
-    let long_dense_lines = lines.iter().filter(|line| {
-        line.len() > 500 && !line.contains(' ')
-    }).count();
+    let long_dense_lines = lines
+        .iter()
+        .filter(|line| line.len() > 500 && !line.contains(' '))
+        .count();
     if long_dense_lines > 3 {
         return true;
     }
-    
+
     false
 }
 
@@ -225,10 +229,14 @@ pub fn sanitize_tool_output(output: String) -> String {
             preview
         );
     }
-    
+
     // Truncate if too large
     if output.len() > MAX_TOOL_OUTPUT_BYTES {
-        debug!(bytes = output.len(), max = MAX_TOOL_OUTPUT_BYTES, "Truncating large tool output");
+        debug!(
+            bytes = output.len(),
+            max = MAX_TOOL_OUTPUT_BYTES,
+            "Truncating large tool output"
+        );
         let truncated: String = output.chars().take(MAX_TOOL_OUTPUT_BYTES).collect();
         format!(
             "{}...\n\n[Truncated: {} bytes total, showing first {}]",

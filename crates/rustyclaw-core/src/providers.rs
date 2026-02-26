@@ -52,7 +52,7 @@ pub struct ProviderDef {
 // This uses the official GitHub Copilot CLI client ID which is publicly documented
 // at https://docs.github.com/en/copilot/using-github-copilot/using-github-copilot-in-the-cli
 pub const GITHUB_COPILOT_DEVICE_FLOW: DeviceFlowConfig = DeviceFlowConfig {
-    client_id: "Iv1.b507a08c87ecfe98",  // GitHub Copilot CLI client ID
+    client_id: "Iv1.b507a08c87ecfe98", // GitHub Copilot CLI client ID
     device_auth_url: "https://github.com/login/device/code",
     token_url: "https://github.com/login/oauth/access_token",
     scope: Some("read:user"),
@@ -81,13 +81,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         secret_key: Some("OPENAI_API_KEY"),
         device_flow: None,
         base_url: Some("https://api.openai.com/v1"),
-        models: &[
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "o3",
-            "o4-mini",
-        ],
+        models: &["gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano", "o3", "o4-mini"],
         help_url: Some("https://platform.openai.com/api-keys"),
         help_text: Some("Get a key at platform.openai.com → API Keys"),
     },
@@ -98,11 +92,7 @@ pub const PROVIDERS: &[ProviderDef] = &[
         secret_key: Some("GEMINI_API_KEY"),
         device_flow: None,
         base_url: Some("https://generativelanguage.googleapis.com/v1beta"),
-        models: &[
-            "gemini-2.5-pro",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
-        ],
+        models: &["gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.0-flash"],
         help_url: Some("https://aistudio.google.com/apikey"),
         help_text: Some("Get a key at aistudio.google.com → API Key"),
     },
@@ -193,7 +183,9 @@ pub const PROVIDERS: &[ProviderDef] = &[
         base_url: Some("http://localhost:52415/v1"),
         models: &[],
         help_url: None,
-        help_text: Some("No key needed — exo cluster. Default port 52415. Install: github.com/exo-explore/exo"),
+        help_text: Some(
+            "No key needed — exo cluster. Default port 52415. Install: github.com/exo-explore/exo",
+        ),
     },
     ProviderDef {
         id: "opencode",
@@ -241,7 +233,9 @@ pub const PROVIDERS: &[ProviderDef] = &[
             "qwen3-coder",
         ],
         help_url: Some("https://opencode.ai/auth"),
-        help_text: Some("Get a key at opencode.ai/auth — includes free models (Big Pickle, MiniMax, Kimi)"),
+        help_text: Some(
+            "Get a key at opencode.ai/auth — includes free models (Big Pickle, MiniMax, Kimi)",
+        ),
     },
     ProviderDef {
         id: "custom",
@@ -281,7 +275,10 @@ pub fn provider_ids() -> Vec<&'static str> {
 
 /// Return all model names across all providers (for tab-completion).
 pub fn all_model_names() -> Vec<&'static str> {
-    PROVIDERS.iter().flat_map(|p| p.models.iter().copied()).collect()
+    PROVIDERS
+        .iter()
+        .flat_map(|p| p.models.iter().copied())
+        .collect()
 }
 
 /// Return the models for the given provider ID.
@@ -310,9 +307,7 @@ pub async fn fetch_models(
         None => return Err(format!("Unknown provider: {}", provider_id)),
     };
 
-    let base = base_url_override
-        .or(def.base_url)
-        .unwrap_or("");
+    let base = base_url_override.or(def.base_url).unwrap_or("");
 
     if base.is_empty() {
         return Err(format!(
@@ -323,7 +318,10 @@ pub async fn fetch_models(
 
     // Anthropic has no public models endpoint
     if provider_id == "anthropic" {
-        return Err("Anthropic does not provide a models API. Set a model manually with /model <name>.".to_string());
+        return Err(
+            "Anthropic does not provide a models API. Set a model manually with /model <name>."
+                .to_string(),
+        );
     }
 
     let result = match provider_id {
@@ -341,17 +339,32 @@ pub async fn fetch_models(
             def.display,
         )),
         Ok(models) => Ok(models),
-        Err(e) => Err(format!("Failed to fetch models from {}: {}", def.display, e)),
+        Err(e) => Err(format!(
+            "Failed to fetch models from {}: {}",
+            def.display, e
+        )),
     }
 }
 
 /// Non-chat model ID patterns.  Any model whose ID contains one of these
 /// substrings (case-insensitive) is filtered out of the selector.
 const NON_CHAT_PATTERNS: &[&str] = &[
-    "embed", "tts", "whisper", "dall-e", "davinci", "babbage",
-    "moderation", "search", "similarity", "code-search",
-    "text-search", "audio", "realtime", "transcri",
-    "computer-use", "canary", // internal/experimental
+    "embed",
+    "tts",
+    "whisper",
+    "dall-e",
+    "davinci",
+    "babbage",
+    "moderation",
+    "search",
+    "similarity",
+    "code-search",
+    "text-search",
+    "audio",
+    "realtime",
+    "transcri",
+    "computer-use",
+    "canary", // internal/experimental
 ];
 
 /// Check whether a model entry looks like it supports chat completions.
@@ -432,11 +445,7 @@ async fn fetch_google_models(
         None => return Ok(Vec::new()),
     };
 
-    let url = format!(
-        "{}/models?key={}",
-        base_url.trim_end_matches('/'),
-        key,
-    );
+    let url = format!("{}/models?key={}", base_url.trim_end_matches('/'), key,);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -497,9 +506,7 @@ pub enum TokenResponse {
 }
 
 /// Initiate OAuth device flow and return device code and verification URL.
-pub async fn start_device_flow(
-    config: &DeviceFlowConfig,
-) -> Result<DeviceAuthResponse, String> {
+pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthResponse, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -673,8 +680,14 @@ mod tests {
         assert_eq!(provider.secret_key, Some("GITHUB_COPILOT_TOKEN"));
 
         let device_config = provider.device_flow.unwrap();
-        assert_eq!(device_config.device_auth_url, "https://github.com/login/device/code");
-        assert_eq!(device_config.token_url, "https://github.com/login/oauth/access_token");
+        assert_eq!(
+            device_config.device_auth_url,
+            "https://github.com/login/device/code"
+        );
+        assert_eq!(
+            device_config.token_url,
+            "https://github.com/login/oauth/access_token"
+        );
         assert!(!device_config.client_id.is_empty());
     }
 
@@ -687,7 +700,10 @@ mod tests {
 
         let device_config = provider.device_flow.unwrap();
         // Should use same device flow as github-copilot
-        assert_eq!(device_config.device_auth_url, "https://github.com/login/device/code");
+        assert_eq!(
+            device_config.device_auth_url,
+            "https://github.com/login/device/code"
+        );
     }
 
     #[test]
@@ -723,22 +739,40 @@ mod tests {
             // Verify auth consistency
             match provider.auth_method {
                 AuthMethod::ApiKey => {
-                    assert!(provider.secret_key.is_some(),
-                        "Provider {} with ApiKey auth must have secret_key", provider.id);
-                    assert!(provider.device_flow.is_none(),
-                        "Provider {} with ApiKey auth should not have device_flow", provider.id);
+                    assert!(
+                        provider.secret_key.is_some(),
+                        "Provider {} with ApiKey auth must have secret_key",
+                        provider.id
+                    );
+                    assert!(
+                        provider.device_flow.is_none(),
+                        "Provider {} with ApiKey auth should not have device_flow",
+                        provider.id
+                    );
                 }
                 AuthMethod::DeviceFlow => {
-                    assert!(provider.secret_key.is_some(),
-                        "Provider {} with DeviceFlow auth must have secret_key", provider.id);
-                    assert!(provider.device_flow.is_some(),
-                        "Provider {} with DeviceFlow auth must have device_flow config", provider.id);
+                    assert!(
+                        provider.secret_key.is_some(),
+                        "Provider {} with DeviceFlow auth must have secret_key",
+                        provider.id
+                    );
+                    assert!(
+                        provider.device_flow.is_some(),
+                        "Provider {} with DeviceFlow auth must have device_flow config",
+                        provider.id
+                    );
                 }
                 AuthMethod::None => {
-                    assert!(provider.secret_key.is_none(),
-                        "Provider {} with None auth should not have secret_key", provider.id);
-                    assert!(provider.device_flow.is_none(),
-                        "Provider {} with None auth should not have device_flow", provider.id);
+                    assert!(
+                        provider.secret_key.is_none(),
+                        "Provider {} with None auth should not have secret_key",
+                        provider.id
+                    );
+                    assert!(
+                        provider.device_flow.is_none(),
+                        "Provider {} with None auth should not have device_flow",
+                        provider.id
+                    );
                 }
             }
         }

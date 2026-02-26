@@ -150,7 +150,8 @@ mod tests {
 
     fn temp_dir() -> PathBuf {
         let id = TEST_COUNTER.fetch_add(1, Ordering::SeqCst);
-        let dir = std::env::temp_dir().join(format!("rustyclaw_test_{}_{}", std::process::id(), id));
+        let dir =
+            std::env::temp_dir().join(format!("rustyclaw_test_{}_{}", std::process::id(), id));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
@@ -517,7 +518,11 @@ mod tests {
         let mut m = SecretsManager::new(&dir);
 
         let pubkey = m
-            .generate_ssh_key("rustyclaw_agent", "rustyclaw@agent", AccessPolicy::WithApproval)
+            .generate_ssh_key(
+                "rustyclaw_agent",
+                "rustyclaw@agent",
+                AccessPolicy::WithApproval,
+            )
             .unwrap();
 
         assert!(pubkey.starts_with("ssh-ed25519 "));
@@ -595,7 +600,8 @@ mod tests {
             description: None,
             disabled: false,
         };
-        m.store_credential("typed_one", &entry, "val", None).unwrap();
+        m.store_credential("typed_one", &entry, "val", None)
+            .unwrap();
 
         // Store legacy bare-key secrets (one known provider, one unknown).
         m.store_secret("ANTHROPIC_API_KEY", "sk-ant-xxx").unwrap();
@@ -624,7 +630,11 @@ mod tests {
         assert!(!names.contains(&"__init"));
 
         // Sub-keys (cred:*, val:*) excluded.
-        assert!(!names.iter().any(|n| n.starts_with("cred:") || n.starts_with("val:")));
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.starts_with("cred:") || n.starts_with("val:"))
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -828,8 +838,16 @@ mod tests {
         let mut extra = std::collections::BTreeMap::new();
         extra.insert("billing_zip".to_string(), "94025".to_string());
 
-        m.store_payment_method("visa_4242", &entry, "A. Lovelace", "4242424242424242", "12/28", "123", &extra)
-            .unwrap();
+        m.store_payment_method(
+            "visa_4242",
+            &entry,
+            "A. Lovelace",
+            "4242424242424242",
+            "12/28",
+            "123",
+            &extra,
+        )
+        .unwrap();
 
         // Needs authentication.
         let ctx = AccessContext {
@@ -881,7 +899,8 @@ mod tests {
             disabled: false,
         };
         let note = "abcde-12345\nfghij-67890\nklmno-13579";
-        m.store_credential("gh_recovery", &entry, note, None).unwrap();
+        m.store_credential("gh_recovery", &entry, note, None)
+            .unwrap();
 
         let ctx = AccessContext {
             authenticated: true,
@@ -889,7 +908,10 @@ mod tests {
         };
         let (meta, val) = m.get_credential("gh_recovery", &ctx).unwrap().unwrap();
         assert_eq!(meta.kind, SecretKind::SecureNote);
-        assert_eq!(meta.description, Some("GitHub 2FA backup codes".to_string()));
+        assert_eq!(
+            meta.description,
+            Some("GitHub 2FA backup codes".to_string())
+        );
         match val {
             CredentialValue::Single(v) => assert_eq!(v, note),
             _ => panic!("Expected Single"),
@@ -1001,7 +1023,8 @@ mod tests {
         assert_eq!(creds[0].1.policy, AccessPolicy::Always);
 
         // Change to AUTH.
-        m.set_credential_policy("k", AccessPolicy::WithAuth).unwrap();
+        m.set_credential_policy("k", AccessPolicy::WithAuth)
+            .unwrap();
         let creds = m.list_credentials();
         assert_eq!(creds[0].1.policy, AccessPolicy::WithAuth);
 
@@ -1015,7 +1038,8 @@ mod tests {
         );
 
         // Change back to ASK.
-        m.set_credential_policy("k", AccessPolicy::WithApproval).unwrap();
+        m.set_credential_policy("k", AccessPolicy::WithApproval)
+            .unwrap();
         let creds = m.list_credentials();
         assert_eq!(creds[0].1.policy, AccessPolicy::WithApproval);
 
@@ -1031,7 +1055,8 @@ mod tests {
         m.store_secret("LEGACY_KEY", "legacy_val").unwrap();
 
         // Setting policy should create a cred: entry.
-        m.set_credential_policy("LEGACY_KEY", AccessPolicy::Always).unwrap();
+        m.set_credential_policy("LEGACY_KEY", AccessPolicy::Always)
+            .unwrap();
 
         let all = m.list_all_entries();
         let entry = all.iter().find(|(n, _)| n == "LEGACY_KEY").unwrap();

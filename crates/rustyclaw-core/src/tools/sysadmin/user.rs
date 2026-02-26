@@ -1,7 +1,7 @@
 //! User and group management: list, add, remove, group membership.
 
 use super::{sh, sh_async};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -9,7 +9,10 @@ use tracing::{debug, instrument};
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing action")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing action")?;
     tracing::Span::current().record("action", action);
     let name = args.get("name").and_then(|v| v.as_str());
     debug!(name, "User management request");
@@ -19,8 +22,10 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
             let user = sh_async("whoami").await?;
             let groups = sh_async("groups 2>/dev/null").await.unwrap_or_default();
             let id_output = sh_async("id").await.unwrap_or_default();
-            let sudo_check = sh_async("sudo -n true 2>&1; echo $?").await
-                .map(|s| s.trim() == "0").unwrap_or(false);
+            let sudo_check = sh_async("sudo -n true 2>&1; echo $?")
+                .await
+                .map(|s| s.trim() == "0")
+                .unwrap_or(false);
             Ok(json!({ "action": "whoami", "user": user, "groups": groups, "id": id_output, "has_sudo": sudo_check }).to_string())
         }
 
@@ -28,7 +33,8 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
             let output = if cfg!(target_os = "macos") {
                 sh_async("dscl . list /Users | grep -v '^_'").await?
             } else {
-                sh_async("awk -F: '$3 >= 1000 || $3 == 0 { print $1, $3, $6, $7 }' /etc/passwd").await?
+                sh_async("awk -F: '$3 >= 1000 || $3 == 0 { print $1, $3, $6, $7 }' /etc/passwd")
+                    .await?
             };
             Ok(json!({ "action": "list_users", "output": output }).to_string())
         }
@@ -47,7 +53,11 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
             let output = if cfg!(target_os = "macos") {
                 sh_async(&format!("dscl . read /Users/{} 2>&1 | head -30", user)).await?
             } else {
-                sh_async(&format!("id {} 2>&1 && getent passwd {} 2>/dev/null", user, user)).await?
+                sh_async(&format!(
+                    "id {} 2>&1 && getent passwd {} 2>/dev/null",
+                    user, user
+                ))
+                .await?
             };
             Ok(json!({ "action": "user_info", "user": user, "output": output }).to_string())
         }
@@ -57,7 +67,10 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
             let cmd = if cfg!(target_os = "macos") {
                 format!("sudo sysadminctl -addUser {} -password '' 2>&1", user)
             } else {
-                let shell = args.get("shell").and_then(|v| v.as_str()).unwrap_or("/bin/bash");
+                let shell = args
+                    .get("shell")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("/bin/bash");
                 format!("sudo useradd -m -s {} {} 2>&1", shell, user)
             };
             let output = sh_async(&cmd).await?;
@@ -77,9 +90,15 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
 
         "add_to_group" => {
             let user = name.ok_or("Missing 'name'")?;
-            let group = args.get("group").and_then(|v| v.as_str()).ok_or("Missing 'group'")?;
+            let group = args
+                .get("group")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing 'group'")?;
             let cmd = if cfg!(target_os = "macos") {
-                format!("sudo dseditgroup -o edit -a {} -t user {} 2>&1", user, group)
+                format!(
+                    "sudo dseditgroup -o edit -a {} -t user {} 2>&1",
+                    user, group
+                )
             } else {
                 format!("sudo usermod -aG {} {} 2>&1", group, user)
             };
@@ -92,7 +111,10 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
             Ok(json!({ "action": "last_logins", "output": output }).to_string())
         }
 
-        _ => Err(format!("Unknown action: {}. Valid: whoami, list_users, list_groups, user_info, add_user, remove_user, add_to_group, last_logins", action)),
+        _ => Err(format!(
+            "Unknown action: {}. Valid: whoami, list_users, list_groups, user_info, add_user, remove_user, add_to_group, last_logins",
+            action
+        )),
     }
 }
 
@@ -100,7 +122,10 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
 pub fn exec_user_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing action")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing action")?;
     tracing::Span::current().record("action", action);
 
     match action {
@@ -117,6 +142,9 @@ pub fn exec_user_manage(args: &Value, _workspace_dir: &Path) -> Result<String, S
             };
             Ok(json!({ "action": "list_users", "output": output }).to_string())
         }
-        _ => Err(format!("Sync not fully supported for '{}'. Use async.", action)),
+        _ => Err(format!(
+            "Sync not fully supported for '{}'. Use async.",
+            action
+        )),
     }
 }

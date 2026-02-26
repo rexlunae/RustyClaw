@@ -52,11 +52,7 @@ fn blocking_request_with_retry(
                     let backoff = backoff_delay(attempt);
                     let delay = retry_after.unwrap_or(backoff);
 
-                    last_err = Some(anyhow::anyhow!(
-                        "HTTP {} from ClawHub: {}",
-                        status,
-                        body,
-                    ));
+                    last_err = Some(anyhow::anyhow!("HTTP {} from ClawHub: {}", status, body,));
 
                     if attempt < CLAWHUB_MAX_RETRIES {
                         std::thread::sleep(delay);
@@ -111,8 +107,7 @@ pub const DEFAULT_REGISTRY_URL: &str = "https://clawhub.ai";
 // ── Skill types ─────────────────────────────────────────────────────────────
 
 /// Where a skill was installed from.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub enum SkillSource {
     /// Locally authored (found on disk, not from a registry).
     #[default]
@@ -125,7 +120,6 @@ pub enum SkillSource {
         version: String,
     },
 }
-
 
 /// Represents a skill that can be loaded and executed
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -567,7 +561,9 @@ impl SkillManager {
 
     /// Load a legacy skill file (.skill/.json/.yaml)
     fn load_skill_legacy(&self, path: &Path) -> Result<Skill> {
-        let is_json = path.extension().is_some_and(|e| e == "json" || e == "skill");
+        let is_json = path
+            .extension()
+            .is_some_and(|e| e == "json" || e == "skill");
         let is_yaml = path.extension().is_some_and(|e| e == "yaml" || e == "yml");
 
         if !is_json && !is_yaml {
@@ -635,7 +631,9 @@ impl SkillManager {
                 .iter()
                 .any(|bin| self.binary_exists(bin));
             if !any_found {
-                result.missing_bins.extend(skill.metadata.requires.any_bins.clone());
+                result
+                    .missing_bins
+                    .extend(skill.metadata.requires.any_bins.clone());
                 result.passed = false;
             }
         }
@@ -715,11 +713,19 @@ impl SkillManager {
         let mut context = String::from("## Skills (mandatory)\n\n");
         context.push_str("Before replying: scan <available_skills> <description> entries.\n");
         context.push_str("- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.\n");
-        context.push_str("- If multiple could apply: choose the most specific one, then read/follow it.\n");
+        context.push_str(
+            "- If multiple could apply: choose the most specific one, then read/follow it.\n",
+        );
         context.push_str("- If none clearly apply: do not read any SKILL.md.\n");
-        context.push_str("Constraints: never read more than one skill up front; only read after selecting.\n\n");
-        context.push_str("The following skills provide specialized instructions for specific tasks.\n");
-        context.push_str("Use the read tool to load a skill's file when the task matches its description.\n");
+        context.push_str(
+            "Constraints: never read more than one skill up front; only read after selecting.\n\n",
+        );
+        context.push_str(
+            "The following skills provide specialized instructions for specific tasks.\n",
+        );
+        context.push_str(
+            "Use the read tool to load a skill's file when the task matches its description.\n",
+        );
         context.push_str("When a skill file references a relative path, resolve it against the skill directory (parent of SKILL.md / dirname of the path) and use that absolute path in tool commands.\n\n");
 
         if enabled_skills.is_empty() {
@@ -742,13 +748,16 @@ impl SkillManager {
             if let Some(ref desc) = skill.description {
                 context.push_str(&format!("    <description>{}</description>\n", desc));
             }
-            context.push_str(&format!("    <location>{}</location>\n", skill.path.display()));
-            
+            context.push_str(&format!(
+                "    <location>{}</location>\n",
+                skill.path.display()
+            ));
+
             if available {
                 context.push_str("    <available>true</available>\n");
             } else {
                 context.push_str("    <available>false</available>\n");
-                
+
                 // Show what's missing
                 let mut missing = Vec::new();
                 if gate_result.wrong_os {
@@ -761,10 +770,13 @@ impl SkillManager {
                     missing.push(format!("env: {}", gate_result.missing_env.join(", ")));
                 }
                 if !missing.is_empty() {
-                    context.push_str(&format!("    <requires>{}</requires>\n", missing.join("; ")));
+                    context.push_str(&format!(
+                        "    <requires>{}</requires>\n",
+                        missing.join("; ")
+                    ));
                 }
             }
-            
+
             context.push_str("  </skill>\n");
         }
 
@@ -784,7 +796,9 @@ impl SkillManager {
     fn append_skill_creation_instructions(&self, context: &mut String) {
         context.push_str("## Creating New Skills\n\n");
         context.push_str("When a user asks you to create, author, or scaffold a new skill, use the `skill_create` tool.\n");
-        context.push_str("This tool creates the skill directory and SKILL.md file in the correct location.\n\n");
+        context.push_str(
+            "This tool creates the skill directory and SKILL.md file in the correct location.\n\n",
+        );
         context.push_str("A skill is a directory containing a `SKILL.md` file with YAML frontmatter and markdown instructions.\n\n");
         context.push_str("<skill_template>\n");
         context.push_str("```\n");
@@ -794,13 +808,18 @@ impl SkillManager {
         context.push_str("metadata: {\"openclaw\": {\"emoji\": \"🔧\"}}\n");
         context.push_str("---\n\n");
         context.push_str("# Skill Title\n\n");
-        context.push_str("Detailed instructions for the agent to follow when this skill is activated.\n");
-        context.push_str("Include step-by-step guidance, tool usage patterns, and any constraints.\n");
+        context.push_str(
+            "Detailed instructions for the agent to follow when this skill is activated.\n",
+        );
+        context
+            .push_str("Include step-by-step guidance, tool usage patterns, and any constraints.\n");
         context.push_str("```\n");
         context.push_str("</skill_template>\n\n");
         context.push_str("Frontmatter fields:\n");
-        context.push_str("- `name` (required): kebab-case identifier, used as the directory name\n");
-        context.push_str("- `description` (required): shown in skill listings, used for matching\n");
+        context
+            .push_str("- `name` (required): kebab-case identifier, used as the directory name\n");
+        context
+            .push_str("- `description` (required): shown in skill listings, used for matching\n");
         context.push_str("- `metadata` (optional): JSON with gating requirements, e.g.\n");
         context.push_str("  `{\"openclaw\": {\"emoji\": \"⚡\", \"always\": false, \"requires\": {\"bins\": [\"git\", \"node\"]}}}`\n\n");
 
@@ -833,9 +852,7 @@ impl SkillManager {
             anyhow::bail!("Skill name cannot be empty");
         }
         if name.contains('/') || name.contains('\\') || name.contains(' ') {
-            anyhow::bail!(
-                "Skill name must be a simple identifier (no slashes or spaces): {name}"
-            );
+            anyhow::bail!("Skill name must be a simple identifier (no slashes or spaces): {name}");
         }
 
         let skills_dir = self
@@ -948,18 +965,33 @@ impl SkillManager {
         out.push_str(&format!("Path: {}\n", skill.path.display()));
         match &skill.source {
             SkillSource::Local => out.push_str("Source: local\n"),
-            SkillSource::Registry { registry_url, version } => {
-                out.push_str(&format!("Source: registry ({}@{})\n", registry_url, version));
+            SkillSource::Registry {
+                registry_url,
+                version,
+            } => {
+                out.push_str(&format!(
+                    "Source: registry ({}@{})\n",
+                    registry_url, version
+                ));
             }
         }
         if !skill.linked_secrets.is_empty() {
-            out.push_str(&format!("Linked secrets: {}\n", skill.linked_secrets.join(", ")));
+            out.push_str(&format!(
+                "Linked secrets: {}\n",
+                skill.linked_secrets.join(", ")
+            ));
         }
         if !gate.missing_bins.is_empty() {
-            out.push_str(&format!("Missing binaries: {}\n", gate.missing_bins.join(", ")));
+            out.push_str(&format!(
+                "Missing binaries: {}\n",
+                gate.missing_bins.join(", ")
+            ));
         }
         if !gate.missing_env.is_empty() {
-            out.push_str(&format!("Missing env vars: {}\n", gate.missing_env.join(", ")));
+            out.push_str(&format!(
+                "Missing env vars: {}\n",
+                gate.missing_env.join(", ")
+            ));
         }
         Some(out)
     }
@@ -1038,7 +1070,8 @@ impl SkillManager {
         )
         .context("ClawHub registry is not reachable")?;
 
-        let body: RegistrySearchResponse = resp.json().context("Failed to parse registry response")?;
+        let body: RegistrySearchResponse =
+            resp.json().context("Failed to parse registry response")?;
 
         // ClawHub returns "results", legacy might return "skills"
         let entries = if !body.results.is_empty() {
@@ -1063,7 +1096,11 @@ impl SkillManager {
         }
 
         // ClawHub download API: /api/v1/download?slug=<name>&version=<version>
-        let mut url = format!("{}/api/v1/download?slug={}", self.registry_url, urlencoding::encode(name));
+        let mut url = format!(
+            "{}/api/v1/download?slug={}",
+            self.registry_url,
+            urlencoding::encode(name)
+        );
         if let Some(v) = version {
             url.push_str(&format!("&version={}", urlencoding::encode(v)));
         }
@@ -1122,7 +1159,10 @@ impl SkillManager {
                 .unwrap_or_default()
                 .as_millis() as u64,
         });
-        std::fs::write(clawhub_dir.join("install.json"), serde_json::to_string_pretty(&meta)?)?;
+        std::fs::write(
+            clawhub_dir.join("install.json"),
+            serde_json::to_string_pretty(&meta)?,
+        )?;
 
         // Load the newly-installed skill.
         let skill_md_path = skill_dir.join("SKILL.md");
@@ -1148,14 +1188,14 @@ impl SkillManager {
             .get_skill(skill_name)
             .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", skill_name))?;
 
-        let token = self
-            .registry_token
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("ClawHub auth token required for publishing. Set clawhub_token in config."))?;
+        let token = self.registry_token.as_ref().ok_or_else(|| {
+            anyhow::anyhow!(
+                "ClawHub auth token required for publishing. Set clawhub_token in config."
+            )
+        })?;
 
         // Read the skill content.
-        let content = std::fs::read_to_string(&skill.path)
-            .context("Failed to read skill file")?;
+        let content = std::fs::read_to_string(&skill.path).context("Failed to read skill file")?;
 
         let manifest = SkillManifest {
             name: skill.name.clone(),
@@ -1261,7 +1301,11 @@ impl SkillManager {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            anyhow::bail!("ClawHub token verification failed (HTTP {}): {}", status, body);
+            anyhow::bail!(
+                "ClawHub token verification failed (HTTP {}): {}",
+                status,
+                body
+            );
         }
 
         let auth: AuthResponse = resp.json().context("Failed to parse auth response")?;
@@ -1271,25 +1315,35 @@ impl SkillManager {
     /// Check authentication status (whether a token is configured and valid).
     pub fn auth_status(&self) -> Result<String> {
         match &self.registry_token {
-            Some(token) => {
-                match self.auth_token(token) {
-                    Ok(resp) if resp.ok => {
-                        let user = resp.username.unwrap_or_else(|| "unknown".into());
-                        Ok(format!("Authenticated as '{}' on {}", user, self.registry_url))
-                    }
-                    Ok(_) => Ok(format!("Token configured but invalid on {}", self.registry_url)),
-                    Err(_) => Ok(format!(
-                        "Token configured but registry unreachable ({})",
-                        self.registry_url,
-                    )),
+            Some(token) => match self.auth_token(token) {
+                Ok(resp) if resp.ok => {
+                    let user = resp.username.unwrap_or_else(|| "unknown".into());
+                    Ok(format!(
+                        "Authenticated as '{}' on {}",
+                        user, self.registry_url
+                    ))
                 }
-            }
-            None => Ok(format!("Not authenticated. Run `/clawhub auth login` or set clawhub_token in config.")),
+                Ok(_) => Ok(format!(
+                    "Token configured but invalid on {}",
+                    self.registry_url
+                )),
+                Err(_) => Ok(format!(
+                    "Token configured but registry unreachable ({})",
+                    self.registry_url,
+                )),
+            },
+            None => Ok(format!(
+                "Not authenticated. Run `/clawhub auth login` or set clawhub_token in config."
+            )),
         }
     }
 
     /// Fetch trending / popular skills from the ClawHub registry.
-    pub fn trending(&self, category: Option<&str>, limit: Option<usize>) -> Result<Vec<TrendingEntry>> {
+    pub fn trending(
+        &self,
+        category: Option<&str>,
+        limit: Option<usize>,
+    ) -> Result<Vec<TrendingEntry>> {
         let mut url = format!("{}/api/v1/trending", self.registry_url);
         let mut params = vec![];
         if let Some(cat) = category {
@@ -1354,14 +1408,17 @@ impl SkillManager {
             );
         }
 
-        let body: CategoriesResponse = resp.json().context("Failed to parse categories response")?;
+        let body: CategoriesResponse =
+            resp.json().context("Failed to parse categories response")?;
         Ok(body.categories)
     }
 
     /// Fetch the authenticated user's profile from ClawHub.
     pub fn profile(&self) -> Result<ClawHubProfile> {
         let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Not authenticated. Run `/clawhub auth login` or set clawhub_token in config.")
+            anyhow::anyhow!(
+                "Not authenticated. Run `/clawhub auth login` or set clawhub_token in config."
+            )
         })?;
 
         let url = format!("{}/api/v1/profile", self.registry_url);
@@ -1392,7 +1449,9 @@ impl SkillManager {
     /// Fetch the authenticated user's starred skills from ClawHub.
     pub fn starred(&self) -> Result<Vec<StarredEntry>> {
         let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Not authenticated. Run `/clawhub auth login` or set clawhub_token in config.")
+            anyhow::anyhow!(
+                "Not authenticated. Run `/clawhub auth login` or set clawhub_token in config."
+            )
         })?;
 
         let url = format!("{}/api/v1/starred", self.registry_url);
@@ -1506,8 +1565,9 @@ impl SkillManager {
             );
         }
 
-        let detail: RegistrySkillDetail =
-            resp.json().context("Failed to parse skill detail response")?;
+        let detail: RegistrySkillDetail = resp
+            .json()
+            .context("Failed to parse skill detail response")?;
         Ok(detail)
     }
 }
@@ -1518,7 +1578,10 @@ fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
 
     if !content.starts_with("---") {
         // No frontmatter, treat entire content as instructions
-        return Ok((serde_yaml::Value::Mapping(Default::default()), content.to_string()));
+        return Ok((
+            serde_yaml::Value::Mapping(Default::default()),
+            content.to_string(),
+        ));
     }
 
     // Find the closing ---
@@ -1527,13 +1590,16 @@ fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
         let frontmatter_str = &after_first[..end_idx];
         let instructions = after_first[end_idx + 4..].trim_start().to_string();
 
-        let frontmatter: serde_yaml::Value = serde_yaml::from_str(frontmatter_str)
-            .context("Failed to parse YAML frontmatter")?;
+        let frontmatter: serde_yaml::Value =
+            serde_yaml::from_str(frontmatter_str).context("Failed to parse YAML frontmatter")?;
 
         Ok((frontmatter, instructions))
     } else {
         // No closing ---, treat as no frontmatter
-        Ok((serde_yaml::Value::Mapping(Default::default()), content.to_string()))
+        Ok((
+            serde_yaml::Value::Mapping(Default::default()),
+            content.to_string(),
+        ))
     }
 }
 
@@ -1624,7 +1690,11 @@ Do the thing.
         };
         let result = manager.check_gates(&skill);
         assert!(!result.passed);
-        assert!(result.missing_bins.contains(&"nonexistent_binary_12345".to_string()));
+        assert!(
+            result
+                .missing_bins
+                .contains(&"nonexistent_binary_12345".to_string())
+        );
     }
 
     #[test]
@@ -1662,7 +1732,10 @@ Do the thing.
 
         manager.link_secret("deploy", "AWS_KEY").unwrap();
         manager.link_secret("deploy", "AWS_SECRET").unwrap();
-        assert_eq!(manager.get_linked_secrets("deploy"), vec!["AWS_KEY", "AWS_SECRET"]);
+        assert_eq!(
+            manager.get_linked_secrets("deploy"),
+            vec!["AWS_KEY", "AWS_SECRET"]
+        );
 
         // Linking the same secret again should not duplicate.
         manager.link_secret("deploy", "AWS_KEY").unwrap();

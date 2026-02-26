@@ -4,10 +4,8 @@ use anyhow::{Context, Result};
 use securestore::KeySource;
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
-use super::types::{
-    AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind,
-};
 use super::SecretsManager;
+use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
 
 impl SecretsManager {
     /// Ensure the vault is loaded (or created if it doesn't exist yet).
@@ -89,9 +87,8 @@ impl SecretsManager {
         // 3. Drop the old vault and create a new one with the new password.
         self.vault = None;
 
-        let new_vault =
-            securestore::SecretsManager::new(KeySource::Password(&new_password))
-                .context("Failed to create vault with new password")?;
+        let new_vault = securestore::SecretsManager::new(KeySource::Password(&new_password))
+            .context("Failed to create vault with new password")?;
         new_vault
             .save_as(&self.vault_path)
             .context("Failed to save re-encrypted vault")?;
@@ -615,9 +612,7 @@ impl SecretsManager {
         let meta_key = format!("cred:{}", name);
 
         let mut entry: SecretEntry = match self.get_secret(&meta_key, true)? {
-            Some(json) => {
-                serde_json::from_str(&json).context("Corrupted credential metadata")?
-            }
+            Some(json) => serde_json::from_str(&json).context("Corrupted credential metadata")?,
             None => {
                 // Legacy bare key — promote to typed entry.
                 let (label, kind) = Self::label_for_legacy_key(name);
@@ -644,9 +639,7 @@ impl SecretsManager {
         let meta_key = format!("cred:{}", name);
 
         let mut entry: SecretEntry = match self.get_secret(&meta_key, true)? {
-            Some(json) => {
-                serde_json::from_str(&json).context("Corrupted credential metadata")?
-            }
+            Some(json) => serde_json::from_str(&json).context("Corrupted credential metadata")?,
             None => {
                 // Legacy bare key — promote to typed entry.
                 let (label, kind) = Self::label_for_legacy_key(name);
@@ -683,8 +676,9 @@ impl SecretsManager {
         use ssh_key::private::PrivateKey;
 
         // Generate keypair.
-        let private = PrivateKey::random(&mut ssh_key::rand_core::OsRng, ssh_key::Algorithm::Ed25519)
-            .map_err(|e| anyhow::anyhow!("Failed to generate SSH key: {}", e))?;
+        let private =
+            PrivateKey::random(&mut ssh_key::rand_core::OsRng, ssh_key::Algorithm::Ed25519)
+                .map_err(|e| anyhow::anyhow!("Failed to generate SSH key: {}", e))?;
 
         let private_pem = private
             .to_openssh(ssh_key::LineEnding::LF)

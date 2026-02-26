@@ -1,7 +1,7 @@
 //! Media tools: screenshot capture and clipboard access.
 
-use super::{sh, sh_async, resolve_path, expand_tilde};
-use serde_json::{json, Value};
+use super::{expand_tilde, resolve_path, sh, sh_async};
+use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
@@ -9,7 +9,9 @@ fn human_size(bytes: u64) -> String {
     const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
     let mut val = bytes as f64;
     for unit in UNITS {
-        if val < 1024.0 { return format!("{:.1} {}", val, unit); }
+        if val < 1024.0 {
+            return format!("{:.1} {}", val, unit);
+        }
         val /= 1024.0;
     }
     format!("{:.1} PB", val)
@@ -19,7 +21,10 @@ fn human_size(bytes: u64) -> String {
 
 #[instrument(skip(args, workspace_dir))]
 pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let output_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("screenshot.png");
+    let output_path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("screenshot.png");
     let region = args.get("region").and_then(|v| v.as_str());
     let delay = args.get("delay").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -60,7 +65,10 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> Result
     if tokio::fs::try_exists(&target).await.unwrap_or(false) {
         let meta = tokio::fs::metadata(&target).await.ok();
         let size = meta.map(|m| human_size(m.len())).unwrap_or_default();
-        Ok(json!({ "path": target.display().to_string(), "size": size, "format": "png" }).to_string())
+        Ok(
+            json!({ "path": target.display().to_string(), "size": size, "format": "png" })
+                .to_string(),
+        )
     } else {
         Err("Screenshot failed. Install screencapture (macOS) or imagemagick (Linux).".to_string())
     }
@@ -68,7 +76,10 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> Result
 
 #[instrument(skip(args, _workspace_dir))]
 pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing required parameter: action")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: action")?;
 
     match action {
         "read" => {
@@ -76,8 +87,14 @@ pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> Result
             Ok(json!({ "content": text.trim(), "length": text.len() }).to_string())
         }
         "write" => {
-            let content = args.get("content").and_then(|v| v.as_str()).ok_or("Missing content")?;
-            let cmd = format!("echo -n '{}' | (pbcopy 2>/dev/null || xclip -selection clipboard 2>/dev/null || xsel --clipboard --input 2>/dev/null)", content.replace('\'', "'\\''"));
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing content")?;
+            let cmd = format!(
+                "echo -n '{}' | (pbcopy 2>/dev/null || xclip -selection clipboard 2>/dev/null || xsel --clipboard --input 2>/dev/null)",
+                content.replace('\'', "'\\''")
+            );
             sh_async(&cmd).await?;
             Ok(json!({ "status": "ok", "length": content.len() }).to_string())
         }
@@ -89,7 +106,10 @@ pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> Result
 
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let output_path = args.get("path").and_then(|v| v.as_str()).unwrap_or("screenshot.png");
+    let output_path = args
+        .get("path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("screenshot.png");
     let region = args.get("region").and_then(|v| v.as_str());
     let delay = args.get("delay").and_then(|v| v.as_u64()).unwrap_or(0);
 
@@ -119,31 +139,48 @@ pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> Result<String, Str
         .output()
         .or_else(|_| {
             std::process::Command::new("import")
-                .arg("-window").arg("root")
+                .arg("-window")
+                .arg("root")
                 .arg(target.display().to_string())
                 .output()
         })
         .map_err(|e| format!("Screenshot failed: {}", e))?;
 
     if output.status.success() && target.exists() {
-        let size = std::fs::metadata(&target).ok().map(|m| human_size(m.len())).unwrap_or_default();
-        Ok(json!({ "path": target.display().to_string(), "size": size, "format": "png" }).to_string())
+        let size = std::fs::metadata(&target)
+            .ok()
+            .map(|m| human_size(m.len()))
+            .unwrap_or_default();
+        Ok(
+            json!({ "path": target.display().to_string(), "size": size, "format": "png" })
+                .to_string(),
+        )
     } else {
-        Err(format!("Screenshot failed: {}", String::from_utf8_lossy(&output.stderr)))
+        Err(format!(
+            "Screenshot failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ))
     }
 }
 
 #[instrument(skip(args, _workspace_dir))]
 pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
-    let action = args.get("action").and_then(|v| v.as_str()).ok_or("Missing required parameter: action")?;
+    let action = args
+        .get("action")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: action")?;
 
     match action {
         "read" => {
-            let text = sh("pbpaste 2>/dev/null || xclip -selection clipboard -o 2>/dev/null").unwrap_or_default();
+            let text = sh("pbpaste 2>/dev/null || xclip -selection clipboard -o 2>/dev/null")
+                .unwrap_or_default();
             Ok(json!({ "content": text.trim(), "length": text.len() }).to_string())
         }
         "write" => {
-            let content = args.get("content").and_then(|v| v.as_str()).ok_or("Missing content")?;
+            let content = args
+                .get("content")
+                .and_then(|v| v.as_str())
+                .ok_or("Missing content")?;
             let mut child = std::process::Command::new("sh")
                 .arg("-c")
                 .arg("pbcopy 2>/dev/null || xclip -selection clipboard 2>/dev/null")
@@ -153,7 +190,9 @@ pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> Result<String, Str
 
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
-                stdin.write_all(content.as_bytes()).map_err(|e| format!("Write failed: {}", e))?;
+                stdin
+                    .write_all(content.as_bytes())
+                    .map_err(|e| format!("Write failed: {}", e))?;
             }
             let status = child.wait().map_err(|e| format!("Wait failed: {}", e))?;
             if status.success() {

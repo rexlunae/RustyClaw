@@ -84,7 +84,6 @@ pub enum AccessPolicy {
     SkillOnly(Vec<String>),
 }
 
-
 impl std::fmt::Display for AccessPolicy {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -146,7 +145,10 @@ pub enum CredentialValue {
     UserPass { username: String, password: String },
     /// SSH keypair — private key in OpenSSH PEM format, public key in
     /// `ssh-ed25519 AAAA…` format.
-    SshKeyPair { private_key: String, public_key: String },
+    SshKeyPair {
+        private_key: String,
+        public_key: String,
+    },
     /// Arbitrary key/value pairs (form autofill fields).
     FormFields(BTreeMap<String, String>),
     /// Payment card details.
@@ -221,7 +223,11 @@ fn default_same_site() -> String {
 
 impl Cookie {
     /// Create a simple cookie with defaults.
-    pub fn new(name: impl Into<String>, value: impl Into<String>, domain: impl Into<String>) -> Self {
+    pub fn new(
+        name: impl Into<String>,
+        value: impl Into<String>,
+        domain: impl Into<String>,
+    ) -> Self {
         Self {
             name: name.into(),
             value: value.into(),
@@ -254,7 +260,8 @@ impl Cookie {
     /// Check if this cookie is valid for a given path.
     pub fn matches_path(&self, request_path: &str) -> bool {
         request_path.starts_with(&self.path)
-            || (self.path.ends_with('/') && request_path.starts_with(self.path.trim_end_matches('/')))
+            || (self.path.ends_with('/')
+                && request_path.starts_with(self.path.trim_end_matches('/')))
     }
 
     /// Check if the cookie has expired.
@@ -387,7 +394,11 @@ impl BrowserStore {
 
     /// Set a cookie (replaces existing cookie with same name/domain/path).
     pub fn set_cookie(&mut self, cookie: Cookie) {
-        let domain_key = cookie.domain.to_lowercase().trim_start_matches('.').to_string();
+        let domain_key = cookie
+            .domain
+            .to_lowercase()
+            .trim_start_matches('.')
+            .to_string();
         let cookies = self.cookies.entry(domain_key).or_default();
 
         // Remove existing cookie with same name and path

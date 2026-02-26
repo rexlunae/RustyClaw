@@ -249,7 +249,10 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
                 .collect(),
             foreground_id: *foreground_id,
         }),
-        ServerPayload::ThreadCreated { thread_id, label } => {
+        ServerPayload::ThreadCreated {
+            thread_id: _,
+            label: _,
+        } => {
             // Thread was created — we'll get a ThreadsUpdate too
             FrameAction::none()
         }
