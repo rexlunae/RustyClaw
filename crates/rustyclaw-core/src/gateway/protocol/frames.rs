@@ -415,15 +415,15 @@ pub struct TaskInfoDto {
 }
 
 /// DTO for thread info in updates (unified tasks + threads).
+/// NOTE: Do NOT use skip_serializing_if with bincode - it breaks deserialization
+/// since bincode is not self-describing (positional format).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadInfoDto {
     pub id: u64,
     pub label: String,
     /// Description (for spawned tasks)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
     /// Task status (None = simple thread, Some = spawned task)
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<String>,
     pub is_foreground: bool,
     pub message_count: usize,
@@ -856,6 +856,57 @@ mod tests {
                 }
                 _ => panic!("Expected ToolCall payload"),
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod frame_size_tests {
+    use super::*;
+
+    #[test]
+    fn test_threads_update_size() {
+        let thread = ThreadInfoDto {
+            id: 1,
+            label: "Main".to_string(),
+            description: None,
+            status: None,
+            is_foreground: true,
+            message_count: 0,
+            has_summary: false,
+        };
+        
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ThreadsUpdate,
+            payload: ServerPayload::ThreadsUpdate {
+                threads: vec![thread],
+                foreground_id: Some(1),
+            },
+        };
+        
+        let bytes = serialize_frame(&frame).unwrap();
+        println!("ThreadsUpdate with 1 thread: {} bytes", bytes.len());
+        println!("Bytes: {:?}", bytes);
+        
+        // With bincode standard config (varint encoding), small values are compact.
+        // 16 bytes is correct for this minimal frame.
+        // Key test: can we deserialize it without error?
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("Round-trip deserialization failed");
+        
+        // Verify we got the right frame type
+        assert!(matches!(decoded.frame_type, ServerFrameType::ThreadsUpdate));
+        if let ServerPayload::ThreadsUpdate { threads, foreground_id } = decoded.payload {
+            assert_eq!(threads.len(), 1);
+            assert_eq!(threads[0].id, 1);
+            assert_eq!(threads[0].label, "Main");
+            assert_eq!(threads[0].description, None);
+            assert_eq!(threads[0].status, None);
+            assert_eq!(threads[0].is_foreground, true);
+            assert_eq!(threads[0].message_count, 0);
+            assert_eq!(threads[0].has_summary, false);
+            assert_eq!(foreground_id, Some(1));
+        } else {
+            panic!("Wrong payload type");
         }
     }
 }
