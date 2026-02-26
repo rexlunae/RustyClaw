@@ -1182,15 +1182,70 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 debug!("Thread switch request: {}", thread_id);
-                                let task_id = crate::tasks::TaskId(thread_id);
+                                let target_id = crate::tasks::TaskId(thread_id);
+
+                                // Get current foreground thread for compaction
+                                let current_fg_id = thread_mgr.foreground().map(|t| t.task_id);
+
+                                // Compact the current thread if it has messages
+                                if let Some(fg_id) = current_fg_id {
+                                    if fg_id != target_id {
+                                        if let Some(thread) = thread_mgr.get_mut(fg_id) {
+                                            if thread.messages.len() > 3 && thread.compact_summary.is_none() {
+                                                // Generate compaction prompt
+                                                let prompt = thread.compaction_prompt();
+
+                                                // Notify client about compaction
+                                                protocol::server::send_info(
+                                                    &mut writer,
+                                                    &format!("Compacting thread '{}'...", thread.label),
+                                                )
+                                                .await?;
+
+                                                // Call LLM to summarize
+                                                let current_model_ctx = shared_model_ctx.read().await.clone();
+                                                if let Some(ref ctx) = current_model_ctx {
+                                                    let summary_req = ProviderRequest {
+                                                        messages: vec![ChatMessage::text("user", &prompt)],
+                                                        model: ctx.model.clone(),
+                                                        provider: ctx.provider.clone(),
+                                                        base_url: ctx.base_url.clone(),
+                                                        api_key: ctx.api_key.clone(),
+                                                    };
+
+                                                    let summary_result = if ctx.provider == "anthropic" {
+                                                        providers::call_anthropic_with_tools(&http, &summary_req, None).await
+                                                    } else if ctx.provider == "google" {
+                                                        providers::call_google_with_tools(&http, &summary_req).await
+                                                    } else {
+                                                        providers::call_openai_with_tools(&http, &summary_req).await
+                                                    };
+
+                                                    match summary_result {
+                                                        Ok(resp) if !resp.text.is_empty() => {
+                                                            thread.apply_compaction(resp.text);
+                                                            debug!(thread = %thread.label, "Thread compacted");
+                                                        }
+                                                        Ok(_) => {
+                                                            debug!(thread = %thread.label, "Empty summary from LLM");
+                                                        }
+                                                        Err(e) => {
+                                                            debug!(thread = %thread.label, error = %e, "Compaction failed");
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
 
                                 // Get summary of thread being switched to
                                 let context_summary = thread_mgr
-                                    .get(task_id)
+                                    .get(target_id)
                                     .and_then(|t| t.compact_summary.clone());
 
                                 // Perform the switch
-                                if thread_mgr.switch_to(task_id).is_some() {
+                                if thread_mgr.switch_to(target_id).is_some() {
                                     let frame = ServerFrame {
                                         frame_type: ServerFrameType::ThreadSwitched,
                                         payload: ServerPayload::ThreadSwitched {
