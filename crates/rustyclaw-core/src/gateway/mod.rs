@@ -419,17 +419,27 @@ pub async fn run_gateway(
 }
 
 /// Send a threads update frame to the client.
+///
+/// This includes:
+/// - Chat threads (from ThreadManager)
+/// - Running tasks (from TaskManager)
+/// - Active sub-agent sessions (from SessionManager)
 async fn send_threads_update<S>(
     writer: &mut futures_util::stream::SplitSink<WebSocketStream<S>, Message>,
     thread_mgr: &crate::tasks::ThreadManager,
+    task_mgr: &SharedTaskManager,
+    session_key: Option<&str>,
 ) -> Result<()>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
 {
+    use crate::sessions::{session_manager, SessionKind, SessionStatus};
+
     let thread_list = thread_mgr.list_info();
     let foreground_id = thread_mgr.foreground().map(|t| t.task_id.0);
 
-    let threads: Vec<protocol::ThreadInfoDto> = thread_list
+    // Collect chat threads
+    let mut threads: Vec<protocol::ThreadInfoDto> = thread_list
         .iter()
         .map(|t| protocol::ThreadInfoDto {
             id: t.id.0,
@@ -441,6 +451,68 @@ where
             has_summary: t.has_summary,
         })
         .collect();
+
+    // Add running tasks from TaskManager
+    let tasks = if let Some(sess) = session_key {
+        task_mgr.for_session(sess).await
+    } else {
+        task_mgr.active().await
+    };
+
+    for task in tasks {
+        // Skip terminal tasks older than 5 minutes
+        if task.status.is_terminal() {
+            if let Some(finished) = task.finished_at {
+                if finished.elapsed().map(|d| d.as_secs() > 300).unwrap_or(false) {
+                    continue;
+                }
+            }
+        }
+
+        threads.push(protocol::ThreadInfoDto {
+            id: task.id.0,
+            label: task.kind.display_name().to_string(),
+            description: Some(task.kind.description()),
+            status: Some(format!("{:?}", task.status)),
+            is_foreground: false,
+            message_count: 0,
+            has_summary: task.status.is_terminal(),
+        });
+    }
+
+    // Add active sub-agent sessions
+    if let Ok(sess_mgr) = session_manager().lock() {
+        let subagent_kinds = [SessionKind::Subagent, SessionKind::Cron];
+        let active_sessions = sess_mgr.list(Some(&subagent_kinds), true, 50);
+        
+        for session in active_sessions {
+            // Generate a unique ID based on session key hash
+            let id = {
+                use std::hash::{Hash, Hasher};
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                session.key.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            let status_str = match session.status {
+                SessionStatus::Active => "Running",
+                SessionStatus::Completed => "Completed",
+                SessionStatus::Error => "Failed",
+                SessionStatus::Timeout => "Timeout",
+                SessionStatus::Stopped => "Stopped",
+            };
+
+            threads.push(protocol::ThreadInfoDto {
+                id,
+                label: session.label.clone().unwrap_or_else(|| "Sub-agent".to_string()),
+                description: session.task.clone(),
+                status: Some(status_str.to_string()),
+                is_foreground: false,
+                message_count: session.messages.len(),
+                has_summary: session.status != SessionStatus::Active,
+            });
+        }
+    }
 
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThreadsUpdate,
@@ -1115,7 +1187,7 @@ async fn handle_connection(
                                             };
                                             send_frame(&mut writer, &frame).await?;
                                             // Update thread list
-                                            send_threads_update(&mut writer, &thread_mgr).await?;
+                                            send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                                         }
                                     }
                                 }
@@ -1228,7 +1300,7 @@ async fn handle_connection(
                                 };
                                 send_frame(&mut writer, &frame).await?;
                                 // Send updated thread list
-                                send_threads_update(&mut writer, &thread_mgr).await?;
+                                send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                                 // Persist thread state
                                 let _ = thread_mgr.save_to_file(&threads_path);
                             }
@@ -1307,7 +1379,7 @@ async fn handle_connection(
                                     };
                                     send_frame(&mut writer, &frame).await?;
                                     // Send updated thread list
-                                    send_threads_update(&mut writer, &thread_mgr).await?;
+                                    send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                                     // Persist thread state (includes compaction summary)
                                     let _ = thread_mgr.save_to_file(&threads_path);
                                 } else {
@@ -1323,14 +1395,14 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadList => {
                                 debug!("Thread list request");
-                                send_threads_update(&mut writer, &thread_mgr).await?;
+                                send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 debug!("Thread close request: {}", thread_id);
                                 let task_id = crate::tasks::TaskId(thread_id);
                                 thread_mgr.remove(task_id);
                                 // Send updated thread list
-                                send_threads_update(&mut writer, &thread_mgr).await?;
+                                send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                                 // Persist thread state
                                 let _ = thread_mgr.save_to_file(&threads_path);
                             }
@@ -1339,7 +1411,7 @@ async fn handle_connection(
                                 let task_id = crate::tasks::TaskId(thread_id);
                                 if thread_mgr.rename(task_id, &new_label) {
                                     // Send updated thread list
-                                    send_threads_update(&mut writer, &thread_mgr).await?;
+                                    send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                                     // Persist thread state
                                     let _ = thread_mgr.save_to_file(&threads_path);
                                 } else {
@@ -1401,7 +1473,7 @@ async fn handle_connection(
                             }
                             
                             // Send updated thread list (status may have changed)
-                            send_threads_update(&mut writer, &thread_mgr).await?;
+                            send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                             
                             // Persist thread state
                             let _ = thread_mgr.save_to_file(&threads_path);
@@ -1421,7 +1493,7 @@ async fn handle_connection(
                             send_frame(&mut writer, &error_frame).await?;
                             
                             // Send updated thread list
-                            send_threads_update(&mut writer, &thread_mgr).await?;
+                            send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                         }
                     }
                 }
