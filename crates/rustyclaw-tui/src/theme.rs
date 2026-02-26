@@ -1,91 +1,107 @@
 // ── RustyClaw TUI Theme ─────────────────────────────────────────────────────
 //
 // Colour palette for the iocraft TUI.
+// Follows the "lobster palette" from rustyclaw-core/src/theme.rs
+//
+// | Token          | Hex       | Usage                          |
+// |----------------|-----------|--------------------------------|
+// | accent         | `#FF5A2D` | headings, labels, primary      |
+// | accent_bright  | `#FF7A3D` | command names, emphasis        |
+// | accent_dim     | `#D14A22` | secondary highlight            |
+// | info           | `#FF8A5B` | informational values           |
+// | success        | `#2FBF71` | success states                 |
+// | warn           | `#FFB020` | warnings, fallbacks            |
+// | error          | `#E23D2D` | errors, failures               |
+// | muted          | `#8B7F77` | de-emphasis, metadata          |
 
 use iocraft::prelude::*;
 use rustyclaw_core::types::MessageRole;
 
-// ── Accent (teal / cyan) ────────────────────────────────────────────────────
+// ── Accent (lobster orange) ─────────────────────────────────────────────────
 
 pub const ACCENT: Color = Color::Rgb {
-    r: 0,
-    g: 175,
-    b: 175,
+    r: 0xFF,
+    g: 0x5A,
+    b: 0x2D,
 };
 pub const ACCENT_BRIGHT: Color = Color::Rgb {
-    r: 0,
-    g: 215,
-    b: 215,
+    r: 0xFF,
+    g: 0x7A,
+    b: 0x3D,
 };
-pub const ACCENT_DIM: Color = Color::Rgb { r: 0, g: 95, b: 95 };
+pub const ACCENT_DIM: Color = Color::Rgb {
+    r: 0xD1,
+    g: 0x4A,
+    b: 0x22,
+};
 
 // ── Text ────────────────────────────────────────────────────────────────────
 
 pub const TEXT: Color = Color::Rgb {
-    r: 198,
-    g: 208,
-    b: 220,
+    r: 0xE8,
+    g: 0xE0,
+    b: 0xD8,
 };
 pub const TEXT_DIM: Color = Color::Rgb {
-    r: 110,
-    g: 120,
-    b: 135,
+    r: 0xA0,
+    g: 0x98,
+    b: 0x90,
 };
 pub const MUTED: Color = Color::Rgb {
-    r: 75,
-    g: 85,
-    b: 99,
+    r: 0x8B,
+    g: 0x7F,
+    b: 0x77,
 };
 
 // ── Semantic ────────────────────────────────────────────────────────────────
 
 pub const INFO: Color = Color::Rgb {
-    r: 66,
-    g: 165,
-    b: 245,
+    r: 0xFF,
+    g: 0x8A,
+    b: 0x5B,
 };
 pub const SUCCESS: Color = Color::Rgb {
-    r: 102,
-    g: 187,
-    b: 106,
+    r: 0x2F,
+    g: 0xBF,
+    b: 0x71,
 };
 pub const WARN: Color = Color::Rgb {
-    r: 255,
-    g: 167,
-    b: 38,
+    r: 0xFF,
+    g: 0xB0,
+    b: 0x20,
 };
 pub const ERROR: Color = Color::Rgb {
-    r: 239,
-    g: 83,
-    b: 80,
+    r: 0xE2,
+    g: 0x3D,
+    b: 0x2D,
 };
 
 // ── Backgrounds ─────────────────────────────────────────────────────────────
 
 pub const BG_MAIN: Color = Color::Rgb {
-    r: 22,
-    g: 22,
-    b: 30,
+    r: 0x1A,
+    g: 0x18,
+    b: 0x16,
 };
 pub const BG_SURFACE: Color = Color::Rgb {
-    r: 30,
-    g: 30,
-    b: 40,
+    r: 0x24,
+    g: 0x20,
+    b: 0x1C,
 };
 pub const BG_USER: Color = Color::Rgb {
-    r: 24,
-    g: 35,
-    b: 45,
+    r: 0x2A,
+    g: 0x22,
+    b: 0x1A,
 };
 pub const BG_ASSISTANT: Color = Color::Rgb {
-    r: 28,
-    g: 28,
-    b: 38,
+    r: 0x22,
+    g: 0x1E,
+    b: 0x1A,
 };
 pub const BG_CODE: Color = Color::Rgb {
-    r: 26,
-    g: 26,
-    b: 36,
+    r: 0x1E,
+    g: 0x1A,
+    b: 0x16,
 };
 
 // ── Spinner frames ──────────────────────────────────────────────────────────
@@ -121,7 +137,7 @@ pub fn role_bg(role: &MessageRole) -> Color {
 pub fn role_border(role: &MessageRole) -> Color {
     match role {
         MessageRole::User => ACCENT_BRIGHT,
-        MessageRole::Assistant => MUTED,
+        MessageRole::Assistant => ACCENT_DIM,
         MessageRole::Error => ERROR,
         MessageRole::Warning => WARN,
         MessageRole::Success => SUCCESS,
