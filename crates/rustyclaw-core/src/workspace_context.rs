@@ -310,6 +310,7 @@ impl WorkspaceContext {
 - **Web:** web_fetch, web_search, browser (automation)
 - **Memory:** memory_search, memory_get, save_memory
 - **Sessions:** sessions_send (communicate with parent)
+- **Tasks:** task_describe (update what you're doing — shown in sidebar)
 - **Secrets:** secrets_list, secrets_get
 - **Scheduling:** cron
 
@@ -321,6 +322,11 @@ impl WorkspaceContext {
 - Your final output will be delivered to the parent session automatically when you complete
 - If you need to send interim updates, use `sessions_send` with the parent session key
 - Do **not** assume access to messaging channels (Signal, Discord, etc.) — route through the parent
+
+### Status Updates
+- Use `task_describe` to update what you're currently doing (displayed in sidebar)
+- Keep descriptions short: \"Cloning repo\", \"Running tests\", \"Analyzing results\"
+- Update when starting major phases of work
 
 ### Tools
 You have access to the same tools as the parent agent. **Use them to verify assumptions.**

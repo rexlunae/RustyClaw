@@ -6,27 +6,27 @@ pub mod agent_setup;
 // native schema (OpenAI function-calling, Anthropic tool-use, Google
 // function declarations).
 
-use tracing::{debug, warn, instrument};
+use tracing::{debug, instrument, warn};
 
-mod helpers;
-mod file;
-mod runtime;
-mod web;
-mod memory_tools;
-mod cron_tool;
-mod sessions_tools;
-mod patch;
-mod gateway_tools;
-mod devices;
 mod browser;
-mod skills_tools;
-mod secrets_tools;
-mod system_tools;
-mod sysadmin;
+mod cron_tool;
+mod devices;
 pub mod exo_ai;
+mod file;
+mod gateway_tools;
+mod helpers;
+mod memory_tools;
 pub mod npm;
 pub mod ollama;
+mod patch;
+mod runtime;
+mod secrets_tools;
+mod sessions_tools;
+mod skills_tools;
+mod sysadmin;
+mod system_tools;
 pub mod uv;
+mod web;
 // UV tool
 use uv::{exec_uv_manage, exec_uv_manage_async};
 
@@ -39,68 +39,72 @@ mod params;
 
 // Re-export helpers for external use
 pub use helpers::{
-    process_manager, set_credentials_dir, is_protected_path,
-    expand_tilde, VAULT_ACCESS_DENIED, command_references_credentials,
-    init_sandbox, sandbox, run_sandboxed_command,
-    set_vault, vault, SharedVault,
-    sanitize_tool_output,
+    SharedVault, VAULT_ACCESS_DENIED, command_references_credentials, expand_tilde, init_sandbox,
+    is_protected_path, process_manager, run_sandboxed_command, sandbox, sanitize_tool_output,
+    set_credentials_dir, set_vault, vault,
 };
 
 // File operations
 use file::{
-    exec_read_file, exec_write_file, exec_edit_file, exec_list_directory, exec_search_files, exec_find_files,
-    exec_read_file_async, exec_write_file_async, exec_edit_file_async, exec_list_directory_async,
-    exec_search_files_async, exec_find_files_async,
+    exec_edit_file, exec_edit_file_async, exec_find_files, exec_find_files_async,
+    exec_list_directory, exec_list_directory_async, exec_read_file, exec_read_file_async,
+    exec_search_files, exec_search_files_async, exec_write_file, exec_write_file_async,
 };
 
 // Runtime operations
-use runtime::{exec_execute_command, exec_process, exec_execute_command_async, exec_process_async};
+use runtime::{exec_execute_command, exec_execute_command_async, exec_process, exec_process_async};
 
 // Web operations
-use web::{exec_web_fetch, exec_web_search, exec_web_fetch_async, exec_web_search_async};
+use web::{exec_web_fetch, exec_web_fetch_async, exec_web_search, exec_web_search_async};
 
 // Memory operations
-use memory_tools::{exec_memory_search, exec_memory_get, exec_save_memory, exec_search_history};
+use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
 
 // Cron operations
 use cron_tool::exec_cron;
 
 // Session operations
-use sessions_tools::{exec_sessions_list, exec_sessions_spawn, exec_sessions_send, exec_sessions_history, exec_session_status, exec_agents_list};
+use sessions_tools::{
+    exec_agents_list, exec_session_status, exec_sessions_history, exec_sessions_list,
+    exec_sessions_send, exec_sessions_spawn,
+};
 
 // Patch operations
 use patch::exec_apply_patch;
 
 // Gateway operations
 use gateway_tools::{
-    exec_gateway, exec_message, exec_tts, exec_image,
-    exec_gateway_async, exec_message_async, exec_tts_async, exec_image_async,
+    exec_gateway, exec_gateway_async, exec_image, exec_image_async, exec_message,
+    exec_message_async, exec_tts, exec_tts_async,
 };
 
 // Device operations
-use devices::{exec_nodes, exec_canvas, exec_nodes_async, exec_canvas_async};
+use devices::{exec_canvas, exec_canvas_async, exec_nodes, exec_nodes_async};
 
 // Browser automation (separate module with feature-gated implementation)
 use browser::exec_browser;
 
 // Skill operations
-use skills_tools::{exec_skill_list, exec_skill_search, exec_skill_install, exec_skill_info, exec_skill_enable, exec_skill_link_secret, exec_skill_create};
+use skills_tools::{
+    exec_skill_create, exec_skill_enable, exec_skill_info, exec_skill_install,
+    exec_skill_link_secret, exec_skill_list, exec_skill_search,
+};
 
 // MCP operations
 mod mcp_tools;
-use mcp_tools::{exec_mcp_list, exec_mcp_connect, exec_mcp_disconnect};
+use mcp_tools::{exec_mcp_connect, exec_mcp_disconnect, exec_mcp_list};
 
 // Task operations
 mod task_tools;
 use task_tools::{
-    exec_task_list, exec_task_status, exec_task_foreground, exec_task_background,
-    exec_task_cancel, exec_task_pause, exec_task_resume, exec_task_input,
+    exec_task_background, exec_task_cancel, exec_task_describe, exec_task_foreground,
+    exec_task_input, exec_task_list, exec_task_pause, exec_task_resume, exec_task_status,
 };
 
 // Model operations
 mod model_tools;
 use model_tools::{
-    exec_model_list, exec_model_enable, exec_model_disable, exec_model_set, exec_model_recommend,
+    exec_model_disable, exec_model_enable, exec_model_list, exec_model_recommend, exec_model_set,
 };
 
 // Secrets operations
@@ -108,22 +112,19 @@ use secrets_tools::exec_secrets_stub;
 
 // System tools
 use system_tools::{
-    exec_disk_usage, exec_classify_files, exec_system_monitor,
-    exec_battery_health, exec_app_index, exec_cloud_browse,
-    exec_browser_cache, exec_screenshot, exec_clipboard,
-    exec_audit_sensitive, exec_secure_delete, exec_summarize_file,
-    exec_disk_usage_async, exec_classify_files_async, exec_system_monitor_async,
-    exec_battery_health_async, exec_app_index_async, exec_cloud_browse_async,
-    exec_browser_cache_async, exec_screenshot_async, exec_clipboard_async,
-    exec_audit_sensitive_async, exec_secure_delete_async, exec_summarize_file_async,
+    exec_app_index, exec_app_index_async, exec_audit_sensitive, exec_audit_sensitive_async,
+    exec_battery_health, exec_battery_health_async, exec_browser_cache, exec_browser_cache_async,
+    exec_classify_files, exec_classify_files_async, exec_clipboard, exec_clipboard_async,
+    exec_cloud_browse, exec_cloud_browse_async, exec_disk_usage, exec_disk_usage_async,
+    exec_screenshot, exec_screenshot_async, exec_secure_delete, exec_secure_delete_async,
+    exec_summarize_file, exec_summarize_file_async, exec_system_monitor, exec_system_monitor_async,
 };
 
 // System administration tools
 use sysadmin::{
-    exec_pkg_manage, exec_net_info, exec_net_scan,
-    exec_service_manage, exec_user_manage, exec_firewall,
-    exec_pkg_manage_async, exec_net_info_async, exec_net_scan_async,
-    exec_service_manage_async, exec_user_manage_async, exec_firewall_async,
+    exec_firewall, exec_firewall_async, exec_net_info, exec_net_info_async, exec_net_scan,
+    exec_net_scan_async, exec_pkg_manage, exec_pkg_manage_async, exec_service_manage,
+    exec_service_manage_async, exec_user_manage, exec_user_manage_async,
 };
 
 // Exo AI tools
@@ -140,7 +141,7 @@ fn exec_ask_user_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, St
 }
 
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::path::Path;
 
 // ── Tool permissions ────────────────────────────────────────────────────────
@@ -276,6 +277,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "task_pause" => "Pause a running task",
         "task_resume" => "Resume a paused task",
         "task_input" => "Send input to a task",
+        "task_describe" => "Set task description (shown in sidebar)",
         "model_list" => "List available models with cost tiers",
         "model_enable" => "Enable a model for use",
         "model_disable" => "Disable a model",
@@ -396,6 +398,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &TASK_PAUSE,
         &TASK_RESUME,
         &TASK_INPUT,
+        &TASK_DESCRIBE,
         &MODEL_LIST,
         &MODEL_ENABLE,
         &MODEL_DISABLE,
@@ -439,7 +442,7 @@ pub static READ_FILE: ToolDef = ToolDef {
                   If you have an absolute path from find_files or search_files, \
                   pass it exactly as-is. Use the optional start_line / end_line \
                   parameters to read a specific range (1-based, inclusive).",
-    parameters: vec![],  // filled by init; see `read_file_params()`.
+    parameters: vec![], // filled by init; see `read_file_params()`.
     execute: exec_read_file,
 };
 
@@ -839,7 +842,6 @@ pub static MCP_DISCONNECT: ToolDef = ToolDef {
     execute: exec_mcp_disconnect,
 };
 
-
 // ── Task tools ──────────────────────────────────────────────────────────────
 
 pub static TASK_LIST: ToolDef = ToolDef {
@@ -901,6 +903,14 @@ pub static TASK_INPUT: ToolDef = ToolDef {
     execute: exec_task_input,
 };
 
+pub static TASK_DESCRIBE: ToolDef = ToolDef {
+    name: "task_describe",
+    description: "Set a short description of what the task is currently doing. \
+                  This description is displayed in the sidebar. \
+                  If no task ID is provided, sets description for the current task.",
+    parameters: vec![],
+    execute: exec_task_describe,
+};
 
 // ── Model tools ─────────────────────────────────────────────────────────────
 
@@ -944,7 +954,6 @@ pub static MODEL_RECOMMEND: ToolDef = ToolDef {
     parameters: vec![],
     execute: exec_model_recommend,
 };
-
 
 // ── System tools ────────────────────────────────────────────────────────────
 
@@ -1277,6 +1286,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "task_pause" => task_tools::task_id_param(),
         "task_resume" => task_tools::task_id_param(),
         "task_input" => task_tools::task_input_params(),
+        "task_describe" => task_tools::task_describe_params(),
         "model_list" => model_tools::model_list_params(),
         "model_enable" => model_tools::model_id_param(),
         "model_disable" => model_tools::model_id_param(),
@@ -1390,7 +1400,10 @@ pub fn tools_google() -> Vec<Value> {
 /// Returns `true` for tools that must be routed through the gateway
 /// (i.e. handled by `execute_secrets_tool`) rather than `execute_tool`.
 pub fn is_secrets_tool(name: &str) -> bool {
-    matches!(name, "secrets_list" | "secrets_get" | "secrets_store" | "secrets_set_policy")
+    matches!(
+        name,
+        "secrets_list" | "secrets_get" | "secrets_store" | "secrets_set_policy"
+    )
 }
 
 /// Returns `true` for skill-management tools that are routed through the
@@ -1458,13 +1471,17 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
 ];
 
 /// Find a tool by name and execute it with the given arguments.
-/// 
+///
 /// Tools with async implementations are called directly.
 /// Other tools run on a blocking thread pool to avoid blocking the async runtime.
 #[instrument(skip(args, workspace_dir), fields(tool = name))]
-pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn execute_tool(
+    name: &str,
+    args: &Value,
+    workspace_dir: &Path,
+) -> Result<String, String> {
     debug!("Executing tool");
-    
+
     // Handle async-native tools directly
     if ASYNC_NATIVE_TOOLS.contains(&name) {
         let result = match name {
@@ -1501,7 +1518,9 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
             "browser_cache" => system_tools::exec_browser_cache_async(args, workspace_dir).await,
             "screenshot" => system_tools::exec_screenshot_async(args, workspace_dir).await,
             "clipboard" => system_tools::exec_clipboard_async(args, workspace_dir).await,
-            "audit_sensitive" => system_tools::exec_audit_sensitive_async(args, workspace_dir).await,
+            "audit_sensitive" => {
+                system_tools::exec_audit_sensitive_async(args, workspace_dir).await
+            }
             "secure_delete" => system_tools::exec_secure_delete_async(args, workspace_dir).await,
             "summarize_file" => system_tools::exec_summarize_file_async(args, workspace_dir).await,
             "nodes" => devices::exec_nodes_async(args, workspace_dir).await,
@@ -1513,31 +1532,29 @@ pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> Res
         }
         return result;
     }
-    
+
     // Find the tool for sync execution
     let tool = all_tools().into_iter().find(|t| t.name == name);
-    
+
     let Some(tool) = tool else {
         warn!(tool = name, "Unknown tool requested");
         return Err(format!("Unknown tool: {}", name));
     };
-    
+
     // Clone what we need for the blocking task
     let execute_fn = tool.execute;
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
-    
+
     // Run sync tools on blocking thread pool
-    let result = tokio::task::spawn_blocking(move || {
-        execute_fn(&args, &workspace_dir)
-    })
-    .await
-    .map_err(|e| format!("Task join error: {}", e))?;
-    
+    let result = tokio::task::spawn_blocking(move || execute_fn(&args, &workspace_dir))
+        .await
+        .map_err(|e| format!("Task join error: {}", e))?;
+
     if result.is_err() {
         warn!(error = ?result.as_ref().err(), "Tool execution failed");
     }
-    
+
     result
 }
 
@@ -1801,7 +1818,11 @@ mod tests {
     #[test]
     fn test_openai_format() {
         let tools = tools_openai();
-        assert!(tools.len() >= 60, "Expected at least 60 tools, got {}", tools.len());
+        assert!(
+            tools.len() >= 60,
+            "Expected at least 60 tools, got {}",
+            tools.len()
+        );
         assert_eq!(tools[0]["type"], "function");
         assert_eq!(tools[0]["function"]["name"], "read_file");
         assert!(tools[0]["function"]["parameters"]["properties"]["path"].is_object());
@@ -1810,7 +1831,11 @@ mod tests {
     #[test]
     fn test_anthropic_format() {
         let tools = tools_anthropic();
-        assert!(tools.len() >= 60, "Expected at least 60 tools, got {}", tools.len());
+        assert!(
+            tools.len() >= 60,
+            "Expected at least 60 tools, got {}",
+            tools.len()
+        );
         assert_eq!(tools[0]["name"], "read_file");
         assert!(tools[0]["input_schema"]["properties"]["path"].is_object());
     }
@@ -1818,7 +1843,11 @@ mod tests {
     #[test]
     fn test_google_format() {
         let tools = tools_google();
-        assert!(tools.len() >= 60, "Expected at least 60 tools, got {}", tools.len());
+        assert!(
+            tools.len() >= 60,
+            "Expected at least 60 tools, got {}",
+            tools.len()
+        );
         assert_eq!(tools[0]["name"], "read_file");
     }
 
@@ -1833,7 +1862,10 @@ mod tests {
     #[test]
     fn test_resolve_path_relative() {
         let result = helpers::resolve_path(Path::new("/workspace"), "relative/path.txt");
-        assert_eq!(result, std::path::PathBuf::from("/workspace/relative/path.txt"));
+        assert_eq!(
+            result,
+            std::path::PathBuf::from("/workspace/relative/path.txt")
+        );
     }
 
     // ── web_fetch ───────────────────────────────────────────────────
@@ -1859,10 +1891,22 @@ mod tests {
         let params = web_fetch_params();
         assert_eq!(params.len(), 6);
         assert!(params.iter().any(|p| p.name == "url" && p.required));
-        assert!(params.iter().any(|p| p.name == "extract_mode" && !p.required));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "extract_mode" && !p.required)
+        );
         assert!(params.iter().any(|p| p.name == "max_chars" && !p.required));
-        assert!(params.iter().any(|p| p.name == "use_cookies" && !p.required));
-        assert!(params.iter().any(|p| p.name == "authorization" && !p.required));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "use_cookies" && !p.required)
+        );
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "authorization" && !p.required)
+        );
         assert!(params.iter().any(|p| p.name == "headers" && !p.required));
     }
 
@@ -1894,7 +1938,11 @@ mod tests {
         assert!(params.iter().any(|p| p.name == "query" && p.required));
         assert!(params.iter().any(|p| p.name == "count" && !p.required));
         assert!(params.iter().any(|p| p.name == "country" && !p.required));
-        assert!(params.iter().any(|p| p.name == "search_lang" && !p.required));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "search_lang" && !p.required)
+        );
         assert!(params.iter().any(|p| p.name == "freshness" && !p.required));
     }
 
@@ -1954,8 +2002,16 @@ mod tests {
         assert!(params.iter().any(|p| p.name == "query" && p.required));
         assert!(params.iter().any(|p| p.name == "maxResults" && !p.required));
         assert!(params.iter().any(|p| p.name == "minScore" && !p.required));
-        assert!(params.iter().any(|p| p.name == "recencyBoost" && !p.required));
-        assert!(params.iter().any(|p| p.name == "halfLifeDays" && !p.required));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "recencyBoost" && !p.required)
+        );
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "halfLifeDays" && !p.required)
+        );
     }
 
     #[test]
@@ -2180,7 +2236,11 @@ mod tests {
         assert!(params.iter().any(|p| p.name == "kind" && p.required));
         assert!(params.iter().any(|p| p.name == "value" && p.required));
         assert!(params.iter().any(|p| p.name == "policy" && !p.required));
-        assert!(params.iter().any(|p| p.name == "description" && !p.required));
+        assert!(
+            params
+                .iter()
+                .any(|p| p.name == "description" && !p.required)
+        );
         assert!(params.iter().any(|p| p.name == "username" && !p.required));
     }
 

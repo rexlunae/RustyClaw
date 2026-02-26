@@ -49,9 +49,7 @@ pub enum TaskStatus {
     },
 
     /// Task is paused (can be resumed)
-    Paused {
-        reason: Option<String>,
-    },
+    Paused { reason: Option<String> },
 
     /// Task completed successfully
     Completed {
@@ -72,15 +70,16 @@ pub enum TaskStatus {
     Cancelled,
 
     /// Task is waiting for user input
-    WaitingForInput {
-        prompt: String,
-    },
+    WaitingForInput { prompt: String },
 }
 
 impl TaskStatus {
     /// Check if the task is in a terminal state.
     pub fn is_terminal(&self) -> bool {
-        matches!(self, Self::Completed { .. } | Self::Failed { .. } | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed { .. } | Self::Failed { .. } | Self::Cancelled
+        )
     }
 
     /// Check if the task is running (foreground or background).
@@ -119,10 +118,7 @@ impl TaskStatus {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum TaskKind {
     /// Shell command execution
-    Command {
-        command: String,
-        pid: Option<u32>,
-    },
+    Command { command: String, pid: Option<u32> },
 
     /// Sub-agent session
     SubAgent {
@@ -137,28 +133,16 @@ pub enum TaskKind {
     },
 
     /// MCP tool call
-    McpTool {
-        server: String,
-        tool: String,
-    },
+    McpTool { server: String, tool: String },
 
     /// Browser automation
-    Browser {
-        action: String,
-        url: Option<String>,
-    },
+    Browser { action: String, url: Option<String> },
 
     /// File operation (download, upload, copy)
-    FileOp {
-        operation: String,
-        path: String,
-    },
+    FileOp { operation: String, path: String },
 
     /// Web request
-    WebRequest {
-        url: String,
-        method: String,
-    },
+    WebRequest { url: String, method: String },
 
     /// Generic/custom task
     Custom {
@@ -319,6 +303,9 @@ pub struct Task {
     /// User-provided label
     pub label: Option<String>,
 
+    /// Short description of what the task is currently doing (agent-settable)
+    pub description: Option<String>,
+
     /// Whether task output should stream to chat
     pub stream_output: bool,
 
@@ -339,6 +326,7 @@ impl Task {
             finished_at: None,
             session_key: None,
             label: None,
+            description: None,
             stream_output: false,
             output_buffer: String::new(),
         }
@@ -353,6 +341,12 @@ impl Task {
     /// Set a label.
     pub fn with_label(mut self, label: impl Into<String>) -> Self {
         self.label = Some(label.into());
+        self
+    }
+
+    /// Set a description.
+    pub fn with_description(mut self, desc: impl Into<String>) -> Self {
+        self.description = Some(desc.into());
         self
     }
 
@@ -394,8 +388,14 @@ impl Task {
     /// Update progress.
     pub fn update_progress(&mut self, progress: TaskProgress) {
         match &mut self.status {
-            TaskStatus::Running { progress: p, message: m } |
-            TaskStatus::Background { progress: p, message: m } => {
+            TaskStatus::Running {
+                progress: p,
+                message: m,
+            }
+            | TaskStatus::Background {
+                progress: p,
+                message: m,
+            } => {
                 *p = progress.fraction;
                 if progress.message.is_some() {
                     *m = progress.message;
@@ -441,7 +441,16 @@ impl Task {
 
     /// Get display label (user label or auto-generated).
     pub fn display_label(&self) -> String {
-        self.label.clone().unwrap_or_else(|| self.kind.description())
+        self.label
+            .clone()
+            .unwrap_or_else(|| self.kind.description())
+    }
+
+    /// Get short description (agent-set, or fallback to label).
+    pub fn display_description(&self) -> String {
+        self.description
+            .clone()
+            .unwrap_or_else(|| self.display_label())
     }
 }
 
@@ -451,7 +460,10 @@ mod system_time_serde {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     pub fn serialize<S: Serializer>(time: &SystemTime, ser: S) -> Result<S::Ok, S::Error> {
-        let millis = time.duration_since(UNIX_EPOCH).unwrap_or_default().as_millis() as u64;
+        let millis = time
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
         millis.serialize(ser)
     }
 

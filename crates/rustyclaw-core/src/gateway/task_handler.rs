@@ -2,18 +2,27 @@
 //!
 //! Handles task_* tool calls by interacting with the shared TaskManager.
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tracing::instrument;
 
 use super::SharedTaskManager;
-use crate::tasks::{Task, TaskId, TaskStatus, TaskIcon, format_task_status, format_task_indicators};
+use crate::tasks::{
+    Task, TaskIcon, TaskId, TaskStatus, format_task_indicators, format_task_status,
+};
 
 /// Check if a tool name is a task tool.
 pub fn is_task_tool(name: &str) -> bool {
     matches!(
         name,
-        "task_list" | "task_status" | "task_foreground" | "task_background"
-            | "task_cancel" | "task_pause" | "task_resume" | "task_input"
+        "task_list"
+            | "task_status"
+            | "task_foreground"
+            | "task_background"
+            | "task_cancel"
+            | "task_pause"
+            | "task_resume"
+            | "task_input"
+            | "task_describe"
     )
 }
 
@@ -34,6 +43,7 @@ pub async fn execute_task_tool(
         "task_pause" => exec_task_pause(args, task_mgr).await,
         "task_resume" => exec_task_resume(args, task_mgr).await,
         "task_input" => exec_task_input(args, task_mgr).await,
+        "task_describe" => exec_task_describe(args, task_mgr, session_key).await,
         _ => Err(format!("Unknown task tool: {}", name)),
     }
 }
@@ -45,7 +55,10 @@ async fn exec_task_list(
     current_session: Option<&str>,
 ) -> Result<String, String> {
     let session_filter = args.get("session").and_then(|v| v.as_str());
-    let include_completed = args.get("includeCompleted").and_then(|v| v.as_bool()).unwrap_or(false);
+    let include_completed = args
+        .get("includeCompleted")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let tasks: Vec<Task> = if let Some(session) = session_filter {
         task_mgr.for_session(session).await
@@ -56,7 +69,8 @@ async fn exec_task_list(
         task_mgr.all().await
     };
 
-    let filtered: Vec<&Task> = tasks.iter()
+    let filtered: Vec<&Task> = tasks
+        .iter()
         .filter(|t| include_completed || !t.status.is_terminal())
         .collect();
 
@@ -64,35 +78,43 @@ async fn exec_task_list(
         return Ok(json!({
             "tasks": [],
             "message": "No active tasks"
-        }).to_string());
+        })
+        .to_string());
     }
 
-    let task_list: Vec<Value> = filtered.iter().map(|t| {
-        json!({
-            "id": t.id.0,
-            "kind": t.kind.display_name(),
-            "label": t.display_label(),
-            "status": format_status_short(&t.status),
-            "foreground": t.status.is_foreground(),
-            "elapsed": t.elapsed().map(|d| d.as_secs()),
-            "progress": t.status.progress(),
+    let task_list: Vec<Value> = filtered
+        .iter()
+        .map(|t| {
+            json!({
+                "id": t.id.0,
+                "kind": t.kind.display_name(),
+                "label": t.display_label(),
+                "status": format_status_short(&t.status),
+                "foreground": t.status.is_foreground(),
+                "elapsed": t.elapsed().map(|d| d.as_secs()),
+                "progress": t.status.progress(),
+            })
         })
-    }).collect();
+        .collect();
 
-    let indicators = format_task_indicators(&filtered.iter().cloned().cloned().collect::<Vec<_>>(), 5);
+    let indicators =
+        format_task_indicators(&filtered.iter().cloned().cloned().collect::<Vec<_>>(), 5);
 
     Ok(json!({
         "tasks": task_list,
         "count": filtered.len(),
         "indicators": indicators,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Get detailed task status.
 async fn exec_task_status(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    
-    let task = task_mgr.get(task_id).await
+
+    let task = task_mgr
+        .get(task_id)
+        .await
         .ok_or_else(|| format!("Task {} not found", task_id))?;
 
     Ok(json!({
@@ -112,16 +134,22 @@ async fn exec_task_status(args: &Value, task_mgr: &SharedTaskManager) -> Result<
         } else {
             String::new()
         },
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Bring task to foreground.
-async fn exec_task_foreground(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_foreground(
+    args: &Value,
+    task_mgr: &SharedTaskManager,
+) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    
+
     task_mgr.set_foreground(task_id).await?;
-    
-    let task = task_mgr.get(task_id).await
+
+    let task = task_mgr
+        .get(task_id)
+        .await
         .ok_or_else(|| format!("Task {} not found", task_id))?;
 
     Ok(json!({
@@ -129,16 +157,22 @@ async fn exec_task_foreground(args: &Value, task_mgr: &SharedTaskManager) -> Res
         "id": task_id.0,
         "label": task.display_label(),
         "message": format!("Task {} is now in foreground", task_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Move task to background.
-async fn exec_task_background(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_background(
+    args: &Value,
+    task_mgr: &SharedTaskManager,
+) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    
+
     task_mgr.set_background(task_id).await?;
-    
-    let task = task_mgr.get(task_id).await
+
+    let task = task_mgr
+        .get(task_id)
+        .await
         .ok_or_else(|| format!("Task {} not found", task_id))?;
 
     Ok(json!({
@@ -146,96 +180,159 @@ async fn exec_task_background(args: &Value, task_mgr: &SharedTaskManager) -> Res
         "id": task_id.0,
         "label": task.display_label(),
         "message": format!("Task {} moved to background", task_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Cancel a task.
 async fn exec_task_cancel(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    
+
     task_mgr.cancel(task_id).await?;
 
     Ok(json!({
         "success": true,
         "id": task_id.0,
         "message": format!("Task {} cancelled", task_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Pause a task.
 async fn exec_task_pause(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    
+
     // Update status to paused
-    task_mgr.update_status(task_id, TaskStatus::Paused { reason: None }).await;
+    task_mgr
+        .update_status(task_id, TaskStatus::Paused { reason: None })
+        .await;
 
     Ok(json!({
         "success": true,
         "id": task_id.0,
         "message": format!("Task {} paused", task_id),
         "note": "Not all task types support pause/resume",
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Resume a paused task.
 async fn exec_task_resume(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    
+
     // Check if task exists and is paused
-    let task = task_mgr.get(task_id).await
+    let task = task_mgr
+        .get(task_id)
+        .await
         .ok_or_else(|| format!("Task {} not found", task_id))?;
-    
+
     if !matches!(task.status, TaskStatus::Paused { .. }) {
-        return Err(format!("Task {} is not paused (status: {})", task_id, format_status_short(&task.status)));
+        return Err(format!(
+            "Task {} is not paused (status: {})",
+            task_id,
+            format_status_short(&task.status)
+        ));
     }
-    
+
     // Update status back to running
-    task_mgr.update_status(task_id, TaskStatus::Running { 
-        progress: None, 
-        message: Some("Resumed".to_string()) 
-    }).await;
+    task_mgr
+        .update_status(
+            task_id,
+            TaskStatus::Running {
+                progress: None,
+                message: Some("Resumed".to_string()),
+            },
+        )
+        .await;
 
     Ok(json!({
         "success": true,
         "id": task_id.0,
         "message": format!("Task {} resumed", task_id),
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Send input to a task.
 async fn exec_task_input(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
-    let input = args.get("input")
+    let input = args
+        .get("input")
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: input")?;
-    
-    let task = task_mgr.get(task_id).await
+
+    let task = task_mgr
+        .get(task_id)
+        .await
         .ok_or_else(|| format!("Task {} not found", task_id))?;
-    
+
     if !matches!(task.status, TaskStatus::WaitingForInput { .. }) {
-        return Err(format!("Task {} is not waiting for input (status: {})", task_id, format_status_short(&task.status)));
+        return Err(format!(
+            "Task {} is not waiting for input (status: {})",
+            task_id,
+            format_status_short(&task.status)
+        ));
     }
-    
+
     // TODO: Actually send input via TaskHandle
     // This requires storing TaskHandles in TaskManager
-    
+
     Ok(json!({
         "success": true,
         "id": task_id.0,
         "input": input,
         "message": format!("Input sent to task {}", task_id),
         "note": "Task input delivery not yet fully implemented",
-    }).to_string())
+    })
+    .to_string())
+}
+
+/// Set task description.
+async fn exec_task_describe(
+    args: &Value,
+    task_mgr: &SharedTaskManager,
+    session_key: Option<&str>,
+) -> Result<String, String> {
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: description")?;
+
+    // Get task ID from args, or find the current session's active task
+    let task_id = if let Ok(id) = parse_task_id(args) {
+        id
+    } else if let Some(session) = session_key {
+        // Find the running task for this session
+        let tasks = task_mgr.for_session(session).await;
+        tasks
+            .iter()
+            .find(|t| matches!(t.status, TaskStatus::Running { .. }))
+            .map(|t| t.id)
+            .ok_or("No active task found for current session")?
+    } else {
+        return Err("No task ID provided and no session context".to_string());
+    };
+
+    task_mgr.set_description(task_id, description).await?;
+
+    Ok(json!({
+        "success": true,
+        "id": task_id.0,
+        "description": description,
+        "message": format!("Task {} description updated", task_id),
+    })
+    .to_string())
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 fn parse_task_id(args: &Value) -> Result<TaskId, String> {
-    let id = args.get("id")
+    let id = args
+        .get("id")
         .or_else(|| args.get("taskId"))
         .and_then(|v| v.as_u64())
         .ok_or("Missing required parameter: id (task ID)")?;
-    
+
     Ok(TaskId(id))
 }
 
@@ -259,26 +356,35 @@ pub async fn generate_task_prompt_section(
 ) -> Option<String> {
     let tasks = task_mgr.for_session(session_key).await;
     let active: Vec<_> = tasks.iter().filter(|t| !t.status.is_terminal()).collect();
-    
+
     if active.is_empty() {
         return None;
     }
-    
+
     let mut section = String::from("## Active Tasks\n");
-    
+
     for task in &active {
         let icon = TaskIcon::from_status(&task.status);
-        let fg = if task.status.is_foreground() { " [foreground]" } else { "" };
+        let fg = if task.status.is_foreground() {
+            " [foreground]"
+        } else {
+            ""
+        };
+        // Show description if set, otherwise label
+        let desc = task.display_description();
         section.push_str(&format!(
             "- {} #{}: {}{}\n",
             icon.emoji(),
             task.id.0,
-            task.display_label(),
+            desc,
             fg
         ));
     }
-    
-    section.push_str("\nUse task_foreground/task_background to switch focus, task_cancel to stop.\n");
-    
+
+    section.push_str(
+        "\nUse task_foreground/task_background to switch focus, task_cancel to stop.\n\
+         Use task_describe to update what your task is doing.\n",
+    );
+
     Some(section)
 }
