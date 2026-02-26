@@ -242,19 +242,29 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
         ServerPayload::ThreadsUpdate {
             threads,
             foreground_id,
-        } => {
-            // TODO: Handle thread list updates in TUI
-            FrameAction::none()
-        }
+        } => FrameAction::just_action(Action::ThreadsUpdate {
+            threads: threads
+                .iter()
+                .map(|t| crate::action::ThreadInfo {
+                    id: t.id,
+                    label: t.label.clone(),
+                    is_foreground: t.is_foreground,
+                    message_count: t.message_count,
+                    has_summary: t.has_summary,
+                })
+                .collect(),
+            foreground_id: *foreground_id,
+        }),
         ServerPayload::ThreadCreated { thread_id, label } => {
-            // TODO: Handle thread creation confirmation
+            // Thread was created — we'll get a ThreadsUpdate too
             FrameAction::none()
         }
         ServerPayload::ThreadSwitched {
             thread_id,
             context_summary,
         } => {
-            // TODO: Handle thread switch confirmation
+            // Thread was switched — we'll get a ThreadsUpdate too
+            // Could show the context_summary in messages if desired
             FrameAction::none()
         }
         ServerPayload::Empty => FrameAction::none(),

@@ -84,6 +84,11 @@ pub(crate) enum GwEvent {
     TasksUpdate {
         tasks: Vec<crate::action::TaskInfo>,
     },
+    /// Thread list update from gateway
+    ThreadsUpdate {
+        threads: Vec<crate::action::ThreadInfo>,
+        foreground_id: Option<u64>,
+    },
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -133,6 +138,8 @@ pub(crate) enum UserInput {
     RefreshSecrets,
     /// Request current task list from gateway
     RefreshTasks,
+    /// Request current thread list from gateway
+    RefreshThreads,
     /// Switch to a different thread
     ThreadSwitch(u64),
     /// Create a new thread
@@ -673,6 +680,20 @@ impl App {
                         }
                     }
                 }
+                Ok(UserInput::RefreshThreads) => {
+                    if let Some(ref mut sink) = ws_sink {
+                        use futures_util::SinkExt;
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::ThreadList,
+                            payload: ClientPayload::ThreadList,
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink
+                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                                .await;
+                        }
+                    }
+                }
                 Ok(UserInput::ThreadCreate(label)) => {
                     if let Some(ref mut sink) = ws_sink {
                         use futures_util::SinkExt;
@@ -755,6 +776,15 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         // ── Tasks ───────────────────────────────────────────────────────
         Action::TasksUpdate(tasks) => Some(GwEvent::TasksUpdate {
             tasks: tasks.clone(),
+        }),
+
+        // ── Threads ─────────────────────────────────────────────────────
+        Action::ThreadsUpdate {
+            threads,
+            foreground_id,
+        } => Some(GwEvent::ThreadsUpdate {
+            threads: threads.clone(),
+            foreground_id: *foreground_id,
         }),
 
         // ── Generic messages ────────────────────────────────────────────
@@ -1068,6 +1098,12 @@ mod tui_component {
                                         let mut m = messages.read().clone();
                                         m.push(DisplayMessage::success("Authenticated"));
                                         messages.set(m);
+                                        // Request initial thread list
+                                        if let Ok(guard) = tx_for_history.lock() {
+                                            if let Some(ref tx) = *guard {
+                                                let _ = tx.send(UserInput::RefreshThreads);
+                                            }
+                                        }
                                     }
                                     GwEvent::Info(s) => {
                                         // Check for "Model ready" or similar to upgrade status
@@ -1317,6 +1353,17 @@ mod tui_component {
                                     }
                                     GwEvent::TasksUpdate { tasks: task_list } => {
                                         tasks.set(task_list);
+                                    }
+                                    GwEvent::ThreadsUpdate {
+                                        threads: thread_list,
+                                        foreground_id,
+                                    } => {
+                                        threads.set(thread_list);
+                                        // Update sidebar_selected to stay in bounds
+                                        let count = threads.read().len();
+                                        if count > 0 && sidebar_selected.get() >= count {
+                                            sidebar_selected.set(count - 1);
+                                        }
                                     }
                                 }
                             }

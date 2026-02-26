@@ -417,6 +417,38 @@ pub async fn run_gateway(
     Ok(())
 }
 
+/// Send a threads update frame to the client.
+async fn send_threads_update<S>(
+    writer: &mut futures_util::stream::SplitSink<WebSocketStream<S>, Message>,
+    thread_mgr: &crate::tasks::ThreadManager,
+) -> Result<()>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
+    let thread_list = thread_mgr.list_info();
+    let foreground_id = thread_mgr.foreground().map(|t| t.task_id.0);
+
+    let threads: Vec<protocol::ThreadInfoDto> = thread_list
+        .iter()
+        .map(|t| protocol::ThreadInfoDto {
+            id: t.id.0,
+            label: t.label.clone(),
+            is_foreground: t.is_foreground,
+            message_count: t.message_count,
+            has_summary: t.has_summary,
+        })
+        .collect();
+
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ThreadsUpdate,
+        payload: ServerPayload::ThreadsUpdate {
+            threads,
+            foreground_id,
+        },
+    };
+    send_frame(writer, &frame).await
+}
+
 async fn handle_connection(
     stream: MaybeTlsStream,
     peer: SocketAddr,
@@ -439,6 +471,11 @@ async fn handle_connection(
     // Reload updates the shared state; new connections pick up changes.
     let config = shared_config.read().await.clone();
     let model_ctx = shared_model_ctx.read().await.clone();
+
+    // Thread manager for multi-task conversations.
+    let mut thread_mgr = crate::tasks::ThreadManager::new();
+    // Create a default thread for the main conversation.
+    let default_thread_id = thread_mgr.create_thread("Main");
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -1118,53 +1155,61 @@ async fn handle_connection(
                                 send_frame(&mut writer, &frame).await?;
                             }
                             ClientPayload::ThreadCreate { label } => {
-                                // TODO: Implement thread creation
                                 debug!("Thread create request: {}", label);
+                                let thread_id = thread_mgr.create_thread(&label);
                                 let frame = ServerFrame {
                                     frame_type: ServerFrameType::ThreadCreated,
                                     payload: ServerPayload::ThreadCreated {
-                                        thread_id: 1, // Placeholder
+                                        thread_id: thread_id.0,
                                         label,
                                     },
                                 };
                                 send_frame(&mut writer, &frame).await?;
+                                // Send updated thread list
+                                send_threads_update(&mut writer, &thread_mgr).await?;
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
-                                // TODO: Implement thread switching
                                 debug!("Thread switch request: {}", thread_id);
-                                let frame = ServerFrame {
-                                    frame_type: ServerFrameType::ThreadSwitched,
-                                    payload: ServerPayload::ThreadSwitched {
-                                        thread_id,
-                                        context_summary: None,
-                                    },
-                                };
-                                send_frame(&mut writer, &frame).await?;
+                                let task_id = crate::tasks::TaskId(thread_id);
+
+                                // Get summary of thread being switched to
+                                let context_summary = thread_mgr
+                                    .get(task_id)
+                                    .and_then(|t| t.compact_summary.clone());
+
+                                // Perform the switch
+                                if thread_mgr.switch_to(task_id).is_some() {
+                                    let frame = ServerFrame {
+                                        frame_type: ServerFrameType::ThreadSwitched,
+                                        payload: ServerPayload::ThreadSwitched {
+                                            thread_id,
+                                            context_summary,
+                                        },
+                                    };
+                                    send_frame(&mut writer, &frame).await?;
+                                    // Send updated thread list
+                                    send_threads_update(&mut writer, &thread_mgr).await?;
+                                } else {
+                                    let frame = ServerFrame {
+                                        frame_type: ServerFrameType::Error,
+                                        payload: ServerPayload::Error {
+                                            ok: false,
+                                            message: format!("Thread {} not found", thread_id),
+                                        },
+                                    };
+                                    send_frame(&mut writer, &frame).await?;
+                                }
                             }
                             ClientPayload::ThreadList => {
-                                // TODO: Implement thread listing
                                 debug!("Thread list request");
-                                let frame = ServerFrame {
-                                    frame_type: ServerFrameType::ThreadsUpdate,
-                                    payload: ServerPayload::ThreadsUpdate {
-                                        threads: vec![],
-                                        foreground_id: None,
-                                    },
-                                };
-                                send_frame(&mut writer, &frame).await?;
+                                send_threads_update(&mut writer, &thread_mgr).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
-                                // TODO: Implement thread close
                                 debug!("Thread close request: {}", thread_id);
+                                let task_id = crate::tasks::TaskId(thread_id);
+                                thread_mgr.remove(task_id);
                                 // Send updated thread list
-                                let frame = ServerFrame {
-                                    frame_type: ServerFrameType::ThreadsUpdate,
-                                    payload: ServerPayload::ThreadsUpdate {
-                                        threads: vec![],
-                                        foreground_id: None,
-                                    },
-                                };
-                                send_frame(&mut writer, &frame).await?;
+                                send_threads_update(&mut writer, &thread_mgr).await?;
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.

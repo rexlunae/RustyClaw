@@ -213,6 +213,11 @@ pub enum Action {
     UserPromptResponse(rustyclaw_core::user_prompt_types::UserPromptResponse),
     /// Gateway sent a tasks update
     TasksUpdate(Vec<TaskInfo>),
+    /// Gateway sent a threads update
+    ThreadsUpdate {
+        threads: Vec<ThreadInfo>,
+        foreground_id: Option<u64>,
+    },
     /// A long-running slash-command tool finished (msg, is_error)
     ToolCommandDone {
         message: String,
