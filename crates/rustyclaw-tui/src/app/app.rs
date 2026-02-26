@@ -530,6 +530,29 @@ impl App {
                                 .collect();
                             let _ = gw_tx.send(GwEvent::ShowToolPerms { tools });
                         }
+                        CommandAction::ThreadNew(label) => {
+                            // Send thread create to gateway
+                            if let Some(ref mut sink) = ws_sink {
+                                use futures_util::SinkExt;
+                                let frame = ClientFrame {
+                                    frame_type: ClientFrameType::ThreadCreate,
+                                    payload: ClientPayload::ThreadCreate { label },
+                                };
+                                if let Ok(data) = serialize_frame(&frame) {
+                                    let _ = sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
+                        CommandAction::ThreadList => {
+                            // Focus sidebar to show threads
+                            let _ = gw_tx.send(GwEvent::Info(
+                                "Press Tab to focus sidebar and navigate threads.".to_string(),
+                            ));
+                        }
                         _ => {}
                     }
                 }

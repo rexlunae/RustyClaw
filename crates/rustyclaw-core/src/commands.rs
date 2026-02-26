@@ -32,6 +32,10 @@ pub enum CommandAction {
     GatewayReload,
     /// Download media by ID (id, optional destination path)
     Download(String, Option<String>),
+    /// Create a new thread
+    ThreadNew(String),
+    /// List threads (handled in TUI)
+    ThreadList,
 }
 
 #[derive(Debug, Clone)]
@@ -76,6 +80,9 @@ pub fn command_names() -> Vec<String> {
         "skill unlink-secret".into(),
         "skill create".into(),
         "secrets".into(),
+        "thread".into(),
+        "thread new".into(),
+        "thread list".into(),
         "clawhub".into(),
         "clawhub auth".into(),
         "clawhub auth login".into(),
@@ -153,12 +160,22 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             let model = parts.get(2).copied();
             let dest = parts.get(3).copied();
             let mut args = serde_json::json!({"action": action});
-            if let Some(m) = model { args["model"] = serde_json::json!(m); }
-            if let Some(d) = dest { args["destination"] = serde_json::json!(d); }
+            if let Some(m) = model {
+                args["model"] = serde_json::json!(m);
+            }
+            if let Some(d) = dest {
+                args["destination"] = serde_json::json!(d);
+            }
             let ws_dir = context.config.workspace_dir();
             match crate::tools::ollama::exec_ollama_manage(&args, &ws_dir) {
-                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
-                Err(e) => CommandResponse { messages: vec![format!("ollama error: {}", e)], action: CommandAction::None },
+                Ok(msg) => CommandResponse {
+                    messages: vec![msg],
+                    action: CommandAction::None,
+                },
+                Err(e) => CommandResponse {
+                    messages: vec![format!("ollama error: {}", e)],
+                    action: CommandAction::None,
+                },
             }
         }
         "exo" => {
@@ -166,11 +183,19 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             let action = parts.get(1).copied().unwrap_or("status");
             let model = parts.get(2).copied();
             let mut args = serde_json::json!({"action": action});
-            if let Some(m) = model { args["model"] = serde_json::json!(m); }
+            if let Some(m) = model {
+                args["model"] = serde_json::json!(m);
+            }
             let ws_dir = context.config.workspace_dir();
             match crate::tools::exo_ai::exec_exo_manage(&args, &ws_dir) {
-                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
-                Err(e) => CommandResponse { messages: vec![format!("exo error: {}", e)], action: CommandAction::None },
+                Ok(msg) => CommandResponse {
+                    messages: vec![msg],
+                    action: CommandAction::None,
+                },
+                Err(e) => CommandResponse {
+                    messages: vec![format!("exo error: {}", e)],
+                    action: CommandAction::None,
+                },
             }
         }
         "uv" => {
@@ -185,8 +210,14 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             }
             let ws_dir = context.config.workspace_dir();
             match crate::tools::uv::exec_uv_manage(&args, &ws_dir) {
-                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
-                Err(e) => CommandResponse { messages: vec![format!("uv error: {}", e)], action: CommandAction::None },
+                Ok(msg) => CommandResponse {
+                    messages: vec![msg],
+                    action: CommandAction::None,
+                },
+                Err(e) => CommandResponse {
+                    messages: vec![format!("uv error: {}", e)],
+                    action: CommandAction::None,
+                },
             }
         }
         "npm" => {
@@ -201,8 +232,14 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             }
             let ws_dir = context.config.workspace_dir();
             match crate::tools::npm::exec_npm_manage(&args, &ws_dir) {
-                Ok(msg) => CommandResponse { messages: vec![msg], action: CommandAction::None },
-                Err(e) => CommandResponse { messages: vec![format!("npm error: {}", e)], action: CommandAction::None },
+                Ok(msg) => CommandResponse {
+                    messages: vec![msg],
+                    action: CommandAction::None,
+                },
+                Err(e) => CommandResponse {
+                    messages: vec![format!("npm error: {}", e)],
+                    action: CommandAction::None,
+                },
             }
         }
         "help" => CommandResponse {
@@ -213,7 +250,8 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /download <id> [path]    - Download media attachment to file".to_string(),
                 "  /enable-access           - Enable agent access to secrets".to_string(),
                 "  /disable-access          - Disable agent access to secrets".to_string(),
-                "  /onboard                 - Run setup wizard (use CLI: rustyclaw onboard)".to_string(),
+                "  /onboard                 - Run setup wizard (use CLI: rustyclaw onboard)"
+                    .to_string(),
                 "  /reload-skills           - Reload skills".to_string(),
                 "  /gateway                 - Show gateway connection status".to_string(),
                 "  /gateway start           - Connect to the gateway".to_string(),
@@ -223,15 +261,22 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /provider <name>         - Change the AI provider".to_string(),
                 "  /model <name>            - Change the AI model".to_string(),
                 "  /skills                  - Show loaded skills".to_string(),
-                "  /skill                   - Skill management (info/install/publish/link)".to_string(),
-                "  /tools                   - Edit tool permissions (allow/deny/ask/skill)".to_string(),
+                "  /skill                   - Skill management (info/install/publish/link)"
+                    .to_string(),
+                "  /tools                   - Edit tool permissions (allow/deny/ask/skill)"
+                    .to_string(),
                 "  /secrets                 - Open the secrets vault".to_string(),
                 "  /clawhub                 - ClawHub skill registry commands".to_string(),
-                "  /agent setup             - Set up local model tools (uv, exo, ollama)".to_string(),
-                "  /ollama <action> [model] - Ollama admin (setup/pull/list/ps/status/…)".to_string(),
-                "  /exo <action> [model]    - Exo cluster admin (setup/start/stop/status/…)".to_string(),
-                "  /uv <action> [pkg …]     - Python/uv admin (setup/pip-install/list/…)".to_string(),
-                "  /npm <action> [pkg …]    - Node.js/npm admin (setup/install/run/build/…)".to_string(),
+                "  /agent setup             - Set up local model tools (uv, exo, ollama)"
+                    .to_string(),
+                "  /ollama <action> [model] - Ollama admin (setup/pull/list/ps/status/…)"
+                    .to_string(),
+                "  /exo <action> [model]    - Exo cluster admin (setup/start/stop/status/…)"
+                    .to_string(),
+                "  /uv <action> [pkg …]     - Python/uv admin (setup/pip-install/list/…)"
+                    .to_string(),
+                "  /npm <action> [pkg …]    - Node.js/npm admin (setup/install/run/build/…)"
+                    .to_string(),
             ],
             action: CommandAction::None,
         },
@@ -257,7 +302,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     action: CommandAction::Download(media_id, dest_path),
                 }
             }
-        },
+        }
         "enable-access" => {
             context.secrets_manager.set_agent_access(true);
             context.config.agent_access = true;
@@ -346,12 +391,10 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     action: CommandAction::SetProvider(name),
                 }
             }
-            None => {
-                CommandResponse {
-                    messages: Vec::new(),
-                    action: CommandAction::ShowProviderSelector,
-                }
-            }
+            None => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::ShowProviderSelector,
+            },
         },
         "model" => match parts.get(1) {
             Some(name) => {
@@ -373,6 +416,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             }
         },
         "clawhub" | "hub" | "registry" => handle_clawhub_subcommand(&parts[1..], context),
+        "thread" => handle_thread_subcommand(&parts[1..]),
         "q" | "quit" | "exit" => CommandResponse {
             messages: Vec::new(),
             action: CommandAction::Quit,
@@ -451,11 +495,7 @@ fn handle_skill_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -> 
                                 query,
                             )
                         } else {
-                            format!(
-                                "{} result(s) for '{}':",
-                                results.len(),
-                                query,
-                            )
+                            format!("{} result(s) for '{}':", results.len(), query,)
                         };
                         let mut msgs: Vec<String> = vec![header];
                         for r in &results {
@@ -529,10 +569,7 @@ fn handle_skill_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -> 
             }
             match context.skill_manager.link_secret(skill, secret) {
                 Ok(_) => CommandResponse {
-                    messages: vec![format!(
-                        "Secret '{}' linked to skill '{}'.",
-                        secret, skill,
-                    )],
+                    messages: vec![format!("Secret '{}' linked to skill '{}'.", secret, skill,)],
                     action: CommandAction::None,
                 },
                 Err(e) => CommandResponse {
@@ -573,8 +610,10 @@ fn handle_skill_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -> 
                     messages: vec![
                         "Usage: /skill create <name> <one-line description>".to_string(),
                         "".to_string(),
-                        "This creates an empty skill scaffold. To have the agent write a full".to_string(),
-                        "skill from a prompt, just ask: \"Create a skill that deploys to S3\"".to_string(),
+                        "This creates an empty skill scaffold. To have the agent write a full"
+                            .to_string(),
+                        "skill from a prompt, just ask: \"Create a skill that deploys to S3\""
+                            .to_string(),
                     ],
                     action: CommandAction::None,
                 };
@@ -585,11 +624,15 @@ fn handle_skill_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -> 
                 format!("A skill called {}", name)
             };
             let instructions = format!("# {}\n\nTODO: Add instructions for this skill.", name);
-            match context.skill_manager.create_skill(name, &description, &instructions, None) {
+            match context
+                .skill_manager
+                .create_skill(name, &description, &instructions, None)
+            {
                 Ok(path) => CommandResponse {
                     messages: vec![
                         format!("✅ Skill '{}' created at {}", name, path.display()),
-                        "Edit the SKILL.md to add instructions, or ask the agent to fill it in.".to_string(),
+                        "Edit the SKILL.md to add instructions, or ask the agent to fill it in."
+                            .to_string(),
                     ],
                     action: CommandAction::None,
                 },
@@ -602,7 +645,8 @@ fn handle_skill_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -> 
         Some(sub) => CommandResponse {
             messages: vec![
                 format!("Unknown skill subcommand: {}", sub),
-                "Usage: /skill info|remove|search|install|publish|create|link-secret|unlink-secret".to_string(),
+                "Usage: /skill info|remove|search|install|publish|create|link-secret|unlink-secret"
+                    .to_string(),
             ],
             action: CommandAction::None,
         },
@@ -617,6 +661,36 @@ fn handle_skill_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -> 
                 "  /skill create <name> [description] — Create a new skill".to_string(),
                 "  /skill link-secret <skill> <secret> — Link secret to skill".to_string(),
                 "  /skill unlink-secret <skill> <secret> — Unlink secret".to_string(),
+            ],
+            action: CommandAction::None,
+        },
+    }
+}
+
+fn handle_thread_subcommand(parts: &[&str]) -> CommandResponse {
+    match parts.first().copied() {
+        Some("new") => {
+            let label = parts.get(1..).map(|p| p.join(" ")).unwrap_or_default();
+            if label.is_empty() {
+                CommandResponse {
+                    messages: vec!["Usage: /thread new <label>".to_string()],
+                    action: CommandAction::None,
+                }
+            } else {
+                CommandResponse {
+                    messages: vec![format!("Creating thread '{}'...", label)],
+                    action: CommandAction::ThreadNew(label),
+                }
+            }
+        }
+        Some("list") | None => CommandResponse {
+            messages: vec!["Press Tab to focus sidebar and view threads.".to_string()],
+            action: CommandAction::ThreadList,
+        },
+        Some(sub) => CommandResponse {
+            messages: vec![
+                format!("Unknown thread subcommand: {}", sub),
+                "Available: /thread new <label>, /thread list".to_string(),
             ],
             action: CommandAction::None,
         },
@@ -644,10 +718,9 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
                         context.config.clawhub_token = Some(token.to_string());
                         let _ = context.config.save(None);
                         let url = context.skill_manager.registry_url().to_string();
-                        context.skill_manager.set_registry(
-                            &url,
-                            Some(token.to_string()),
-                        );
+                        context
+                            .skill_manager
+                            .set_registry(&url, Some(token.to_string()));
                         let user = resp.username.unwrap_or_else(|| "unknown".into());
                         CommandResponse {
                             messages: vec![format!("✓ Authenticated as '{}' on ClawHub.", user)],
@@ -678,10 +751,7 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
                 context.config.clawhub_token = None;
                 let _ = context.config.save(None);
                 let url = context.skill_manager.registry_url().to_string();
-                context.skill_manager.set_registry(
-                    &url,
-                    None,
-                );
+                context.skill_manager.set_registry(&url, None);
                 CommandResponse {
                     messages: vec!["Logged out from ClawHub.".to_string()],
                     action: CommandAction::None,
@@ -720,7 +790,8 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
                             action: CommandAction::None,
                         }
                     } else {
-                        let mut msgs = vec![format!("{} result(s) for '{}':", results.len(), query)];
+                        let mut msgs =
+                            vec![format!("{} result(s) for '{}':", results.len(), query)];
                         for r in &results {
                             let dl = if r.downloads > 0 {
                                 format!(" (↓{})", r.downloads)
@@ -841,7 +912,10 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
                         msgs.push(format!("  Categories: {}", detail.categories.join(", ")));
                     }
                     if !detail.required_secrets.is_empty() {
-                        msgs.push(format!("  Requires secrets: {}", detail.required_secrets.join(", ")));
+                        msgs.push(format!(
+                            "  Requires secrets: {}",
+                            detail.required_secrets.join(", ")
+                        ));
                     }
                     if !detail.updated_at.is_empty() {
                         msgs.push(format!("  Updated: {}", detail.updated_at));
@@ -865,7 +939,9 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
             #[cfg(target_os = "linux")]
             let _ = std::process::Command::new("xdg-open").arg(url).spawn();
             #[cfg(target_os = "windows")]
-            let _ = std::process::Command::new("cmd").args(["/C", "start", url]).spawn();
+            let _ = std::process::Command::new("cmd")
+                .args(["/C", "start", url])
+                .spawn();
             CommandResponse {
                 messages: vec![format!("Opening {} in your browser…", url)],
                 action: CommandAction::None,
@@ -873,16 +949,17 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
         }
         Some("profile" | "me") => match context.skill_manager.profile() {
             Ok(p) => {
-                let mut msgs = vec![
-                    format!("ClawHub profile: {}", p.username),
-                ];
+                let mut msgs = vec![format!("ClawHub profile: {}", p.username)];
                 if !p.display_name.is_empty() {
                     msgs.push(format!("  Name: {}", p.display_name));
                 }
                 if !p.bio.is_empty() {
                     msgs.push(format!("  Bio: {}", p.bio));
                 }
-                msgs.push(format!("  Published: {}  Starred: {}", p.published_count, p.starred_count));
+                msgs.push(format!(
+                    "  Published: {}  Starred: {}",
+                    p.published_count, p.starred_count
+                ));
                 if !p.joined.is_empty() {
                     msgs.push(format!("  Joined: {}", p.joined));
                 }
@@ -900,7 +977,9 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
             Ok(entries) => {
                 if entries.is_empty() {
                     CommandResponse {
-                        messages: vec!["No starred skills. Star skills with: /clawhub star <name>".to_string()],
+                        messages: vec![
+                            "No starred skills. Star skills with: /clawhub star <name>".to_string(),
+                        ],
                         action: CommandAction::None,
                     }
                 } else {
