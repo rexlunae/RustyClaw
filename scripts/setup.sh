@@ -39,11 +39,11 @@ err()     { echo -e "${RED}[FAIL]${NC}  $1"; }
 step()    { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
-ALL_COMPONENTS=(rust rustyclaw uv ollama node exo)
-CORE_COMPONENTS=(rust rustyclaw)  # Always installed unless skipped
-OPTIONAL_COMPONENTS=(uv ollama node exo)  # Offer selection
-SKIP=()
-ONLY=()
+ALL_COMPONENTS="rust rustyclaw uv ollama node exo"
+CORE_COMPONENTS="rust rustyclaw"
+OPTIONAL_COMPONENTS="uv ollama node exo"
+SKIP=""
+ONLY=""
 EXO_DIR="${EXO_DIR:-$HOME/exo}"
 RUSTYCLAW_FEATURES=""
 FROM_SOURCE=false
@@ -95,14 +95,14 @@ while [[ $# -gt 0 ]]; do
         --skip)
             shift
             while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                SKIP+=("$1"); shift
+                SKIP="$SKIP $1"; shift
             done
             INTERACTIVE=false
             ;;
         --only)
             shift
             while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
-                ONLY+=("$1"); shift
+                ONLY="$ONLY $1"; shift
             done
             INTERACTIVE=false
             ;;
@@ -127,80 +127,78 @@ esac
 has() { command -v "$1" &>/dev/null; }
 
 # ── Detect installed components ─────────────────────────────────────────────
-declare -A COMPONENT_STATUS
-declare -A COMPONENT_VERSION
+# Using simple variables instead of associative arrays for bash 3.x compatibility
+STATUS_rust="missing"; VERSION_rust=""
+STATUS_rustyclaw="missing"; VERSION_rustyclaw=""
+STATUS_uv="missing"; VERSION_uv=""
+STATUS_ollama="missing"; VERSION_ollama=""
+STATUS_node="missing"; VERSION_node=""
+STATUS_exo="missing"; VERSION_exo=""
 
-detect_component() {
-    local comp="$1"
-    case "$comp" in
-        rust)
-            if has rustc; then
-                COMPONENT_STATUS[rust]="installed"
-                COMPONENT_VERSION[rust]="$(rustc --version 2>/dev/null | cut -d' ' -f2)"
-            else
-                COMPONENT_STATUS[rust]="missing"
-            fi
-            ;;
-        rustyclaw)
-            if has rustyclaw; then
-                COMPONENT_STATUS[rustyclaw]="installed"
-                COMPONENT_VERSION[rustyclaw]="$(rustyclaw --version 2>/dev/null || echo 'unknown')"
-            else
-                COMPONENT_STATUS[rustyclaw]="missing"
-            fi
-            ;;
-        uv)
-            if has uv; then
-                COMPONENT_STATUS[uv]="installed"
-                COMPONENT_VERSION[uv]="$(uv --version 2>/dev/null | head -1)"
-            else
-                COMPONENT_STATUS[uv]="missing"
-            fi
-            ;;
-        ollama)
-            if has ollama; then
-                COMPONENT_STATUS[ollama]="installed"
-                COMPONENT_VERSION[ollama]="$(ollama --version 2>/dev/null | head -1 || echo 'found')"
-            else
-                COMPONENT_STATUS[ollama]="missing"
-            fi
-            ;;
-        node)
-            if has node && has npm; then
-                COMPONENT_STATUS[node]="installed"
-                COMPONENT_VERSION[node]="node $(node --version 2>/dev/null), npm $(npm --version 2>/dev/null)"
-            else
-                COMPONENT_STATUS[node]="missing"
-            fi
-            ;;
-        exo)
-            if [[ -d "$EXO_DIR" && -f "$EXO_DIR/setup.py" ]]; then
-                COMPONENT_STATUS[exo]="installed"
-                COMPONENT_VERSION[exo]="at $EXO_DIR"
-            else
-                COMPONENT_STATUS[exo]="missing"
-            fi
-            ;;
-    esac
+# Selection state (1=selected, 0=not selected)
+SEL_rust=1; SEL_rustyclaw=1  # Core: selected by default
+SEL_uv=0; SEL_ollama=0; SEL_node=0; SEL_exo=0  # Optional: not selected
+
+detect_components() {
+    if has rustc; then
+        STATUS_rust="installed"
+        VERSION_rust="$(rustc --version 2>/dev/null | cut -d' ' -f2)"
+    fi
+    if has rustyclaw; then
+        STATUS_rustyclaw="installed"
+        VERSION_rustyclaw="$(rustyclaw --version 2>/dev/null || echo 'unknown')"
+    fi
+    if has uv; then
+        STATUS_uv="installed"
+        VERSION_uv="$(uv --version 2>/dev/null | head -1)"
+    fi
+    if has ollama; then
+        STATUS_ollama="installed"
+        VERSION_ollama="$(ollama --version 2>/dev/null | head -1 || echo 'found')"
+    fi
+    if has node && has npm; then
+        STATUS_node="installed"
+        VERSION_node="node $(node --version 2>/dev/null), npm $(npm --version 2>/dev/null)"
+    fi
+    if [[ -d "$EXO_DIR" && -f "$EXO_DIR/setup.py" ]]; then
+        STATUS_exo="installed"
+        VERSION_exo="at $EXO_DIR"
+    fi
 }
 
-# Detect all components
-for comp in "${ALL_COMPONENTS[@]}"; do
-    detect_component "$comp"
-done
+detect_components
 
 # ── Interactive selection ───────────────────────────────────────────────────
-declare -A SELECTED
+get_status() {
+    local comp="$1"
+    eval "echo \$STATUS_$comp"
+}
 
-# Core components are always selected by default
-for comp in "${CORE_COMPONENTS[@]}"; do
-    SELECTED[$comp]=true
-done
+get_version() {
+    local comp="$1"
+    eval "echo \$VERSION_$comp"
+}
 
-# Optional components default to false
-for comp in "${OPTIONAL_COMPONENTS[@]}"; do
-    SELECTED[$comp]=false
-done
+get_selected() {
+    local comp="$1"
+    eval "echo \$SEL_$comp"
+}
+
+set_selected() {
+    local comp="$1"
+    local val="$2"
+    eval "SEL_$comp=$val"
+}
+
+toggle_selected() {
+    local comp="$1"
+    local current=$(get_selected "$comp")
+    if [[ "$current" == "1" ]]; then
+        set_selected "$comp" 0
+    else
+        set_selected "$comp" 1
+    fi
+}
 
 show_menu() {
     clear
@@ -212,14 +210,14 @@ show_menu() {
     echo ""
     
     local i=1
-    for comp in "${ALL_COMPONENTS[@]}"; do
-        local status="${COMPONENT_STATUS[$comp]}"
-        local version="${COMPONENT_VERSION[$comp]:-}"
-        local selected="${SELECTED[$comp]}"
+    for comp in $ALL_COMPONENTS; do
+        local status=$(get_status "$comp")
+        local version=$(get_version "$comp")
+        local selected=$(get_selected "$comp")
         
         # Checkbox
         local check="[ ]"
-        [[ "$selected" == true ]] && check="[${GREEN}✓${NC}]"
+        [[ "$selected" == "1" ]] && check="[${GREEN}✓${NC}]"
         
         # Status indicator
         local status_str=""
@@ -242,7 +240,7 @@ show_menu() {
         
         echo -e "  ${BOLD}$i)${NC} $check ${CYAN}$comp${NC} - $desc"
         echo -e "         $status_str"
-        ((i++))
+        i=$((i + 1))
     done
     
     echo ""
@@ -259,23 +257,23 @@ if [[ "$INTERACTIVE" == true ]]; then
         read -rsn1 key
         
         case "$key" in
-            1) [[ "${SELECTED[rust]}" == true ]] && SELECTED[rust]=false || SELECTED[rust]=true ;;
-            2) [[ "${SELECTED[rustyclaw]}" == true ]] && SELECTED[rustyclaw]=false || SELECTED[rustyclaw]=true ;;
-            3) [[ "${SELECTED[uv]}" == true ]] && SELECTED[uv]=false || SELECTED[uv]=true ;;
-            4) [[ "${SELECTED[ollama]}" == true ]] && SELECTED[ollama]=false || SELECTED[ollama]=true ;;
-            5) [[ "${SELECTED[node]}" == true ]] && SELECTED[node]=false || SELECTED[node]=true ;;
-            6) [[ "${SELECTED[exo]}" == true ]] && SELECTED[exo]=false || SELECTED[exo]=true ;;
+            1) toggle_selected rust ;;
+            2) toggle_selected rustyclaw ;;
+            3) toggle_selected uv ;;
+            4) toggle_selected ollama ;;
+            5) toggle_selected node ;;
+            6) toggle_selected exo ;;
             a|A)
-                for comp in "${ALL_COMPONENTS[@]}"; do
-                    SELECTED[$comp]=true
+                for comp in $ALL_COMPONENTS; do
+                    set_selected "$comp" 1
                 done
                 ;;
             n|N)
-                for comp in "${ALL_COMPONENTS[@]}"; do
-                    SELECTED[$comp]=false
+                for comp in $ALL_COMPONENTS; do
+                    set_selected "$comp" 0
                 done
-                for comp in "${CORE_COMPONENTS[@]}"; do
-                    SELECTED[$comp]=true
+                for comp in $CORE_COMPONENTS; do
+                    set_selected "$comp" 1
                 done
                 ;;
             q|Q)
@@ -295,23 +293,23 @@ fi
 should_install() {
     local comp="$1"
     
-    # If interactive, use the SELECTED array
+    # If interactive, use the selection state
     if [[ "$INTERACTIVE" == true ]]; then
-        [[ "${SELECTED[$comp]}" == true ]]
+        [[ "$(get_selected "$comp")" == "1" ]]
         return $?
     fi
     
     # If --only was specified
-    if [[ ${#ONLY[@]} -gt 0 ]]; then
-        printf '%s\n' "${ONLY[@]}" | grep -qx "$comp"
+    if [[ -n "$ONLY" ]]; then
+        echo "$ONLY" | grep -qw "$comp"
         return $?
     fi
     
     # If --all was specified
     if [[ "$INSTALL_ALL" == true ]]; then
         # Check skip list
-        if [[ ${#SKIP[@]} -gt 0 ]]; then
-            if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
+        if [[ -n "$SKIP" ]]; then
+            if echo "$SKIP" | grep -qw "$comp"; then
                 return 1
             fi
         fi
@@ -319,15 +317,12 @@ should_install() {
     fi
     
     # Non-interactive default: only core components
-    for core in "${CORE_COMPONENTS[@]}"; do
-        [[ "$comp" == "$core" ]] && return 0
-    done
-    
-    # Check skip list
-    if [[ ${#SKIP[@]} -gt 0 ]]; then
-        if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
+    if echo "$CORE_COMPONENTS" | grep -qw "$comp"; then
+        # Check skip list
+        if [[ -n "$SKIP" ]] && echo "$SKIP" | grep -qw "$comp"; then
             return 1
         fi
+        return 0
     fi
     
     return 1
@@ -338,9 +333,9 @@ echo -e "${BOLD}🦀🦞 RustyClaw Full Setup${NC}"
 echo -e "${DIM}   OS: $OS ($ARCH)${NC}"
 echo ""
 
-INSTALLED=()
-SKIPPED=()
-FAILED=()
+INSTALLED=""
+SKIPPED=""
+FAILED=""
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 1. Rust toolchain
@@ -355,12 +350,12 @@ if should_install rust; then
 
         if [[ "$RUST_MAJOR" -ge 1 && "$RUST_MINOR" -ge 85 ]]; then
             success "Rust $RUST_VER (>= 1.85 ✓)"
-            INSTALLED+=("rust")
+            INSTALLED="$INSTALLED rust"
         else
             warn "Rust $RUST_VER found but 1.85+ required — updating..."
             rustup update stable
             success "Rust updated to $(rustc --version | cut -d' ' -f2)"
-            INSTALLED+=("rust")
+            INSTALLED="$INSTALLED rust"
         fi
     else
         info "Installing Rust via rustup..."
@@ -368,10 +363,10 @@ if should_install rust; then
         # shellcheck disable=SC1091
         source "$HOME/.cargo/env"
         success "Rust $(rustc --version | cut -d' ' -f2) installed"
-        INSTALLED+=("rust")
+        INSTALLED="$INSTALLED rust"
     fi
 else
-    SKIPPED+=("rust")
+    SKIPPED="$SKIPPED rust"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -464,13 +459,13 @@ if should_install rustyclaw; then
 
     if has rustyclaw; then
         success "RustyClaw $(rustyclaw --version 2>/dev/null || echo 'installed')"
-        INSTALLED+=("rustyclaw")
+        INSTALLED="$INSTALLED rustyclaw"
     else
         err "RustyClaw binary not found in PATH after install"
-        FAILED+=("rustyclaw")
+        FAILED="$FAILED rustyclaw"
     fi
 else
-    SKIPPED+=("rustyclaw")
+    SKIPPED="$SKIPPED rustyclaw"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -481,7 +476,7 @@ if should_install uv; then
 
     if has uv; then
         success "uv already installed ($(uv --version 2>/dev/null || echo 'found'))"
-        INSTALLED+=("uv")
+        INSTALLED="$INSTALLED uv"
     else
         info "Installing uv..."
         if curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1; then
@@ -489,18 +484,18 @@ if should_install uv; then
             export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
             if has uv; then
                 success "uv $(uv --version 2>/dev/null) installed"
-                INSTALLED+=("uv")
+                INSTALLED="$INSTALLED uv"
             else
                 err "uv installed but not found in PATH"
-                FAILED+=("uv")
+                FAILED="$FAILED uv"
             fi
         else
             err "Failed to install uv"
-            FAILED+=("uv")
+            FAILED="$FAILED uv"
         fi
     fi
 else
-    SKIPPED+=("uv")
+    SKIPPED="$SKIPPED uv"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -511,32 +506,32 @@ if should_install ollama; then
 
     if has ollama; then
         success "Ollama already installed ($(ollama --version 2>/dev/null || echo 'found'))"
-        INSTALLED+=("ollama")
+        INSTALLED="$INSTALLED ollama"
     else
         info "Installing Ollama..."
         case "$PLATFORM" in
             macos)
                 if has brew; then
-                    brew install ollama 2>&1 && success "Ollama installed via Homebrew" && INSTALLED+=("ollama") \
-                        || { err "Homebrew install failed"; FAILED+=("ollama"); }
+                    brew install ollama 2>&1 && success "Ollama installed via Homebrew" && INSTALLED="$INSTALLED ollama" \
+                        || { err "Homebrew install failed"; FAILED="$FAILED ollama"; }
                 else
                     err "Homebrew required on macOS — install Homebrew first"
-                    FAILED+=("ollama")
+                    FAILED="$FAILED ollama"
                 fi
                 ;;
             linux)
                 if curl -fsSL https://ollama.com/install.sh | sh 2>&1; then
                     success "Ollama installed"
-                    INSTALLED+=("ollama")
+                    INSTALLED="$INSTALLED ollama"
                 else
                     err "Ollama install script failed"
-                    FAILED+=("ollama")
+                    FAILED="$FAILED ollama"
                 fi
                 ;;
         esac
     fi
 else
-    SKIPPED+=("ollama")
+    SKIPPED="$SKIPPED ollama"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -553,17 +548,17 @@ if should_install node; then
 
     if has node && has npm; then
         success "Node $(node --version) + npm $(npm --version) already installed"
-        INSTALLED+=("node")
+        INSTALLED="$INSTALLED node"
     else
         info "Installing Node.js..."
         case "$PLATFORM" in
             macos)
                 if has brew; then
-                    brew install node 2>&1 && success "Node.js installed via Homebrew" && INSTALLED+=("node") \
-                        || { err "Homebrew install failed"; FAILED+=("node"); }
+                    brew install node 2>&1 && success "Node.js installed via Homebrew" && INSTALLED="$INSTALLED node" \
+                        || { err "Homebrew install failed"; FAILED="$FAILED node"; }
                 else
                     err "Homebrew required on macOS"
-                    FAILED+=("node")
+                    FAILED="$FAILED node"
                 fi
                 ;;
             linux)
@@ -572,17 +567,17 @@ if should_install node; then
                     if curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - 2>&1 \
                         && sudo apt-get install -y nodejs 2>&1; then
                         success "Node.js installed via NodeSource"
-                        INSTALLED+=("node")
+                        INSTALLED="$INSTALLED node"
                     else
                         err "Node.js install failed"
-                        FAILED+=("node")
+                        FAILED="$FAILED node"
                     fi
                 elif has dnf; then
-                    sudo dnf install -y nodejs npm 2>&1 && success "Node.js installed" && INSTALLED+=("node") \
-                        || { err "Node.js install failed"; FAILED+=("node"); }
+                    sudo dnf install -y nodejs npm 2>&1 && success "Node.js installed" && INSTALLED="$INSTALLED node" \
+                        || { err "Node.js install failed"; FAILED="$FAILED node"; }
                 elif has pacman; then
-                    sudo pacman -Sy --noconfirm nodejs npm 2>&1 && success "Node.js installed" && INSTALLED+=("node") \
-                        || { err "Node.js install failed"; FAILED+=("node"); }
+                    sudo pacman -Sy --noconfirm nodejs npm 2>&1 && success "Node.js installed" && INSTALLED="$INSTALLED node" \
+                        || { err "Node.js install failed"; FAILED="$FAILED node"; }
                 else
                     warn "Installing Node.js via nvm..."
                     curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
@@ -591,13 +586,13 @@ if should_install node; then
                     . "$NVM_DIR/nvm.sh"
                     nvm install --lts
                     success "Node.js installed via nvm"
-                    INSTALLED+=("node")
+                    INSTALLED="$INSTALLED node"
                 fi
                 ;;
         esac
     fi
 else
-    SKIPPED+=("node")
+    SKIPPED="$SKIPPED node"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -609,10 +604,10 @@ if should_install exo; then
     # exo needs uv and node
     if ! has uv; then
         warn "uv is required for exo but not installed — skipping exo"
-        FAILED+=("exo")
+        FAILED="$FAILED exo"
     elif ! has node; then
         warn "Node.js is required for exo dashboard — skipping exo"
-        FAILED+=("exo")
+        FAILED="$FAILED exo"
     else
         if [[ -d "$EXO_DIR" && -f "$EXO_DIR/setup.py" ]]; then
             success "Exo repo already present at $EXO_DIR"
@@ -623,7 +618,7 @@ if should_install exo; then
                 info "Rebuilding exo dashboard..."
                 (cd "$EXO_DIR/exo/api/chatgpt-clone" && npm install --silent && npm run build --silent) 2>&1 || true
             fi
-            INSTALLED+=("exo")
+            INSTALLED="$INSTALLED exo"
         else
             info "Cloning exo to $EXO_DIR..."
             git clone https://github.com/exo-explore/exo.git "$EXO_DIR" 2>&1
@@ -639,11 +634,11 @@ if should_install exo; then
             fi
 
             success "Exo cloned and installed at $EXO_DIR"
-            INSTALLED+=("exo")
+            INSTALLED="$INSTALLED exo"
         fi
     fi
 else
-    SKIPPED+=("exo")
+    SKIPPED="$SKIPPED exo"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -654,18 +649,23 @@ echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━�
 echo -e "${BOLD}  Setup Summary${NC}"
 echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 
-if [[ ${#INSTALLED[@]} -gt 0 ]]; then
-    echo -e "  ${GREEN}Installed:${NC} ${INSTALLED[*]}"
+# Trim leading spaces
+INSTALLED=$(echo "$INSTALLED" | xargs)
+SKIPPED=$(echo "$SKIPPED" | xargs)
+FAILED=$(echo "$FAILED" | xargs)
+
+if [[ -n "$INSTALLED" ]]; then
+    echo -e "  ${GREEN}Installed:${NC} $INSTALLED"
 fi
-if [[ ${#SKIPPED[@]} -gt 0 ]]; then
-    echo -e "  ${DIM}Skipped:${NC}   ${SKIPPED[*]}"
+if [[ -n "$SKIPPED" ]]; then
+    echo -e "  ${DIM}Skipped:${NC}   $SKIPPED"
 fi
-if [[ ${#FAILED[@]} -gt 0 ]]; then
-    echo -e "  ${RED}Failed:${NC}    ${FAILED[*]}"
+if [[ -n "$FAILED" ]]; then
+    echo -e "  ${RED}Failed:${NC}    $FAILED"
 fi
 
 echo ""
-if [[ ${#FAILED[@]} -eq 0 ]]; then
+if [[ -z "$FAILED" ]]; then
     echo -e "  ${GREEN}${BOLD}✓ All done!${NC}"
 else
     echo -e "  ${YELLOW}⚠ Some components failed — see above for details.${NC}"
