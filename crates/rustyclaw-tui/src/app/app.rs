@@ -558,6 +558,43 @@ impl App {
                                 "Press Tab to focus sidebar and navigate threads.".to_string(),
                             ));
                         }
+                        CommandAction::ThreadClose(id) => {
+                            // Send thread close to gateway
+                            if let Some(ref mut sink) = ws_sink {
+                                use futures_util::SinkExt;
+                                let frame = ClientFrame {
+                                    frame_type: ClientFrameType::ThreadClose,
+                                    payload: ClientPayload::ThreadClose { thread_id: id },
+                                };
+                                if let Ok(data) = serialize_frame(&frame) {
+                                    let _ = sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
+                        CommandAction::ThreadRename(id, new_label) => {
+                            // Send thread rename to gateway
+                            if let Some(ref mut sink) = ws_sink {
+                                use futures_util::SinkExt;
+                                let frame = ClientFrame {
+                                    frame_type: ClientFrameType::ThreadRename,
+                                    payload: ClientPayload::ThreadRename {
+                                        thread_id: id,
+                                        new_label,
+                                    },
+                                };
+                                if let Ok(data) = serialize_frame(&frame) {
+                                    let _ = sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }

@@ -36,6 +36,10 @@ pub enum CommandAction {
     ThreadNew(String),
     /// List threads (handled in TUI)
     ThreadList,
+    /// Close a thread by ID
+    ThreadClose(u64),
+    /// Rename a thread (id, new_label)
+    ThreadRename(u64, String),
 }
 
 #[derive(Debug, Clone)]
@@ -83,6 +87,8 @@ pub fn command_names() -> Vec<String> {
         "thread".into(),
         "thread new".into(),
         "thread list".into(),
+        "thread close".into(),
+        "thread rename".into(),
         "clawhub".into(),
         "clawhub auth".into(),
         "clawhub auth login".into(),
@@ -683,6 +689,39 @@ fn handle_thread_subcommand(parts: &[&str]) -> CommandResponse {
                 }
             }
         }
+        Some("close") => {
+            let id_str = parts.get(1).copied().unwrap_or("");
+            match id_str.parse::<u64>() {
+                Ok(id) => CommandResponse {
+                    messages: vec![format!("Closing thread {}...", id)],
+                    action: CommandAction::ThreadClose(id),
+                },
+                Err(_) => CommandResponse {
+                    messages: vec![
+                        "Usage: /thread close <id>".to_string(),
+                        "Get thread IDs from /thread list or sidebar.".to_string(),
+                    ],
+                    action: CommandAction::None,
+                },
+            }
+        }
+        Some("rename") => {
+            let id_str = parts.get(1).copied().unwrap_or("");
+            let new_label = parts.get(2..).map(|p| p.join(" ")).unwrap_or_default();
+            match id_str.parse::<u64>() {
+                Ok(id) if !new_label.is_empty() => CommandResponse {
+                    messages: vec![format!("Renaming thread {} to '{}'...", id, new_label)],
+                    action: CommandAction::ThreadRename(id, new_label),
+                },
+                _ => CommandResponse {
+                    messages: vec![
+                        "Usage: /thread rename <id> <new_label>".to_string(),
+                        "Example: /thread rename 1234567890 Fix CSS bugs".to_string(),
+                    ],
+                    action: CommandAction::None,
+                },
+            }
+        }
         Some("list") | None => CommandResponse {
             messages: vec!["Press Tab to focus sidebar and view threads.".to_string()],
             action: CommandAction::ThreadList,
@@ -690,7 +729,7 @@ fn handle_thread_subcommand(parts: &[&str]) -> CommandResponse {
         Some(sub) => CommandResponse {
             messages: vec![
                 format!("Unknown thread subcommand: {}", sub),
-                "Available: /thread new <label>, /thread list".to_string(),
+                "Available: new, list, close, rename".to_string(),
             ],
             action: CommandAction::None,
         },

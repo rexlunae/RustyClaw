@@ -273,6 +273,16 @@ impl ThreadManager {
         self.threads.remove(&id)
     }
 
+    /// Rename a thread.
+    pub fn rename(&mut self, id: TaskId, new_label: impl Into<String>) -> bool {
+        if let Some(thread) = self.threads.get_mut(&id) {
+            thread.label = new_label.into();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Build combined context from all threads with share_context=true.
     pub fn build_global_context(&self) -> String {
         let mut ctx = String::new();

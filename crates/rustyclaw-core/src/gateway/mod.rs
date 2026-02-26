@@ -1300,6 +1300,25 @@ async fn handle_connection(
                                 // Persist thread state
                                 let _ = thread_mgr.save_to_file(&threads_path);
                             }
+                            ClientPayload::ThreadRename { thread_id, new_label } => {
+                                debug!("Thread rename request: {} -> {}", thread_id, new_label);
+                                let task_id = crate::tasks::TaskId(thread_id);
+                                if thread_mgr.rename(task_id, &new_label) {
+                                    // Send updated thread list
+                                    send_threads_update(&mut writer, &thread_mgr).await?;
+                                    // Persist thread state
+                                    let _ = thread_mgr.save_to_file(&threads_path);
+                                } else {
+                                    let frame = ServerFrame {
+                                        frame_type: ServerFrameType::Error,
+                                        payload: ServerPayload::Error {
+                                            ok: false,
+                                            message: format!("Thread {} not found", thread_id),
+                                        },
+                                    };
+                                    send_frame(&mut writer, &frame).await?;
+                                }
+                            }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.

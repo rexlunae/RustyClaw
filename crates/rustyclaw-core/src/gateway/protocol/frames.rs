@@ -56,6 +56,8 @@ pub enum ClientFrameType {
     ThreadList = 22,
     /// Close/delete a thread.
     ThreadClose = 23,
+    /// Rename a thread.
+    ThreadRename = 24,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -242,6 +244,11 @@ pub enum ClientPayload {
     /// Close/delete a thread.
     ThreadClose {
         thread_id: u64,
+    },
+    /// Rename a thread.
+    ThreadRename {
+        thread_id: u64,
+        new_label: String,
     },
 }
 
