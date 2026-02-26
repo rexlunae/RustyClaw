@@ -1101,10 +1101,26 @@ async fn handle_connection(
                                 let current_model_ctx = shared_model_ctx.read().await.clone();
                                 let workspace_dir = config.workspace_dir();
 
+                                // Inject thread context into system prompt if available
+                                let messages_with_context = {
+                                    let global_ctx = thread_mgr.build_global_context();
+                                    if !global_ctx.is_empty() && !messages.is_empty() && messages[0].role == "system" {
+                                        let mut msgs = messages.clone();
+                                        msgs[0].content = format!(
+                                            "{}\n\n# Background Tasks\n\n{}",
+                                            msgs[0].content,
+                                            global_ctx
+                                        );
+                                        msgs
+                                    } else {
+                                        messages
+                                    }
+                                };
+
                                 // Build a ChatRequest from the messages
                                 let chat_request = ChatRequest {
                                     msg_type: "chat".to_string(),
-                                    messages,
+                                    messages: messages_with_context,
                                     model: None,
                                     provider: None,
                                     base_url: None,
