@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ── RustyClaw Full Setup ─────────────────────────────────────────────────────
 #
-# Installs RustyClaw and all supporting tools from source:
+# Installs RustyClaw and optionally supporting tools:
 #   • Rust toolchain (1.85+)
 #   • RustyClaw (from local workspace or crates.io)
 #   • uv (Python environment manager)
@@ -10,12 +10,13 @@
 #   • Exo (distributed AI cluster)
 #
 # Usage:
-#   ./scripts/setup.sh              # install everything
+#   ./scripts/setup.sh              # interactive mode — choose what to install
+#   ./scripts/setup.sh --all        # install everything (no prompts)
 #   ./scripts/setup.sh --skip exo   # skip exo
 #   ./scripts/setup.sh --only rust rustyclaw  # only Rust + RustyClaw
 #   ./scripts/setup.sh --help
 #
-# Can also be piped:
+# Can also be piped (non-interactive installs core only):
 #   curl -fsSL https://raw.githubusercontent.com/rexlunae/RustyClaw/main/scripts/setup.sh | bash
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -39,12 +40,21 @@ step()    { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
 ALL_COMPONENTS=(rust rustyclaw uv ollama node exo)
+CORE_COMPONENTS=(rust rustyclaw)  # Always installed unless skipped
+OPTIONAL_COMPONENTS=(uv ollama node exo)  # Offer selection
 SKIP=()
 ONLY=()
 EXO_DIR="${EXO_DIR:-$HOME/exo}"
 RUSTYCLAW_FEATURES=""
 FROM_SOURCE=false
 FORCE=false
+INSTALL_ALL=false
+INTERACTIVE=true
+
+# Detect if we're in a pipe (non-interactive)
+if [[ ! -t 0 ]]; then
+    INTERACTIVE=false
+fi
 
 print_help() {
     cat <<'EOF'
@@ -53,6 +63,7 @@ print_help() {
 Usage: ./scripts/setup.sh [OPTIONS]
 
 Options:
+  --all                     Install all components (no prompts)
   --skip <component...>     Skip listed components
   --only <component...>     Install only listed components
   --exo-dir <path>          Where to clone exo (default: ~/exo)
@@ -64,7 +75,8 @@ Options:
 Components: rust, rustyclaw, uv, ollama, node, exo
 
 Examples:
-  ./scripts/setup.sh                          # install everything
+  ./scripts/setup.sh                          # interactive — choose components
+  ./scripts/setup.sh --all                    # install everything
   ./scripts/setup.sh --skip exo ollama        # skip exo and ollama
   ./scripts/setup.sh --only rust rustyclaw    # just Rust + RustyClaw
   ./scripts/setup.sh --from-source            # build from local checkout
@@ -75,17 +87,24 @@ EOF
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h) print_help ;;
+        --all|-a)
+            INSTALL_ALL=true
+            INTERACTIVE=false
+            shift
+            ;;
         --skip)
             shift
             while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
                 SKIP+=("$1"); shift
             done
+            INTERACTIVE=false
             ;;
         --only)
             shift
             while [[ $# -gt 0 && ! "$1" =~ ^-- ]]; do
                 ONLY+=("$1"); shift
             done
+            INTERACTIVE=false
             ;;
         --exo-dir)   EXO_DIR="$2"; shift 2 ;;
         --features)  RUSTYCLAW_FEATURES="$2"; shift 2 ;;
@@ -94,21 +113,6 @@ while [[ $# -gt 0 ]]; do
         *) warn "Unknown option: $1"; shift ;;
     esac
 done
-
-# Determine which components to install
-should_install() {
-    local comp="$1"
-    if [[ ${#ONLY[@]} -gt 0 ]]; then
-        printf '%s\n' "${ONLY[@]}" | grep -qx "$comp"
-        return $?
-    fi
-    if [[ ${#SKIP[@]} -gt 0 ]]; then
-        if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
-            return 1
-        fi
-    fi
-    return 0
-}
 
 # ── Detect platform ─────────────────────────────────────────────────────────
 OS="$(uname -s)"
@@ -122,8 +126,212 @@ esac
 
 has() { command -v "$1" &>/dev/null; }
 
-# Simple shell runner
-sh_run() { bash -c "$*"; }
+# ── Detect installed components ─────────────────────────────────────────────
+declare -A COMPONENT_STATUS
+declare -A COMPONENT_VERSION
+
+detect_component() {
+    local comp="$1"
+    case "$comp" in
+        rust)
+            if has rustc; then
+                COMPONENT_STATUS[rust]="installed"
+                COMPONENT_VERSION[rust]="$(rustc --version 2>/dev/null | cut -d' ' -f2)"
+            else
+                COMPONENT_STATUS[rust]="missing"
+            fi
+            ;;
+        rustyclaw)
+            if has rustyclaw; then
+                COMPONENT_STATUS[rustyclaw]="installed"
+                COMPONENT_VERSION[rustyclaw]="$(rustyclaw --version 2>/dev/null || echo 'unknown')"
+            else
+                COMPONENT_STATUS[rustyclaw]="missing"
+            fi
+            ;;
+        uv)
+            if has uv; then
+                COMPONENT_STATUS[uv]="installed"
+                COMPONENT_VERSION[uv]="$(uv --version 2>/dev/null | head -1)"
+            else
+                COMPONENT_STATUS[uv]="missing"
+            fi
+            ;;
+        ollama)
+            if has ollama; then
+                COMPONENT_STATUS[ollama]="installed"
+                COMPONENT_VERSION[ollama]="$(ollama --version 2>/dev/null | head -1 || echo 'found')"
+            else
+                COMPONENT_STATUS[ollama]="missing"
+            fi
+            ;;
+        node)
+            if has node && has npm; then
+                COMPONENT_STATUS[node]="installed"
+                COMPONENT_VERSION[node]="node $(node --version 2>/dev/null), npm $(npm --version 2>/dev/null)"
+            else
+                COMPONENT_STATUS[node]="missing"
+            fi
+            ;;
+        exo)
+            if [[ -d "$EXO_DIR" && -f "$EXO_DIR/setup.py" ]]; then
+                COMPONENT_STATUS[exo]="installed"
+                COMPONENT_VERSION[exo]="at $EXO_DIR"
+            else
+                COMPONENT_STATUS[exo]="missing"
+            fi
+            ;;
+    esac
+}
+
+# Detect all components
+for comp in "${ALL_COMPONENTS[@]}"; do
+    detect_component "$comp"
+done
+
+# ── Interactive selection ───────────────────────────────────────────────────
+declare -A SELECTED
+
+# Core components are always selected by default
+for comp in "${CORE_COMPONENTS[@]}"; do
+    SELECTED[$comp]=true
+done
+
+# Optional components default to false
+for comp in "${OPTIONAL_COMPONENTS[@]}"; do
+    SELECTED[$comp]=false
+done
+
+show_menu() {
+    clear
+    echo -e "${BOLD}🦀🦞 RustyClaw Setup${NC}"
+    echo -e "${DIM}   OS: $OS ($ARCH)${NC}"
+    echo ""
+    echo -e "${BOLD}Select components to install:${NC}"
+    echo -e "${DIM}(Use number keys to toggle, Enter to proceed, q to quit)${NC}"
+    echo ""
+    
+    local i=1
+    for comp in "${ALL_COMPONENTS[@]}"; do
+        local status="${COMPONENT_STATUS[$comp]}"
+        local version="${COMPONENT_VERSION[$comp]:-}"
+        local selected="${SELECTED[$comp]}"
+        
+        # Checkbox
+        local check="[ ]"
+        [[ "$selected" == true ]] && check="[${GREEN}✓${NC}]"
+        
+        # Status indicator
+        local status_str=""
+        if [[ "$status" == "installed" ]]; then
+            status_str="${GREEN}(installed: $version)${NC}"
+        else
+            status_str="${DIM}(not installed)${NC}"
+        fi
+        
+        # Component description
+        local desc=""
+        case "$comp" in
+            rust)      desc="Rust toolchain (required)" ;;
+            rustyclaw) desc="RustyClaw CLI + TUI" ;;
+            uv)        desc="Python environment manager (for exo)" ;;
+            ollama)    desc="Local model server" ;;
+            node)      desc="Node.js + npm (for exo dashboard)" ;;
+            exo)       desc="Distributed AI cluster" ;;
+        esac
+        
+        echo -e "  ${BOLD}$i)${NC} $check ${CYAN}$comp${NC} - $desc"
+        echo -e "         $status_str"
+        ((i++))
+    done
+    
+    echo ""
+    echo -e "  ${BOLD}a)${NC} Select all"
+    echo -e "  ${BOLD}n)${NC} Select none (core only)"
+    echo -e "  ${BOLD}Enter)${NC} Proceed with selection"
+    echo -e "  ${BOLD}q)${NC} Quit"
+    echo ""
+}
+
+if [[ "$INTERACTIVE" == true ]]; then
+    while true; do
+        show_menu
+        read -rsn1 key
+        
+        case "$key" in
+            1) [[ "${SELECTED[rust]}" == true ]] && SELECTED[rust]=false || SELECTED[rust]=true ;;
+            2) [[ "${SELECTED[rustyclaw]}" == true ]] && SELECTED[rustyclaw]=false || SELECTED[rustyclaw]=true ;;
+            3) [[ "${SELECTED[uv]}" == true ]] && SELECTED[uv]=false || SELECTED[uv]=true ;;
+            4) [[ "${SELECTED[ollama]}" == true ]] && SELECTED[ollama]=false || SELECTED[ollama]=true ;;
+            5) [[ "${SELECTED[node]}" == true ]] && SELECTED[node]=false || SELECTED[node]=true ;;
+            6) [[ "${SELECTED[exo]}" == true ]] && SELECTED[exo]=false || SELECTED[exo]=true ;;
+            a|A)
+                for comp in "${ALL_COMPONENTS[@]}"; do
+                    SELECTED[$comp]=true
+                done
+                ;;
+            n|N)
+                for comp in "${ALL_COMPONENTS[@]}"; do
+                    SELECTED[$comp]=false
+                done
+                for comp in "${CORE_COMPONENTS[@]}"; do
+                    SELECTED[$comp]=true
+                done
+                ;;
+            q|Q)
+                echo "Cancelled."
+                exit 0
+                ;;
+            "")
+                # Enter pressed — proceed
+                break
+                ;;
+        esac
+    done
+    clear
+fi
+
+# ── Determine what to install ───────────────────────────────────────────────
+should_install() {
+    local comp="$1"
+    
+    # If interactive, use the SELECTED array
+    if [[ "$INTERACTIVE" == true ]]; then
+        [[ "${SELECTED[$comp]}" == true ]]
+        return $?
+    fi
+    
+    # If --only was specified
+    if [[ ${#ONLY[@]} -gt 0 ]]; then
+        printf '%s\n' "${ONLY[@]}" | grep -qx "$comp"
+        return $?
+    fi
+    
+    # If --all was specified
+    if [[ "$INSTALL_ALL" == true ]]; then
+        # Check skip list
+        if [[ ${#SKIP[@]} -gt 0 ]]; then
+            if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
+                return 1
+            fi
+        fi
+        return 0
+    fi
+    
+    # Non-interactive default: only core components
+    for core in "${CORE_COMPONENTS[@]}"; do
+        [[ "$comp" == "$core" ]] && return 0
+    done
+    
+    # Check skip list
+    if [[ ${#SKIP[@]} -gt 0 ]]; then
+        if printf '%s\n' "${SKIP[@]}" | grep -qx "$comp" 2>/dev/null; then
+            return 1
+        fi
+    fi
+    
+    return 1
+}
 
 echo ""
 echo -e "${BOLD}🦀🦞 RustyClaw Full Setup${NC}"
@@ -467,11 +675,15 @@ echo ""
 echo -e "  ${BOLD}Next steps:${NC}"
 echo "    1. rustyclaw onboard     # configure provider + vault"
 echo "    2. rustyclaw tui         # launch the terminal UI"
-if should_install ollama 2>/dev/null; then
+
+# Show ollama hint if it was installed or available
+if should_install ollama 2>/dev/null || has ollama; then
     echo "    3. ollama serve          # start local model server"
     echo "    4. ollama pull llama3    # download a model"
 fi
-if should_install exo 2>/dev/null; then
+
+# Show exo hint if it was installed
+if should_install exo 2>/dev/null || [[ -d "$EXO_DIR" ]]; then
     echo ""
     echo -e "  ${BOLD}Exo:${NC}"
     echo "    cd $EXO_DIR && uv run exo   # start distributed cluster"
