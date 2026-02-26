@@ -475,6 +475,34 @@ impl ThreadManager {
         }
     }
     
+    // ── Backwards Compatibility ─────────────────────────────────────────────
+    // These methods match the old tasks::ThreadManager API for easier migration.
+    
+    /// Alias for create_chat (old API compatibility).
+    pub fn create_thread(&mut self, label: impl Into<String>) -> ThreadId {
+        self.create_chat(label)
+    }
+    
+    /// Alias for switch_foreground that returns old foreground ID (old API compatibility).
+    pub fn switch_to(&mut self, id: ThreadId) -> Option<ThreadId> {
+        let old_fg = self.foreground_id;
+        if self.switch_foreground(id) {
+            old_fg
+        } else {
+            None
+        }
+    }
+    
+    /// Get a thread by ID (compatibility - already exists as get()).
+    pub fn get_by_id(&self, id: ThreadId) -> Option<&AgentThread> {
+        self.get(id)
+    }
+    
+    /// Get a mutable thread by ID (compatibility - already exists as get_mut()).
+    pub fn get_by_id_mut(&mut self, id: ThreadId) -> Option<&mut AgentThread> {
+        self.get_mut(id)
+    }
+    
     // ── Internal ────────────────────────────────────────────────────────────
     
     fn emit(&self, event: ThreadEvent) {

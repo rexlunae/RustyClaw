@@ -20,3 +20,6 @@ mod events;
 pub use model::*;
 pub use manager::*;
 pub use events::*;
+
+// Backwards compatibility: TaskId is now ThreadId
+pub type TaskId = ThreadId;

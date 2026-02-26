@@ -426,7 +426,7 @@ pub async fn run_gateway(
 /// - Active sub-agent sessions (from SessionManager)
 async fn send_threads_update<S>(
     writer: &mut futures_util::stream::SplitSink<WebSocketStream<S>, Message>,
-    thread_mgr: &crate::tasks::ThreadManager,
+    thread_mgr: &crate::threads::ThreadManager,
     task_mgr: &SharedTaskManager,
     session_key: Option<&str>,
 ) -> Result<()>
@@ -436,7 +436,7 @@ where
     use crate::sessions::{session_manager, SessionKind, SessionStatus};
 
     let thread_list = thread_mgr.list_info();
-    let foreground_id = thread_mgr.foreground().map(|t| t.task_id.0);
+    let foreground_id = thread_mgr.foreground().map(|t| t.task_id().0);
 
     // Collect chat threads
     let mut threads: Vec<protocol::ThreadInfoDto> = thread_list
@@ -445,7 +445,7 @@ where
             id: t.id.0,
             label: t.label.clone(),
             description: t.description.clone(),
-            status: t.status.as_ref().map(|s| format!("{:?}", s)),
+            status: Some(t.status.clone()),
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             has_summary: t.has_summary,
@@ -551,7 +551,7 @@ async fn handle_connection(
     // Thread manager for multi-task conversations.
     // Load from persistent storage or create new with default "Main" thread.
     let threads_path = config.sessions_dir().join("threads.json");
-    let mut thread_mgr = crate::tasks::ThreadManager::load_or_default(&threads_path);
+    let mut thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -1197,7 +1197,7 @@ async fn handle_connection(
                                     // Find the last user message (typically the new one)
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
                                         thread.add_message(
-                                            crate::tasks::MessageRole::User,
+                                            crate::threads::MessageRole::User,
                                             &last_user.content,
                                         );
                                     }
@@ -1307,10 +1307,10 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 debug!("Thread switch request: {}", thread_id);
-                                let target_id = crate::tasks::TaskId(thread_id);
+                                let target_id = crate::threads::ThreadId(thread_id);
 
                                 // Get current foreground thread for compaction
-                                let current_fg_id = thread_mgr.foreground().map(|t| t.task_id);
+                                let current_fg_id = thread_mgr.foreground().map(|t| t.task_id());
 
                                 // Compact the current thread if it has messages
                                 if let Some(fg_id) = current_fg_id {
@@ -1400,7 +1400,7 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 debug!("Thread close request: {}", thread_id);
-                                let task_id = crate::tasks::TaskId(thread_id);
+                                let task_id = crate::threads::ThreadId(thread_id);
                                 thread_mgr.remove(task_id);
                                 // Send updated thread list
                                 send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
@@ -1409,7 +1409,7 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadRename { thread_id, new_label } => {
                                 debug!("Thread rename request: {} -> {}", thread_id, new_label);
-                                let task_id = crate::tasks::TaskId(thread_id);
+                                let task_id = crate::threads::ThreadId(thread_id);
                                 if thread_mgr.rename(task_id, &new_label) {
                                     // Send updated thread list
                                     send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
@@ -1469,7 +1469,7 @@ async fn handle_connection(
                             // Record assistant response in thread history if provided
                             if let Some(text) = response {
                                 if let Some(thread) = thread_mgr.get_mut(thread_id) {
-                                    thread.add_message(crate::tasks::MessageRole::Assistant, &text);
+                                    thread.add_message(crate::threads::MessageRole::Assistant, &text);
                                 }
                             }
                             
@@ -1738,7 +1738,7 @@ async fn dispatch_text_message(
             )>,
         >,
     >,
-    thread_mgr: &mut crate::tasks::ThreadManager,
+    thread_mgr: &mut crate::threads::ThreadManager,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
@@ -1992,7 +1992,7 @@ async fn dispatch_text_message(
                 // Record assistant response in thread history
                 if !model_resp.text.is_empty() {
                     if let Some(thread) = thread_mgr.foreground_mut() {
-                        thread.add_message(crate::tasks::MessageRole::Assistant, &model_resp.text);
+                        thread.add_message(crate::threads::MessageRole::Assistant, &model_resp.text);
                     }
                 }
                 providers::send_response_done(writer).await?;

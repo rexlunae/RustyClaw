@@ -368,6 +368,72 @@ impl AgentThread {
         self.last_activity = SystemTime::now();
     }
     
+    /// Get message count.
+    pub fn message_count(&self) -> usize {
+        self.messages.len()
+    }
+    
+    /// Generate a prompt for compacting this thread's conversation.
+    pub fn compaction_prompt(&self) -> String {
+        let mut prompt = String::from(
+            "Summarize the following conversation in 2-3 sentences, \
+             capturing the key topics, decisions, and any pending items:\n\n",
+        );
+        
+        for msg in &self.messages {
+            let role = match msg.role {
+                MessageRole::User => "User",
+                MessageRole::Assistant => "Assistant",
+                MessageRole::System => "System",
+                MessageRole::Tool => "Tool",
+            };
+            prompt.push_str(&format!("{}: {}\n", role, msg.content));
+        }
+        
+        prompt
+    }
+    
+    /// Apply a compaction summary, keeping only recent messages.
+    pub fn apply_compaction(&mut self, summary: String) {
+        // Keep the last 3 messages
+        const KEEP_RECENT: usize = 3;
+        
+        while self.messages.len() > KEEP_RECENT {
+            self.messages.pop_front();
+        }
+        
+        self.compact_summary = Some(summary);
+        self.last_activity = SystemTime::now();
+    }
+    
+    /// Build context string for this thread (for system prompt injection).
+    pub fn build_context(&self) -> String {
+        let mut ctx = String::new();
+        
+        // Include compact summary if present
+        if let Some(summary) = &self.compact_summary {
+            ctx.push_str("## Previous Context\n");
+            ctx.push_str(summary);
+            ctx.push_str("\n\n");
+        }
+        
+        // Include recent messages
+        if !self.messages.is_empty() {
+            ctx.push_str("## Recent Messages\n");
+            for msg in &self.messages {
+                let role = match msg.role {
+                    MessageRole::User => "User",
+                    MessageRole::Assistant => "Assistant",
+                    MessageRole::System => "System",
+                    MessageRole::Tool => "Tool",
+                };
+                ctx.push_str(&format!("{}: {}\n", role, msg.content));
+            }
+        }
+        
+        ctx
+    }
+    
     /// Get info for sidebar display.
     pub fn to_info(&self) -> ThreadInfo {
         ThreadInfo {
