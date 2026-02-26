@@ -133,6 +133,10 @@ pub(crate) enum UserInput {
     RefreshSecrets,
     /// Request current task list from gateway
     RefreshTasks,
+    /// Switch to a different thread
+    ThreadSwitch(u64),
+    /// Create a new thread
+    ThreadCreate(String),
     Quit,
 }
 
@@ -655,6 +659,34 @@ impl App {
                         }
                     }
                 }
+                Ok(UserInput::ThreadSwitch(thread_id)) => {
+                    if let Some(ref mut sink) = ws_sink {
+                        use futures_util::SinkExt;
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::ThreadSwitch,
+                            payload: ClientPayload::ThreadSwitch { thread_id },
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink
+                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                                .await;
+                        }
+                    }
+                }
+                Ok(UserInput::ThreadCreate(label)) => {
+                    if let Some(ref mut sink) = ws_sink {
+                        use futures_util::SinkExt;
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::ThreadCreate,
+                            payload: ClientPayload::ThreadCreate { label },
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink
+                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                                .await;
+                        }
+                    }
+                }
                 Ok(UserInput::Quit) => break,
                 Err(sync_mpsc::TryRecvError::Empty) => {}
                 Err(sync_mpsc::TryRecvError::Disconnected) => break,
@@ -957,6 +989,11 @@ mod tui_component {
 
         // ── Task state ───────────────────────────────────────────────────
         let mut tasks: State<Vec<crate::action::TaskInfo>> = hooks.use_state(Vec::new);
+
+        // ── Thread state ─────────────────────────────────────────────────
+        let mut threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
+        let mut sidebar_focused = hooks.use_state(|| false);
+        let mut sidebar_selected = hooks.use_state(|| 0usize);
 
         // ── Command menu (slash-command completions) ────────────────────
         let mut command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -1966,6 +2003,40 @@ mod tui_component {
                                 }
                             }
                         }
+                        // Tab toggles sidebar focus when command menu is not open
+                        KeyCode::Tab if !menu_open => {
+                            sidebar_focused.set(!sidebar_focused.get());
+                        }
+                        // Sidebar navigation when focused
+                        KeyCode::Up if sidebar_focused.get() => {
+                            let thread_count = threads.read().len();
+                            if thread_count > 0 {
+                                let current = sidebar_selected.get();
+                                sidebar_selected.set(current.saturating_sub(1));
+                            }
+                        }
+                        KeyCode::Down if sidebar_focused.get() => {
+                            let thread_count = threads.read().len();
+                            if thread_count > 0 {
+                                let current = sidebar_selected.get();
+                                sidebar_selected.set((current + 1).min(thread_count - 1));
+                            }
+                        }
+                        KeyCode::Enter if sidebar_focused.get() => {
+                            let thread_list = threads.read().clone();
+                            if let Some(thread) = thread_list.get(sidebar_selected.get()) {
+                                // Send thread switch request
+                                if let Ok(guard) = tx_for_keys.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::ThreadSwitch(thread.id));
+                                    }
+                                }
+                            }
+                        }
+                        KeyCode::Esc if sidebar_focused.get() => {
+                            // Escape returns focus to input
+                            sidebar_focused.set(false);
+                        }
                         KeyCode::Up => {
                             scroll_offset.set(scroll_offset.get() + 1);
                         }
@@ -2014,7 +2085,8 @@ mod tui_component {
                     && !show_user_prompt.get()
                     && !show_secrets_dialog.get()
                     && !show_skills_dialog.get()
-                    && !show_tool_perms_dialog.get(),
+                    && !show_tool_perms_dialog.get()
+                    && !sidebar_focused.get(),
                 on_change: move |new_val: String| {
                     input_value.set(new_val.clone());
                     // Update slash-command completions
@@ -2043,6 +2115,9 @@ mod tui_component {
                 streaming: streaming.get(),
                 elapsed: elapsed.to_string(),
                 tasks: tasks.read().clone(),
+                threads: threads.read().clone(),
+                sidebar_focused: sidebar_focused.get(),
+                sidebar_selected: sidebar_selected.get(),
                 hint: props.hint.clone(),
                 spinner_tick: spinner_tick.get(),
                 show_auth_dialog: show_auth_dialog.get(),

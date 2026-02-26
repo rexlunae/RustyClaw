@@ -54,6 +54,9 @@ pub struct RootProps {
     pub streaming: bool,
     pub elapsed: String,
     pub tasks: Vec<crate::action::TaskInfo>,
+    pub threads: Vec<crate::action::ThreadInfo>,
+    pub sidebar_focused: bool,
+    pub sidebar_selected: usize,
 
     // status bar
     pub hint: String,
@@ -182,6 +185,9 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     elapsed: props.elapsed.clone(),
                     spinner_tick: props.spinner_tick,
                     tasks: props.tasks.clone(),
+                    threads: props.threads.clone(),
+                    focused: props.sidebar_focused,
+                    selected: props.sidebar_selected,
                 )
             }
 

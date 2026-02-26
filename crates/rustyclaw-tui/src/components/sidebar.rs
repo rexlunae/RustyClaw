@@ -1,6 +1,6 @@
 // ── Sidebar ─────────────────────────────────────────────────────────────────
 
-use crate::action::TaskInfo;
+use crate::action::{TaskInfo, ThreadInfo};
 use crate::theme;
 use iocraft::prelude::*;
 
@@ -15,12 +15,23 @@ pub struct SidebarProps {
     pub elapsed: String,
     pub spinner_tick: usize,
     pub tasks: Vec<TaskInfo>,
+    pub threads: Vec<ThreadInfo>,
+    pub focused: bool,
+    pub selected: usize,
 }
 
 #[component]
 pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
     let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
     let has_tasks = !props.tasks.is_empty();
+    let has_threads = !props.threads.is_empty();
+
+    // Border color reflects focus state
+    let border_color = if props.focused {
+        theme::ACCENT
+    } else {
+        theme::MUTED
+    };
 
     element! {
         View(
@@ -28,7 +39,7 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
             height: 100pct,
             flex_direction: FlexDirection::Column,
             border_style: BorderStyle::Round,
-            border_color: theme::MUTED,
+            border_color: border_color,
             border_edges: Edges::Left,
             padding_left: 1,
             padding_right: 1,
@@ -39,7 +50,54 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
                 Text(content: format!("Status: {}", props.gateway_label), color: theme::TEXT_DIM)
             }
 
-            // Tasks
+            // Threads section (when available)
+            #(if has_threads {
+                element! {
+                    View(margin_top: 1, flex_direction: FlexDirection::Column) {
+                        Text(content: " Threads", color: theme::ACCENT_BRIGHT, weight: Weight::Bold)
+                        View(margin_top: 1, flex_direction: FlexDirection::Column) {
+                            #(props.threads.iter().enumerate().take(8).map(|(i, thread)| {
+                                let is_selected = props.focused && i == props.selected;
+                                let fg_marker = if thread.is_foreground { "★ " } else { "  " };
+                                let summary_marker = if thread.has_summary { "⌁" } else { "" };
+                                // Truncate label to fit
+                                let label = if thread.label.len() > 15 {
+                                    format!("{}…", &thread.label[..14])
+                                } else {
+                                    thread.label.clone()
+                                };
+                                element! {
+                                    View(key: i as u64, flex_direction: FlexDirection::Row) {
+                                        Text(
+                                            content: if is_selected { "▸" } else { fg_marker }.to_string(),
+                                            color: if thread.is_foreground || is_selected { theme::ACCENT } else { theme::MUTED },
+                                        )
+                                        Text(
+                                            content: format!("{}{}", label, summary_marker),
+                                            color: if is_selected { theme::TEXT } else { theme::TEXT_DIM },
+                                            weight: if is_selected { Weight::Bold } else { Weight::Normal },
+                                        )
+                                    }
+                                }
+                            }))
+                            #(if props.threads.len() > 8 {
+                                element! {
+                                    Text(
+                                        content: format!("  +{} more", props.threads.len() - 8),
+                                        color: theme::MUTED,
+                                    )
+                                }.into_any()
+                            } else {
+                                element! { View() }.into_any()
+                            })
+                        }
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // Tasks section
             View(margin_top: 1) {
                 Text(content: " Tasks", color: theme::ACCENT_BRIGHT, weight: Weight::Bold)
             }

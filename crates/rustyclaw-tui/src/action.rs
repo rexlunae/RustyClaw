@@ -230,3 +230,13 @@ pub struct TaskInfo {
     pub status: String,
     pub is_foreground: bool,
 }
+
+/// Thread info for TUI display.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadInfo {
+    pub id: u64,
+    pub label: String,
+    pub is_foreground: bool,
+    pub message_count: usize,
+    pub has_summary: bool,
+}
