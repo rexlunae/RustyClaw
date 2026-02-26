@@ -324,6 +324,57 @@ pub struct ThreadInfo {
 /// Shared thread manager.
 pub type SharedThreadManager = Arc<RwLock<ThreadManager>>;
 
+// ── Persistence ─────────────────────────────────────────────────────────────
+
+/// Serializable state for thread persistence.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ThreadManagerState {
+    pub threads: Vec<TaskThread>,
+    pub foreground_id: Option<u64>,
+}
+
+impl ThreadManager {
+    /// Save thread state to a file.
+    pub fn save_to_file(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let state = ThreadManagerState {
+            threads: self.threads.values().cloned().collect(),
+            foreground_id: self.foreground_id.map(|id| id.0),
+        };
+        let json = serde_json::to_string_pretty(&state)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+        std::fs::write(path, json)
+    }
+
+    /// Load thread state from a file.
+    pub fn load_from_file(path: &std::path::Path) -> std::io::Result<Self> {
+        let json = std::fs::read_to_string(path)?;
+        let state: ThreadManagerState = serde_json::from_str(&json)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+
+        let mut threads = HashMap::new();
+        for thread in state.threads {
+            threads.insert(thread.task_id, thread);
+        }
+
+        Ok(Self {
+            threads,
+            foreground_id: state.foreground_id.map(TaskId),
+        })
+    }
+
+    /// Load from file or create new with default thread.
+    pub fn load_or_default(path: &std::path::Path) -> Self {
+        match Self::load_from_file(path) {
+            Ok(mgr) if !mgr.threads.is_empty() => mgr,
+            _ => {
+                let mut mgr = Self::new();
+                mgr.create_thread("Main");
+                mgr
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

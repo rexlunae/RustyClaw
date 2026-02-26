@@ -473,9 +473,9 @@ async fn handle_connection(
     let model_ctx = shared_model_ctx.read().await.clone();
 
     // Thread manager for multi-task conversations.
-    let mut thread_mgr = crate::tasks::ThreadManager::new();
-    // Create a default thread for the main conversation.
-    let default_thread_id = thread_mgr.create_thread("Main");
+    // Load from persistent storage or create new with default "Main" thread.
+    let threads_path = config.sessions_dir().join("threads.json");
+    let mut thread_mgr = crate::tasks::ThreadManager::load_or_default(&threads_path);
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -1179,6 +1179,8 @@ async fn handle_connection(
                                 send_frame(&mut writer, &frame).await?;
                                 // Send updated thread list
                                 send_threads_update(&mut writer, &thread_mgr).await?;
+                                // Persist thread state
+                                let _ = thread_mgr.save_to_file(&threads_path);
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 debug!("Thread switch request: {}", thread_id);
@@ -1256,6 +1258,8 @@ async fn handle_connection(
                                     send_frame(&mut writer, &frame).await?;
                                     // Send updated thread list
                                     send_threads_update(&mut writer, &thread_mgr).await?;
+                                    // Persist thread state (includes compaction summary)
+                                    let _ = thread_mgr.save_to_file(&threads_path);
                                 } else {
                                     let frame = ServerFrame {
                                         frame_type: ServerFrameType::Error,
@@ -1277,6 +1281,8 @@ async fn handle_connection(
                                 thread_mgr.remove(task_id);
                                 // Send updated thread list
                                 send_threads_update(&mut writer, &thread_mgr).await?;
+                                // Persist thread state
+                                let _ = thread_mgr.save_to_file(&threads_path);
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
@@ -1311,6 +1317,9 @@ async fn handle_connection(
 
     // Clean up reader task
     reader_handle.abort();
+
+    // Persist thread state on disconnect
+    let _ = thread_mgr.save_to_file(&threads_path);
 
     Ok(())
 }
