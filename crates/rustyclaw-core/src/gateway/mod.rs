@@ -433,6 +433,8 @@ where
         .map(|t| protocol::ThreadInfoDto {
             id: t.id.0,
             label: t.label.clone(),
+            description: t.description.clone(),
+            status: t.status.as_ref().map(|s| format!("{:?}", s)),
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             has_summary: t.has_summary,

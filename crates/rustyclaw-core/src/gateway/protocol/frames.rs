@@ -414,11 +414,17 @@ pub struct TaskInfoDto {
     pub is_foreground: bool,
 }
 
-/// DTO for thread info in updates.
+/// DTO for thread info in updates (unified tasks + threads).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadInfoDto {
     pub id: u64,
     pub label: String,
+    /// Description (for spawned tasks)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Task status (None = simple thread, Some = spawned task)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<String>,
     pub is_foreground: bool,
     pub message_count: usize,
     pub has_summary: bool,

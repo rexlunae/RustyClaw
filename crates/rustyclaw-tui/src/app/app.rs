@@ -80,11 +80,7 @@ pub(crate) enum GwEvent {
     },
     /// A secrets mutation succeeded — re-fetch the list from the gateway
     RefreshSecrets,
-    /// Task list update from gateway
-    TasksUpdate {
-        tasks: Vec<crate::action::TaskInfo>,
-    },
-    /// Thread list update from gateway
+    /// Thread list update from gateway (unified tasks + threads)
     ThreadsUpdate {
         threads: Vec<crate::action::ThreadInfo>,
         foreground_id: Option<u64>,
@@ -839,9 +835,6 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         Action::UserPromptRequest(prompt) => Some(GwEvent::UserPromptRequest(prompt.clone())),
 
         // ── Tasks ───────────────────────────────────────────────────────
-        Action::TasksUpdate(tasks) => Some(GwEvent::TasksUpdate {
-            tasks: tasks.clone(),
-        }),
 
         // ── Threads ─────────────────────────────────────────────────────
         Action::ThreadsUpdate {
@@ -1089,10 +1082,7 @@ mod tui_component {
             hooks.use_state(|| None);
         let mut user_prompt_selected = hooks.use_state(|| 0usize);
 
-        // ── Task state ───────────────────────────────────────────────────
-        let mut tasks: State<Vec<crate::action::TaskInfo>> = hooks.use_state(Vec::new);
-
-        // ── Thread state ─────────────────────────────────────────────────
+        // ── Thread state (unified tasks + threads) ───────────────────────
         let mut threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
         let mut sidebar_focused = hooks.use_state(|| false);
         let mut sidebar_selected = hooks.use_state(|| 0usize);
@@ -1422,9 +1412,6 @@ mod tui_component {
                                                 let _ = tx.send(UserInput::RefreshSecrets);
                                             }
                                         }
-                                    }
-                                    GwEvent::TasksUpdate { tasks: task_list } => {
-                                        tasks.set(task_list);
                                     }
                                     GwEvent::ThreadsUpdate {
                                         threads: thread_list,
@@ -2254,7 +2241,6 @@ mod tui_component {
                 task_text: if streaming.get() { "Streaming…".to_string() } else { "Idle".to_string() },
                 streaming: streaming.get(),
                 elapsed: elapsed.to_string(),
-                tasks: tasks.read().clone(),
                 threads: threads.read().clone(),
                 sidebar_focused: sidebar_focused.get(),
                 sidebar_selected: sidebar_selected.get(),

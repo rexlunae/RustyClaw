@@ -2,8 +2,14 @@
 //!
 //! Each thread has its own conversation history that compacts when the user
 //! switches away, with summaries merged into global context.
+//!
+//! Threads unify two concepts:
+//! - Simple conversation threads (user-created via /thread new)
+//! - Spawned sub-agent tasks (created via sessions_spawn)
+//!
+//! Both share the same UI representation in the sidebar.
 
-use super::model::{Task, TaskId, TaskKind, TaskStatus};
+use super::model::{TaskId, TaskStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -49,6 +55,14 @@ pub struct TaskThread {
     /// User-provided label for this thread
     pub label: String,
 
+    /// Optional description (for spawned tasks)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+
+    /// Task status (for spawned tasks, None = simple thread)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub status: Option<TaskStatus>,
+
     /// Full conversation history (compacted when switching away)
     pub messages: Vec<ThreadMessage>,
 
@@ -78,6 +92,8 @@ impl TaskThread {
         Self {
             task_id: TaskId::new(),
             label: label.into(),
+            description: None,
+            status: None,
             messages: Vec::new(),
             compact_summary: None,
             is_foreground: true,
@@ -86,6 +102,17 @@ impl TaskThread {
             model: None,
             share_context: true,
         }
+    }
+
+    /// Create a new thread for a spawned task.
+    pub fn new_task(label: impl Into<String>, description: impl Into<String>) -> Self {
+        let mut thread = Self::new(label);
+        thread.description = Some(description.into());
+        thread.status = Some(TaskStatus::Running {
+            progress: None,
+            message: None,
+        });
+        thread
     }
 
     /// Add a message to the thread.
@@ -353,6 +380,8 @@ impl ThreadManager {
             .map(|t| ThreadInfo {
                 id: t.task_id,
                 label: t.label.clone(),
+                description: t.description.clone(),
+                status: t.status.clone(),
                 is_foreground: t.is_foreground,
                 message_count: t.messages.len(),
                 has_summary: t.compact_summary.is_some(),
@@ -361,11 +390,15 @@ impl ThreadManager {
     }
 }
 
-/// Summary info about a thread for display.
+/// Summary info about a thread for display (unified tasks + threads).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadInfo {
     pub id: TaskId,
     pub label: String,
+    /// Description (for spawned tasks)
+    pub description: Option<String>,
+    /// Task status (None = simple thread, Some = spawned task)
+    pub status: Option<TaskStatus>,
     pub is_foreground: bool,
     pub message_count: usize,
     pub has_summary: bool,

@@ -211,9 +211,7 @@ pub enum Action {
     UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
     /// User responded to a structured prompt
     UserPromptResponse(rustyclaw_core::user_prompt_types::UserPromptResponse),
-    /// Gateway sent a tasks update
-    TasksUpdate(Vec<TaskInfo>),
-    /// Gateway sent a threads update
+    /// Gateway sent a threads update (unified tasks + threads)
     ThreadsUpdate {
         threads: Vec<ThreadInfo>,
         foreground_id: Option<u64>,
@@ -231,22 +229,19 @@ pub enum Action {
     Noop,
 }
 
-/// Task info for TUI display.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct TaskInfo {
-    pub id: u64,
-    pub label: String,
-    pub description: Option<String>,
-    pub status: String,
-    pub is_foreground: bool,
-}
-
-/// Thread info for TUI display.
+/// Thread/task info for TUI display (unified).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ThreadInfo {
     pub id: u64,
     pub label: String,
+    /// Description (for spawned tasks)
+    pub description: Option<String>,
+    /// Task status (None = simple thread, Some = spawned task)
+    pub status: Option<String>,
     pub is_foreground: bool,
     pub message_count: usize,
     pub has_summary: bool,
 }
+
+/// Alias for backward compatibility
+pub type TaskInfo = ThreadInfo;

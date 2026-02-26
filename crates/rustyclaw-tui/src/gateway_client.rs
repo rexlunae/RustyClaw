@@ -227,18 +227,10 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             prompt.id = id.clone();
             FrameAction::just_action(Action::UserPromptRequest(prompt))
         }
-        ServerPayload::TasksUpdate { tasks } => FrameAction::just_action(Action::TasksUpdate(
-            tasks
-                .iter()
-                .map(|t| crate::action::TaskInfo {
-                    id: t.id,
-                    label: t.label.clone(),
-                    description: t.description.clone(),
-                    status: t.status.clone(),
-                    is_foreground: t.is_foreground,
-                })
-                .collect(),
-        )),
+        ServerPayload::TasksUpdate { tasks: _ } => {
+            // Legacy — tasks are now unified with threads
+            FrameAction::none()
+        }
         ServerPayload::ThreadsUpdate {
             threads,
             foreground_id,
@@ -248,6 +240,8 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
                 .map(|t| crate::action::ThreadInfo {
                     id: t.id,
                     label: t.label.clone(),
+                    description: t.description.clone(),
+                    status: t.status.clone(),
                     is_foreground: t.is_foreground,
                     message_count: t.message_count,
                     has_summary: t.has_summary,
