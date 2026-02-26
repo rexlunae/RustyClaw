@@ -1,51 +1,28 @@
-[package]
-name = "rustyclaw"
-version = "0.1.33"
+[workspace]
+members = [
+    "crates/rustyclaw-core",
+    "crates/rustyclaw-cli",
+    "crates/rustyclaw-tui",
+]
+resolver = "3"
+
+[workspace.package]
+version = "0.2.0"
 edition = "2024"
 authors = ["Erica Stith <erica@example.com>"]
-description = "A lightweight, secure agentic AI assistant runtime with OpenClaw compatibility"
 license = "MIT"
-readme = "README.md"
 homepage = "https://github.com/rexlunae/RustyClaw"
 repository = "https://github.com/rexlunae/RustyClaw"
-documentation = "https://github.com/rexlunae/RustyClaw#readme"
-keywords = ["ai", "agent", "llm", "openclaw", "automation"]
-categories = ["command-line-utilities", "development-tools", "text-processing"]
-default-run = "rustyclaw"
 rust-version = "1.85"
-exclude = [
-    ".github/*",
-    "tests/*",
-    "*.md",
-    "!README.md",
-]
 
-[badges]
-maintenance = { status = "actively-developed" }
-
-[features]
-default = ["tui", "web-tools"]
-tui = ["dep:ratatui", "dep:crossterm", "dep:tui-markdown", "dep:tui-input"]
-web-tools = ["dep:scraper", "dep:html2md"]
-matrix = ["dep:matrix-sdk"]
-browser = ["dep:chromiumoxide"]
-# Publishable feature sets
-all-messengers = ["matrix"]
-full = ["tui", "web-tools", "matrix", "browser"]
-
-# Signal support is temporarily disabled for crates.io publishing.
-# presage and presage-store-sqlite require building from git source.
-# See BUILDING.md for instructions on building with Signal support.
-# signal = ["dep:presage", "dep:presage-store-sqlite"]
-
-[lints.rust]
+[workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal"))'] }
 
-[dependencies]
-# TUI dependencies (optional — disable with --no-default-features for headless builds)
-ratatui = { version = "0.30", optional = true }
-crossterm = { version = "0.29", features = ["event-stream"], optional = true }
-tui-markdown = { version = "0.3", optional = true }
+# ── Shared dependency versions ───────────────────────────────────────────────
+[workspace.dependencies]
+# Internal crates
+rustyclaw-core = { path = "crates/rustyclaw-core", version = "0.2.0" }
+rustyclaw-tui = { path = "crates/rustyclaw-tui", version = "0.2.0" }
 
 # Configuration and serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -61,12 +38,12 @@ thiserror = "2.0"
 aho-corasick = "1.1"
 
 # Random number generation (for retry jitter)
-rand = "0.9"
+rand = "0.10"
 
 # Secrets management (encrypted on-disk vault)
 securestore = "0.100.0"
 
-# OpenSSL with vendored feature for cross-compilation (used by securestore + reqwest native-tls)
+# OpenSSL with vendored feature for cross-compilation
 openssl-sys = { version = "0.9", features = ["vendored"] }
 
 # TOTP 2FA support
@@ -83,7 +60,7 @@ dirs = "6.0"
 shellexpand = "3.1"
 directories = "6.0"
 
-# Async runtime (for messenger support)
+# Async runtime
 tokio = { version = "1.35", features = ["full"] }
 tokio-util = "0.7"
 async-trait = "0.1"
@@ -92,38 +69,36 @@ futures-util = "0.3"
 tokio-tungstenite = { version = "0.28", features = ["rustls-tls-webpki-roots"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
-# Note: 0.13+ renamed rustls-tls to rustls
 reqwest = { version = "0.13", features = ["json", "rustls", "stream", "blocking", "form"], default-features = false }
 url = "2.5"
-tui-input = { version = "0.15", optional = true }
-strum = { version = "0.27", features = ["derive"] }
+strum = { version = "0.28", features = ["derive"] }
 sysinfo = "0.38"
 which = "8"
 glob = "0.3"
 walkdir = "2"
 
-# HTML parsing and text extraction (optional — disable with --no-default-features)
-scraper = { version = "0.25", optional = true }
-html2md = { version = "0.2", optional = true }
+# HTML parsing and text extraction
+scraper = { version = "0.25" }
+html2md = { version = "0.2" }
 urlencoding = "2.1"
 
 # Time handling
 chrono = "0.4"
-zip = "8.0"
+zip = "8.1"
 
 # Tracing for structured logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Binary serialization for gateway protocol
-bincode = { version = "2.0", features = ["serde"] }
+bincode = { version = "2.0.0-rc.3", features = ["serde"] }
 
 # Base64 encoding for image data
 base64 = "0.22"
 
 # Security validation
 regex = "1.10"
-ipnetwork = "0.20"
+ipnetwork = "0.21"
 
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"
@@ -134,42 +109,37 @@ indicatif = "0.18"
 unicode-width = "0.2"
 rpassword = "7"
 
-# Matrix messenger support (optional)
-# Features: e2e-encryption (default), sqlite (persistence), rustls-tls (TLS)
-# rustls-tls is required when default-features = false
-matrix-sdk = { version = "0.10", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"], optional = true }
+# TUI dependencies
+iocraft = "0.7"
+smol = "2"
+crossterm = "0.28"
 
-# Signal messenger support - DISABLED for crates.io publishing
-# Signal requires presage from git which isn't compatible with crates.io.
-# To build with Signal, clone the repo and use Cargo.signal.toml
-# presage = { version = "0.3", optional = true }
-# presage-store-sqlite = { version = "0.3", optional = true }
+# Matrix messenger support (0.16+ for libsqlite3-sys 0.35 compatibility with wa-rs)
+# NOTE: matrix-sdk 0.16 can hit Rust recursion limits on some compilers.
+# If you get "queries overflow the depth limit", try: RUSTFLAGS="--cfg recursion_limit=\"512\"" cargo build
+# Or disable the matrix feature: cargo build --no-default-features
+matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
 
-# Browser automation (optional)
-chromiumoxide = { version = "0.8", default-features = false, features = ["tokio-runtime"], optional = true }
+# WhatsApp Web support
+wa-rs = "0.2"
+wa-rs-sqlite-storage = "0.2"
+wa-rs-tokio-transport = "0.2"
+wa-rs-ureq-http = "0.2"
 
-# Unix process management
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# Browser automation
+chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }
 
-# Landlock sandbox (Linux 5.13+ kernel)
-[target.'cfg(target_os = "linux")'.dependencies]
-landlock = "0.4"
+# MCP (Model Context Protocol) client support
+rmcp = { version = "0.16", features = ["client", "transport-child-process"] }
+
+# Schema generation for MCP
+schemars = "1.0.0-alpha.17"
 
 # Patches for crypto compatibility
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
 
-[dev-dependencies]
-tempfile = "3"
-# Integration test dependencies (tokio-tungstenite, futures-util, which already in main deps)
-axum = "0.8"
-
 [profile.release]
 lto = true
 codegen-units = 1
 strip = true
-
-[[bin]]
-name = "rustyclaw"
-path = "src/main.rs"

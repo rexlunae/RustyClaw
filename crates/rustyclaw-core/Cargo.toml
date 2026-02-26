@@ -1,0 +1,103 @@
+[package]
+name = "rustyclaw-core"
+description = "Core library for RustyClaw — config, gateway protocol, secrets, tools, and shared types"
+readme = "../../README.md"
+keywords = ["ai", "agent", "llm", "openclaw", "automation"]
+categories = ["development-tools", "text-processing"]
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["web-tools"]
+web-tools = ["dep:scraper", "dep:html2md"]
+browser = ["dep:chromiumoxide"]
+mcp = ["dep:rmcp", "dep:schemars"]
+matrix = ["dep:matrix-sdk"]
+whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", "dep:wa-rs-ureq-http"]
+all-messengers = ["matrix", "whatsapp"]
+full = ["web-tools", "browser", "mcp", "all-messengers"]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+toml.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+rand.workspace = true
+securestore.workspace = true
+openssl-sys.workspace = true
+totp-rs.workspace = true
+qrcode.workspace = true
+ssh-key.workspace = true
+dirs.workspace = true
+shellexpand.workspace = true
+directories.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+clap.workspace = true
+futures-util.workspace = true
+tokio-tungstenite.workspace = true
+tokio-rustls.workspace = true
+rustls-pemfile.workspace = true
+reqwest.workspace = true
+url.workspace = true
+strum.workspace = true
+sysinfo.workspace = true
+which.workspace = true
+glob.workspace = true
+walkdir.workspace = true
+urlencoding.workspace = true
+chrono.workspace = true
+zip.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+bincode.workspace = true
+base64.workspace = true
+regex.workspace = true
+ipnetwork.workspace = true
+httpdate.workspace = true
+colored.workspace = true
+indicatif.workspace = true
+unicode-width.workspace = true
+rpassword.workspace = true
+
+# Fast multi-pattern matching (for leak detection)
+aho-corasick.workspace = true
+
+# Optional (browser only)
+scraper = { workspace = true, optional = true }
+html2md = { workspace = true, optional = true }
+chromiumoxide = { workspace = true, optional = true }
+
+# MCP (Model Context Protocol) client support
+rmcp = { workspace = true, optional = true }
+schemars = { workspace = true, optional = true }
+
+# Messengers (optional - matrix can hit recursion limits on some compilers)
+matrix-sdk = { workspace = true, optional = true }
+wa-rs = { workspace = true, optional = true }
+wa-rs-sqlite-storage = { workspace = true, optional = true }
+wa-rs-tokio-transport = { workspace = true, optional = true }
+wa-rs-ureq-http = { workspace = true, optional = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Pipes", "Win32_Foundation"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+landlock = "0.4"
+
+[dev-dependencies]
+tempfile = "3"
