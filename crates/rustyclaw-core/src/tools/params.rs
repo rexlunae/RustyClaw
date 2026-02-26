@@ -1061,6 +1061,17 @@ pub fn skill_create_params() -> Vec<ToolParam> {
     ]
 }
 
+// ── Thread tools ────────────────────────────────────────────────────────────
+
+pub fn thread_describe_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "description".into(),
+        description: "Description of what this thread is about or currently doing.".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
 // ── System tools ────────────────────────────────────────────────────────────
 
 pub fn disk_usage_params() -> Vec<ToolParam> {

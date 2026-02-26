@@ -1242,6 +1242,7 @@ async fn handle_connection(
                                     &workspace_dir,
                                     &vault,
                                     &skill_mgr,
+                                    &task_mgr,
                                     &tool_cancel,
                                     &shared_config,
                                     &approval_rx,
@@ -1724,6 +1725,7 @@ async fn dispatch_text_message(
     workspace_dir: &std::path::Path,
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
+    task_mgr: &SharedTaskManager,
     tool_cancel: &ToolCancelFlag,
     shared_config: &SharedConfig,
     approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
@@ -2154,7 +2156,20 @@ async fn dispatch_text_message(
             };
 
             // Sanitize the output (truncate large outputs, warn about garbage).
-            let output = tools::sanitize_tool_output(output);
+            let mut output = tools::sanitize_tool_output(output);
+
+            // Intercept thread update markers and apply them
+            if output.starts_with(tools::THREAD_UPDATE_MARKER) {
+                let json_str = &output[tools::THREAD_UPDATE_MARKER.len()..];
+                if let Ok(update) = serde_json::from_str::<serde_json::Value>(json_str) {
+                    if let Some(description) = update.get("description").and_then(|v| v.as_str()) {
+                        thread_mgr.set_foreground_description(description);
+                        output = format!("Thread description set to: {}", description);
+                        // Send updated thread list to client
+                        send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                    }
+                }
+            }
 
             // Notify the client about the result.
             protocol::server::send_tool_result(writer, &tc.id, &tc.name, &output, is_error).await?;
