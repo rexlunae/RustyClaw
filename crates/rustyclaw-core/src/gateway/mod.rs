@@ -8,6 +8,7 @@
 mod auth;
 pub mod canvas_handler;
 mod command_wrapper;
+pub mod concurrent;
 pub mod csrf;
 pub mod health;
 mod helpers;
@@ -767,6 +768,12 @@ async fn handle_connection(
     )>(4);
     let user_prompt_rx = Arc::new(Mutex::new(user_prompt_rx));
 
+    // Channel for model task responses (concurrent execution).
+    let (model_task_tx, mut model_task_rx) = concurrent::channel();
+    
+    // Track active model tasks per thread.
+    let mut active_tasks = concurrent::ActiveTasks::new();
+
     let reader_cancel = cancel.clone();
     let reader_tool_cancel = tool_cancel.clone();
     let reader_handle = tokio::spawn(async move {
@@ -1372,6 +1379,51 @@ async fn handle_connection(
                     }
                     Message::Pong(_) => {}
                     _ => {}
+                }
+            }
+            // Handle messages from spawned model tasks
+            model_msg = model_task_rx.recv() => {
+                if let Some(task_msg) = model_msg {
+                    match task_msg {
+                        concurrent::ModelTaskMessage::RawMessage(msg) => {
+                            // Forward raw WebSocket message to client
+                            writer.send(msg).await?;
+                        }
+                        concurrent::ModelTaskMessage::Done { thread_id, response } => {
+                            // Task completed - remove from active tasks
+                            active_tasks.remove(&thread_id);
+                            
+                            // Record assistant response in thread history if provided
+                            if let Some(text) = response {
+                                if let Some(thread) = thread_mgr.get_mut(thread_id) {
+                                    thread.add_message(crate::tasks::MessageRole::Assistant, &text);
+                                }
+                            }
+                            
+                            // Send updated thread list (status may have changed)
+                            send_threads_update(&mut writer, &thread_mgr).await?;
+                            
+                            // Persist thread state
+                            let _ = thread_mgr.save_to_file(&threads_path);
+                        }
+                        concurrent::ModelTaskMessage::Error { thread_id, message } => {
+                            // Task failed - remove from active tasks
+                            active_tasks.remove(&thread_id);
+                            
+                            // Send error frame
+                            let error_frame = ServerFrame {
+                                frame_type: ServerFrameType::Error,
+                                payload: ServerPayload::Error {
+                                    ok: false,
+                                    message,
+                                },
+                            };
+                            send_frame(&mut writer, &error_frame).await?;
+                            
+                            // Send updated thread list
+                            send_threads_update(&mut writer, &thread_mgr).await?;
+                        }
+                    }
                 }
             }
         }
