@@ -1,7 +1,10 @@
 // ── Sidebar ─────────────────────────────────────────────────────────────────
 
-use iocraft::prelude::*;
 use crate::theme;
+use iocraft::prelude::*;
+
+/// Braille spinner frames for smooth animation.
+const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
 
 #[derive(Default, Props)]
 pub struct SidebarProps {
@@ -9,6 +12,7 @@ pub struct SidebarProps {
     pub task_text: String,
     pub streaming: bool,
     pub elapsed: String,
+    pub spinner_tick: usize,
 }
 
 #[component]
@@ -36,9 +40,10 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
             }
             View(margin_top: 1) {
                 #(if props.streaming {
+                    let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
                     element! {
                         View(flex_direction: FlexDirection::Row) {
-                            Text(content: "⠋ ", color: theme::ACCENT)
+                            Text(content: format!("{} ", spinner), color: theme::ACCENT)
                             Text(content: format!("Streaming {}", props.elapsed), color: theme::TEXT_DIM)
                         }
                     }.into_any()

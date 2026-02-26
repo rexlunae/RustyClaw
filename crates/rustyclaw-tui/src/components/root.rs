@@ -155,6 +155,9 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     Messages(
                         messages: props.messages.clone(),
                         scroll_offset: props.scroll_offset,
+                        streaming: props.streaming,
+                        spinner_tick: props.spinner_tick,
+                        elapsed: props.elapsed.clone(),
                     )
                     CommandMenu(
                         completions: props.command_completions.clone(),
@@ -176,6 +179,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     task_text: props.task_text.clone(),
                     streaming: props.streaming,
                     elapsed: props.elapsed.clone(),
+                    spinner_tick: props.spinner_tick,
                 )
             }
 

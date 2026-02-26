@@ -7,18 +7,30 @@
 // Layout: overflow: Hidden on an outer container, Position::Absolute with
 // `bottom: -(scroll_offset)` on an inner container.
 
-use iocraft::prelude::*;
 use crate::components::message_bubble::MessageBubble;
+use crate::theme;
 use crate::types::DisplayMessage;
+use iocraft::prelude::*;
+
+/// Braille spinner frames for smooth animation.
+const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
 
 #[derive(Default, Props)]
 pub struct MessagesProps {
     pub messages: Vec<DisplayMessage>,
     pub scroll_offset: i32,
+    /// Whether the model is currently streaming/thinking.
+    pub streaming: bool,
+    /// Tick counter for spinner animation.
+    pub spinner_tick: usize,
+    /// Elapsed time string (e.g., "2.3s").
+    pub elapsed: String,
 }
 
 #[component]
 pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
+    let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
+
     element! {
         View(
             flex_direction: FlexDirection::Column,
@@ -41,6 +53,28 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                         )
                     }
                 }))
+
+                // Streaming indicator at the bottom
+                #(if props.streaming {
+                    element! {
+                        View(
+                            flex_direction: FlexDirection::Row,
+                            padding_left: 2,
+                            padding_top: 1,
+                        ) {
+                            Text(
+                                content: format!("{} ", spinner),
+                                color: theme::ACCENT,
+                            )
+                            Text(
+                                content: format!("Thinking… {}", props.elapsed),
+                                color: theme::MUTED,
+                            )
+                        }
+                    }.into_any()
+                } else {
+                    element! { View() }.into_any()
+                })
             }
         }
     }
