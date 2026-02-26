@@ -552,6 +552,9 @@ async fn handle_connection(
     // Load from persistent storage or create new with default "Main" thread.
     let threads_path = config.sessions_dir().join("threads.json");
     let mut thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
+    
+    // Subscribe to thread events for push-based sidebar updates
+    let mut thread_events_rx = thread_mgr.subscribe();
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -1496,6 +1499,15 @@ async fn handle_connection(
                             // Send updated thread list
                             send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                         }
+                    }
+                }
+            }
+            // Handle thread events for push-based sidebar updates
+            thread_event = thread_events_rx.recv() => {
+                if let Ok(event) = thread_event {
+                    // Only send updates for events that affect sidebar display
+                    if event.triggers_sidebar_update() {
+                        send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
                     }
                 }
             }
