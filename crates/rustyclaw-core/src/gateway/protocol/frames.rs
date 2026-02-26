@@ -48,6 +48,14 @@ pub enum ClientFrameType {
     UserPromptResponse = 18,
     /// Request current task list.
     TasksRequest = 19,
+    /// Create a new thread.
+    ThreadCreate = 20,
+    /// Switch to a different thread.
+    ThreadSwitch = 21,
+    /// Request thread list.
+    ThreadList = 22,
+    /// Close/delete a thread.
+    ThreadClose = 23,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -118,6 +126,12 @@ pub enum ServerFrameType {
     UserPromptRequest = 30,
     /// Task list update.
     TasksUpdate = 31,
+    /// Thread list update.
+    ThreadsUpdate = 32,
+    /// Thread created result.
+    ThreadCreated = 33,
+    /// Thread switched result.
+    ThreadSwitched = 34,
 }
 
 /// Status frame sub-types.
@@ -214,6 +228,20 @@ pub enum ClientPayload {
     /// Request current task list (optionally filtered by session).
     TasksRequest {
         session: Option<String>,
+    },
+    /// Create a new thread.
+    ThreadCreate {
+        label: String,
+    },
+    /// Switch to a different thread.
+    ThreadSwitch {
+        thread_id: u64,
+    },
+    /// Request list of threads.
+    ThreadList,
+    /// Close/delete a thread.
+    ThreadClose {
+        thread_id: u64,
     },
 }
 
@@ -354,6 +382,19 @@ pub enum ServerPayload {
     TasksUpdate {
         tasks: Vec<TaskInfoDto>,
     },
+    ThreadsUpdate {
+        threads: Vec<ThreadInfoDto>,
+        foreground_id: Option<u64>,
+    },
+    ThreadCreated {
+        thread_id: u64,
+        label: String,
+    },
+    ThreadSwitched {
+        thread_id: u64,
+        /// Optional summary of the thread being switched to
+        context_summary: Option<String>,
+    },
 }
 
 /// DTO for task info in updates.
@@ -364,6 +405,16 @@ pub struct TaskInfoDto {
     pub description: Option<String>,
     pub status: String,
     pub is_foreground: bool,
+}
+
+/// DTO for thread info in updates.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadInfoDto {
+    pub id: u64,
+    pub label: String,
+    pub is_foreground: bool,
+    pub message_count: usize,
+    pub has_summary: bool,
 }
 
 /// DTO for secret entries in list results.

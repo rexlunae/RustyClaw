@@ -16,5 +16,5 @@ pub mod types;
 
 pub use frames::{
     ClientFrame, ClientFrameType, ClientPayload, SecretEntryDto, ServerFrame, ServerFrameType,
-    ServerPayload, StatusType, TaskInfoDto, deserialize_frame, serialize_frame,
+    ServerPayload, StatusType, TaskInfoDto, ThreadInfoDto, deserialize_frame, serialize_frame,
 };

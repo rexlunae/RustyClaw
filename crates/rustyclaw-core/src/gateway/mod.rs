@@ -1117,6 +1117,55 @@ async fn handle_connection(
                                 };
                                 send_frame(&mut writer, &frame).await?;
                             }
+                            ClientPayload::ThreadCreate { label } => {
+                                // TODO: Implement thread creation
+                                debug!("Thread create request: {}", label);
+                                let frame = ServerFrame {
+                                    frame_type: ServerFrameType::ThreadCreated,
+                                    payload: ServerPayload::ThreadCreated {
+                                        thread_id: 1, // Placeholder
+                                        label,
+                                    },
+                                };
+                                send_frame(&mut writer, &frame).await?;
+                            }
+                            ClientPayload::ThreadSwitch { thread_id } => {
+                                // TODO: Implement thread switching
+                                debug!("Thread switch request: {}", thread_id);
+                                let frame = ServerFrame {
+                                    frame_type: ServerFrameType::ThreadSwitched,
+                                    payload: ServerPayload::ThreadSwitched {
+                                        thread_id,
+                                        context_summary: None,
+                                    },
+                                };
+                                send_frame(&mut writer, &frame).await?;
+                            }
+                            ClientPayload::ThreadList => {
+                                // TODO: Implement thread listing
+                                debug!("Thread list request");
+                                let frame = ServerFrame {
+                                    frame_type: ServerFrameType::ThreadsUpdate,
+                                    payload: ServerPayload::ThreadsUpdate {
+                                        threads: vec![],
+                                        foreground_id: None,
+                                    },
+                                };
+                                send_frame(&mut writer, &frame).await?;
+                            }
+                            ClientPayload::ThreadClose { thread_id } => {
+                                // TODO: Implement thread close
+                                debug!("Thread close request: {}", thread_id);
+                                // Send updated thread list
+                                let frame = ServerFrame {
+                                    frame_type: ServerFrameType::ThreadsUpdate,
+                                    payload: ServerPayload::ThreadsUpdate {
+                                        threads: vec![],
+                                        foreground_id: None,
+                                    },
+                                };
+                                send_frame(&mut writer, &frame).await?;
+                            }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.

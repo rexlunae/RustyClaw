@@ -239,6 +239,24 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
                 })
                 .collect(),
         )),
+        ServerPayload::ThreadsUpdate {
+            threads,
+            foreground_id,
+        } => {
+            // TODO: Handle thread list updates in TUI
+            FrameAction::none()
+        }
+        ServerPayload::ThreadCreated { thread_id, label } => {
+            // TODO: Handle thread creation confirmation
+            FrameAction::none()
+        }
+        ServerPayload::ThreadSwitched {
+            thread_id,
+            context_summary,
+        } => {
+            // TODO: Handle thread switch confirmation
+            FrameAction::none()
+        }
         ServerPayload::Empty => FrameAction::none(),
     }
 }

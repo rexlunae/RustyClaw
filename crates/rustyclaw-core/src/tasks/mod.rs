@@ -13,10 +13,17 @@
 //! - MCP tool calls
 //! - Long-running tools (browser, web_fetch, etc.)
 
-mod model;
-mod manager;
 mod display;
+mod manager;
+mod model;
+mod thread;
 
-pub use model::{Task, TaskId, TaskStatus, TaskKind, TaskProgress};
-pub use manager::{TaskManager, TaskHandle, TaskEvent};
-pub use display::{TaskIcon, TaskIndicator, format_task_status, format_task_indicators, format_task_icons};
+pub use display::{
+    TaskIcon, TaskIndicator, format_task_icons, format_task_indicators, format_task_status,
+};
+pub use manager::{TaskEvent, TaskHandle, TaskManager};
+pub use model::{Task, TaskId, TaskKind, TaskProgress, TaskStatus};
+pub use thread::{
+    MessageRole, SharedThreadManager, TaskThread, ThreadInfo, ThreadManager, ThreadMessage,
+    ToolInteraction,
+};
