@@ -95,6 +95,7 @@ base64 = "0.22"
 
 # Security validation
 regex = "1.10"
+aho-corasick = "1.1"
 ipnetwork = "0.21"
 
 # HTTP date parsing (for Set-Cookie expires)
