@@ -4875,6 +4875,7 @@ dependencies = [
 name = "rustyclaw-core"
 version = "0.2.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
