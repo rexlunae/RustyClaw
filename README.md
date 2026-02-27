@@ -373,10 +373,11 @@ Heartbeat system for proactive monitoring without explicit schedules.
 RustyClaw's security model is documented in detail:
 
 - **[SECURITY.md](docs/SECURITY.md)** — Full security architecture
-- **[THREAT_MODEL.md](docs/THREAT_MODEL.md)** — Known threats and mitigations
-- **[AUDIT.md](docs/AUDIT.md)** — Audit log and findings
+- **[DEPLOYMENT.md](docs/DEPLOYMENT.md)** — Production deployment guide
+- **[SANDBOX.md](docs/SANDBOX.md)** — Sandbox configuration
+- **[CLIENT_SPEC.md](docs/CLIENT_SPEC.md)** — WebSocket protocol for custom clients
 
-t### Quick Overview
+### Quick Overview
 
 ```
 User Input
