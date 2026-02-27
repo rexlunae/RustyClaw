@@ -335,6 +335,7 @@ async fn main() -> Result<()> {
             shared_skills,
             None,
             None,
+            None, // observer
             cancel,
         )
         .await

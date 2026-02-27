@@ -38,6 +38,7 @@ pub use types::{
 pub use messenger_handler::{SharedMessengerManager, create_messenger_manager, run_messenger_loop};
 
 use crate::config::Config;
+use crate::observability::ObserverEvent;
 use crate::providers as crate_providers;
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
@@ -90,6 +91,9 @@ pub type SharedTaskManager = Arc<crate::tasks::TaskManager>;
 
 /// Shared model registry for model management.
 pub type SharedModelRegistry = crate::models::SharedModelRegistry;
+
+/// Shared observer for recording telemetry events.
+pub type SharedObserver = Arc<dyn crate::observability::Observer>;
 
 // Re-export protocol helpers for external use
 pub use protocol::server::{
@@ -184,6 +188,7 @@ pub async fn run_gateway(
     skill_mgr: SharedSkillManager,
     task_mgr: Option<SharedTaskManager>,
     model_registry: Option<SharedModelRegistry>,
+    observer: Option<SharedObserver>,
     cancel: CancellationToken,
 ) -> Result<()> {
     // Create task manager if not provided
@@ -386,6 +391,7 @@ pub async fn run_gateway(
                 let vault_clone = vault.clone();
                 let skill_clone = skill_mgr.clone();
                 let task_mgr_clone = task_mgr.clone();
+                let observer_clone = observer.clone();
                 let limiter_clone = rate_limiter.clone();
                 let child_cancel = cancel.child_token();
                 let tls = tls_acceptor.clone();
@@ -406,7 +412,7 @@ pub async fn run_gateway(
                     if let Err(err) = handle_connection(
                         boxed_stream, peer, shared_cfg, shared_ctx,
                         session_clone, vault_clone, skill_clone, task_mgr_clone,
-                        limiter_clone, child_cancel,
+                        observer_clone, limiter_clone, child_cancel,
                     ).await {
                         debug!(peer = %peer, error = %err, "Connection error");
                     }
@@ -534,6 +540,7 @@ async fn handle_connection(
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: SharedTaskManager,
+    observer: Option<SharedObserver>,
     rate_limiter: auth::RateLimiter,
     cancel: CancellationToken,
 ) -> Result<()> {
@@ -1246,6 +1253,7 @@ async fn handle_connection(
                                     &vault,
                                     &skill_mgr,
                                     &task_mgr,
+                                    observer.as_ref(),
                                     &tool_cancel,
                                     &shared_config,
                                     &approval_rx,
@@ -1738,6 +1746,7 @@ async fn dispatch_text_message(
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
     task_mgr: &SharedTaskManager,
+    observer: Option<&SharedObserver>,
     tool_cancel: &ToolCancelFlag,
     shared_config: &SharedConfig,
     approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
@@ -1874,6 +1883,16 @@ async fn dispatch_text_message(
             }
         }
 
+        // Record LLM request event for observability
+        let request_start = std::time::Instant::now();
+        if let Some(obs) = observer {
+            obs.record_event(&ObserverEvent::LlmRequest {
+                provider: resolved.provider.clone(),
+                model: resolved.model.clone(),
+                messages_count: resolved.messages.len(),
+            });
+        }
+
         let result = if resolved.provider == "anthropic" {
             // Anthropic: use streaming mode with writer for real-time chunks
             providers::call_anthropic_with_tools(http, &resolved, Some(writer)).await
@@ -1882,6 +1901,24 @@ async fn dispatch_text_message(
         } else {
             providers::call_openai_with_tools(http, &resolved).await
         };
+
+        // Record LLM response event
+        let request_duration = request_start.elapsed();
+        let (success, error_msg) = match &result {
+            Ok(_) => (true, None),
+            Err(e) => (false, Some(e.to_string())),
+        };
+        if let Some(obs) = observer {
+            obs.record_event(&ObserverEvent::LlmResponse {
+                provider: resolved.provider.clone(),
+                model: resolved.model.clone(),
+                duration: request_duration,
+                success,
+                error_message: error_msg,
+                input_tokens: None,  // TODO: extract from response if available
+                output_tokens: None,
+            });
+        }
 
         let model_resp = match result {
             Ok(r) => r,
@@ -2044,6 +2081,14 @@ async fn dispatch_text_message(
         };
 
         for tc in &model_resp.tool_calls {
+            // Record tool call start event
+            let tool_start = std::time::Instant::now();
+            if let Some(obs) = observer {
+                obs.record_event(&ObserverEvent::ToolCallStart {
+                    tool: tc.name.clone(),
+                });
+            }
+
             // Stringify arguments once for the wire protocol (tool args are
             // inherently schemaless JSON from the LLM).
             let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
@@ -2185,6 +2230,15 @@ async fn dispatch_text_message(
 
             // Notify the client about the result.
             protocol::server::send_tool_result(writer, &tc.id, &tc.name, &output, is_error).await?;
+
+            // Record tool call completion event
+            if let Some(obs) = observer {
+                obs.record_event(&ObserverEvent::ToolCall {
+                    tool: tc.name.clone(),
+                    duration: tool_start.elapsed(),
+                    success: !is_error,
+                });
+            }
 
             tool_results.push(ToolCallResult {
                 id: tc.id.clone(),
