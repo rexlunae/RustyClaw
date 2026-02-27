@@ -270,6 +270,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "task_resume" => "Resume a paused task",
         "task_input" => "Send input to a task",
         "task_describe" => "Set task description (shown in sidebar)",
+        "thread_describe" => "Set conversation thread description (shown in sidebar)",
         "model_list" => "List available models with cost tiers",
         "model_enable" => "Enable a model for use",
         "model_disable" => "Disable a model",
@@ -391,6 +392,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &TASK_RESUME,
         &TASK_INPUT,
         &TASK_DESCRIBE,
+        &THREAD_DESCRIBE,
         &MODEL_LIST,
         &MODEL_ENABLE,
         &MODEL_DISABLE,
@@ -904,6 +906,35 @@ pub static TASK_DESCRIBE: ToolDef = ToolDef {
     execute: exec_task_describe,
 };
 
+// ── Thread tools ────────────────────────────────────────────────────────────
+
+/// Marker prefix for thread update commands in tool output.
+pub const THREAD_UPDATE_MARKER: &str = "🏷️THREAD_UPDATE:";
+
+pub static THREAD_DESCRIBE: ToolDef = ToolDef {
+    name: "thread_describe",
+    description: "Set a description for the current conversation thread. \
+                  This description is displayed in the sidebar and helps track what the thread is about. \
+                  Call this when starting a new task or when the thread's focus changes significantly.",
+    parameters: vec![],
+    execute: exec_thread_describe,
+};
+
+fn exec_thread_describe(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let description = args
+        .get("description")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: description")?;
+
+    // Return a marker that the gateway will intercept
+    let update = json!({
+        "action": "set_description",
+        "description": description,
+    });
+    
+    Ok(format!("{}{}", THREAD_UPDATE_MARKER, update))
+}
+
 // ── Model tools ─────────────────────────────────────────────────────────────
 
 pub static MODEL_LIST: ToolDef = ToolDef {
@@ -1279,6 +1310,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "task_resume" => task_tools::task_id_param(),
         "task_input" => task_tools::task_input_params(),
         "task_describe" => task_tools::task_describe_params(),
+        "thread_describe" => thread_describe_params(),
         "model_list" => model_tools::model_list_params(),
         "model_enable" => model_tools::model_id_param(),
         "model_disable" => model_tools::model_id_param(),

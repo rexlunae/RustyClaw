@@ -250,6 +250,13 @@ impl ThreadManager {
         self.foreground_id.and_then(|id| self.threads.get_mut(&id))
     }
 
+    /// Set the description of the foreground thread.
+    pub fn set_foreground_description(&mut self, description: &str) {
+        if let Some(thread) = self.foreground_mut() {
+            thread.description = Some(description.to_string());
+        }
+    }
+
     /// Switch to a different thread (returns the old foreground if any).
     pub fn switch_to(&mut self, id: TaskId) -> Option<TaskId> {
         if !self.threads.contains_key(&id) {

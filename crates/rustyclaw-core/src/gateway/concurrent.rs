@@ -10,7 +10,7 @@
 //! - The main loop selects between client messages and model responses
 //! - Thread switching is allowed while models are running
 
-use crate::tasks::TaskId;
+use crate::threads::ThreadId;
 use futures_util::Sink;
 use std::pin::Pin;
 use std::task::{Context, Poll};
@@ -26,14 +26,14 @@ pub enum ModelTaskMessage {
     /// The model task completed successfully.
     /// The main loop should update thread state.
     Done {
-        thread_id: TaskId,
+        thread_id: ThreadId,
         /// Final assistant response text to add to thread history
         response: Option<String>,
     },
     
     /// The model task failed with an error
     Error {
-        thread_id: TaskId,
+        thread_id: ThreadId,
         message: String,
     },
 }
@@ -55,11 +55,11 @@ pub fn channel() -> (ModelTaskTx, ModelTaskRx) {
 /// functions that expect a WebSocket writer.
 pub struct ChannelSink {
     tx: ModelTaskTx,
-    thread_id: TaskId,
+    thread_id: ThreadId,
 }
 
 impl ChannelSink {
-    pub fn new(tx: ModelTaskTx, thread_id: TaskId) -> Self {
+    pub fn new(tx: ModelTaskTx, thread_id: ThreadId) -> Self {
         Self { tx, thread_id }
     }
     
@@ -110,7 +110,7 @@ impl Sink<Message> for ChannelSink {
 #[derive(Debug, Default)]
 pub struct ActiveTasks {
     /// Map of thread ID to task handle (for cancellation)
-    tasks: std::collections::HashMap<TaskId, tokio::task::JoinHandle<()>>,
+    tasks: std::collections::HashMap<ThreadId, tokio::task::JoinHandle<()>>,
 }
 
 impl ActiveTasks {
@@ -120,19 +120,19 @@ impl ActiveTasks {
     
     /// Register a new task for a thread.
     /// If there's already a task for this thread, it will be aborted.
-    pub fn register(&mut self, thread_id: TaskId, handle: tokio::task::JoinHandle<()>) {
+    pub fn register(&mut self, thread_id: ThreadId, handle: tokio::task::JoinHandle<()>) {
         if let Some(old_handle) = self.tasks.insert(thread_id, handle) {
             old_handle.abort();
         }
     }
     
     /// Remove a task when it completes.
-    pub fn remove(&mut self, thread_id: &TaskId) {
+    pub fn remove(&mut self, thread_id: &ThreadId) {
         self.tasks.remove(thread_id);
     }
     
     /// Cancel a task for a specific thread.
-    pub fn cancel(&mut self, thread_id: &TaskId) -> bool {
+    pub fn cancel(&mut self, thread_id: &ThreadId) -> bool {
         if let Some(handle) = self.tasks.remove(thread_id) {
             handle.abort();
             true
@@ -142,12 +142,12 @@ impl ActiveTasks {
     }
     
     /// Check if a thread has an active task.
-    pub fn is_running(&self, thread_id: &TaskId) -> bool {
+    pub fn is_running(&self, thread_id: &ThreadId) -> bool {
         self.tasks.contains_key(thread_id)
     }
     
     /// Get IDs of all threads with active tasks.
-    pub fn running_threads(&self) -> Vec<TaskId> {
+    pub fn running_threads(&self) -> Vec<ThreadId> {
         self.tasks.keys().copied().collect()
     }
 }
