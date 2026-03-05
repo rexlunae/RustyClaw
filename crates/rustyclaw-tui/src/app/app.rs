@@ -217,15 +217,8 @@ impl App {
         let (user_tx, user_rx) = sync_mpsc::channel::<UserInput>();
 
         // ── Gather static info for the component ────────────────────────
-        let soul_name = self
-            .soul_manager
-            .get_content()
-            .and_then(|c: &str| {
-                c.lines()
-                    .find(|l: &&str| l.starts_with("# "))
-                    .map(|l: &str| l.trim_start_matches("# ").to_string())
-            })
-            .unwrap_or_else(|| "RustyClaw".to_string());
+        // Use the configured agent_name — no need to parse SOUL.md
+        let soul_name = self.config.agent_name.clone();
 
         let provider = self
             .config
