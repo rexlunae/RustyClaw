@@ -9,6 +9,8 @@ use rustyclaw_core::types::MessageRole;
 pub struct MessageBubbleProps {
     pub role: Option<MessageRole>,
     pub content: String,
+    /// Custom name to display for assistant messages (falls back to "Assistant").
+    pub assistant_name: Option<String>,
 }
 
 #[component]
@@ -20,16 +22,19 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
 
     let icon = role.icon();
     let label = match role {
-        MessageRole::User => "You",
-        MessageRole::Assistant => "Assistant",
-        MessageRole::Info => "Info",
-        MessageRole::Success => "Success",
-        MessageRole::Warning => "Warning",
-        MessageRole::Error => "Error",
-        MessageRole::System => "System",
-        MessageRole::ToolCall => "Tool Call",
-        MessageRole::ToolResult => "Tool Result",
-        MessageRole::Thinking => "Thinking",
+        MessageRole::User => "You".to_string(),
+        MessageRole::Assistant => props
+            .assistant_name
+            .clone()
+            .unwrap_or_else(|| "Assistant".to_string()),
+        MessageRole::Info => "Info".to_string(),
+        MessageRole::Success => "Success".to_string(),
+        MessageRole::Warning => "Warning".to_string(),
+        MessageRole::Error => "Error".to_string(),
+        MessageRole::System => "System".to_string(),
+        MessageRole::ToolCall => "Tool Call".to_string(),
+        MessageRole::ToolResult => "Tool Result".to_string(),
+        MessageRole::Thinking => "Thinking".to_string(),
     };
 
     // Render markdown for assistant messages, plain text for others

@@ -161,6 +161,11 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         streaming: props.streaming,
                         spinner_tick: props.spinner_tick,
                         elapsed: props.elapsed.clone(),
+                        assistant_name: if props.soul_name.is_empty() {
+                            None
+                        } else {
+                            Some(props.soul_name.clone())
+                        },
                     )
                     CommandMenu(
                         completions: props.command_completions.clone(),

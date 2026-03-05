@@ -25,11 +25,14 @@ pub struct MessagesProps {
     pub spinner_tick: usize,
     /// Elapsed time string (e.g., "2.3s").
     pub elapsed: String,
+    /// Custom name to display for assistant messages.
+    pub assistant_name: Option<String>,
 }
 
 #[component]
 pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
     let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
+    let assistant_name = props.assistant_name.clone();
 
     element! {
         View(
@@ -45,11 +48,13 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                 bottom: -(props.scroll_offset),
             ) {
                 #(props.messages.iter().enumerate().map(|(i, msg)| {
+                    let name = assistant_name.clone();
                     element! {
                         MessageBubble(
                             key: i as u64,
                             role: msg.role,
                             content: msg.content.clone(),
+                            assistant_name: name,
                         )
                     }
                 }))
