@@ -586,6 +586,35 @@ impl App {
                                 }
                             }
                         }
+                        CommandAction::SetModel(model_name) => {
+                            // Parse model name: could be "provider/model" or just "model"
+                            let (provider, model) = if model_name.contains('/') {
+                                let parts: Vec<&str> = model_name.splitn(2, '/').collect();
+                                (parts[0].to_string(), parts[1].to_string())
+                            } else {
+                                // Keep existing provider, just change model
+                                let existing_provider = config
+                                    .model
+                                    .as_ref()
+                                    .map(|m| m.provider.clone())
+                                    .unwrap_or_else(|| "anthropic".to_string());
+                                (existing_provider, model_name.clone())
+                            };
+
+                            // Update config
+                            config.model = Some(rustyclaw_core::config::ModelProvider {
+                                provider,
+                                model: Some(model),
+                                base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                            });
+
+                            // Save config
+                            if let Err(e) = config.save(None) {
+                                let _ = gw_tx.send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                            } else {
+                                let _ = gw_tx.send(GwEvent::Success(format!("Model set to {}. Restart gateway to apply.", model_name)));
+                            }
+                        }
                         _ => {}
                     }
                 }
