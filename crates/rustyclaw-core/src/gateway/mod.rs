@@ -2228,6 +2228,12 @@ async fn dispatch_text_message(
                 }
             }
 
+            // Tools that modify session state should trigger sidebar update
+            const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagents"];
+            if SESSION_TOOLS.contains(&tc.name.as_str()) && !is_error {
+                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+            }
+
             // Notify the client about the result.
             protocol::server::send_tool_result(writer, &tc.id, &tc.name, &output, is_error).await?;
 
