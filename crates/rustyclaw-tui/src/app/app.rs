@@ -223,7 +223,18 @@ impl App {
             .and_then(|c: &str| {
                 c.lines()
                     .find(|l: &&str| l.starts_with("# "))
-                    .map(|l: &str| l.trim_start_matches("# ").to_string())
+                    .map(|l: &str| {
+                        let header = l.trim_start_matches("# ");
+                        // Extract name from formats like "SOUL.md – Jadzia, The Joined Explorer"
+                        // or "SOUL.md - Name, Description"
+                        let name = header
+                            .split(" – ")
+                            .nth(1)
+                            .or_else(|| header.split(" - ").nth(1))
+                            .unwrap_or(header);
+                        // Take only the part before comma for short name
+                        name.split(',').next().unwrap_or(name).trim().to_string()
+                    })
             })
             .unwrap_or_else(|| "RustyClaw".to_string());
 
