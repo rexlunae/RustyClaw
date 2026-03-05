@@ -644,9 +644,9 @@ mod tests {
         };
         let safety = SafetyLayer::new(config);
 
-        // Clean request should pass
+        // Clean request should pass (use IP to avoid DNS resolution in CI)
         let result = safety.validate_http_request(
-            "https://api.example.com/data",
+            "https://93.184.215.14/data",
             &[("Content-Type".to_string(), "application/json".to_string())],
             Some(b"{\"query\": \"hello\"}"),
         );
