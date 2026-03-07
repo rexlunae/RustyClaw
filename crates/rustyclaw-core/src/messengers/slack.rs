@@ -6,6 +6,7 @@
 use super::{Message, Messenger, SendOptions};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use std::sync::Mutex;
 
 /// Slack messenger using bot token and Web API.
 pub struct SlackMessenger {
@@ -20,7 +21,8 @@ pub struct SlackMessenger {
     /// Bot user ID (resolved on initialize).
     bot_user_id: Option<String>,
     /// Track last read timestamp per channel for polling.
-    last_ts: std::collections::HashMap<String, String>,
+    /// Wrapped in a Mutex so receive_messages(&self) can update it.
+    last_ts: Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl SlackMessenger {
@@ -33,7 +35,7 @@ impl SlackMessenger {
             connected: false,
             http: reqwest::Client::new(),
             bot_user_id: None,
-            last_ts: std::collections::HashMap::new(),
+            last_ts: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -84,14 +86,17 @@ impl SlackMessenger {
     }
 
     /// Fetch conversation history for a channel since last known timestamp.
-    async fn fetch_history(&mut self, channel: &str) -> Result<Vec<Message>> {
+    async fn fetch_history(&self, channel: &str) -> Result<Vec<Message>> {
         let mut params = serde_json::json!({
             "channel": channel,
             "limit": 20
         });
 
-        if let Some(ts) = self.last_ts.get(channel) {
-            params["oldest"] = serde_json::json!(ts);
+        {
+            let last_ts = self.last_ts.lock().unwrap();
+            if let Some(ts) = last_ts.get(channel) {
+                params["oldest"] = serde_json::json!(ts);
+            }
         }
 
         let data = self.api_call("conversations.history", &params).await?;
@@ -136,7 +141,8 @@ impl SlackMessenger {
             .first()
             .and_then(|m| m["ts"].as_str())
         {
-            self.last_ts.insert(channel.to_string(), newest.to_string());
+            let mut last_ts = self.last_ts.lock().unwrap();
+            last_ts.insert(channel.to_string(), newest.to_string());
         }
 
         // Slack returns newest first, reverse for chronological order
@@ -214,12 +220,11 @@ impl Messenger for SlackMessenger {
     }
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
-        // We need &mut self for tracking last_ts, but the trait gives &self.
-        // Use interior mutability pattern — for now, return empty and rely
-        // on the polling loop to call fetch_history through a mutable ref.
-        // In practice, the messenger manager holds a Box<dyn Messenger>
-        // behind a Mutex, so the gateway loop can use a mutable approach.
-        Ok(Vec::new())
+        let channel = match &self.default_channel {
+            Some(ch) => ch.clone(),
+            None => return Ok(Vec::new()),
+        };
+        self.fetch_history(&channel).await
     }
 
     fn is_connected(&self) -> bool {

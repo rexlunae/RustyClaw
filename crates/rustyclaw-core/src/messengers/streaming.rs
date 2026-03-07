@@ -235,14 +235,21 @@ impl StreamBuffer {
                 break;
             }
 
-            // Try to split at a newline or space
-            let split_at = remaining[..max_len]
+            // Find a char boundary at or before max_len to avoid
+            // panicking when max_len falls inside a multi-byte codepoint.
+            let mut boundary = max_len;
+            while boundary > 0 && !remaining.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+
+            // Try to split at a newline or space within the boundary
+            let split_at = remaining[..boundary]
                 .rfind('\n')
-                .or_else(|| remaining[..max_len].rfind(' '))
-                .unwrap_or(max_len);
+                .or_else(|| remaining[..boundary].rfind(' '))
+                .unwrap_or(boundary);
 
             chunks.push(remaining[..split_at].to_string());
-            remaining = &remaining[split_at..].trim_start();
+            remaining = remaining[split_at..].trim_start();
         }
 
         chunks

@@ -347,7 +347,13 @@ pub fn detect_mime_type(path: &Path) -> String {
 
     if let Ok(out) = result {
         if out.status.success() {
-            return String::from_utf8_lossy(&out.stdout).trim().to_string();
+            let mime = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            // The `file` command may succeed but return an error message
+            // (e.g. "cannot open ...") instead of a real MIME type.
+            // Real MIME types always contain a slash.
+            if mime.contains('/') {
+                return mime;
+            }
         }
     }
 
@@ -419,17 +425,11 @@ mod tests {
 
     #[test]
     fn test_detect_mime_fallback() {
-        // Test extension-based fallback for nonexistent file.
-        // The `file` command may report "cannot open" on stderr and return
-        // a non-success status, so we fall back to the extension map which
-        // yields "image/jpeg".  On some CI images the `file` command may
-        // still succeed and return something like "application/x-empty" or
-        // "inode/x-empty", so accept any of those outcomes.
+        // For a nonexistent file, `file --mime-type` may exit non-zero or
+        // return a non-MIME error string.  Either way, detect_mime_type()
+        // should fall through to the extension-based lookup which returns
+        // "image/jpeg" for a .jpg path.
         let mime = detect_mime_type(Path::new("/tmp/nonexistent_test_file_that_should_not_exist.jpg"));
-        assert!(
-            mime.contains("image") || mime.contains("octet-stream") || mime.contains("empty"),
-            "unexpected mime type for nonexistent .jpg: {}",
-            mime
-        );
+        assert_eq!(mime, "image/jpeg");
     }
 }

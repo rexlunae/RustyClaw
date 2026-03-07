@@ -109,10 +109,8 @@ fn exec_pdf_extract(args: &Value, workspace_dir: &Path) -> Result<String, String
     let mut python_cmd = Command::new("python3");
     python_cmd
         .arg("-c")
-        .arg(format!(
-            "from pdfminer.high_level import extract_text; print(extract_text('{}'))",
-            path.display()
-        ))
+        .arg("import sys; from pdfminer.high_level import extract_text; print(extract_text(sys.argv[1]))")
+        .arg(path.to_string_lossy().as_ref())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
@@ -216,9 +214,10 @@ fn truncate_output(text: &str, max_chars: usize) -> String {
     if text.len() <= max_chars {
         text.to_string()
     } else {
+        let truncated: String = text.chars().take(max_chars).collect();
         format!(
             "{}\n\n[Output truncated at {} characters. Use start_page/end_page to read specific pages.]",
-            &text[..max_chars],
+            truncated,
             max_chars
         )
     }
