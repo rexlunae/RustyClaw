@@ -97,6 +97,27 @@ fn parse_ping(line: &str) -> Option<&str> {
     line.strip_prefix("PING ")
 }
 
+/// Split a UTF-8 string into chunks of at most `max_bytes` bytes each,
+/// never splitting in the middle of a multi-byte character.
+fn split_utf8(s: &str, max_bytes: usize) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
+    while start < s.len() {
+        let mut end = (start + max_bytes).min(s.len());
+        // Back up to a char boundary if we landed mid-codepoint
+        while end > start && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        if end == start {
+            // Shouldn't happen with valid UTF-8, but advance at least one char
+            end = start + s[start..].chars().next().map_or(1, |c| c.len_utf8());
+        }
+        chunks.push(&s[start..end]);
+        start = end;
+    }
+    chunks
+}
+
 #[async_trait]
 impl Messenger for IrcMessenger {
     fn name(&self) -> &str {
@@ -246,11 +267,7 @@ impl Messenger for IrcMessenger {
         // IRC messages have a max length of ~512 bytes including the command.
         // Split long messages.
         let max_len = 400; // Leave room for PRIVMSG header
-        for chunk in content
-            .as_bytes()
-            .chunks(max_len)
-            .map(|c| String::from_utf8_lossy(c))
-        {
+        for chunk in split_utf8(content, max_len) {
             self.send_raw(&format!("PRIVMSG {} :{}", target, chunk))
                 .await?;
         }
