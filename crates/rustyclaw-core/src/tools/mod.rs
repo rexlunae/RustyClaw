@@ -27,6 +27,7 @@ mod sysadmin;
 mod system_tools;
 pub mod uv;
 mod web;
+mod pdf;
 // UV tool
 use uv::exec_uv_manage;
 
@@ -118,6 +119,9 @@ use sysadmin::{
     exec_firewall, exec_net_info, exec_net_scan, exec_pkg_manage, exec_service_manage,
     exec_user_manage,
 };
+
+// PDF tool
+use pdf::exec_pdf;
 
 // Exo AI tools
 use exo_ai::exec_exo_manage;
@@ -294,6 +298,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "uv_manage" => "Manage Python envs & packages via uv",
         "npm_manage" => "Manage Node.js packages & scripts via npm",
         "agent_setup" => "Set up local model infrastructure",
+        "pdf" => "Analyze PDF files (extract text, metadata, page counts)",
         _ => "Unknown tool",
     }
 }
@@ -422,6 +427,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &NPM_MANAGE,
         &AGENT_SETUP,
         &ASK_USER,
+        &PDF,
     ]
 }
 
@@ -1222,6 +1228,20 @@ pub static ASK_USER: ToolDef = ToolDef {
     execute: exec_ask_user_stub,
 };
 
+// ── PDF tool ────────────────────────────────────────────────────────────────
+
+pub static PDF: ToolDef = ToolDef {
+    name: "pdf",
+    description: "Analyze PDF files. Actions:\n\
+                  - extract: Extract text from a PDF (supports page ranges via start_page/end_page)\n\
+                  - info: Get PDF metadata (title, author, pages, etc.)\n\
+                  - page_count: Get the number of pages\n\n\
+                  Requires poppler-utils (pdftotext, pdfinfo) for best results. \
+                  Falls back to textutil (macOS) or pdfminer (Python).",
+    parameters: vec![],
+    execute: exec_pdf,
+};
+
 // Re-export parameter functions from params module
 pub use params::*;
 
@@ -1340,6 +1360,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "uv_manage" => uv_manage_params(),
         "npm_manage" => npm_manage_params(),
         "agent_setup" => agent_setup_params(),
+        "pdf" => pdf_params(),
         _ => vec![],
     }
 }

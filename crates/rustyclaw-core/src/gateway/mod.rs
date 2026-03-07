@@ -12,6 +12,8 @@ pub mod concurrent;
 pub mod csrf;
 pub mod health;
 mod helpers;
+pub mod webhooks;
+pub mod thinking_clock;
 pub mod mcp_handler;
 mod messenger_handler;
 pub mod model_handler;

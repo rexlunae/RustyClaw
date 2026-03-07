@@ -149,6 +149,58 @@ pub struct MessengerConfig {
     /// Allowed user IDs (whitelist).
     #[serde(default)]
     pub allowed_users: Vec<String>,
+
+    // ── Slack-specific ─────────────────────────────────────────────────
+    /// Slack app-level token for Socket Mode (optional).
+    #[serde(default)]
+    pub app_token: Option<String>,
+    /// Default channel to listen on (Slack).
+    #[serde(default)]
+    pub default_channel: Option<String>,
+
+    // ── IRC-specific ───────────────────────────────────────────────────
+    /// IRC server hostname.
+    #[serde(default)]
+    pub server: Option<String>,
+    /// Port number (IRC, BlueBubbles, etc.).
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Nickname (IRC).
+    #[serde(default)]
+    pub nick: Option<String>,
+    /// IRC channels to join.
+    #[serde(default)]
+    pub irc_channels: Vec<String>,
+    /// Whether to use TLS (IRC).
+    #[serde(default)]
+    pub use_tls: Option<bool>,
+
+    // ── Google Chat-specific ───────────────────────────────────────────
+    /// Service account credentials path (Google Chat).
+    #[serde(default)]
+    pub credentials_path: Option<String>,
+    /// Google Chat spaces to listen on.
+    #[serde(default)]
+    pub spaces: Vec<String>,
+
+    // ── Teams-specific ─────────────────────────────────────────────────
+    /// Bot Framework app ID (Teams).
+    #[serde(default)]
+    pub app_id: Option<String>,
+    /// Bot Framework app password (Teams).
+    #[serde(default)]
+    pub app_password: Option<String>,
+
+    // ── DM pairing security ────────────────────────────────────────────
+    /// Pairing code required before accepting DMs from unknown users.
+    #[serde(default)]
+    pub pairing_code: Option<String>,
+    /// Whether DM pairing is required for this messenger.
+    #[serde(default)]
+    pub require_pairing: bool,
+    /// List of already-paired user IDs.
+    #[serde(default)]
+    pub paired_users: Vec<String>,
 }
 
 fn default_true() -> bool {
