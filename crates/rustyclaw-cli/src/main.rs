@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
+mod commands;
+
 // ── Top-level CLI ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Parser)]
