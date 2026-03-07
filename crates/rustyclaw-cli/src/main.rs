@@ -824,96 +824,12 @@ async fn main() -> Result<()> {
                     }
                 }
                 GatewayCommands::Run(args) => {
-                    use rustyclaw_core::gateway::{GatewayOptions, ModelContext, run_gateway};
-                    use rustyclaw_core::secrets::SecretsManager;
-                    use tokio_util::sync::CancellationToken;
-
                     let host = match args.bind {
                         GatewayBind::Loopback => "127.0.0.1",
                         GatewayBind::Lan => "0.0.0.0",
                         _ => "127.0.0.1",
                     };
-                    let listen = format!("{}:{}", host, args.port);
-                    let tls_cert = config.tls_cert.clone();
-                    let tls_key = config.tls_key.clone();
-                    let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
-                    println!(
-                        "{}",
-                        rustyclaw_core::theme::icon_ok(&format!(
-                            "RustyClaw gateway listening on {}",
-                            rustyclaw_core::theme::info(&format!("{}://{}", scheme, listen))
-                        ))
-                    );
-
-                    // Open the secrets vault — the gateway owns it.
-                    let creds_dir = config.credentials_dir();
-                    let vault = if config.secrets_password_protected {
-                        let password = rpassword::prompt_password(format!(
-                            "{} Vault password: ",
-                            rustyclaw_core::theme::info("🔑")
-                        ))
-                        .unwrap_or_default();
-                        SecretsManager::with_password(&creds_dir, password)
-                    } else {
-                        SecretsManager::new(&creds_dir)
-                    };
-
-                    let shared_vault: rustyclaw_core::gateway::SharedVault =
-                        std::sync::Arc::new(tokio::sync::Mutex::new(vault));
-
-                    // Resolve model context from the vault.
-                    let model_ctx = {
-                        let mut v = shared_vault.lock().await;
-                        match ModelContext::resolve(&config, &mut v) {
-                            Ok(ctx) => {
-                                println!(
-                                    "{} {} via {} ({})",
-                                    rustyclaw_core::theme::icon_ok("Model:"),
-                                    rustyclaw_core::theme::info(&ctx.model),
-                                    rustyclaw_core::theme::info(&ctx.provider),
-                                    rustyclaw_core::theme::muted(&ctx.base_url),
-                                );
-                                Some(ctx)
-                            }
-                            Err(err) => {
-                                eprintln!("⚠ Could not resolve model context: {}", err);
-                                None
-                            }
-                        }
-                    };
-
-                    let cancel = CancellationToken::new();
-
-                    // Load skills for the gateway from multiple directories.
-                    // Uses consolidated skills_dirs from config.
-                    let skills_dirs = config.skills_dirs();
-
-                    let mut sm = SkillManager::with_dirs(skills_dirs);
-                    if let Err(e) = sm.load_skills() {
-                        eprintln!("⚠ Could not load skills: {}", e);
-                    }
-                    if let Some(url) = config.clawhub_url.as_deref() {
-                        sm.set_registry(url, config.clawhub_token.clone());
-                    }
-                    let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
-                        std::sync::Arc::new(tokio::sync::Mutex::new(sm));
-
-                    run_gateway(
-                        config,
-                        GatewayOptions {
-                            listen,
-                            tls_cert,
-                            tls_key,
-                        },
-                        model_ctx,
-                        shared_vault,
-                        shared_skills,
-                        None,
-                        None,
-                        None, // observer
-                        cancel,
-                    )
-                    .await?;
+                    commands::handle_run(config, host, args.port).await?;
                 }
             }
         }
