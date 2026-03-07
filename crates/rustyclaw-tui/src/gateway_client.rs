@@ -98,10 +98,10 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             message,
         } => {
             if *ok {
-                FrameAction::just_action(Action::Success(format!(
-                    "Gateway config reloaded: {} / {}",
-                    provider, model
-                )))
+                FrameAction::just_action(Action::GatewayReloaded {
+                    provider: provider.clone(),
+                    model: model.clone(),
+                })
             } else {
                 FrameAction::just_action(Action::Error(format!(
                     "Reload failed: {}",
