@@ -1751,7 +1751,7 @@ pub fn pdf_params() -> Vec<ToolParam> {
         ToolParam {
             name: "action".into(),
             description: "Action to perform: 'extract' (default) to extract text, \
-                          'info' to get page count and metadata."
+                          'info' to get metadata, 'page_count' to get number of pages."
                 .into(),
             param_type: "string".into(),
             required: false,

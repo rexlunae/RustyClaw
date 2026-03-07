@@ -137,7 +137,7 @@ impl Messenger for IMessageMessenger {
     async fn receive_messages(&self) -> Result<Vec<Message>> {
         let poll_ts = self.last_poll_ts.load(Ordering::Relaxed);
         let url = format!(
-            "{}?after={}&limit=50&sort=asc",
+            "{}&after={}&limit=50&sort=asc",
             self.api_url("message"), poll_ts
         );
 
