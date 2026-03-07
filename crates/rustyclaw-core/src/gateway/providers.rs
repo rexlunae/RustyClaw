@@ -487,7 +487,12 @@ pub async fn validate_model_connection(
 
     let result: Result<reqwest::Response> = if ctx.provider == "anthropic" {
         // Anthropic has no /models list endpoint — use a minimal chat.
-        let url = format!("{}/v1/messages", ctx.base_url.trim_end_matches('/'));
+        let base = ctx.base_url.trim_end_matches('/');
+        let url = if base.ends_with("/v1") {
+            format!("{}/messages", base)
+        } else {
+            format!("{}/v1/messages", base)
+        };
         let body = json!({
             "model": ctx.model,
             "max_tokens": 1,
@@ -1060,7 +1065,16 @@ pub async fn call_anthropic_with_tools(
 ) -> Result<ModelResponse> {
     use futures_util::StreamExt;
 
-    let url = format!("{}/v1/messages", req.base_url.trim_end_matches('/'));
+    // Build the Anthropic messages URL.  The static base_url is
+    // "https://api.anthropic.com" (no /v1), but the user's config may
+    // have saved it with a trailing /v1.  Handle both to avoid a
+    // double "/v1/v1/messages" path that 404s.
+    let base = req.base_url.trim_end_matches('/');
+    let url = if base.ends_with("/v1") {
+        format!("{}/messages", base)
+    } else {
+        format!("{}/v1/messages", base)
+    };
 
     let system = req
         .messages

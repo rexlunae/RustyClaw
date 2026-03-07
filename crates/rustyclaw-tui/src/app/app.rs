@@ -693,6 +693,61 @@ impl App {
                                 }
                             }
                         }
+                        CommandAction::FetchModels => {
+                            // Spawn an async task to fetch the live model list
+                            // from the provider API and send results back via
+                            // the GwEvent channel.
+                            let provider_id = config
+                                .model
+                                .as_ref()
+                                .map(|m| m.provider.clone())
+                                .unwrap_or_default();
+                            let base_url = config
+                                .model
+                                .as_ref()
+                                .and_then(|m| m.base_url.clone());
+                            // Try to read the API key from the environment
+                            // variable that the provider expects.
+                            let api_key = rustyclaw_core::providers::secret_key_for_provider(
+                                &provider_id,
+                            )
+                            .and_then(|env_name| std::env::var(env_name).ok());
+
+                            let gw_tx2 = gw_tx.clone();
+                            tokio::spawn(async move {
+                                match rustyclaw_core::providers::fetch_models_detailed(
+                                    &provider_id,
+                                    api_key.as_deref(),
+                                    base_url.as_deref(),
+                                )
+                                .await
+                                {
+                                    Ok(models) => {
+                                        let count = models.len();
+                                        let display = rustyclaw_core::providers::display_name_for_provider(&provider_id);
+                                        let _ = gw_tx2.send(GwEvent::Info(format!(
+                                            "{} models from {}:",
+                                            count, display,
+                                        )));
+                                        // Show models in batches to avoid
+                                        // flooding the channel.
+                                        let lines: Vec<String> =
+                                            models.iter().map(|m| m.display_line()).collect();
+                                        for chunk in lines.chunks(20) {
+                                            let _ = gw_tx2.send(GwEvent::Info(
+                                                chunk.join("\n"),
+                                            ));
+                                        }
+                                        let _ = gw_tx2.send(GwEvent::Info(
+                                            "Tip: /model <id> to switch".to_string(),
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        let _ = gw_tx2.send(GwEvent::Error(e));
+                                    }
+                                }
+                            });
+                        }
                         _ => {}
                     }
                 }

@@ -30,6 +30,8 @@ pub enum CommandAction {
     ShowToolPermissions,
     /// Reload gateway configuration
     GatewayReload,
+    /// Fetch the live model list from the provider API
+    FetchModels,
     /// Download media by ID (id, optional destination path)
     Download(String, Option<String>),
     /// Create a new thread
@@ -441,30 +443,11 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 }
             }
             None => {
-                // Show models scoped to the current provider so the user
-                // doesn't see model IDs from other providers that won't work.
-                let current_provider = context
-                    .config
-                    .model
-                    .as_ref()
-                    .map(|m| m.provider.as_str())
-                    .unwrap_or("");
-                let provider_models = providers::models_for_provider(current_provider);
-                let list = if provider_models.is_empty() {
-                    providers::all_model_names().join(", ")
-                } else {
-                    provider_models.join(", ")
-                };
+                // Trigger an async fetch from the provider API so the user
+                // sees the full, live model list (with pricing where available).
                 CommandResponse {
-                    messages: vec![
-                        "Usage: /model <name>".to_string(),
-                        if current_provider.is_empty() {
-                            format!("Known models: {}", list)
-                        } else {
-                            format!("Models for {}: {}", current_provider, list)
-                        },
-                    ],
-                    action: CommandAction::None,
+                    messages: vec!["Fetching models from provider…".to_string()],
+                    action: CommandAction::FetchModels,
                 }
             }
         },
