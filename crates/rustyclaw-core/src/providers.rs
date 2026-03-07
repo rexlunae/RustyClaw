@@ -326,6 +326,43 @@ pub fn base_url_for_provider(id: &str) -> Option<&'static str> {
 
 // ── Dynamic model fetching ──────────────────────────────────────────────────
 
+/// Rich model metadata returned by [`fetch_models_detailed`].
+#[derive(Debug, Clone)]
+pub struct ModelInfo {
+    /// Provider-specific model ID (e.g. `anthropic/claude-opus-4-20250514`).
+    pub id: String,
+    /// Human-readable name (if available from the API).
+    pub name: Option<String>,
+    /// Context window size in tokens (if available).
+    pub context_length: Option<u64>,
+    /// Price per prompt/input token in USD (if available).
+    pub pricing_prompt: Option<f64>,
+    /// Price per completion/output token in USD (if available).
+    pub pricing_completion: Option<f64>,
+}
+
+impl ModelInfo {
+    /// Format a one-line summary suitable for display in the TUI.
+    pub fn display_line(&self) -> String {
+        let mut parts = vec![self.id.clone()];
+        if let Some(ref name) = self.name {
+            if name != &self.id {
+                parts.push(format!("({})", name));
+            }
+        }
+        if let Some(ctx) = self.context_length {
+            parts.push(format!("{}k ctx", ctx / 1000));
+        }
+        if let (Some(p), Some(c)) = (self.pricing_prompt, self.pricing_completion) {
+            // Show price per million tokens for readability
+            let p_m = p * 1_000_000.0;
+            let c_m = c * 1_000_000.0;
+            parts.push(format!("${:.2}/${:.2} per 1M tok", p_m, c_m));
+        }
+        parts.join(" · ")
+    }
+}
+
 /// Fetch the list of available models from a provider's API.
 ///
 /// Returns `Err` with a human-readable message on any failure — no silent
@@ -335,6 +372,21 @@ pub async fn fetch_models(
     api_key: Option<&str>,
     base_url_override: Option<&str>,
 ) -> Result<Vec<String>, String> {
+    // Delegate to the detailed version and strip down to IDs.
+    fetch_models_detailed(provider_id, api_key, base_url_override)
+        .await
+        .map(|v| v.into_iter().map(|m| m.id).collect())
+}
+
+/// Fetch models with full metadata (pricing, context length, name).
+///
+/// Providers that don't expose rich metadata will still return [`ModelInfo`]
+/// entries — just with `None` for the optional fields.
+pub async fn fetch_models_detailed(
+    provider_id: &str,
+    api_key: Option<&str>,
+    base_url_override: Option<&str>,
+) -> Result<Vec<ModelInfo>, String> {
     let def = match provider_by_id(provider_id) {
         Some(d) => d,
         None => return Err(format!("Unknown provider: {}", provider_id)),
@@ -349,21 +401,31 @@ pub async fn fetch_models(
         ));
     }
 
-    // Anthropic has no public models endpoint
+    // Anthropic has no public models endpoint — return the static list.
     if provider_id == "anthropic" {
-        return Err(
-            "Anthropic does not provide a models API. Set a model manually with /model <name>."
-                .to_string(),
-        );
+        let static_models: Vec<ModelInfo> = def
+            .models
+            .iter()
+            .map(|id| ModelInfo {
+                id: id.to_string(),
+                name: None,
+                context_length: None,
+                pricing_prompt: None,
+                pricing_completion: None,
+            })
+            .collect();
+        return Ok(static_models);
     }
 
     let result = match provider_id {
         // Google Gemini uses a different response shape
-        "google" => fetch_google_models(base, api_key).await,
+        "google" => fetch_google_models_detailed(base, api_key).await,
         // Local providers — no auth needed, OpenAI-compatible /v1/models
-        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models(base, None).await,
+        "ollama" | "lmstudio" | "exo" => {
+            fetch_openai_compatible_models_detailed(base, None).await
+        }
         // Everything else is OpenAI-compatible
-        _ => fetch_openai_compatible_models(base, api_key).await,
+        _ => fetch_openai_compatible_models_detailed(base, api_key).await,
     };
 
     match result {
@@ -428,15 +490,15 @@ fn is_chat_model(entry: &serde_json::Value) -> bool {
     !NON_CHAT_PATTERNS.iter().any(|pat| lower.contains(pat))
 }
 
-/// Fetch from an OpenAI-compatible `/models` endpoint.
+/// Fetch from an OpenAI-compatible `/models` endpoint with full metadata.
 ///
 /// Works for OpenAI, xAI, OpenRouter, Ollama, GitHub Copilot, and
 /// custom providers.  Only models that appear to support chat
 /// completions are returned (see [`is_chat_model`]).
-async fn fetch_openai_compatible_models(
+async fn fetch_openai_compatible_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<String>, reqwest::Error> {
+) -> Result<Vec<ModelInfo>, reqwest::Error> {
     let url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
@@ -451,34 +513,55 @@ async fn fetch_openai_compatible_models(
     let resp = req.send().await?.error_for_status()?;
     let body: serde_json::Value = resp.json().await?;
 
-    let mut models: Vec<String> = body
+    let mut models: Vec<ModelInfo> = body
         .get("data")
         .and_then(|d| d.as_array())
         .map(|arr| {
             arr.iter()
                 .filter(|m| is_chat_model(m))
-                .filter_map(|m| m.get("id").and_then(|v| v.as_str()))
-                .map(|s| s.to_string())
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|v| v.as_str())?.to_string();
+                    let name = m.get("name").and_then(|v| v.as_str()).map(String::from);
+                    let context_length = m
+                        .get("context_length")
+                        .and_then(|v| v.as_u64());
+                    // OpenRouter-style pricing: { "prompt": "0.000015", "completion": "0.000075" }
+                    let pricing_prompt = m
+                        .get("pricing")
+                        .and_then(|p| p.get("prompt"))
+                        .and_then(|v| v.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| v.as_f64()));
+                    let pricing_completion = m
+                        .get("pricing")
+                        .and_then(|p| p.get("completion"))
+                        .and_then(|v| v.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| v.as_f64()));
+                    Some(ModelInfo {
+                        id,
+                        name,
+                        context_length,
+                        pricing_prompt,
+                        pricing_completion,
+                    })
+                })
                 .collect()
         })
         .unwrap_or_default();
 
-    models.sort();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
     Ok(models)
 }
 
-/// Fetch from the Google Gemini `/models` endpoint.
-async fn fetch_google_models(
+/// Fetch from the Google Gemini `/models` endpoint with metadata.
+async fn fetch_google_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<String>, reqwest::Error> {
+) -> Result<Vec<ModelInfo>, reqwest::Error> {
     let key = match api_key {
         Some(k) => k,
         // No key — return empty so the outer match produces a clear error
         None => return Ok(Vec::new()),
     };
 
-    let url = format!("{}/models?key={}", base_url.trim_end_matches('/'), key,);
+    let url = format!("{}/models?key={}", base_url.trim_end_matches('/'), key);
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
@@ -493,10 +576,26 @@ async fn fetch_google_models(
         .map(|arr| {
             arr.iter()
                 .filter_map(|m| {
-                    m.get("name")
+                    let raw_name = m.get("name").and_then(|v| v.as_str())?;
+                    let id = raw_name
+                        .strip_prefix("models/")
+                        .unwrap_or(raw_name)
+                        .to_string();
+                    let display_name = m
+                        .get("displayName")
                         .and_then(|v| v.as_str())
-                        // API returns "models/gemini-2.5-pro" — strip the prefix
-                        .map(|s| s.strip_prefix("models/").unwrap_or(s).to_string())
+                        .map(String::from);
+                    // Google returns inputTokenLimit / outputTokenLimit
+                    let context_length = m
+                        .get("inputTokenLimit")
+                        .and_then(|v| v.as_u64());
+                    Some(ModelInfo {
+                        id,
+                        name: display_name,
+                        context_length,
+                        pricing_prompt: None,
+                        pricing_completion: None,
+                    })
                 })
                 .collect::<Vec<_>>()
         })
