@@ -1,0 +1,44 @@
+# RustyClaw Docker Compose
+#
+# Usage:
+#   docker compose up -d          # Start all services
+#   docker compose logs -f        # Follow logs
+#   docker compose down           # Stop and remove containers
+#
+# Configuration:
+#   Mount your config.toml at /home/rustyclaw/.config/rustyclaw/config.toml
+#   or set environment variables for provider keys.
+
+services:
+  rustyclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rustyclaw
+    restart: unless-stopped
+    ports:
+      - "3000:3000"   # Gateway / WebSocket
+    volumes:
+      - rustyclaw-data:/home/rustyclaw/.config/rustyclaw
+      # Mount your config (uncomment and adjust path):
+      # - ./config.toml:/home/rustyclaw/.config/rustyclaw/config.toml:ro
+    environment:
+      - RUST_LOG=info
+      # Provider API keys (set in .env or pass via environment):
+      # - OPENAI_API_KEY=
+      # - ANTHROPIC_API_KEY=
+      # - GOOGLE_API_KEY=
+      # Messenger tokens:
+      # - DISCORD_BOT_TOKEN=
+      # - TELEGRAM_BOT_TOKEN=
+      # - SLACK_BOT_TOKEN=
+    command: ["gateway", "--bind", "0.0.0.0:3000"]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+volumes:
+  rustyclaw-data:

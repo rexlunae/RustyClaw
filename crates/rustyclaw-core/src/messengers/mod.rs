@@ -153,11 +153,27 @@ impl Default for MessengerManager {
 
 mod console;
 mod discord;
+mod google_chat;
+pub mod group_chat;
+mod imessage;
+mod irc;
+pub mod media;
+mod slack;
+pub mod streaming;
+mod teams;
 mod telegram;
 mod webhook;
 
 pub use console::ConsoleMessenger;
 pub use discord::DiscordMessenger;
+pub use google_chat::GoogleChatMessenger;
+pub use group_chat::GroupChatConfig;
+pub use imessage::IMessageMessenger;
+pub use irc::IrcMessenger;
+pub use media::{MediaConfig, MediaType};
+pub use slack::SlackMessenger;
+pub use streaming::{StreamBuffer, StreamConfig, StreamStrategy};
+pub use teams::TeamsMessenger;
 pub use telegram::TelegramMessenger;
 pub use webhook::WebhookMessenger;
 

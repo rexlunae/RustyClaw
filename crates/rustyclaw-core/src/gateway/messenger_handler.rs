@@ -6,7 +6,8 @@
 
 use crate::config::{Config, MessengerConfig};
 use crate::messengers::{
-    DiscordMessenger, MediaAttachment, Message, Messenger, MessengerManager, SendOptions,
+    DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger, MediaAttachment,
+    Message, Messenger, MessengerManager, SendOptions, SlackMessenger, TeamsMessenger,
     TelegramMessenger, WebhookMessenger,
 };
 use crate::tools;
@@ -106,6 +107,82 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .or_else(|| std::env::var("WEBHOOK_URL").ok())
                 .context("Webhook requires 'webhook_url' or WEBHOOK_URL env var")?;
             Box::new(WebhookMessenger::new(name, url))
+        }
+        "slack" => {
+            let token = config
+                .token
+                .clone()
+                .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok())
+                .context("Slack requires 'token' or SLACK_BOT_TOKEN env var")?;
+            let mut messenger = SlackMessenger::new(name, token);
+            if let Some(ref app_token) = config.app_token {
+                messenger = messenger.with_app_token(app_token.clone());
+            }
+            if let Some(ref channel) = config.default_channel {
+                messenger = messenger.with_default_channel(channel.clone());
+            }
+            Box::new(messenger)
+        }
+        "irc" => {
+            let server = config
+                .server
+                .clone()
+                .context("IRC requires 'server'")?;
+            let port = config.port.unwrap_or(6697);
+            let nick = config
+                .nick
+                .clone()
+                .unwrap_or_else(|| "RustyClaw".to_string());
+            let mut messenger = IrcMessenger::new(name, server, port, nick);
+            if !config.irc_channels.is_empty() {
+                messenger = messenger.with_channels(config.irc_channels.clone());
+            }
+            if let Some(ref pass) = config.password {
+                messenger = messenger.with_password(pass.clone());
+            }
+            if let Some(tls) = config.use_tls {
+                messenger = messenger.with_tls(tls);
+            }
+            Box::new(messenger)
+        }
+        "google_chat" => {
+            let mut messenger = GoogleChatMessenger::new(name);
+            if let Some(ref url) = config.webhook_url {
+                messenger = messenger.with_webhook_url(url.clone());
+            }
+            if let Some(ref creds) = config.credentials_path {
+                messenger = messenger.with_credentials(creds.clone());
+            }
+            if !config.spaces.is_empty() {
+                messenger = messenger.with_spaces(config.spaces.clone());
+            }
+            Box::new(messenger)
+        }
+        "teams" => {
+            let mut messenger = TeamsMessenger::new(name);
+            if let Some(ref url) = config.webhook_url {
+                messenger = messenger.with_webhook_url(url.clone());
+            }
+            if let (Some(app_id), Some(app_pass)) =
+                (&config.app_id, &config.app_password)
+            {
+                messenger =
+                    messenger.with_bot_framework(app_id.clone(), app_pass.clone());
+            }
+            Box::new(messenger)
+        }
+        "imessage" => {
+            let server_url = config
+                .server
+                .clone()
+                .or_else(|| std::env::var("BLUEBUBBLES_URL").ok())
+                .context("iMessage requires 'server' (BlueBubbles URL) or BLUEBUBBLES_URL env var")?;
+            let password = config
+                .password
+                .clone()
+                .or_else(|| std::env::var("BLUEBUBBLES_PASSWORD").ok())
+                .context("iMessage requires 'password' (BlueBubbles password) or BLUEBUBBLES_PASSWORD env var")?;
+            Box::new(IMessageMessenger::new(name, server_url, password))
         }
         #[cfg(feature = "matrix")]
         "matrix" => {

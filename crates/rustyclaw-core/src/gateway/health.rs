@@ -1,8 +1,12 @@
 //! Health check and status endpoint for remote monitoring.
 //!
 //! Provides HTTP endpoints for:
-//! - /health - Simple health check (returns 200 OK if running)
-//! - /status - Detailed status with metrics
+//! - /health  - Simple health check (returns 200 OK if running)
+//! - /healthz - Kubernetes-compatible health check (alias for /health)
+//! - /ready   - Readiness probe (returns 200 when ready to serve)
+//! - /readyz  - Kubernetes-compatible readiness probe (alias for /ready)
+//! - /status  - Detailed status with metrics
+//! - /metrics - Prometheus-compatible metrics
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -135,10 +139,20 @@ async fn handle_health_request(
 
     // Generate response
     let (status, content_type, body) = match path {
-        "/health" => {
-            // Simple health check
+        "/health" | "/healthz" => {
+            // Simple health check (OpenClaw-compatible)
             let response = json!({
                 "status": "ok",
+                "version": env!("CARGO_PKG_VERSION"),
+                "uptime_secs": stats.uptime_secs(),
+            });
+            ("200 OK", "application/json", response.to_string())
+        }
+        "/ready" | "/readyz" => {
+            // Readiness probe — returns 200 when the gateway is ready to
+            // accept connections and process requests.
+            let response = json!({
+                "status": "ready",
                 "version": env!("CARGO_PKG_VERSION"),
                 "uptime_secs": stats.uptime_secs(),
             });
@@ -234,7 +248,7 @@ async fn handle_health_request(
             // 404 Not Found
             let response = json!({
                 "error": "Not Found",
-                "available_endpoints": ["/health", "/status", "/metrics"],
+                "available_endpoints": ["/health", "/healthz", "/ready", "/readyz", "/status", "/metrics"],
             });
             ("404 Not Found", "application/json", response.to_string())
         }
