@@ -20,6 +20,7 @@ mod providers;
 mod secrets_handler;
 mod skills_handler;
 pub mod task_handler;
+mod tool_executor;
 mod types;
 
 // Re-export protocol types
@@ -1951,64 +1952,12 @@ async fn dispatch_text_message(
                 // ── Auto-continuation for incomplete intent ─────────────
                 // Sometimes the model narrates what it plans to do ("Let me check...")
                 // but returns finish_reason=stop without making a tool call.
-                // This is common with large contexts or certain API proxies.
                 // Detect this and prompt the model to continue.
-                //
-                // Guard: only trigger for SHORT responses (< 500 chars).
-                // Long responses (e.g., a capabilities listing) are always
-                // complete answers and must never be auto-continued.
-                let consider_continuation =
-                    model_resp.text.len() < 500 && consecutive_continues < MAX_AUTO_CONTINUES;
-
-                let should_continue = if consider_continuation {
-                    // Check only the tail of the response for intent patterns.
-                    let tail = if model_resp.text.len() > 200 {
-                        &model_resp.text[model_resp.text.len() - 200..]
-                    } else {
-                        &model_resp.text
-                    };
-
-                    const INTENT_PATTERNS: &[&str] = &[
-                        "Let me ",
-                        "I'll ",
-                        "I will ",
-                        "Now let me ",
-                        "Let's ",
-                        "Now I'll ",
-                        "I need to ",
-                        "First, let me ",
-                        "First let me ",
-                    ];
-
-                    // Phrases that look like intent but are actually polite
-                    // closers or conversational filler — never action intent.
-                    let text_lower = model_resp.text.to_lowercase();
-                    const NON_ACTION_PHRASES: &[&str] = &[
-                        "let me know",
-                        "i'll help",
-                        "i'll guide",
-                        "i'll be happy",
-                        "i'll be glad",
-                        "i'll do my best",
-                        "i'll try my best",
-                        "i'll assist",
-                        "let's get started",
-                        "let's begin",
-                        "let me help",
-                    ];
-
-                    let has_exclusion = NON_ACTION_PHRASES.iter().any(|p| text_lower.contains(p));
-
-                    let text_suggests_action =
-                        !has_exclusion && INTENT_PATTERNS.iter().any(|p| tail.contains(p));
-
-                    // Also trigger if response ends with colon (about to list/show)
-                    let ends_with_continuation = tail.trim_end().ends_with(':');
-
-                    text_suggests_action || ends_with_continuation
-                } else {
-                    false
-                };
+                let should_continue = tool_executor::should_auto_continue(
+                    &model_resp.text,
+                    consecutive_continues,
+                    MAX_AUTO_CONTINUES,
+                );
 
                 if should_continue {
                     consecutive_continues += 1;
@@ -2151,34 +2100,15 @@ async fn dispatch_text_message(
 
                         if tools::is_user_prompt_tool(&tc.name) {
                             execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
-                        } else if tools::is_secrets_tool(&tc.name) {
-                            match secrets_handler::execute_secrets_tool(
+                        } else {
+                            tool_executor::execute_tool_by_type(
                                 &tc.name,
                                 &tc.arguments,
+                                workspace_dir,
                                 vault,
-                            )
-                            .await
-                            {
-                                Ok(text) => (text, false),
-                                Err(err) => (err, true),
-                            }
-                        } else if tools::is_skill_tool(&tc.name) {
-                            match skills_handler::execute_skill_tool(
-                                &tc.name,
-                                &tc.arguments,
                                 skill_mgr,
                             )
                             .await
-                            {
-                                Ok(text) => (text, false),
-                                Err(err) => (err, true),
-                            }
-                        } else {
-                            match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir).await
-                            {
-                                Ok(text) => (text, false),
-                                Err(err) => (err, true),
-                            }
                         }
                     }
                 }
@@ -2189,25 +2119,15 @@ async fn dispatch_text_message(
                     // Execute the tool.
                     if tools::is_user_prompt_tool(&tc.name) {
                         execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
-                    } else if tools::is_secrets_tool(&tc.name) {
-                        match secrets_handler::execute_secrets_tool(&tc.name, &tc.arguments, vault)
-                            .await
-                        {
-                            Ok(text) => (text, false),
-                            Err(err) => (err, true),
-                        }
-                    } else if tools::is_skill_tool(&tc.name) {
-                        match skills_handler::execute_skill_tool(&tc.name, &tc.arguments, skill_mgr)
-                            .await
-                        {
-                            Ok(text) => (text, false),
-                            Err(err) => (err, true),
-                        }
                     } else {
-                        match tools::execute_tool(&tc.name, &tc.arguments, workspace_dir).await {
-                            Ok(text) => (text, false),
-                            Err(err) => (err, true),
-                        }
+                        tool_executor::execute_tool_by_type(
+                            &tc.name,
+                            &tc.arguments,
+                            workspace_dir,
+                            vault,
+                            skill_mgr,
+                        )
+                        .await
                     }
                 }
             };
