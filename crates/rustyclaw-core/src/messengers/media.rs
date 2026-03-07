@@ -349,9 +349,10 @@ pub fn detect_mime_type(path: &Path) -> String {
         if out.status.success() {
             let mime = String::from_utf8_lossy(&out.stdout).trim().to_string();
             // The `file` command may succeed but return an error message
-            // (e.g. "cannot open ...") instead of a real MIME type.
-            // Real MIME types always contain a slash.
-            if mime.contains('/') {
+            // (e.g. "cannot open '/path' (No such file or directory)")
+            // instead of a real MIME type.  A valid MIME type is a single
+            // token like "image/jpeg" — no spaces, exactly one slash.
+            if !mime.contains(' ') && mime.matches('/').count() == 1 {
                 return mime;
             }
         }

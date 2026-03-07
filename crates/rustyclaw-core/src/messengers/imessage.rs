@@ -40,9 +40,18 @@ impl IMessageMessenger {
 
     /// Build a BlueBubbles API URL with password query param.
     fn api_url(&self, path: &str) -> String {
+        // URL-encode the password to handle special characters (&, =, #, etc.)
+        let encoded_password: String = self.password.bytes().map(|b| {
+            match b {
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                    (b as char).to_string()
+                }
+                _ => format!("%{:02X}", b),
+            }
+        }).collect();
         format!(
             "{}/api/v1/{}?password={}",
-            self.server_url, path, self.password
+            self.server_url, path, encoded_password
         )
     }
 }
@@ -128,8 +137,8 @@ impl Messenger for IMessageMessenger {
     async fn receive_messages(&self) -> Result<Vec<Message>> {
         let poll_ts = self.last_poll_ts.load(Ordering::Relaxed);
         let url = format!(
-            "{}/api/v1/message?password={}&after={}&limit=50&sort=asc",
-            self.server_url, self.password, poll_ts
+            "{}?after={}&limit=50&sort=asc",
+            self.api_url("message"), poll_ts
         );
 
         let resp = self.http.get(&url).send().await?;
@@ -226,5 +235,18 @@ mod tests {
         let url = m.api_url("server/info");
         assert!(url.starts_with("http://localhost:1234/api/v1/server/info"));
         assert!(url.contains("password=pass"));
+    }
+
+    #[test]
+    fn test_api_url_encodes_special_chars() {
+        let m = IMessageMessenger::new(
+            "test".to_string(),
+            "http://localhost:1234".to_string(),
+            "p@ss&word".to_string(),
+        );
+        let url = m.api_url("server/info");
+        // Special chars should be percent-encoded
+        assert!(url.contains("password=p%40ss%26word"));
+        assert!(!url.contains("p@ss&word"));
     }
 }
