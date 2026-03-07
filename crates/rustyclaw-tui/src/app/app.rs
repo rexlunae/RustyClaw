@@ -1305,6 +1305,14 @@ mod tui_component {
                                             auth_code.set(String::new());
                                             auth_error.set(String::new());
                                         }
+                                        // Always stop the spinner / streaming state so
+                                        // the TUI doesn't get stuck in "Thinking…" after
+                                        // a provider error (e.g. 400 Bad Request).
+                                        streaming.set(false);
+                                        stream_start.set(None);
+                                        elapsed.set(String::new());
+                                        streaming_buf.set(String::new());
+
                                         let mut m = messages.read().clone();
                                         m.push(DisplayMessage::error(s));
                                         messages.set(m);

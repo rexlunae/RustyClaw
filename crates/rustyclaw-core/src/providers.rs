@@ -114,11 +114,44 @@ pub const PROVIDERS: &[ProviderDef] = &[
         secret_key: Some("OPENROUTER_API_KEY"),
         device_flow: None,
         base_url: Some("https://openrouter.ai/api/v1"),
+        // Popular models — OpenRouter has 300+ models; use /model fetch or
+        // the dynamic fetch_models() API for a complete list.
         models: &[
+            // Anthropic
             "anthropic/claude-opus-4-20250514",
             "anthropic/claude-sonnet-4-20250514",
+            "anthropic/claude-haiku-4-20250514",
+            "anthropic/claude-3.5-sonnet",
+            "anthropic/claude-3.5-haiku",
+            // OpenAI
             "openai/gpt-4.1",
+            "openai/gpt-4.1-mini",
+            "openai/gpt-4.1-nano",
+            "openai/o3",
+            "openai/o4-mini",
+            "openai/gpt-4o",
+            "openai/gpt-4o-mini",
+            // Google
             "google/gemini-2.5-pro",
+            "google/gemini-2.5-flash",
+            "google/gemini-2.0-flash",
+            // Meta
+            "meta-llama/llama-4-maverick",
+            "meta-llama/llama-4-scout",
+            "meta-llama/llama-3.3-70b-instruct",
+            // Mistral
+            "mistralai/mistral-large",
+            "mistralai/mistral-small",
+            "mistralai/codestral",
+            // DeepSeek
+            "deepseek/deepseek-chat-v3",
+            "deepseek/deepseek-r1",
+            // xAI
+            "x-ai/grok-3",
+            "x-ai/grok-3-mini",
+            // Qwen
+            "qwen/qwen3-coder",
+            "qwen/qwen-2.5-72b-instruct",
         ],
         help_url: Some("https://openrouter.ai/keys"),
         help_text: Some("Get a key at openrouter.ai/keys (free tier available)"),
