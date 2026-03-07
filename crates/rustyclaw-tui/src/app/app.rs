@@ -1386,9 +1386,14 @@ mod tui_component {
                                         } else {
                                             format!("{} / {}", provider, model)
                                         };
+                                        let msg_text = if label.is_empty() {
+                                            "Model switched to (none)".to_string()
+                                        } else {
+                                            format!("Model switched to {}", label)
+                                        };
                                         dynamic_model_label.set(Some(label));
                                         let mut m = messages.read().clone();
-                                        m.push(DisplayMessage::success(format!("Model switched to {} / {}", provider, model)));
+                                        m.push(DisplayMessage::success(msg_text));
                                         messages.set(m);
                                     }
                                     GwEvent::ToolCall { name, arguments } => {
