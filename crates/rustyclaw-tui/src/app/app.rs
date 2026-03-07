@@ -706,12 +706,19 @@ impl App {
                                 .model
                                 .as_ref()
                                 .and_then(|m| m.base_url.clone());
-                            // Try to read the API key from the environment
-                            // variable that the provider expects.
+                            // Read the API key: try the encrypted vault first
+                            // (where onboarding stores it), then fall back to
+                            // environment variables.
                             let api_key = rustyclaw_core::providers::secret_key_for_provider(
                                 &provider_id,
                             )
-                            .and_then(|env_name| std::env::var(env_name).ok());
+                            .and_then(|key_name| {
+                                secrets_manager
+                                    .get_secret(key_name, true)
+                                    .ok()
+                                    .flatten()
+                                    .or_else(|| std::env::var(key_name).ok())
+                            });
 
                             let gw_tx2 = gw_tx.clone();
                             tokio::spawn(async move {
