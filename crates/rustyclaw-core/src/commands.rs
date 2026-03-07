@@ -54,9 +54,9 @@ pub struct CommandContext<'a> {
     pub config: &'a mut Config,
 }
 
-/// List of all known command names (without the / prefix).
-/// Includes subcommand forms so tab-completion works for them.
-pub fn command_names() -> Vec<String> {
+/// Base command names shared by both `command_names` and
+/// `command_names_for_provider`.  Does NOT include `model <name>` entries.
+fn base_command_names() -> Vec<String> {
     let mut names: Vec<String> = vec![
         "help".into(),
         "clear".into(),
@@ -115,8 +115,38 @@ pub fn command_names() -> Vec<String> {
     for p in providers::provider_ids() {
         names.push(format!("provider {}", p));
     }
+    names
+}
+
+/// List of all known command names (without the / prefix).
+/// Includes subcommand forms so tab-completion works for them.
+/// Model completions include ALL providers (use `command_names_for_provider`
+/// for provider-scoped completions).
+pub fn command_names() -> Vec<String> {
+    let mut names = base_command_names();
     for m in providers::all_model_names() {
         names.push(format!("model {}", m));
+    }
+    names
+}
+
+/// Like `command_names` but model completions are scoped to the given
+/// provider so the user only sees model IDs that their active provider
+/// actually supports.
+pub fn command_names_for_provider(provider_id: &str) -> Vec<String> {
+    let mut names = base_command_names();
+    let models = providers::models_for_provider(provider_id);
+    if models.is_empty() {
+        // Provider has no static model list (e.g. custom / LM Studio) —
+        // fall back to showing all models so the user isn't left with zero
+        // completions.
+        for m in providers::all_model_names() {
+            names.push(format!("model {}", m));
+        }
+    } else {
+        for m in models {
+            names.push(format!("model {}", m));
+        }
     }
     names
 }
@@ -411,11 +441,28 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 }
             }
             None => {
-                let list = providers::all_model_names().join(", ");
+                // Show models scoped to the current provider so the user
+                // doesn't see model IDs from other providers that won't work.
+                let current_provider = context
+                    .config
+                    .model
+                    .as_ref()
+                    .map(|m| m.provider.as_str())
+                    .unwrap_or("");
+                let provider_models = providers::models_for_provider(current_provider);
+                let list = if provider_models.is_empty() {
+                    providers::all_model_names().join(", ")
+                } else {
+                    provider_models.join(", ")
+                };
                 CommandResponse {
                     messages: vec![
                         "Usage: /model <name>".to_string(),
-                        format!("Known models: {}", list),
+                        if current_provider.is_empty() {
+                            format!("Known models: {}", list)
+                        } else {
+                            format!("Models for {}: {}", current_provider, list)
+                        },
                     ],
                     action: CommandAction::None,
                 }

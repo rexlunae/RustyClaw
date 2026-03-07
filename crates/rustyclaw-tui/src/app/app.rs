@@ -362,6 +362,7 @@ impl App {
                 element!(TuiRoot(
                     soul_name: soul_name,
                     model_label: model_label,
+                    provider_id: provider.clone(),
                     hint: hint,
                 ))
                 .fullscreen()
@@ -1134,6 +1135,8 @@ mod tui_component {
     pub struct TuiRootProps {
         pub soul_name: String,
         pub model_label: String,
+        /// Active provider ID (e.g. "openrouter") for provider-scoped completions.
+        pub provider_id: String,
         pub hint: String,
     }
 
@@ -1160,6 +1163,7 @@ mod tui_component {
         let mut should_quit = hooks.use_state(|| false);
         let mut streaming_buf = hooks.use_state(|| String::new());
         let mut dynamic_model_label: State<Option<String>> = hooks.use_state(|| None);
+        let mut dynamic_provider_id: State<Option<String>> = hooks.use_state(|| None);
 
         // ── Auth dialog state ───────────────────────────────────────────
         let mut show_auth_dialog = hooks.use_state(|| false);
@@ -1391,6 +1395,7 @@ mod tui_component {
                                         } else {
                                             format!("Model switched to {}", label)
                                         };
+                                        dynamic_provider_id.set(Some(provider));
                                         dynamic_model_label.set(Some(label));
                                         let mut m = messages.read().clone();
                                         m.push(DisplayMessage::success(msg_text));
@@ -2319,12 +2324,18 @@ mod tui_component {
         let gw_label = status.label().to_string();
         let gw_color = Some(theme::gateway_color(&status));
 
+        // Clone props into owned values so closures below don't borrow `props`.
+        let prop_soul_name = props.soul_name.clone();
+        let prop_model_label = props.model_label.clone();
+        let prop_provider_id = props.provider_id.clone();
+        let prop_hint = props.hint.clone();
+
         element! {
             Root(
                 width: width,
                 height: height,
-                soul_name: props.soul_name.clone(),
-                model_label: dynamic_model_label.read().clone().unwrap_or_else(|| props.model_label.clone()),
+                soul_name: prop_soul_name,
+                model_label: dynamic_model_label.read().clone().unwrap_or_else(|| prop_model_label.clone()),
                 gateway_icon: gw_icon,
                 gateway_label: gw_label,
                 gateway_color: gw_color,
@@ -2345,7 +2356,9 @@ mod tui_component {
                     input_value.set(new_val.clone());
                     // Update slash-command completions
                     if let Some(partial) = new_val.strip_prefix('/') {
-                        let names = rustyclaw_core::commands::command_names();
+                        let current_pid = dynamic_provider_id.read().clone()
+                            .unwrap_or_else(|| prop_provider_id.clone());
+                        let names = rustyclaw_core::commands::command_names_for_provider(&current_pid);
                         let filtered: Vec<String> = names
                             .into_iter()
                             .filter(|c: &String| c.starts_with(partial))
@@ -2371,7 +2384,7 @@ mod tui_component {
                 threads: threads.read().clone(),
                 sidebar_focused: sidebar_focused.get(),
                 sidebar_selected: sidebar_selected.get(),
-                hint: props.hint.clone(),
+                hint: prop_hint.clone(),
                 spinner_tick: spinner_tick.get(),
                 show_auth_dialog: show_auth_dialog.get(),
                 auth_code: auth_code.read().clone(),
