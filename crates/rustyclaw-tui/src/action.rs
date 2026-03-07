@@ -184,6 +184,11 @@ pub enum Action {
     },
     /// Gateway authenticated successfully
     GatewayAuthenticated,
+    /// Gateway config reloaded with new provider/model
+    GatewayReloaded {
+        provider: String,
+        model: String,
+    },
     /// Gateway vault unlocked successfully
     GatewayVaultUnlocked,
     /// Info message

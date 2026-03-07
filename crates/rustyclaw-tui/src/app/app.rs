@@ -35,6 +35,11 @@ pub(crate) enum GwEvent {
     AuthChallenge,
     Authenticated,
     ModelReady(String),
+    /// Gateway reloaded config — update model label in status bar
+    ModelReloaded {
+        provider: String,
+        model: String,
+    },
     Info(String),
     Success(String),
     Warning(String),
@@ -608,11 +613,83 @@ impl App {
                                 base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                             });
 
-                            // Save config
+                            // Save config and tell the gateway to reload so the
+                            // new model takes effect immediately (no restart needed).
                             if let Err(e) = config.save(None) {
-                                let _ = gw_tx.send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                                let _ = gw_tx
+                                    .send(GwEvent::Error(format!("Failed to save config: {}", e)));
                             } else {
-                                let _ = gw_tx.send(GwEvent::Success(format!("Model set to {}. Restart gateway to apply.", model_name)));
+                                let _ = gw_tx.send(GwEvent::Info(format!(
+                                    "Model set to {}. Reloading gateway…",
+                                    model_name
+                                )));
+                                // Send Reload frame so the gateway picks up the new config
+                                if let Some(ref mut sink) = ws_sink {
+                                    use futures_util::SinkExt;
+                                    let frame = ClientFrame {
+                                        frame_type: ClientFrameType::Reload,
+                                        payload: ClientPayload::Reload,
+                                    };
+                                    if let Ok(data) = serialize_frame(&frame) {
+                                        let _ = sink
+                                            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                                data.into(),
+                                            ))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
+                        CommandAction::SetProvider(provider_name) => {
+                            // Update config with new provider, keep existing model
+                            let existing_model =
+                                config.model.as_ref().and_then(|m| m.model.clone());
+                            config.model = Some(rustyclaw_core::config::ModelProvider {
+                                provider: provider_name.clone(),
+                                model: existing_model,
+                                base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                            });
+
+                            // Save config and tell the gateway to reload
+                            if let Err(e) = config.save(None) {
+                                let _ = gw_tx
+                                    .send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                            } else {
+                                let _ = gw_tx.send(GwEvent::Info(format!(
+                                    "Provider set to {}. Reloading gateway…",
+                                    provider_name
+                                )));
+                                if let Some(ref mut sink) = ws_sink {
+                                    use futures_util::SinkExt;
+                                    let frame = ClientFrame {
+                                        frame_type: ClientFrameType::Reload,
+                                        payload: ClientPayload::Reload,
+                                    };
+                                    if let Ok(data) = serialize_frame(&frame) {
+                                        let _ = sink
+                                            .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                                data.into(),
+                                            ))
+                                            .await;
+                                    }
+                                }
+                            }
+                        }
+                        CommandAction::GatewayReload => {
+                            // Send Reload frame to the gateway
+                            if let Some(ref mut sink) = ws_sink {
+                                use futures_util::SinkExt;
+                                let frame = ClientFrame {
+                                    frame_type: ClientFrameType::Reload,
+                                    payload: ClientPayload::Reload,
+                                };
+                                if let Ok(data) = serialize_frame(&frame) {
+                                    let _ = sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
+                                        .await;
+                                }
                             }
                         }
                         _ => {}
@@ -824,6 +901,10 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         Action::GatewayDisconnected(s) => Some(GwEvent::Disconnected(s.clone())),
         Action::GatewayVaultLocked => Some(GwEvent::VaultLocked),
         Action::GatewayVaultUnlocked => Some(GwEvent::VaultUnlocked),
+        Action::GatewayReloaded { provider, model } => Some(GwEvent::ModelReloaded {
+            provider: provider.clone(),
+            model: model.clone(),
+        }),
 
         // ── Streaming ───────────────────────────────────────────────────
         Action::GatewayStreamStart => Some(GwEvent::StreamStart),
@@ -1078,6 +1159,7 @@ mod tui_component {
         let mut spinner_tick = hooks.use_state(|| 0usize);
         let mut should_quit = hooks.use_state(|| false);
         let mut streaming_buf = hooks.use_state(|| String::new());
+        let mut dynamic_model_label: State<Option<String>> = hooks.use_state(|| None);
 
         // ── Auth dialog state ───────────────────────────────────────────
         let mut show_auth_dialog = hooks.use_state(|| false);
@@ -1293,6 +1375,20 @@ mod tui_component {
                                         gw_status.set(rustyclaw_core::types::GatewayStatus::ModelReady);
                                         let mut m = messages.read().clone();
                                         m.push(DisplayMessage::success(detail));
+                                        messages.set(m);
+                                    }
+                                    GwEvent::ModelReloaded { provider, model } => {
+                                        gw_status.set(rustyclaw_core::types::GatewayStatus::ModelReady);
+                                        let label = if provider.is_empty() {
+                                            String::new()
+                                        } else if model.is_empty() {
+                                            provider.clone()
+                                        } else {
+                                            format!("{} / {}", provider, model)
+                                        };
+                                        dynamic_model_label.set(Some(label));
+                                        let mut m = messages.read().clone();
+                                        m.push(DisplayMessage::success(format!("Model switched to {} / {}", provider, model)));
                                         messages.set(m);
                                     }
                                     GwEvent::ToolCall { name, arguments } => {
@@ -2223,7 +2319,7 @@ mod tui_component {
                 width: width,
                 height: height,
                 soul_name: props.soul_name.clone(),
-                model_label: props.model_label.clone(),
+                model_label: dynamic_model_label.read().clone().unwrap_or_else(|| props.model_label.clone()),
                 gateway_icon: gw_icon,
                 gateway_label: gw_label,
                 gateway_color: gw_color,
