@@ -783,211 +783,20 @@ async fn main() -> Result<()> {
         Commands::Gateway(sub) => {
             match sub {
                 GatewayCommands::Start => {
-                    use rustyclaw_core::daemon;
-                    use rustyclaw_core::theme as t;
-
-                    // Under the new security model the gateway daemon owns
-                    // the secrets vault — we only forward the vault password
-                    // so it can open the vault and extract the API key itself.
                     let vault_password = extract_vault_password(&config);
-
-                    let sp = t::spinner("Starting gateway…");
-
-                    let (port, bind) = parse_gateway_defaults(&config);
-
-                    match daemon::start(
-                        &config.settings_dir,
-                        port,
-                        bind,
-                        &[],
-                        None,
-                        vault_password.as_deref(),
-                        config.tls_cert.as_deref(),
-                        config.tls_key.as_deref(),
-                    ) {
-                        Ok(pid) => {
-                            let scheme = if config.tls_cert.is_some() {
-                                "wss"
-                            } else {
-                                "ws"
-                            };
-                            t::spinner_ok(
-                                &sp,
-                                &format!(
-                                    "Gateway started (PID {}, {})",
-                                    pid,
-                                    t::info(&format!(
-                                        "{}://{}:{}",
-                                        scheme,
-                                        if bind == "loopback" {
-                                            "127.0.0.1"
-                                        } else {
-                                            bind
-                                        },
-                                        port
-                                    )),
-                                ),
-                            );
-                            println!(
-                                "  {}",
-                                t::muted(&format!(
-                                    "Logs: {}",
-                                    daemon::log_path(&config.settings_dir).display()
-                                ))
-                            );
-                        }
-                        Err(e) => {
-                            t::spinner_fail(&sp, &format!("Failed to start gateway: {}", e));
-                        }
-                    }
+                    let (port, bind) = commands::parse_gateway_defaults(&config);
+                    commands::handle_start(&config, vault_password.as_deref(), port, bind)?;
                 }
                 GatewayCommands::Stop => {
-                    use rustyclaw_core::daemon;
-                    use rustyclaw_core::theme as t;
-
-                    let sp = t::spinner("Stopping gateway…");
-
-                    match daemon::stop(&config.settings_dir)? {
-                        daemon::StopResult::Stopped { pid } => {
-                            t::spinner_ok(&sp, &format!("Gateway stopped (was PID {})", pid));
-                        }
-                        daemon::StopResult::WasStale { pid } => {
-                            t::spinner_warn(
-                                &sp,
-                                &format!("Cleaned up stale PID file (PID {} was not running)", pid),
-                            );
-                        }
-                        daemon::StopResult::WasNotRunning => {
-                            t::spinner_warn(&sp, "Gateway is not running");
-                        }
-                    }
+                    commands::handle_stop(&config)?;
                 }
                 GatewayCommands::Restart => {
-                    use rustyclaw_core::daemon;
-                    use rustyclaw_core::theme as t;
-
-                    // Under the new security model the gateway daemon owns
-                    // the secrets vault — we only forward the vault password.
                     let vault_password = extract_vault_password(&config);
-
-                    let sp = t::spinner("Restarting gateway…");
-
-                    // Stop first (ignore "not running" errors).
-                    let was_running = match daemon::stop(&config.settings_dir) {
-                        Ok(daemon::StopResult::Stopped { pid }) => {
-                            sp.set_message(format!("Stopped PID {}. Starting…", pid));
-                            true
-                        }
-                        Ok(_) => false,
-                        Err(e) => {
-                            t::spinner_fail(&sp, &format!("Failed to stop: {}", e));
-                            return Ok(());
-                        }
-                    };
-
-                    // Brief pause to let the port free up.
-                    if was_running {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                    }
-
-                    let (port, bind) = parse_gateway_defaults(&config);
-
-                    match daemon::start(
-                        &config.settings_dir,
-                        port,
-                        bind,
-                        &[],
-                        None,
-                        vault_password.as_deref(),
-                        config.tls_cert.as_deref(),
-                        config.tls_key.as_deref(),
-                    ) {
-                        Ok(pid) => {
-                            let scheme = if config.tls_cert.is_some() {
-                                "wss"
-                            } else {
-                                "ws"
-                            };
-                            t::spinner_ok(
-                                &sp,
-                                &format!(
-                                    "Gateway restarted (PID {}, {})",
-                                    pid,
-                                    t::info(&format!(
-                                        "{}://{}:{}",
-                                        scheme,
-                                        if bind == "loopback" {
-                                            "127.0.0.1"
-                                        } else {
-                                            bind
-                                        },
-                                        port
-                                    )),
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            t::spinner_fail(&sp, &format!("Failed to start: {}", e));
-                        }
-                    }
+                    let (port, bind) = commands::parse_gateway_defaults(&config);
+                    commands::handle_restart(&config, vault_password.as_deref(), port, bind)?;
                 }
                 GatewayCommands::Status { json } => {
-                    use rustyclaw_core::daemon;
-                    use rustyclaw_core::theme as t;
-
-                    let url = config
-                        .gateway_url
-                        .as_deref()
-                        .unwrap_or("ws://127.0.0.1:9001");
-                    let status = daemon::status(&config.settings_dir);
-
-                    if json {
-                        let (running, pid) = match &status {
-                            daemon::DaemonStatus::Running { pid } => (true, Some(*pid)),
-                            daemon::DaemonStatus::Stale { pid } => (false, Some(*pid)),
-                            daemon::DaemonStatus::Stopped => (false, None),
-                        };
-                        print!("{{ \"running\": {}", running);
-                        if let Some(pid) = pid {
-                            print!(", \"pid\": {}", pid);
-                        }
-                        println!(", \"gateway_url\": \"{}\" }}", url);
-                    } else {
-                        println!("{}", t::label_value("Gateway URL", url));
-                        match status {
-                            daemon::DaemonStatus::Running { pid } => {
-                                println!(
-                                    "{}",
-                                    t::label_value(
-                                        "Status     ",
-                                        &t::success(&format!("running (PID {})", pid))
-                                    )
-                                );
-                            }
-                            daemon::DaemonStatus::Stale { pid } => {
-                                println!(
-                                    "{}",
-                                    t::label_value(
-                                        "Status     ",
-                                        &t::warn(&format!(
-                                            "stale PID file (PID {} not running)",
-                                            pid
-                                        ))
-                                    )
-                                );
-                            }
-                            daemon::DaemonStatus::Stopped => {
-                                println!("{}", t::label_value("Status     ", &t::muted("stopped")));
-                            }
-                        }
-                        let log = daemon::log_path(&config.settings_dir);
-                        if log.exists() {
-                            println!(
-                                "{}",
-                                t::label_value("Log        ", &log.display().to_string())
-                            );
-                        }
-                    }
+                    commands::handle_status(&config, json);
                 }
                 GatewayCommands::Reload => {
                     use rustyclaw_core::theme as t;
@@ -1514,18 +1323,6 @@ async fn main() -> Result<()> {
 /// Parse the default gateway port and bind address from Config.
 /// If `gateway_url` is set (e.g. "ws://127.0.0.1:9001"), extract host/port
 /// from it.  Otherwise fall back to 127.0.0.1:9001.
-fn parse_gateway_defaults(config: &Config) -> (u16, &str) {
-    if let Some(url) = &config.gateway_url {
-        if let Ok(parsed) = url::Url::parse(url) {
-            let port = parsed.port().unwrap_or(9001);
-            let host = parsed.host_str().unwrap_or("127.0.0.1");
-            let bind = if host == "0.0.0.0" { "lan" } else { "loopback" };
-            return (port, bind);
-        }
-    }
-    (9001, "loopback")
-}
-
 /// Extract the vault password for the gateway daemon.
 ///
 /// If the vault is password-protected, prompt the user for it.  The
