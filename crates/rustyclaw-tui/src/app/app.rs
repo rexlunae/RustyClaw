@@ -593,24 +593,22 @@ impl App {
                             }
                         }
                         CommandAction::SetModel(model_name) => {
-                            // Parse model name: could be "provider/model" or just "model"
-                            let (provider, model) = if model_name.contains('/') {
-                                let parts: Vec<&str> = model_name.splitn(2, '/').collect();
-                                (parts[0].to_string(), parts[1].to_string())
-                            } else {
-                                // Keep existing provider, just change model
-                                let existing_provider = config
-                                    .model
-                                    .as_ref()
-                                    .map(|m| m.provider.clone())
-                                    .unwrap_or_else(|| "anthropic".to_string());
-                                (existing_provider, model_name.clone())
-                            };
+                            // /model only changes the model, never the provider.
+                            // The model name is used exactly as entered — on
+                            // OpenRouter, IDs like "anthropic/claude-opus-4-20250514"
+                            // include a provider prefix that is part of the model ID,
+                            // not a directive to switch providers.  Use /provider to
+                            // change providers.
+                            let existing_provider = config
+                                .model
+                                .as_ref()
+                                .map(|m| m.provider.clone())
+                                .unwrap_or_else(|| "openrouter".to_string());
 
-                            // Update config
+                            // Update config — keep the current provider, only change model
                             config.model = Some(rustyclaw_core::config::ModelProvider {
-                                provider,
-                                model: Some(model),
+                                provider: existing_provider,
+                                model: Some(model_name.clone()),
                                 base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                             });
 
