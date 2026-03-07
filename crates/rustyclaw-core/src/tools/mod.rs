@@ -1360,6 +1360,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "uv_manage" => uv_manage_params(),
         "npm_manage" => npm_manage_params(),
         "agent_setup" => agent_setup_params(),
+        "pdf" => pdf_params(),
         _ => vec![],
     }
 }

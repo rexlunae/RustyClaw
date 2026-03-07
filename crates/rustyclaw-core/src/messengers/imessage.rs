@@ -11,6 +11,7 @@
 use super::{Message, Messenger, SendOptions};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 /// iMessage messenger via BlueBubbles REST API.
 pub struct IMessageMessenger {
@@ -21,8 +22,8 @@ pub struct IMessageMessenger {
     password: String,
     connected: bool,
     http: reqwest::Client,
-    /// Last message timestamp for polling.
-    last_poll_ts: i64,
+    /// Last message timestamp for polling (atomic for interior mutability).
+    last_poll_ts: AtomicI64,
 }
 
 impl IMessageMessenger {
@@ -33,7 +34,7 @@ impl IMessageMessenger {
             password,
             connected: false,
             http: reqwest::Client::new(),
-            last_poll_ts: chrono::Utc::now().timestamp_millis(),
+            last_poll_ts: AtomicI64::new(chrono::Utc::now().timestamp_millis()),
         }
     }
 
@@ -125,9 +126,10 @@ impl Messenger for IMessageMessenger {
     }
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
+        let poll_ts = self.last_poll_ts.load(Ordering::Relaxed);
         let url = format!(
             "{}/api/v1/message?password={}&after={}&limit=50&sort=asc",
-            self.server_url, self.password, self.last_poll_ts
+            self.server_url, self.password, poll_ts
         );
 
         let resp = self.http.get(&url).send().await?;
@@ -139,6 +141,7 @@ impl Messenger for IMessageMessenger {
         let messages = data["data"].as_array().cloned().unwrap_or_default();
 
         let mut result = Vec::new();
+        let mut max_ts = poll_ts;
         for msg in &messages {
             // Skip messages we sent
             if msg["isFromMe"].as_bool() == Some(true) {
@@ -163,6 +166,10 @@ impl Messenger for IMessageMessenger {
                 .and_then(|c| c["guid"].as_str())
                 .map(|s| s.to_string());
 
+            if date_created > max_ts {
+                max_ts = date_created;
+            }
+
             result.push(Message {
                 id: guid,
                 sender,
@@ -172,6 +179,11 @@ impl Messenger for IMessageMessenger {
                 reply_to: None,
                 media: None,
             });
+        }
+
+        // Advance the poll timestamp so we don't re-fetch the same messages.
+        if max_ts > poll_ts {
+            self.last_poll_ts.store(max_ts, Ordering::Relaxed);
         }
 
         Ok(result)

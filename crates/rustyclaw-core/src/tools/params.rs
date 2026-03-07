@@ -1745,3 +1745,42 @@ pub fn agent_setup_params() -> Vec<ToolParam> {
         required: false,
     }]
 }
+
+pub fn pdf_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "action".into(),
+            description: "Action to perform: 'extract' (default) to extract text, \
+                          'info' to get page count and metadata."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "path".into(),
+            description: "Path to the PDF file.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "start_page".into(),
+            description: "First page to extract (1-based, inclusive). Omit to start from page 1."
+                .into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "end_page".into(),
+            description: "Last page to extract (1-based, inclusive). Omit to read to the end."
+                .into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "max_chars".into(),
+            description: "Maximum characters to return. Truncates output if exceeded.".into(),
+            param_type: "integer".into(),
+            required: false,
+        },
+    ]
+}

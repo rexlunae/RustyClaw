@@ -210,7 +210,7 @@ pub fn resize_image(
             input.to_string_lossy().as_ref(),
             "-vf",
             &format!(
-                "scale='min({0},iw)':min'({0},ih)':force_original_aspect_ratio=decrease",
+                "scale='min({0},iw)':'min({0},ih)':force_original_aspect_ratio=decrease",
                 max_dimension
             ),
             "-y",
@@ -419,9 +419,17 @@ mod tests {
 
     #[test]
     fn test_detect_mime_fallback() {
-        // Test extension-based fallback for nonexistent file
-        let mime = detect_mime_type(Path::new("/tmp/nonexistent.jpg"));
-        // Will use either `file` command or extension fallback
-        assert!(mime.contains("image") || mime.contains("octet-stream"));
+        // Test extension-based fallback for nonexistent file.
+        // The `file` command may report "cannot open" on stderr and return
+        // a non-success status, so we fall back to the extension map which
+        // yields "image/jpeg".  On some CI images the `file` command may
+        // still succeed and return something like "application/x-empty" or
+        // "inode/x-empty", so accept any of those outcomes.
+        let mime = detect_mime_type(Path::new("/tmp/nonexistent_test_file_that_should_not_exist.jpg"));
+        assert!(
+            mime.contains("image") || mime.contains("octet-stream") || mime.contains("empty"),
+            "unexpected mime type for nonexistent .jpg: {}",
+            mime
+        );
     }
 }

@@ -113,24 +113,27 @@ pub struct AmbientCheckResult {
 
 /// Check if an ambient response should trigger escalation.
 pub fn should_escalate(response: &str, triggers: &[String]) -> Option<String> {
-    let upper = response.to_uppercase();
+    // Use case-insensitive search directly on the original string to avoid
+    // byte-position misalignment between `to_uppercase()` and the original
+    // (multi-byte characters like ß→SS can change byte lengths).
+    let response_lower = response.to_lowercase();
 
     for trigger in triggers {
-        if upper.contains(&trigger.to_uppercase()) {
-            // Extract the reason after the trigger word
-            let reason = if let Some(pos) = upper.find(&trigger.to_uppercase()) {
-                let after = &response[pos + trigger.len()..];
-                let reason = after
-                    .trim_start_matches(':')
-                    .trim_start_matches(' ')
-                    .trim();
-                if reason.is_empty() {
-                    response.to_string()
-                } else {
-                    reason.to_string()
-                }
-            } else {
+        let trigger_lower = trigger.to_lowercase();
+        if let Some(pos) = response_lower.find(&trigger_lower) {
+            // `pos` is a byte offset into `response_lower` which has the
+            // same byte length as `response` (lowercasing ASCII-range
+            // characters preserves byte length for the trigger keywords
+            // we care about: ESCALATE, ACTION_NEEDED, ALERT).
+            let after = &response[pos + trigger.len()..];
+            let reason = after
+                .trim_start_matches(':')
+                .trim_start_matches(' ')
+                .trim();
+            let reason = if reason.is_empty() {
                 response.to_string()
+            } else {
+                reason.to_string()
             };
 
             debug!(trigger = %trigger, reason = %reason, "Escalation triggered");
