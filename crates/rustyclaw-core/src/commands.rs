@@ -458,7 +458,11 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 CommandResponse {
                     messages: vec![
                         "Usage: /model <name>".to_string(),
-                        format!("Models for {}: {}", current_provider, list),
+                        if current_provider.is_empty() {
+                            format!("Known models: {}", list)
+                        } else {
+                            format!("Models for {}: {}", current_provider, list)
+                        },
                     ],
                     action: CommandAction::None,
                 }
