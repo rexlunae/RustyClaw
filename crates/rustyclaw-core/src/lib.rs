@@ -25,6 +25,7 @@ pub mod models;
 pub mod observability;
 pub mod process_manager;
 pub mod providers;
+pub mod protocols;
 pub mod retry;
 pub mod runtime;
 pub mod sandbox;
