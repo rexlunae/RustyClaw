@@ -31,6 +31,7 @@ pub mod runtime;
 pub mod sandbox;
 pub mod secrets;
 pub mod security;
+pub mod skill_audit;
 pub mod sessions;
 pub mod skills;
 pub mod soul;
