@@ -4,6 +4,9 @@
 // configuration, gateway protocol, secrets management, tool dispatch,
 // skills, providers, commands, and shared display types.
 
+// matrix-sdk 0.16 can overflow the default recursion limit on some compilers.
+#![recursion_limit = "256"]
+
 pub mod args;
 pub mod canvas;
 pub mod commands;
