@@ -104,12 +104,12 @@ impl<T: Send + 'static> SubtaskHandle<T> {
 
 impl<T: Send + 'static> Drop for SubtaskHandle<T> {
     fn drop(&mut self) {
-        // If the handle is dropped without joining, cancel the subtask
+        // If the handle is dropped without joining, cancel the subtask.
+        // We only signal via CancellationToken (cooperative) so the spawned
+        // task has a chance to update ThreadManager status before exiting.
+        // Do NOT call handle.abort() — that preempts the status-update code.
         if self.result_rx.is_some() {
             self.cancel_token.cancel();
-            if let Some(handle) = self.join_handle.take() {
-                handle.abort();
-            }
         }
     }
 }
