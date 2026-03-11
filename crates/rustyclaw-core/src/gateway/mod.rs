@@ -455,6 +455,8 @@ where
             label: t.label.clone(),
             description: t.description.clone(),
             status: Some(t.status.clone()),
+            kind_icon: Some(t.icon.clone()),
+            status_icon: Some(t.status_icon.clone()),
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             has_summary: t.has_summary,
@@ -478,11 +480,18 @@ where
             }
         }
 
+        let status_icon = if task.status.is_terminal() {
+            "✓"
+        } else {
+            "▶"
+        };
         threads.push(protocol::ThreadInfoDto {
             id: task.id.0,
             label: task.kind.display_name().to_string(),
             description: Some(task.kind.description()),
             status: Some(format!("{:?}", task.status)),
+            kind_icon: Some("📋".to_string()),
+            status_icon: Some(status_icon.to_string()),
             is_foreground: false,
             message_count: 0,
             has_summary: task.status.is_terminal(),
@@ -511,11 +520,20 @@ where
                 SessionStatus::Stopped => "Stopped",
             };
 
+            let session_status_icon = match session.status {
+                SessionStatus::Active => "▶",
+                SessionStatus::Completed => "✓",
+                SessionStatus::Error => "✗",
+                SessionStatus::Timeout => "⊘",
+                SessionStatus::Stopped => "⊘",
+            };
             threads.push(protocol::ThreadInfoDto {
                 id,
                 label: session.label.clone().unwrap_or_else(|| "Sub-agent".to_string()),
                 description: session.task.clone(),
                 status: Some(status_str.to_string()),
+                kind_icon: Some("🤖".to_string()),
+                status_icon: Some(session_status_icon.to_string()),
                 is_foreground: false,
                 message_count: session.messages.len(),
                 has_summary: session.status != SessionStatus::Active,

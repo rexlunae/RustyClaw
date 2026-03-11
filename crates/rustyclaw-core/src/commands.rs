@@ -42,6 +42,10 @@ pub enum CommandAction {
     ThreadClose(u64),
     /// Rename a thread (id, new_label)
     ThreadRename(u64, String),
+    /// Background the current foreground thread
+    ThreadBackground,
+    /// Foreground a thread by ID
+    ThreadForeground(u64),
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +95,8 @@ fn base_command_names() -> Vec<String> {
         "thread list".into(),
         "thread close".into(),
         "thread rename".into(),
+        "thread bg".into(),
+        "thread fg".into(),
         "clawhub".into(),
         "clawhub auth".into(),
         "clawhub auth login".into(),
@@ -315,6 +321,12 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     .to_string(),
                 "  /npm <action> [pkg …]    - Node.js/npm admin (setup/install/run/build/…)"
                     .to_string(),
+                "  /thread new <label>      - Create a new chat thread".to_string(),
+                "  /thread list             - Show threads (or focus sidebar)".to_string(),
+                "  /thread close <id>       - Close a thread".to_string(),
+                "  /thread rename <id> <l>  - Rename a thread".to_string(),
+                "  /thread bg               - Background the current thread".to_string(),
+                "  /thread fg <id>          - Foreground a thread by ID".to_string(),
             ],
             action: CommandAction::None,
         },
@@ -756,10 +768,30 @@ fn handle_thread_subcommand(parts: &[&str]) -> CommandResponse {
             messages: vec!["Press Tab to focus sidebar and view threads.".to_string()],
             action: CommandAction::ThreadList,
         },
+        Some("bg") | Some("background") => CommandResponse {
+            messages: vec!["Backgrounding current thread…".to_string()],
+            action: CommandAction::ThreadBackground,
+        },
+        Some("fg") | Some("foreground") => {
+            let id_str = parts.get(1).copied().unwrap_or("");
+            match id_str.parse::<u64>() {
+                Ok(id) => CommandResponse {
+                    messages: vec![format!("Foregrounding thread {}…", id)],
+                    action: CommandAction::ThreadForeground(id),
+                },
+                Err(_) => CommandResponse {
+                    messages: vec![
+                        "Usage: /thread fg <id>".to_string(),
+                        "Get thread IDs from /thread list or sidebar.".to_string(),
+                    ],
+                    action: CommandAction::None,
+                },
+            }
+        }
         Some(sub) => CommandResponse {
             messages: vec![
                 format!("Unknown thread subcommand: {}", sub),
-                "Available: new, list, close, rename".to_string(),
+                "Available: new, list, close, rename, bg, fg".to_string(),
             ],
             action: CommandAction::None,
         },

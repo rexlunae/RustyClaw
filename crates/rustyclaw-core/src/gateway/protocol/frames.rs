@@ -425,6 +425,10 @@ pub struct ThreadInfoDto {
     pub description: Option<String>,
     /// Task status (None = simple thread, Some = spawned task)
     pub status: Option<String>,
+    /// Icon for the thread kind (e.g. chat, sub-agent, background, task)
+    pub kind_icon: Option<String>,
+    /// Icon for the thread status (e.g. running, completed, failed)
+    pub status_icon: Option<String>,
     pub is_foreground: bool,
     pub message_count: usize,
     pub has_summary: bool,
@@ -871,6 +875,8 @@ mod frame_size_tests {
             label: "Main".to_string(),
             description: None,
             status: None,
+            kind_icon: None,
+            status_icon: None,
             is_foreground: true,
             message_count: 0,
             has_summary: false,
