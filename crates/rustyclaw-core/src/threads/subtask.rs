@@ -409,9 +409,12 @@ pub struct SubtaskRegistry {
 }
 
 /// An entry in the subtask registry.
+///
+/// Cancellation is cooperative: we signal via `CancellationToken` and the
+/// subtask's async function is expected to check `token.is_cancelled()` or
+/// `token.cancelled().await`.
 struct RegistryEntry {
     cancel_token: CancellationToken,
-    join_handle: tokio::task::JoinHandle<()>,
     label: String,
 }
 
@@ -429,34 +432,29 @@ impl SubtaskRegistry {
         handle: &SubtaskHandle<T>,
         label: impl Into<String>,
     ) {
-        // We can't move the join_handle out of SubtaskHandle, so we just
-        // store the cancel token for cancellation purposes
         self.handles.insert(
             handle.thread_id,
             RegistryEntry {
                 cancel_token: handle.cancel_token.clone(),
-                join_handle: tokio::spawn(async {}), // placeholder
                 label: label.into(),
             },
         );
     }
 
-    /// Cancel a subtask by thread ID.
+    /// Cancel a subtask by thread ID (cooperative via `CancellationToken`).
     pub fn cancel(&mut self, thread_id: &ThreadId) -> bool {
         if let Some(entry) = self.handles.remove(thread_id) {
             entry.cancel_token.cancel();
-            entry.join_handle.abort();
             true
         } else {
             false
         }
     }
 
-    /// Cancel all subtasks.
+    /// Cancel all subtasks (cooperative via `CancellationToken`).
     pub fn cancel_all(&mut self) {
         for (_, entry) in self.handles.drain() {
             entry.cancel_token.cancel();
-            entry.join_handle.abort();
         }
     }
 
