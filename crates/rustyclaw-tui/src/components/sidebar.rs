@@ -89,17 +89,19 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
                                     }.to_string()
                                 };
 
-                                // Truncate label to fit sidebar width
-                                let label = if thread.label.len() > 16 {
-                                    format!("{}…", &thread.label[..15])
+                                // Truncate label to fit sidebar width (char-safe)
+                                let label = if thread.label.chars().count() > 16 {
+                                    let truncated: String = thread.label.chars().take(15).collect();
+                                    format!("{}…", truncated)
                                 } else {
                                     thread.label.clone()
                                 };
 
                                 // Build description line if present
                                 let desc = thread.description.as_ref().map(|d| {
-                                    if d.len() > 20 {
-                                        format!("{}…", &d[..19])
+                                    if d.chars().count() > 20 {
+                                        let truncated: String = d.chars().take(19).collect();
+                                        format!("{}…", truncated)
                                     } else {
                                         d.clone()
                                     }
