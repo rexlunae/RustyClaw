@@ -1419,8 +1419,10 @@ async fn handle_connection(
                                     .get(target_id)
                                     .and_then(|t| t.compact_summary.clone());
 
-                                // Perform the switch
-                                if thread_mgr.switch_to(target_id).is_some() {
+                                // Perform the switch (use switch_foreground which returns bool,
+                                // not switch_to which returns old foreground ID — the latter
+                                // returns None when there is no previous foreground, e.g. after /thread bg)
+                                if thread_mgr.switch_foreground(target_id) {
                                     let frame = ServerFrame {
                                         frame_type: ServerFrameType::ThreadSwitched,
                                         payload: ServerPayload::ThreadSwitched {
