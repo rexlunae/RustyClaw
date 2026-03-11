@@ -1339,6 +1339,24 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 debug!("Thread switch request: {}", thread_id);
+
+                                // thread_id == 0 is a sentinel meaning "background current thread"
+                                if thread_id == 0 {
+                                    // Clear foreground — no thread is active
+                                    thread_mgr.clear_foreground();
+                                    let frame = ServerFrame {
+                                        frame_type: ServerFrameType::ThreadSwitched,
+                                        payload: ServerPayload::ThreadSwitched {
+                                            thread_id: 0,
+                                            context_summary: None,
+                                        },
+                                    };
+                                    send_frame(&mut writer, &frame).await?;
+                                    send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
+                                    let _ = thread_mgr.save_to_file(&threads_path);
+                                    continue;
+                                }
+
                                 let target_id = crate::threads::ThreadId(thread_id);
 
                                 // Get current foreground thread for compaction

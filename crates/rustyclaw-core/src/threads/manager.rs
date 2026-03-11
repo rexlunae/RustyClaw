@@ -261,6 +261,16 @@ impl ThreadManager {
         true
     }
     
+    /// Clear the foreground — no thread is active (background all).
+    pub fn clear_foreground(&mut self) {
+        if let Some(old_id) = self.foreground_id {
+            if let Some(t) = self.threads.get_mut(&old_id) {
+                t.is_foreground = false;
+            }
+        }
+        self.foreground_id = None;
+    }
+    
     /// Rename a thread.
     pub fn rename(&mut self, id: ThreadId, new_label: impl Into<String>) -> bool {
         if let Some(thread) = self.threads.get_mut(&id) {
