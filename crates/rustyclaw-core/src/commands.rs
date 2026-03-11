@@ -775,6 +775,10 @@ fn handle_thread_subcommand(parts: &[&str]) -> CommandResponse {
         Some("fg") | Some("foreground") => {
             let id_str = parts.get(1).copied().unwrap_or("");
             match id_str.parse::<u64>() {
+                Ok(0) => CommandResponse {
+                    messages: vec!["Thread ID 0 is reserved. Use a valid thread ID.".to_string()],
+                    action: CommandAction::None,
+                },
                 Ok(id) => CommandResponse {
                     messages: vec![format!("Foregrounding thread {}…", id)],
                     action: CommandAction::ThreadForeground(id),
