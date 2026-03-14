@@ -608,10 +608,10 @@ impl App {
                                         ))
                                         .await;
                                 }
+                                let _ = gw_tx.send(GwEvent::Info(
+                                    "Current thread backgrounded. Use /thread fg <id> or sidebar to switch.".to_string(),
+                                ));
                             }
-                            let _ = gw_tx.send(GwEvent::Info(
-                                "Current thread backgrounded. Use /thread fg <id> or sidebar to switch.".to_string(),
-                            ));
                         }
                         CommandAction::ThreadForeground(id) => {
                             // Foreground a thread by ID — reuse ThreadSwitch
