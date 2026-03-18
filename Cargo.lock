@@ -3583,10 +3583,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
-name = "oxidized-skills"
-version = "0.3.1"
+name = "oxidized-agentic-audit"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b6edb03595502b5af6d54e1c95ae10102e3178d33596decd1d1d317471577d0"
+checksum = "75ae7ff7767f07ce2acdd7fbe42cd25cef7828f9a8a0eacd74d49ca07c9c5c1c"
 dependencies = [
  "chrono",
  "clap",
@@ -4955,7 +4955,7 @@ dependencies = [
  "libc",
  "matrix-sdk",
  "openssl-sys",
- "oxidized-skills",
+ "oxidized-agentic-audit",
  "qrcode",
  "rand 0.10.0",
  "regex",
