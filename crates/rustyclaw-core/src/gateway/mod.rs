@@ -1203,7 +1203,7 @@ async fn handle_connection(
                                 if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
                                     if let Some(better_thread_id) = thread_mgr.find_best_match(&last_user.content) {
                                         // Found a better match — switch threads
-                                        if thread_mgr.switch_to(better_thread_id).is_some() {
+                                        if thread_mgr.switch_foreground(better_thread_id) {
                                             // Get the context summary from the new foreground thread
                                             let context_summary = thread_mgr
                                                 .foreground()
