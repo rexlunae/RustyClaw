@@ -237,6 +237,6 @@ mod tests {
 
         assert!(result.should_block(70));
         assert!(result.should_block(51));
-        assert!(!result.should_block(50)); // Still blocked due to error_count > 0
+        assert!(result.should_block(50)); // Still blocked due to error_count > 0
     }
 }

@@ -69,37 +69,67 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
                             #(props.threads.iter().enumerate().take(10).map(|(i, thread)| {
                                 let is_selected = props.focused && i == props.selected;
 
-                                // Status indicator: task status or thread markers
-                                let status_icon = match thread.status.as_deref() {
-                                    Some("Running") => "▶",
-                                    Some("Pending") => "◯",
-                                    Some("Completed") => "✓",
-                                    Some("Failed") => "✗",
-                                    Some("Cancelled") => "⊘",
-                                    Some("Paused") => "⏸",
-                                    None if thread.is_foreground => "★",
-                                    None if thread.has_summary => "⌁",
-                                    _ => " ",
+                                // Use structured status_icon from gateway if available,
+                                // otherwise fall back to string matching
+                                let status_icon = if is_selected {
+                                    "▸".to_string()
+                                } else if let Some(ref icon) = thread.status_icon {
+                                    icon.clone()
+                                } else {
+                                    match thread.status.as_deref() {
+                                        Some("Running") => "▶",
+                                        Some("Pending") => "◯",
+                                        Some("Completed") => "✓",
+                                        Some("Failed") => "✗",
+                                        Some("Cancelled") => "⊘",
+                                        Some("Paused") => "⏸",
+                                        None if thread.is_foreground => "★",
+                                        None if thread.has_summary => "⌁",
+                                        _ => " ",
+                                    }.to_string()
                                 };
 
-                                // Truncate label to fit
-                                let label = if thread.label.len() > 16 {
-                                    format!("{}…", &thread.label[..15])
+                                // Truncate label to fit sidebar width (char-safe)
+                                let label = if thread.label.chars().count() > 16 {
+                                    let truncated: String = thread.label.chars().take(15).collect();
+                                    format!("{}…", truncated)
                                 } else {
                                     thread.label.clone()
                                 };
 
+                                // Build description line if present
+                                let desc = thread.description.as_ref().map(|d| {
+                                    if d.chars().count() > 20 {
+                                        let truncated: String = d.chars().take(19).collect();
+                                        format!("{}…", truncated)
+                                    } else {
+                                        d.clone()
+                                    }
+                                });
+
                                 element! {
-                                    View(key: i as u64, flex_direction: FlexDirection::Row) {
-                                        Text(
-                                            content: if is_selected { "▸" } else { status_icon }.to_string(),
-                                            color: if thread.is_foreground || is_selected { theme::ACCENT } else { theme::MUTED },
-                                        )
-                                        Text(
-                                            content: format!(" {}", label),
-                                            color: if is_selected { theme::TEXT } else { theme::TEXT_DIM },
-                                            weight: if is_selected { Weight::Bold } else { Weight::Normal },
-                                        )
+                                    View(key: i as u64, flex_direction: FlexDirection::Column) {
+                                        View(flex_direction: FlexDirection::Row) {
+                                            Text(
+                                                content: status_icon,
+                                                color: if thread.is_foreground || is_selected { theme::ACCENT } else { theme::MUTED },
+                                            )
+                                            Text(
+                                                content: format!(" {}", label),
+                                                color: if is_selected { theme::TEXT } else { theme::TEXT_DIM },
+                                                weight: if is_selected { Weight::Bold } else { Weight::Normal },
+                                            )
+                                        }
+                                        #(if let Some(ref d) = desc {
+                                            element! {
+                                                Text(
+                                                    content: format!("  {}", d),
+                                                    color: theme::MUTED,
+                                                )
+                                            }.into_any()
+                                        } else {
+                                            element! { View() }.into_any()
+                                        })
                                     }
                                 }
                             }))

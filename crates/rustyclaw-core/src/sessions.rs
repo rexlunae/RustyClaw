@@ -380,7 +380,6 @@ mod tests {
         let subagents = manager.list(Some(&[SessionKind::Subagent]), false, 10);
         assert_eq!(subagents.len(), 2);
     }
-}
 
     #[test]
     fn test_subagent_appears_in_active_list() {
@@ -398,3 +397,4 @@ mod tests {
         assert_eq!(active[0].status, SessionStatus::Active);
         assert_eq!(active[0].label, Some("test".to_string()));
     }
+}

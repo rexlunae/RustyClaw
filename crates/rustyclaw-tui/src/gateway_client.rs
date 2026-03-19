@@ -242,6 +242,8 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
                     label: t.label.clone(),
                     description: t.description.clone(),
                     status: t.status.clone(),
+                    kind_icon: t.kind_icon.clone(),
+                    status_icon: t.status_icon.clone(),
                     is_foreground: t.is_foreground,
                     message_count: t.message_count,
                     has_summary: t.has_summary,

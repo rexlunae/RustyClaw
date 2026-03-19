@@ -455,6 +455,8 @@ where
             label: t.label.clone(),
             description: t.description.clone(),
             status: Some(t.status.clone()),
+            kind_icon: Some(t.icon.clone()),
+            status_icon: Some(t.status_icon.clone()),
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             has_summary: t.has_summary,
@@ -478,11 +480,18 @@ where
             }
         }
 
+        let status_icon = if task.status.is_terminal() {
+            "✓"
+        } else {
+            "▶"
+        };
         threads.push(protocol::ThreadInfoDto {
             id: task.id.0,
             label: task.kind.display_name().to_string(),
             description: Some(task.kind.description()),
             status: Some(format!("{:?}", task.status)),
+            kind_icon: Some("📋".to_string()),
+            status_icon: Some(status_icon.to_string()),
             is_foreground: false,
             message_count: 0,
             has_summary: task.status.is_terminal(),
@@ -511,11 +520,20 @@ where
                 SessionStatus::Stopped => "Stopped",
             };
 
+            let session_status_icon = match session.status {
+                SessionStatus::Active => "▶",
+                SessionStatus::Completed => "✓",
+                SessionStatus::Error => "✗",
+                SessionStatus::Timeout => "⊘",
+                SessionStatus::Stopped => "⊘",
+            };
             threads.push(protocol::ThreadInfoDto {
                 id,
                 label: session.label.clone().unwrap_or_else(|| "Sub-agent".to_string()),
                 description: session.task.clone(),
                 status: Some(status_str.to_string()),
+                kind_icon: Some("🤖".to_string()),
+                status_icon: Some(session_status_icon.to_string()),
                 is_foreground: false,
                 message_count: session.messages.len(),
                 has_summary: session.status != SessionStatus::Active,
@@ -1185,7 +1203,7 @@ async fn handle_connection(
                                 if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
                                     if let Some(better_thread_id) = thread_mgr.find_best_match(&last_user.content) {
                                         // Found a better match — switch threads
-                                        if thread_mgr.switch_to(better_thread_id).is_some() {
+                                        if thread_mgr.switch_foreground(better_thread_id) {
                                             // Get the context summary from the new foreground thread
                                             let context_summary = thread_mgr
                                                 .foreground()
@@ -1321,6 +1339,24 @@ async fn handle_connection(
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 debug!("Thread switch request: {}", thread_id);
+
+                                // thread_id == 0 is a sentinel meaning "background current thread"
+                                if thread_id == 0 {
+                                    // Clear foreground — no thread is active
+                                    thread_mgr.clear_foreground();
+                                    let frame = ServerFrame {
+                                        frame_type: ServerFrameType::ThreadSwitched,
+                                        payload: ServerPayload::ThreadSwitched {
+                                            thread_id: 0,
+                                            context_summary: None,
+                                        },
+                                    };
+                                    send_frame(&mut writer, &frame).await?;
+                                    send_threads_update(&mut writer, &thread_mgr, &task_mgr, None).await?;
+                                    let _ = thread_mgr.save_to_file(&threads_path);
+                                    continue;
+                                }
+
                                 let target_id = crate::threads::ThreadId(thread_id);
 
                                 // Get current foreground thread for compaction
@@ -1383,8 +1419,10 @@ async fn handle_connection(
                                     .get(target_id)
                                     .and_then(|t| t.compact_summary.clone());
 
-                                // Perform the switch
-                                if thread_mgr.switch_to(target_id).is_some() {
+                                // Perform the switch (use switch_foreground which returns bool,
+                                // not switch_to which returns old foreground ID — the latter
+                                // returns None when there is no previous foreground, e.g. after /thread bg)
+                                if thread_mgr.switch_foreground(target_id) {
                                     let frame = ServerFrame {
                                         frame_type: ServerFrameType::ThreadSwitched,
                                         payload: ServerPayload::ThreadSwitched {

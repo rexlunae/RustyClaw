@@ -16,10 +16,15 @@
 mod model;
 mod manager;
 mod events;
+pub mod subtask;
 
 pub use model::*;
 pub use manager::*;
 pub use events::*;
+pub use subtask::{
+    SubtaskHandle, SubtaskRegistry, SubtaskResult, SpawnOptions,
+    spawn_subagent, spawn_task, spawn_background,
+};
 
 // Backwards compatibility: TaskId is now ThreadId
 pub type TaskId = ThreadId;

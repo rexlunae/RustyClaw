@@ -592,6 +592,44 @@ impl App {
                                 }
                             }
                         }
+                        CommandAction::ThreadBackground => {
+                            // Background the current foreground thread by switching
+                            // to thread_id 0 (sentinel: no foreground thread).
+                            if let Some(ref mut sink) = ws_sink {
+                                use futures_util::SinkExt;
+                                let frame = ClientFrame {
+                                    frame_type: ClientFrameType::ThreadSwitch,
+                                    payload: ClientPayload::ThreadSwitch { thread_id: 0 },
+                                };
+                                if let Ok(data) = serialize_frame(&frame) {
+                                    let _ = sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
+                                        .await;
+                                }
+                                let _ = gw_tx.send(GwEvent::Info(
+                                    "Current thread backgrounded. Use /thread fg <id> or sidebar to switch.".to_string(),
+                                ));
+                            }
+                        }
+                        CommandAction::ThreadForeground(id) => {
+                            // Foreground a thread by ID — reuse ThreadSwitch
+                            if let Some(ref mut sink) = ws_sink {
+                                use futures_util::SinkExt;
+                                let frame = ClientFrame {
+                                    frame_type: ClientFrameType::ThreadSwitch,
+                                    payload: ClientPayload::ThreadSwitch { thread_id: id },
+                                };
+                                if let Ok(data) = serialize_frame(&frame) {
+                                    let _ = sink
+                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
+                                            data.into(),
+                                        ))
+                                        .await;
+                                }
+                            }
+                        }
                         CommandAction::SetModel(model_name) => {
                             // /model only changes the model, never the provider.
                             // The model name is used exactly as entered — on
