@@ -9,7 +9,7 @@
 //!
 //! Can be used to audit skills at load time or on-demand.
 
-use oxidized_skills::{audit, config::Config, finding::AuditReport, output};
+use oxidized_agentic_audit::{config::Config, finding::ScanReport, output, scan::{self, ScanMode}};
 use std::path::Path;
 use tracing::{debug, warn};
 
@@ -33,7 +33,7 @@ pub struct SkillAuditResult {
     /// Summary of findings (human-readable)
     pub summary: String,
     /// Full report for detailed inspection
-    pub report: Option<AuditReport>,
+    pub report: Option<ScanReport>,
 }
 
 impl SkillAuditResult {
@@ -108,19 +108,19 @@ impl SkillAuditor {
     pub fn audit_skill(&self, skill_path: &Path, skill_name: &str) -> SkillAuditResult {
         debug!("Auditing skill: {} at {}", skill_name, skill_path.display());
 
-        let report = audit::run_audit(skill_path, &self.config);
+        let report = scan::run_scan(skill_path, &self.config, ScanMode::Skill);
 
         let score = report.security_score;
         let grade = grade_to_char(&report.security_grade);
         let error_count = report
             .findings
             .iter()
-            .filter(|f| f.severity == oxidized_skills::finding::Severity::Error)
+            .filter(|f| f.severity == oxidized_agentic_audit::finding::Severity::Error)
             .count();
         let warning_count = report
             .findings
             .iter()
-            .filter(|f| f.severity == oxidized_skills::finding::Severity::Warning)
+            .filter(|f| f.severity == oxidized_agentic_audit::finding::Severity::Warning)
             .count();
 
         let summary = if report.passed {
@@ -199,8 +199,8 @@ impl SkillAuditor {
 }
 
 /// Convert SecurityGrade enum to a char.
-fn grade_to_char(grade: &oxidized_skills::finding::SecurityGrade) -> char {
-    use oxidized_skills::finding::SecurityGrade;
+fn grade_to_char(grade: &oxidized_agentic_audit::finding::SecurityGrade) -> char {
+    use oxidized_agentic_audit::finding::SecurityGrade;
     match grade {
         SecurityGrade::A => 'A',
         SecurityGrade::B => 'B',
