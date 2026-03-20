@@ -12,7 +12,9 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use tokio::sync::Mutex;
 
 
 /// Matrix API response for login
@@ -63,7 +65,7 @@ pub struct MatrixCliMessenger {
     device_id: Option<String>,
     client: Client,
     connected: bool,
-    sync_token: Option<String>,
+    sync_token: Arc<Mutex<Option<String>>>,
 }
 
 impl MatrixCliMessenger {
@@ -83,7 +85,7 @@ impl MatrixCliMessenger {
             device_id: None,
             client: Client::new(),
             connected: false,
-            sync_token: None,
+            sync_token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -104,7 +106,7 @@ impl MatrixCliMessenger {
             device_id,
             client: Client::new(),
             connected: false,
-            sync_token: None,
+            sync_token: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -191,12 +193,15 @@ impl MatrixCliMessenger {
     }
 
     /// Perform a sync to get new messages
-    async fn sync(&mut self, timeout_ms: Option<u64>) -> Result<Vec<Message>> {
+    async fn sync(&self, timeout_ms: Option<u64>) -> Result<Vec<Message>> {
         let mut url = format!("{}/_matrix/client/v3/sync", self.homeserver_url);
         
         let mut params = Vec::new();
-        if let Some(token) = &self.sync_token {
-            params.push(format!("since={}", token));
+        {
+            let token = self.sync_token.lock().await;
+            if let Some(ref t) = *token {
+                params.push(format!("since={}", t));
+            }
         }
         if let Some(timeout) = timeout_ms {
             params.push(format!("timeout={}", timeout));
@@ -219,10 +224,21 @@ impl MatrixCliMessenger {
         }
 
         let sync_response: SyncResponse = response.json().await?;
-        self.sync_token = Some(sync_response.next_batch);
+        
+        // Update sync token
+        {
+            let mut token = self.sync_token.lock().await;
+            *token = Some(sync_response.next_batch.clone());
+        }
 
         let mut messages = Vec::new();
 
+        if let Some(ref rooms) = sync_response.rooms {
+            if let Some(ref joined) = rooms.join {
+            }
+        } else {
+        }
+        
         if let Some(rooms) = sync_response.rooms {
             if let Some(joined_rooms) = rooms.join {
                 for (room_id, room_data) in joined_rooms {
@@ -246,10 +262,14 @@ impl MatrixCliMessenger {
                                                 }
                                             }
                                         }
+                                    } else {
                                     }
                                 }
+                            } else {
                             }
+                        } else {
                         }
+                    } else {
                     }
                 }
             }
@@ -345,20 +365,9 @@ impl Messenger for MatrixCliMessenger {
     }
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
-        // Clone self to make it mutable for sync
-        let mut messenger_clone = MatrixCliMessenger {
-            name: self.name.clone(),
-            homeserver_url: self.homeserver_url.clone(),
-            user_id: self.user_id.clone(),
-            password: self.password.clone(),
-            access_token: self.access_token.clone(),
-            device_id: self.device_id.clone(),
-            client: self.client.clone(),
-            connected: self.connected,
-            sync_token: self.sync_token.clone(),
-        };
-
-        messenger_clone.sync(Some(1000)).await // 1 second timeout
+        // sync() now takes &self and uses Arc<Mutex> for sync_token
+        let result = self.sync(Some(1000)).await;
+        result
     }
 
     fn is_connected(&self) -> bool {
@@ -379,7 +388,10 @@ impl Messenger for MatrixCliMessenger {
         self.access_token = None;
         self.device_id = None;
         self.connected = false;
-        self.sync_token = None;
+        {
+            let mut token = self.sync_token.lock().await;
+            *token = None;
+        }
         
         Ok(())
     }

@@ -31,6 +31,9 @@ use super::{
 #[cfg(feature = "matrix")]
 use crate::messengers::MatrixMessenger;
 
+#[cfg(feature = "matrix-cli")]
+use crate::messengers::MatrixCliMessenger;
+
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
 
@@ -225,6 +228,34 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
         "matrix" => {
             anyhow::bail!("Matrix messenger not compiled in. Rebuild with --features matrix");
         }
+        #[cfg(feature = "matrix-cli")]
+        "matrix-cli" => {
+            let homeserver = config
+                .homeserver
+                .clone()
+                .context("Matrix-CLI requires 'homeserver'")?;
+            let user_id = config
+                .user_id
+                .clone()
+                .context("Matrix-CLI requires 'user_id'")?;
+            let access_token = config
+                .access_token
+                .clone()
+                .context("Matrix-CLI requires 'access_token'")?;
+
+            let messenger = MatrixCliMessenger::with_token(
+                name.clone(),
+                homeserver,
+                user_id,
+                access_token,
+                None, // device_id
+            );
+            Box::new(messenger)
+        }
+        #[cfg(not(feature = "matrix-cli"))]
+        "matrix-cli" => {
+            anyhow::bail!("Matrix-CLI messenger not compiled in. Rebuild with --features matrix-cli");
+        }
         // Signal messenger removed — use claw-me-maybe skill or signal-messenger-standalone
         other => anyhow::bail!("Unknown messenger type: {}", other),
     };
@@ -245,6 +276,7 @@ pub async fn run_messenger_loop(
     skill_mgr: SharedSkillManager,
     task_mgr: super::SharedTaskManager,
     model_registry: super::SharedModelRegistry,
+    copilot_session: Option<Arc<super::CopilotSession>>,
     cancel: CancellationToken,
 ) -> Result<()> {
     // If no model context, we can't process messages
@@ -293,6 +325,7 @@ pub async fn run_messenger_loop(
                         &skill_mgr,
                         &task_mgr,
                         &model_registry,
+                        copilot_session.as_deref(),
                         &conversations,
                         &messenger_type,
                         msg,
@@ -343,6 +376,7 @@ async fn process_incoming_message(
     skill_mgr: &SharedSkillManager,
     task_mgr: &super::SharedTaskManager,
     model_registry: &super::SharedModelRegistry,
+    copilot_session: Option<&super::CopilotSession>,
     conversations: &ConversationStore,
     messenger_type: &str,
     msg: Message,
@@ -422,12 +456,23 @@ async fn process_incoming_message(
         media_refs.clone(),
     ));
 
+    // Resolve effective bearer token (handles Copilot session exchange)
+    let effective_key = super::auth::resolve_bearer_token(
+        http,
+        &model_ctx.provider,
+        model_ctx.api_key.as_deref(),
+        copilot_session,
+    )
+    .await
+    .ok()
+    .flatten();
+    
     // Build request - ProviderRequest expects Vec<ChatMessage>
     let mut resolved = ProviderRequest {
         provider: model_ctx.provider.clone(),
         model: model_ctx.model.clone(),
         base_url: model_ctx.base_url.clone(),
-        api_key: model_ctx.api_key.clone(),
+        api_key: effective_key,
         messages: messages.clone(),
     };
 
