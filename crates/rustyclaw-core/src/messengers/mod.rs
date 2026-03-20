@@ -186,8 +186,14 @@ mod matrix;
 #[cfg(feature = "matrix")]
 pub use matrix::MatrixMessenger;
 
+#[cfg(feature = "signal-cli")]
+mod signal_cli;
+#[cfg(feature = "signal-cli")]
+pub use signal_cli::SignalCliMessenger;
+
 // Signal messenger removed — was incomplete and never had its dependencies (presage) added.
 // Use the signal-messenger-standalone skill or claw-me-maybe for Signal integration.
+// Now replaced with signal-cli based implementation above.
 
 #[cfg(feature = "whatsapp")]
 mod whatsapp;
