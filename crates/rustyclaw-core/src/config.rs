@@ -44,6 +44,7 @@ pub struct Config {
     /// Credentials directory (default: `<settings_dir>/credentials`)
     pub credentials_dir: Option<PathBuf>,
     /// Messenger configurations
+    #[serde(default)]
     pub messengers: Vec<MessengerConfig>,
     /// Whether to use secrets storage
     pub use_secrets: bool,
@@ -360,7 +361,14 @@ impl Config {
 
         if config_path.exists() {
             let content = std::fs::read_to_string(&config_path)?;
-            let mut config: Config = toml::from_str(&content)?;
+            let config: Config = match toml::from_str(&content) {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("ERROR: Failed to parse config: {}", e);
+                    return Err(e.into());
+                }
+            };
+            let mut config = config;
             // Migrate legacy flat layout if detected.
             config.migrate_legacy_layout()?;
             Ok(config)

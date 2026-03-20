@@ -347,6 +347,7 @@ pub async fn run_gateway(
                 let messenger_models = model_registry.clone();
                 let messenger_cancel = cancel.child_token();
                 let mgr_clone = shared_mgr.clone();
+                let messenger_copilot = copilot_session.clone();
 
                 tokio::spawn(async move {
                     if let Err(e) = messenger_handler::run_messenger_loop(
@@ -357,6 +358,7 @@ pub async fn run_gateway(
                         messenger_skills,
                         messenger_tasks,
                         messenger_models,
+                        messenger_copilot,
                         messenger_cancel,
                     )
                     .await
