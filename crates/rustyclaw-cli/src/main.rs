@@ -14,7 +14,7 @@ use rustyclaw_core::skills::SkillManager;
 #[cfg(feature = "tui")]
 use rustyclaw_tui::app::App;
 #[cfg(feature = "tui")]
-use rustyclaw_tui::onboard::run_onboard_wizard;
+use rustyclaw_tui::onboard::{run_onboard_wizard, OnboardArgs as TuiOnboardArgs};
 use std::path::PathBuf;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
@@ -604,7 +604,16 @@ async fn main() -> Result<()> {
                 #[cfg(feature = "tui")]
                 {
                     let mut secrets = open_secrets(&config)?;
-                    run_onboard_wizard(&mut config, &mut secrets, false, args.non_interactive)?;
+                    let tui_args = TuiOnboardArgs {
+                        openrouter_api_key: None,
+                        anthropic_api_key: None,
+                        openai_api_key: None,
+                        gemini_api_key: None,
+                        xai_api_key: None,
+                        reset: false,
+                        non_interactive: args.non_interactive,
+                    };
+                    run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
                     // Optional agent setup step
                     let ws_dir = config.workspace_dir();
                     match rustyclaw_core::tools::agent_setup::exec_agent_setup(
@@ -659,7 +668,16 @@ async fn main() -> Result<()> {
             #[cfg(feature = "tui")]
             {
                 let mut secrets = open_secrets(&config)?;
-                run_onboard_wizard(&mut config, &mut secrets, _args.reset, _args.non_interactive)?;
+                let tui_args = TuiOnboardArgs {
+                    openrouter_api_key: _args.openrouter_api_key.clone(),
+                    anthropic_api_key: _args.anthropic_api_key.clone(),
+                    openai_api_key: _args.openai_api_key.clone(),
+                    gemini_api_key: _args.gemini_api_key.clone(),
+                    xai_api_key: _args.xai_api_key.clone(),
+                    reset: _args.reset,
+                    non_interactive: _args.non_interactive,
+                };
+                run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
                 // Optional agent setup step
                 let ws_dir = config.workspace_dir();
                 match rustyclaw_core::tools::agent_setup::exec_agent_setup(
@@ -709,7 +727,7 @@ async fn main() -> Result<()> {
             #[cfg(feature = "tui")]
             {
                 let mut secrets = open_secrets(&config)?;
-                run_onboard_wizard(&mut config, &mut secrets, false, false)?;
+                run_onboard_wizard(&mut config, &mut secrets, None)?;
             }
             #[cfg(not(feature = "tui"))]
             {
