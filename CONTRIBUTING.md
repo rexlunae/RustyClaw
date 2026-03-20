@@ -46,6 +46,20 @@ cargo clippy
 cargo fmt --check
 ```
 
+### Pre-PR Checklist
+
+Before opening a PR, ensure your changes compile without warnings:
+
+```bash
+# Check library builds warning-free
+cargo check --all-features 2>&1 | grep -E "warning:" && echo "Fix warnings before submitting" || echo "✓ No warnings"
+
+# Check tests compile warning-free
+cargo test --no-run 2>&1 | grep -E "warning:" && echo "Fix test warnings before submitting" || echo "✓ No test warnings"
+```
+
+**No PR should be considered finished while warnings are still present.** Warnings slow down compilation, make CI noisier, and often indicate real issues.
+
 ## Code Style
 
 - Follow Rust conventions (rustfmt enforced)
