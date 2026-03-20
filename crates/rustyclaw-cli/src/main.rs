@@ -604,7 +604,7 @@ async fn main() -> Result<()> {
                 #[cfg(feature = "tui")]
                 {
                     let mut secrets = open_secrets(&config)?;
-                    run_onboard_wizard(&mut config, &mut secrets, false)?;
+                    run_onboard_wizard(&mut config, &mut secrets, false, args.non_interactive)?;
                     // Optional agent setup step
                     let ws_dir = config.workspace_dir();
                     match rustyclaw_core::tools::agent_setup::exec_agent_setup(
@@ -659,7 +659,7 @@ async fn main() -> Result<()> {
             #[cfg(feature = "tui")]
             {
                 let mut secrets = open_secrets(&config)?;
-                run_onboard_wizard(&mut config, &mut secrets, _args.reset)?;
+                run_onboard_wizard(&mut config, &mut secrets, _args.reset, _args.non_interactive)?;
                 // Optional agent setup step
                 let ws_dir = config.workspace_dir();
                 match rustyclaw_core::tools::agent_setup::exec_agent_setup(
@@ -709,7 +709,7 @@ async fn main() -> Result<()> {
             #[cfg(feature = "tui")]
             {
                 let mut secrets = open_secrets(&config)?;
-                run_onboard_wizard(&mut config, &mut secrets, false)?;
+                run_onboard_wizard(&mut config, &mut secrets, false, false)?;
             }
             #[cfg(not(feature = "tui"))]
             {

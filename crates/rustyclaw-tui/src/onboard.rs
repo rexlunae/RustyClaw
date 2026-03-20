@@ -23,6 +23,7 @@ pub fn run_onboard_wizard(
     config: &mut Config,
     secrets: &mut SecretsManager,
     reset: bool,
+    non_interactive: bool,
 ) -> Result<bool> {
     let stdin = io::stdin();
     let mut reader = stdin.lock();
@@ -38,48 +39,50 @@ pub fn run_onboard_wizard(
     }
 
     // ── 0. Safety acknowledgment ───────────────────────────────────
-    println!(
-        "{}",
-        t::warn("⚠  Important: Please read before continuing.")
-    );
-    println!();
-    println!(
-        "  RustyClaw is an {}, meaning it can",
-        t::accent_bright("agentic coding tool")
-    );
-    println!("  read, write, and execute code on your machine on your");
-    println!("  behalf. Like any powerful tool, it should be used with");
-    println!("  care and awareness.");
-    println!();
-    println!(
-        "  • {} and modify files in your project",
-        t::bold("It can create")
-    );
-    println!("  • {} commands in your terminal", t::bold("It can run"));
-    println!(
-        "  • {} with external APIs using your credentials",
-        t::bold("It can interact")
-    );
-    println!();
-    println!("  Always review actions before approving them, especially");
-    println!("  in production environments. You are responsible for any");
-    println!("  changes made by the tool.");
-    println!();
+    if !non_interactive {
+        println!(
+            "{}",
+            t::warn("⚠  Important: Please read before continuing.")
+        );
+        println!();
+        println!(
+            "  RustyClaw is an {}, meaning it can",
+            t::accent_bright("agentic coding tool")
+        );
+        println!("  read, write, and execute code on your machine on your");
+        println!("  behalf. Like any powerful tool, it should be used with");
+        println!("  care and awareness.");
+        println!();
+        println!(
+            "  • {} and modify files in your project",
+            t::bold("It can create")
+        );
+        println!("  • {} commands in your terminal", t::bold("It can run"));
+        println!(
+            "  • {} with external APIs using your credentials",
+            t::bold("It can interact")
+        );
+        println!();
+        println!("  Always review actions before approving them, especially");
+        println!("  in production environments. You are responsible for any");
+        println!("  changes made by the tool.");
+        println!();
 
-    let ack = prompt_line(
-        &mut reader,
-        &format!(
-            "{} ",
-            t::accent("Do you acknowledge and wish to continue? [y/N]:")
-        ),
-    )?;
-    if !ack.trim().eq_ignore_ascii_case("y") {
+        let ack = prompt_line(
+            &mut reader,
+            &format!(
+                "{} ",
+                t::accent("Do you acknowledge and wish to continue? [y/N]:")
+            ),
+        )?;
+        if !ack.trim().eq_ignore_ascii_case("y") {
+            println!();
+            println!("  {}", t::muted("Onboarding cancelled."));
+            println!();
+            return Ok(false);
+        }
         println!();
-        println!("  {}", t::muted("Onboarding cancelled."));
-        println!();
-        return Ok(false);
     }
-    println!();
 
     // ── 0b. Name your agent ────────────────────────────────────────
     println!("{}", t::heading("Name your agent:"));
