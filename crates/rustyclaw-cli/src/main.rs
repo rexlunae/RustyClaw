@@ -69,6 +69,10 @@ enum Commands {
     #[command(alias = "cmd", alias = "run", alias = "message")]
     Command(CommandArgs),
 
+    /// Send a prompt to the model and print the response (headless mode)
+    #[command(alias = "chat", alias = "prompt")]
+    Ask(AskArgs),
+
     /// Show system status (gateway, model, workspace)
     Status(StatusArgs),
 
@@ -342,6 +346,52 @@ struct CommandArgs {
         env = "RUSTYCLAW_GATEWAY"
     )]
     gateway: Option<String>,
+}
+
+// ── Ask (headless mode) ─────────────────────────────────────────────────────
+
+#[derive(Debug, Args)]
+#[command(after_help = "\
+EXAMPLES:
+  rustyclaw ask 'What is 2+2?'
+  echo 'Summarize this' | rustyclaw ask --stdin
+  rustyclaw ask --model anthropic/claude-haiku 'Quick question'
+  rustyclaw ask --no-tools 'Just chat, no actions'
+")]
+struct AskArgs {
+    /// Prompt text (can also be provided via --stdin)
+    #[arg(value_name = "PROMPT", trailing_var_arg = true)]
+    prompt: Vec<String>,
+    /// Read prompt from stdin
+    #[arg(long)]
+    stdin: bool,
+    /// Model to use (overrides default)
+    #[arg(long, short, value_name = "MODEL")]
+    model: Option<String>,
+    /// Disable tool use (pure chat mode)
+    #[arg(long)]
+    no_tools: bool,
+    /// Output raw JSON response
+    #[arg(long)]
+    json: bool,
+    /// System prompt override
+    #[arg(long, value_name = "PROMPT")]
+    system: Option<String>,
+    /// Gateway WebSocket URL (ws://…)
+    #[arg(
+        long = "gateway",
+        alias = "url",
+        alias = "ws",
+        value_name = "WS_URL",
+        env = "RUSTYCLAW_GATEWAY"
+    )]
+    gateway: Option<String>,
+    /// Maximum tokens in response
+    #[arg(long, value_name = "TOKENS")]
+    max_tokens: Option<u32>,
+    /// Temperature (0.0-2.0)
+    #[arg(long, value_name = "TEMP")]
+    temperature: Option<f32>,
 }
 
 // ── Status ──────────────────────────────────────────────────────────────────
@@ -784,6 +834,11 @@ async fn main() -> Result<()> {
             } else {
                 run_local_command(&mut config, &input)?;
             }
+        }
+
+        // ── Ask (headless model interaction) ────────────────────
+        Commands::Ask(args) => {
+            handle_ask(&config, args).await?;
         }
 
         // ── Status ──────────────────────────────────────────────
@@ -2654,4 +2709,147 @@ async fn send_command_via_gateway(gateway_url: &str, command: &str) -> Result<St
     }
 
     anyhow::bail!("Gateway closed without responding")
+}
+
+/// Handle the `ask` command — headless model interaction.
+async fn handle_ask(config: &Config, args: AskArgs) -> Result<()> {
+    use rustyclaw_core::gateway::protocol::{
+        ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerFrameType, ServerPayload,
+        deserialize_frame, serialize_frame,
+    };
+    use rustyclaw_core::gateway::protocol::types::ChatMessage;
+    use std::io::{self, Read};
+
+    // Gather the prompt
+    let prompt = if args.stdin {
+        let mut buf = String::new();
+        io::stdin().read_to_string(&mut buf)?;
+        if !args.prompt.is_empty() {
+            // Prepend CLI args to stdin content
+            format!("{}\n\n{}", args.prompt.join(" "), buf)
+        } else {
+            buf
+        }
+    } else {
+        args.prompt.join(" ")
+    };
+
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        anyhow::bail!("No prompt provided. Use `rustyclaw ask 'your prompt'` or `--stdin`.");
+    }
+
+    // Determine gateway URL
+    let gateway_url = args
+        .gateway
+        .or_else(|| config.gateway_url.clone())
+        .unwrap_or_else(|| "ws://127.0.0.1:9001".to_string());
+
+    // Connect to gateway
+    let url = Url::parse(&gateway_url).context("Invalid gateway URL")?;
+    let (ws_stream, _) = tokio_tungstenite::connect_async(url.to_string())
+        .await
+        .context("Failed to connect to gateway. Is it running? Try `rustyclaw gateway start`")?;
+    let (mut writer, mut reader) = ws_stream.split();
+
+    // Handle auth if needed (simplified — skip TOTP for now)
+    // TODO: Add TOTP support for headless mode
+
+    // Build the chat message
+    let message = ChatMessage::text("user", &prompt);
+
+    // Send as ClientFrame
+    let frame = ClientFrame {
+        frame_type: ClientFrameType::Chat,
+        payload: ClientPayload::Chat {
+            messages: vec![message],
+        },
+    };
+    let bytes = serialize_frame(&frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+    writer.send(Message::Binary(bytes.into())).await?;
+
+    // Collect response
+    let mut response_text = String::new();
+    let mut tool_outputs: Vec<String> = Vec::new();
+
+    while let Some(message) = reader.next().await {
+        let message = message.context("Gateway read error")?;
+
+        match message {
+            Message::Binary(data) => {
+                if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
+                    match frame.frame_type {
+                        ServerFrameType::Chunk => {
+                            if let ServerPayload::Chunk { delta } = frame.payload {
+                                if !args.json {
+                                    // Stream text to stdout
+                                    print!("{}", delta);
+                                    io::Write::flush(&mut io::stdout())?;
+                                }
+                                response_text.push_str(&delta);
+                            }
+                        }
+                        ServerFrameType::ResponseDone => {
+                            // Model finished
+                            if !args.json {
+                                println!(); // Final newline
+                            }
+                            break;
+                        }
+                        ServerFrameType::ToolCall => {
+                            if let ServerPayload::ToolCall { id: _, name, .. } = frame.payload {
+                                if !args.json {
+                                    eprintln!("  → {}", name);
+                                }
+                            }
+                        }
+                        ServerFrameType::ToolResult => {
+                            if let ServerPayload::ToolResult {
+                                id: _,
+                                name,
+                                result,
+                                ..
+                            } = frame.payload
+                            {
+                                tool_outputs.push(format!("{}: {}", name, result));
+                            }
+                        }
+                        ServerFrameType::Error => {
+                            if let ServerPayload::Error { message, .. } = frame.payload {
+                                anyhow::bail!("Gateway error: {}", message);
+                            }
+                        }
+                        ServerFrameType::Info => {
+                            if let ServerPayload::Info { message } = frame.payload {
+                                if !args.json {
+                                    eprintln!("  ℹ {}", message);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Message::Text(text) => {
+                // Legacy text frame — just print it
+                if !args.json {
+                    print!("{}", text);
+                }
+                response_text.push_str(&text);
+            }
+            Message::Close(_) => break,
+            _ => {}
+        }
+    }
+
+    // JSON output if requested
+    if args.json {
+        let output = serde_json::json!({
+            "response": response_text,
+            "tool_calls": tool_outputs,
+        });
+        println!("{}", serde_json::to_string_pretty(&output)?);
+    }
+
+    Ok(())
 }
