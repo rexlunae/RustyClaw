@@ -191,6 +191,11 @@ mod signal_cli;
 #[cfg(feature = "signal-cli")]
 pub use signal_cli::SignalCliMessenger;
 
+#[cfg(feature = "matrix-cli")]
+mod matrix_cli;
+#[cfg(feature = "matrix-cli")]
+pub use matrix_cli::MatrixCliMessenger;
+
 // Signal messenger removed — was incomplete and never had its dependencies (presage) added.
 // Use the signal-messenger-standalone skill or claw-me-maybe for Signal integration.
 // Now replaced with signal-cli based implementation above.
