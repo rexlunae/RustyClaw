@@ -17,14 +17,27 @@ use rustyclaw_core::theme as t;
 
 // ── Public entry point ──────────────────────────────────────────────────────
 
+/// Onboard arguments from CLI (optional).
+pub struct OnboardArgs {
+    pub openrouter_api_key: Option<String>,
+    // Add other API key fields as needed
+    pub anthropic_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub gemini_api_key: Option<String>,
+    pub xai_api_key: Option<String>,
+    pub reset: bool,
+    pub non_interactive: bool,
+}
+
 /// Run the interactive onboarding wizard, mutating `config` in place and
 /// storing secrets.  Returns `true` if the user completed onboarding.
 pub fn run_onboard_wizard(
     config: &mut Config,
     secrets: &mut SecretsManager,
-    reset: bool,
-    non_interactive: bool,
+    args: Option<OnboardArgs>,
 ) -> Result<bool> {
+    let reset = args.as_ref().map(|a| a.reset).unwrap_or(false);
+    let non_interactive = args.as_ref().map(|a| a.non_interactive).unwrap_or(false);
     let stdin = io::stdin();
     let mut reader = stdin.lock();
 
@@ -325,18 +338,60 @@ pub fn run_onboard_wizard(
     }
 
     // ── 2. Select model provider ───────────────────────────────────
-    let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
-    let provider = match arrow_select(&provider_names, "Select a model provider:")? {
-        Some(idx) => &PROVIDERS[idx],
-        None => {
-            println!("  {}", t::warn("Cancelled."));
-            // Save any config changes made during vault setup before returning.
-            config
-                .ensure_dirs()
-                .context("Failed to create directory structure")?;
-            config.save(None)?;
-            println!("  {}", t::muted("Partial config saved."));
-            return Ok(false);
+    let provider = if let Some(ref args) = args {
+        // Check for auto-selection based on API key flags
+        if args.openrouter_api_key.is_some() {
+            // Auto-select OpenRouter
+            println!("  {}", t::icon_ok("Auto-selecting OpenRouter provider based on --openrouter-api-key flag"));
+            PROVIDERS.iter().find(|p| p.id == "openrouter").unwrap()
+        } else if args.anthropic_api_key.is_some() {
+            // Auto-select Anthropic
+            println!("  {}", t::icon_ok("Auto-selecting Anthropic provider based on --anthropic-api-key flag"));
+            PROVIDERS.iter().find(|p| p.id == "anthropic").unwrap()
+        } else if args.openai_api_key.is_some() {
+            // Auto-select OpenAI
+            println!("  {}", t::icon_ok("Auto-selecting OpenAI provider based on --openai-api-key flag"));
+            PROVIDERS.iter().find(|p| p.id == "openai").unwrap()
+        } else if args.gemini_api_key.is_some() {
+            // Auto-select Google
+            println!("  {}", t::icon_ok("Auto-selecting Google provider based on --gemini-api-key flag"));
+            PROVIDERS.iter().find(|p| p.id == "google").unwrap()
+        } else if args.xai_api_key.is_some() {
+            // Auto-select xAI
+            println!("  {}", t::icon_ok("Auto-selecting xAI provider based on --xai-api-key flag"));
+            PROVIDERS.iter().find(|p| p.id == "xai").unwrap()
+        } else {
+            // No API key provided, show interactive selection
+            let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
+            match arrow_select(&provider_names, "Select a model provider:")? {
+                Some(idx) => &PROVIDERS[idx],
+                None => {
+                    println!("  {}", t::warn("Cancelled."));
+                    // Save any config changes made during vault setup before returning.
+                    config
+                        .ensure_dirs()
+                        .context("Failed to create directory structure")?;
+                    config.save(None)?;
+                    println!("  {}", t::muted("Partial config saved."));
+                    return Ok(false);
+                }
+            }
+        }
+    } else {
+        // No args provided, show interactive selection
+        let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
+        match arrow_select(&provider_names, "Select a model provider:")? {
+            Some(idx) => &PROVIDERS[idx],
+            None => {
+                println!("  {}", t::warn("Cancelled."));
+                // Save any config changes made during vault setup before returning.
+                config
+                    .ensure_dirs()
+                    .context("Failed to create directory structure")?;
+                config.save(None)?;
+                println!("  {}", t::muted("Partial config saved."));
+                return Ok(false);
+            }
         }
     };
 
@@ -353,48 +408,68 @@ pub fn run_onboard_wizard(
     if let Some(secret_key) = provider.secret_key {
         match provider.auth_method {
             AuthMethod::ApiKey => {
-                // Standard API key authentication
-                let existing = secrets.get_secret(secret_key, true)?;
-                if existing.is_some() {
-                    let reuse = prompt_line(
-                        &mut reader,
-                        &format!(
-                            "{} ",
-                            t::accent(&format!(
-                                "An API key for {} is already stored. Keep it? [Y/n]:",
-                                provider.display
-                            ))
-                        ),
-                    )?;
-                    if reuse.trim().eq_ignore_ascii_case("n") {
-                        let key = prompt_secret(
+                // Check if API key was provided via CLI args first
+                let provided_key = if let Some(ref args) = args {
+                    match provider.id {
+                        "openrouter" => args.openrouter_api_key.as_ref(),
+                        "anthropic" => args.anthropic_api_key.as_ref(),
+                        "openai" => args.openai_api_key.as_ref(),
+                        "google" => args.gemini_api_key.as_ref(),
+                        "xai" => args.xai_api_key.as_ref(),
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                
+                if let Some(key) = provided_key {
+                    // Store the provided API key
+                    secrets.store_secret(secret_key, key)?;
+                    println!("  {}", t::icon_ok("API key stored securely."));
+                } else {
+                    // Standard API key authentication flow
+                    let existing = secrets.get_secret(secret_key, true)?;
+                    if existing.is_some() {
+                        let reuse = prompt_line(
                             &mut reader,
-                            &format!("{} ", t::accent("Enter API key:")),
+                            &format!(
+                                "{} ",
+                                t::accent(&format!(
+                                    "An API key for {} is already stored. Keep it? [Y/n]:",
+                                    provider.display
+                                ))
+                            ),
                         )?;
+                        if reuse.trim().eq_ignore_ascii_case("n") {
+                            let key = prompt_secret(
+                                &mut reader,
+                                &format!("{} ", t::accent("Enter API key:")),
+                            )?;
+                            if key.trim().is_empty() {
+                                println!(
+                                    "  {}",
+                                    t::icon_warn("No key entered — keeping existing key.")
+                                );
+                            } else {
+                                secrets.store_secret(secret_key, key.trim())?;
+                                println!("  {}", t::icon_ok("API key updated."));
+                            }
+                        } else {
+                            println!("  {}", t::icon_ok("Keeping existing API key."));
+                        }
+                    } else {
+                        let key =
+                            prompt_secret(&mut reader, &format!("{} ", t::accent("Enter API key:")))?;
                         if key.trim().is_empty() {
                             println!(
                                 "  {}",
-                                t::icon_warn("No key entered — keeping existing key.")
+                                t::icon_warn("No key entered — you can add one later with:")
                             );
+                            println!("      {}", t::accent_bright("rustyclaw onboard"));
                         } else {
                             secrets.store_secret(secret_key, key.trim())?;
-                            println!("  {}", t::icon_ok("API key updated."));
+                            println!("  {}", t::icon_ok("API key stored securely."));
                         }
-                    } else {
-                        println!("  {}", t::icon_ok("Keeping existing API key."));
-                    }
-                } else {
-                    let key =
-                        prompt_secret(&mut reader, &format!("{} ", t::accent("Enter API key:")))?;
-                    if key.trim().is_empty() {
-                        println!(
-                            "  {}",
-                            t::icon_warn("No key entered — you can add one later with:")
-                        );
-                        println!("      {}", t::accent_bright("rustyclaw onboard"));
-                    } else {
-                        secrets.store_secret(secret_key, key.trim())?;
-                        println!("  {}", t::icon_ok("API key stored securely."));
                     }
                 }
             }
