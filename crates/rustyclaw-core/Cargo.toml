@@ -21,12 +21,16 @@ web-tools = ["dep:scraper", "dep:html2md"]
 browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp", "dep:schemars"]
 matrix = ["dep:matrix-sdk"]
-matrix-cli = []  # Matrix CLI messenger using HTTP API (no external deps)
 whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", "dep:wa-rs-ureq-http"]
+# CLI-based messengers (tier 1) - no heavy deps, just HTTP
 signal-cli = []
+matrix-cli = []  # Matrix CLI messenger using HTTP API (no external deps)
+telegram-cli = []
+discord-cli = []
+slack-cli = []
 # NOTE: matrix excluded from all-messengers due to matrix-sdk 0.16 recursion limit bug.
 # Use `--features matrix` explicitly if needed.
-all-messengers = ["whatsapp", "signal-cli", "matrix-cli"]
+all-messengers = ["whatsapp", "signal-cli", "matrix-cli", "telegram-cli", "discord-cli", "slack-cli"]
 full = ["web-tools", "browser", "mcp", "all-messengers"]
 
 [dependencies]

@@ -186,6 +186,17 @@ mod matrix;
 #[cfg(feature = "matrix")]
 pub use matrix::MatrixMessenger;
 
+// Signal messenger removed — was incomplete and never had its dependencies (presage) added.
+// Use the signal-messenger-standalone skill or claw-me-maybe for Signal integration.
+// Now replaced with signal-cli based implementation below.
+
+#[cfg(feature = "whatsapp")]
+mod whatsapp;
+#[cfg(feature = "whatsapp")]
+pub use whatsapp::WhatsAppMessenger;
+
+// ── Tier 1: CLI-based messengers (lightweight HTTP/process wrappers) ────────
+
 #[cfg(feature = "signal-cli")]
 mod signal_cli;
 #[cfg(feature = "signal-cli")]
@@ -196,11 +207,17 @@ mod matrix_cli;
 #[cfg(feature = "matrix-cli")]
 pub use matrix_cli::MatrixCliMessenger;
 
-// Signal messenger removed — was incomplete and never had its dependencies (presage) added.
-// Use the signal-messenger-standalone skill or claw-me-maybe for Signal integration.
-// Now replaced with signal-cli based implementation above.
+#[cfg(feature = "telegram-cli")]
+mod telegram_cli;
+#[cfg(feature = "telegram-cli")]
+pub use telegram_cli::TelegramCliMessenger;
 
-#[cfg(feature = "whatsapp")]
-mod whatsapp;
-#[cfg(feature = "whatsapp")]
-pub use whatsapp::WhatsAppMessenger;
+#[cfg(feature = "discord-cli")]
+mod discord_cli;
+#[cfg(feature = "discord-cli")]
+pub use discord_cli::DiscordCliMessenger;
+
+#[cfg(feature = "slack-cli")]
+mod slack_cli;
+#[cfg(feature = "slack-cli")]
+pub use slack_cli::SlackCliMessenger;
