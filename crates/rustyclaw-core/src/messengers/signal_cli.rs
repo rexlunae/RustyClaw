@@ -208,15 +208,19 @@ impl Messenger for SignalCliMessenger {
         }
 
         let normalized_recipient = Self::normalize_phone_number(opts.recipient);
-        let mut args = vec!["send", "-m", opts.content];
         
         // Note: signal-cli doesn't support reply_to or silent options directly
-        // We could prepend reply context to the message content if needed
-        if let Some(reply_to) = opts.reply_to {
-            let content_with_reply = format!("↳ Reply to {}\n\n{}", reply_to, opts.content);
-            args[2] = &content_with_reply;
-        }
+        // We prepend reply context to the message content if needed
+        // Declare outside if-let so it lives as long as args
+        let content_with_reply;
+        let message_content = if let Some(reply_to) = opts.reply_to {
+            content_with_reply = format!("↳ Reply to {}\n\n{}", reply_to, opts.content);
+            content_with_reply.as_str()
+        } else {
+            opts.content
+        };
         
+        let mut args = vec!["send", "-m", message_content];
         args.push(&normalized_recipient);
 
         // Handle media attachment
