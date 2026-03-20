@@ -22,9 +22,10 @@ browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp", "dep:schemars"]
 matrix = ["dep:matrix-sdk"]
 whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", "dep:wa-rs-ureq-http"]
+signal-cli = []
 # NOTE: matrix excluded from all-messengers due to matrix-sdk 0.16 recursion limit bug.
 # Use `--features matrix` explicitly if needed.
-all-messengers = ["whatsapp"]
+all-messengers = ["whatsapp", "signal-cli"]
 full = ["web-tools", "browser", "mcp", "all-messengers"]
 
 [dependencies]
