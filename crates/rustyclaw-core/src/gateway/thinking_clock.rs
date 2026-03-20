@@ -19,7 +19,7 @@
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 /// Configuration for the Thinking Clock.
 #[derive(Debug, Clone, Serialize, Deserialize)]

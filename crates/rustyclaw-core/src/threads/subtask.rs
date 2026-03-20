@@ -47,7 +47,7 @@ pub struct SubtaskHandle<T: Send + 'static> {
     thread_mgr: SharedThreadManager,
 
     /// The underlying tokio JoinHandle (for abort).
-    join_handle: Option<tokio::task::JoinHandle<()>>,
+    _join_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl<T: Send + 'static> SubtaskHandle<T> {
@@ -243,7 +243,7 @@ where
         cancel_token,
         result_rx: Some(result_rx),
         thread_mgr,
-        join_handle: Some(join_handle),
+        _join_handle: Some(join_handle),
     }
 }
 
@@ -321,7 +321,7 @@ where
         cancel_token,
         result_rx: Some(result_rx),
         thread_mgr,
-        join_handle: Some(join_handle),
+        _join_handle: Some(join_handle),
     }
 }
 
@@ -396,7 +396,7 @@ where
         cancel_token,
         result_rx: Some(result_rx),
         thread_mgr,
-        join_handle: Some(join_handle),
+        _join_handle: Some(join_handle),
     }
 }
 

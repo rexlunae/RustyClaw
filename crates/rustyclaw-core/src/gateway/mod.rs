@@ -872,7 +872,7 @@ async fn handle_connection(
     let user_prompt_rx = Arc::new(Mutex::new(user_prompt_rx));
 
     // Channel for model task responses (concurrent execution).
-    let (model_task_tx, mut model_task_rx) = concurrent::channel();
+    let (_model_task_tx, mut model_task_rx) = concurrent::channel();
     
     // Track active model tasks per thread.
     let mut active_tasks = concurrent::ActiveTasks::new();

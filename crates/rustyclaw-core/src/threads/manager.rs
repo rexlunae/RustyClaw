@@ -1,13 +1,13 @@
 //! Thread manager — manages all agent threads.
 
-use super::{AgentThread, MessageRole, ThreadEvent, ThreadId, ThreadInfo, ThreadKind, ThreadStatus};
+use super::{AgentThread, MessageRole, ThreadEvent, ThreadId, ThreadInfo, ThreadStatus};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 use tokio::sync::{broadcast, RwLock};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Configuration for thread management.
 #[derive(Debug, Clone)]
@@ -540,6 +540,7 @@ pub type SharedThreadManager = Arc<RwLock<ThreadManager>>;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::threads::ThreadKind;
     
     #[test]
     fn test_create_chat_thread() {
