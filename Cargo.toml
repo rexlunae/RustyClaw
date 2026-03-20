@@ -116,6 +116,9 @@ iocraft = "0.7"
 smol = "2"
 crossterm = "0.28"
 
+# Fuzzy matching for TUI selectors
+nucleo-matcher = "0.3"
+
 # Matrix messenger support (0.16+ for libsqlite3-sys 0.35 compatibility with wa-rs)
 # NOTE: matrix-sdk 0.16 can hit Rust recursion limits on some compilers.
 # If you get "queries overflow the depth limit", try: RUSTFLAGS="--cfg recursion_limit=\"512\"" cargo build

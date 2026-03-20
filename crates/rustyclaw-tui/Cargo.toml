@@ -44,3 +44,4 @@ totp-rs.workspace = true
 dirs.workspace = true
 reqwest.workspace = true
 shellexpand.workspace = true
+nucleo-matcher.workspace = true

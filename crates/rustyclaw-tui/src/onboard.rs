@@ -548,7 +548,17 @@ pub fn run_onboard_wizard(
         // No models available — ask for a model name.
         let m = prompt_line(&mut reader, &format!("{} ", t::accent("Model name:")))?;
         m.trim().to_string()
+    } else if available_models.len() > 20 {
+        // Large list — use fuzzy search for better UX
+        match fuzzy_select(&available_models, "Select a default model (type to filter):")? {
+            Some(idx) => available_models[idx].clone(),
+            None => {
+                println!("  {}", t::warn("Cancelled — no model selected."));
+                String::new()
+            }
+        }
     } else {
+        // Small list — use simple arrow select
         match arrow_select(&available_models, "Select a default model:")? {
             Some(idx) => available_models[idx].clone(),
             None => {
@@ -1614,6 +1624,195 @@ fn setup_agent_ssh_key(reader: &mut impl BufRead, secrets: &mut SecretsManager) 
     }
     println!();
     Ok(())
+}
+
+/// Interactive fuzzy-search selector for large lists.
+///
+/// Shows a filter input at the top. As the user types, items are fuzzy-matched
+/// and the list updates in real time. Arrow keys navigate, Enter selects,
+/// Esc cancels.
+///
+/// Returns the *original* index of the selected item (into `items`), or `None`
+/// if cancelled.
+fn fuzzy_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<usize>> {
+    use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+    use crossterm::{cursor, execute, terminal as ct};
+    use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+    use nucleo_matcher::{Config, Matcher};
+
+    if items.is_empty() {
+        return Ok(None);
+    }
+
+    let max_visible: usize = 14;
+
+    // Print the heading (above the interactive region)
+    println!("{}", t::heading(heading_text));
+    println!();
+
+    // We'll draw: 1 line for filter input + max_visible lines for items + 1 hint line
+    let draw_height = 1 + max_visible + 1;
+
+    // Pre-allocate the lines so we can overwrite them.
+    for _ in 0..draw_height {
+        println!();
+    }
+
+    let mut stdout = io::stdout();
+    let mut matcher = Matcher::new(Config::DEFAULT);
+
+    // Helper: compute filtered indices based on current query
+    let compute_matches = |query: &str, matcher: &mut Matcher| -> Vec<(usize, u32)> {
+        if query.is_empty() {
+            // No filter — return all items with score 0
+            return items.iter().enumerate().map(|(i, _)| (i, 0u32)).collect();
+        }
+
+        let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+        let mut results: Vec<(usize, u32)> = Vec::new();
+        let mut buf = Vec::new();
+
+        for (i, item) in items.iter().enumerate() {
+            buf.clear();
+            let haystack = nucleo_matcher::Utf32Str::new(item.as_ref(), &mut buf);
+            if let Some(score) = pattern.score(haystack, matcher) {
+                results.push((i, score));
+            }
+        }
+
+        // Sort by score descending (best matches first)
+        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results
+    };
+
+    // Helper: draw the current state
+    let draw = |stdout: &mut io::Stdout,
+                query: &str,
+                matches: &[(usize, u32)],
+                selected: usize,
+                scroll_offset: usize|
+     -> io::Result<()> {
+        // Move cursor up to the first line of our region
+        execute!(stdout, cursor::MoveUp(draw_height as u16))?;
+
+        // Filter input line
+        execute!(stdout, ct::Clear(ct::ClearType::CurrentLine))?;
+        write!(
+            stdout,
+            "  {} {}{}\r\n",
+            t::accent("Filter:"),
+            query,
+            t::muted("▌") // cursor indicator
+        )?;
+
+        // Item lines
+        let end = (scroll_offset + max_visible).min(matches.len());
+
+        for row in 0..max_visible {
+            execute!(stdout, ct::Clear(ct::ClearType::CurrentLine))?;
+            let match_idx = scroll_offset + row;
+            if match_idx < end {
+                let (orig_idx, _score) = matches[match_idx];
+                let label = items[orig_idx].as_ref();
+                let line = if match_idx == selected {
+                    format!("  {} {}", t::accent("❯"), t::accent_bright(label))
+                } else {
+                    format!("    {}", t::muted(label))
+                };
+                write!(stdout, "{}\r\n", line)?;
+            } else {
+                write!(stdout, "\r\n")?;
+            }
+        }
+
+        // Hint line
+        execute!(stdout, ct::Clear(ct::ClearType::CurrentLine))?;
+        if matches.is_empty() {
+            write!(stdout, "  {}\r\n", t::warn("No matches"))?;
+        } else {
+            write!(
+                stdout,
+                "  {}\r\n",
+                t::muted(&format!(
+                    "{}/{} · type to filter · ↑↓ navigate · Enter select · Esc cancel",
+                    selected + 1,
+                    matches.len(),
+                )),
+            )?;
+        }
+        stdout.flush()
+    };
+
+    ct::enable_raw_mode()?;
+
+    let result = (|| -> Result<Option<usize>> {
+        let mut query = String::new();
+        let mut matches = compute_matches(&query, &mut matcher);
+        let mut selected: usize = 0;
+        let mut scroll_offset: usize = 0;
+
+        // Initial draw
+        draw(&mut stdout, &query, &matches, selected, scroll_offset)?;
+
+        loop {
+            if let Event::Key(KeyEvent {
+                code, modifiers, ..
+            }) = event::read()?
+            {
+                match code {
+                    KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        anyhow::bail!("Interrupted");
+                    }
+                    KeyCode::Esc => {
+                        return Ok(None);
+                    }
+                    KeyCode::Enter => {
+                        if !matches.is_empty() {
+                            let (orig_idx, _) = matches[selected];
+                            return Ok(Some(orig_idx));
+                        }
+                    }
+                    KeyCode::Up => {
+                        if selected > 0 {
+                            selected -= 1;
+                            if selected < scroll_offset {
+                                scroll_offset = selected;
+                            }
+                        }
+                    }
+                    KeyCode::Down => {
+                        if !matches.is_empty() && selected + 1 < matches.len() {
+                            selected += 1;
+                            if selected >= scroll_offset + max_visible {
+                                scroll_offset = selected - max_visible + 1;
+                            }
+                        }
+                    }
+                    KeyCode::Backspace => {
+                        if query.pop().is_some() {
+                            matches = compute_matches(&query, &mut matcher);
+                            selected = 0;
+                            scroll_offset = 0;
+                        }
+                    }
+                    KeyCode::Char(c) => {
+                        query.push(c);
+                        matches = compute_matches(&query, &mut matcher);
+                        selected = 0;
+                        scroll_offset = 0;
+                    }
+                    _ => continue,
+                }
+
+                draw(&mut stdout, &query, &matches, selected, scroll_offset)?;
+            }
+        }
+    })();
+
+    // Always restore cooked mode.
+    let _ = ct::disable_raw_mode();
+
+    result
 }
 
 /// Interactive arrow-key selector.

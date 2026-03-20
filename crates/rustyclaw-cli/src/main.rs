@@ -175,6 +175,16 @@ enum GatewayBind {
 }
 
 #[derive(Debug, Args, Default)]
+#[command(after_help = "\
+SECURITY NOTE:
+  API keys passed via CLI flags are visible in `ps aux` and process logs.
+  For scripted/automated setups, prefer environment variables:
+
+    ANTHROPIC_API_KEY=sk-xxx rustyclaw onboard
+    OPENROUTER_API_KEY=sk-xxx rustyclaw onboard
+
+  Or use the interactive wizard which prompts securely.
+")]
 struct OnboardArgs {
     /// Agent workspace directory
     #[arg(long, value_name = "DIR")]
@@ -199,23 +209,25 @@ struct OnboardArgs {
     json: bool,
 
     // ── Provider API-key flags (mirrors openclaw) ────────────────
-    /// Anthropic API key
-    #[arg(long, value_name = "KEY", env = "ANTHROPIC_API_KEY")]
+    // ⚠️ CLI flags are visible in `ps aux`. Prefer env vars for security:
+    //    ANTHROPIC_API_KEY, OPENAI_API_KEY, OPENROUTER_API_KEY, etc.
+    /// Anthropic API key (prefer ANTHROPIC_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "ANTHROPIC_API_KEY", hide = true)]
     anthropic_api_key: Option<String>,
-    /// OpenAI API key
-    #[arg(long, value_name = "KEY", env = "OPENAI_API_KEY")]
+    /// OpenAI API key (prefer OPENAI_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "OPENAI_API_KEY", hide = true)]
     openai_api_key: Option<String>,
-    /// OpenRouter API key
-    #[arg(long, value_name = "KEY", env = "OPENROUTER_API_KEY")]
+    /// OpenRouter API key (prefer OPENROUTER_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "OPENROUTER_API_KEY", hide = true)]
     openrouter_api_key: Option<String>,
-    /// OpenCode Zen API key
-    #[arg(long, value_name = "KEY", env = "OPENCODE_API_KEY")]
+    /// OpenCode Zen API key (prefer OPENCODE_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "OPENCODE_API_KEY", hide = true)]
     opencode_api_key: Option<String>,
-    /// Gemini API key
-    #[arg(long, value_name = "KEY", env = "GEMINI_API_KEY")]
+    /// Gemini API key (prefer GEMINI_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "GEMINI_API_KEY", hide = true)]
     gemini_api_key: Option<String>,
-    /// xAI API key
-    #[arg(long, value_name = "KEY", env = "XAI_API_KEY")]
+    /// xAI API key (prefer XAI_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "XAI_API_KEY", hide = true)]
     xai_api_key: Option<String>,
 
     // ── Gateway flags (inline, mirrors openclaw) ────────────────

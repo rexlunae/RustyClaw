@@ -218,6 +218,31 @@ cat $(echo ~/.rustyclaw/cred*/vault.json)
 
 **Mitigation**: Enable sandbox mode (`bwrap`, `landlock`, or `macos`). The credentials directory is not mounted in the sandbox namespace.
 
+### CLI API Key Exposure
+
+API keys passed via command-line flags (e.g., `--openrouter-api-key=sk-xxx`) are visible to:
+
+- Other users via `ps aux` or `/proc/*/cmdline`
+- Shell history files
+- System logs that capture process spawns
+- Crash dumps and core files
+
+**Mitigation**: Use environment variables instead of CLI flags:
+
+```bash
+# ✅ Safe — not visible in process list
+OPENROUTER_API_KEY=sk-xxx rustyclaw onboard
+
+# ✅ Safe — read from file
+export OPENROUTER_API_KEY=$(cat ~/.secrets/openrouter.key)
+rustyclaw onboard
+
+# ❌ Avoid — visible in ps aux
+rustyclaw onboard --openrouter-api-key=sk-xxx
+```
+
+The onboard wizard's interactive mode prompts for keys securely (no echo, not stored in history).
+
 ### Memory Inspection (Low Risk)
 
 A sufficiently sophisticated agent could theoretically inspect `/proc/self/mem` or similar. This requires:
