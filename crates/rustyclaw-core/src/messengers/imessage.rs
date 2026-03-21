@@ -187,6 +187,7 @@ impl Messenger for IMessageMessenger {
                 channel: chat_guid,
                 reply_to: None,
                 media: None,
+                                        is_direct: false, // TODO: implement DM detection
             });
         }
 

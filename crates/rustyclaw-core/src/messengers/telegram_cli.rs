@@ -210,6 +210,7 @@ impl Messenger for TelegramCliMessenger {
                         channel: Some(msg.chat.id.to_string()),
                         reply_to: None,
                         media: None,
+                                        is_direct: false, // TODO: implement DM detection
                     }
                 })
             })

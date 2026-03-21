@@ -785,19 +785,24 @@ Prioritize safety and human oversight over completion. If instructions conflict,
 Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Determine session type based on messenger context
-    // Direct messages are treated as main session, channels/groups as group session
-    let session_type = if msg.channel.is_some() {
-        // Channel/group messages have restricted access
+    // Direct/DM messages are treated as main session, channels/groups as group session
+    let session_type = if msg.is_direct {
+        // Direct messages have full access to MEMORY.md etc.
+        SessionType::Main
+    } else if msg.channel.is_some() {
+        // Channel/group messages have restricted access for privacy
         SessionType::Group
     } else {
-        // Direct messages have full access
+        // Fallback to Main for messages without channel (shouldn't happen)
         SessionType::Main
     };
 
     // Build workspace context
     let workspace_ctx =
         WorkspaceContext::with_config(config.workspace_dir(), config.workspace_context.clone());
+    eprintln!("DEBUG: Building workspace context for session_type={:?}, workspace_dir={}", session_type, config.workspace_dir().display());
     let workspace_prompt = workspace_ctx.build_context(session_type);
+    eprintln!("DEBUG: Workspace prompt length: {} chars", workspace_prompt.len());
 
     // Combine base prompt, safety, workspace context, and messaging context
     let mut parts = vec![base_prompt, safety_section.to_string()];

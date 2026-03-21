@@ -426,6 +426,8 @@ impl MatrixCliMessenger {
                                         if event.event_type == "m.room.message" {
                                             if let Some(body) = event.content.get("body") {
                                                 if let Some(body_str) = body.as_str() {
+                                                    // Check if this is a DM room
+                                                    let is_dm = in_dm_rooms;
                                                     messages.push(Message {
                                                         id: event.event_id,
                                                         sender: event.sender,
@@ -434,6 +436,7 @@ impl MatrixCliMessenger {
                                                         channel: Some(room_id.clone()),
                                                         reply_to: None,
                                                         media: None,
+                                                        is_direct: is_dm,
                                                     });
                                                 }
                                             }

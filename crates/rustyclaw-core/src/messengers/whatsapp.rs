@@ -93,6 +93,7 @@ impl WhatsAppMessenger {
                                 channel: Some(info.source.chat.to_string()),
                                 reply_to: None,
                                 media: None,
+                                        is_direct: false, // TODO: implement DM detection
                             };
 
                             pending.lock().await.push(message);

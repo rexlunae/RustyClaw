@@ -238,6 +238,7 @@ impl Messenger for IrcMessenger {
                                 channel: Some(channel),
                                 reply_to: None,
                                 media: None,
+                                        is_direct: false, // TODO: implement DM detection
                             };
 
                             let mut pending = pending.lock().await;
