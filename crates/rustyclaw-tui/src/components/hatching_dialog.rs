@@ -225,3 +225,57 @@ pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'stat
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hatch_state_advance_sequence() {
+        let mut state = HatchState::Egg;
+        
+        // Egg -> Crack1
+        assert!(!state.advance());
+        assert_eq!(state, HatchState::Crack1);
+        
+        // Crack1 -> Crack2
+        assert!(!state.advance());
+        assert_eq!(state, HatchState::Crack2);
+        
+        // Crack2 -> Breaking
+        assert!(!state.advance());
+        assert_eq!(state, HatchState::Breaking);
+        
+        // Breaking -> Hatched
+        assert!(!state.advance());
+        assert_eq!(state, HatchState::Hatched);
+        
+        // Hatched -> Connecting (returns true to trigger gateway request)
+        assert!(state.advance());
+        assert_eq!(state, HatchState::Connecting);
+        
+        // Connecting doesn't advance further
+        assert!(!state.advance());
+        assert_eq!(state, HatchState::Connecting);
+    }
+
+    #[test]
+    fn test_hatch_state_awakened_no_advance() {
+        let mut state = HatchState::Awakened {
+            identity: "Test identity".to_string(),
+        };
+        
+        // Awakened state doesn't advance
+        assert!(!state.advance());
+        assert!(matches!(state, HatchState::Awakened { .. }));
+    }
+
+    #[test]
+    fn test_hatching_prompt_exists() {
+        // Verify the prompt is non-empty and contains key instructions
+        assert!(!HATCHING_PROMPT.is_empty());
+        assert!(HATCHING_PROMPT.contains("hatched"));
+        assert!(HATCHING_PROMPT.contains("SOUL.md"));
+        assert!(HATCHING_PROMPT.contains("identity"));
+    }
+}
