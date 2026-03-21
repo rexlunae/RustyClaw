@@ -325,6 +325,12 @@ pub async fn run_gateway(
     };
 
     let model_ctx = model_ctx.map(Arc::new);
+    
+    // Store model info in global runtime context for tool access
+    if let Some(ref ctx) = model_ctx {
+        crate::runtime_ctx::set_model_info(&ctx.provider, &ctx.model, &ctx.base_url);
+    }
+    
     let shared_config: SharedConfig = Arc::new(RwLock::new(config.clone()));
     let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
     let rate_limiter = auth::new_rate_limiter();
