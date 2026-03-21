@@ -137,11 +137,48 @@ impl SoulManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn test_soul_manager_creation() {
         let temp_path = std::env::temp_dir().join("rustyclaw_test_soul.md");
         let manager = SoulManager::new(temp_path);
         assert!(manager.get_content().is_none());
+    }
+
+    #[test]
+    fn test_needs_hatching_no_file() {
+        let temp_path = std::env::temp_dir().join("rustyclaw_test_soul_nonexistent.md");
+        // Ensure file doesn't exist
+        let _ = fs::remove_file(&temp_path);
+        
+        let manager = SoulManager::new(temp_path);
+        assert!(manager.needs_hatching(), "should need hatching when file doesn't exist");
+    }
+
+    #[test]
+    fn test_needs_hatching_default_content() {
+        let temp_path = std::env::temp_dir().join("rustyclaw_test_soul_default.md");
+        // Write default content
+        fs::write(&temp_path, DEFAULT_SOUL_CONTENT).unwrap();
+        
+        let manager = SoulManager::new(temp_path.clone());
+        assert!(manager.needs_hatching(), "should need hatching when file has default content");
+        
+        // Cleanup
+        let _ = fs::remove_file(&temp_path);
+    }
+
+    #[test]
+    fn test_needs_hatching_custom_content() {
+        let temp_path = std::env::temp_dir().join("rustyclaw_test_soul_custom.md");
+        // Write custom content
+        fs::write(&temp_path, "# My Custom Soul\n\nI am unique!").unwrap();
+        
+        let manager = SoulManager::new(temp_path.clone());
+        assert!(!manager.needs_hatching(), "should NOT need hatching when file has custom content");
+        
+        // Cleanup
+        let _ = fs::remove_file(&temp_path);
     }
 }
