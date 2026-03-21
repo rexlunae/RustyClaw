@@ -29,10 +29,23 @@ pub struct ChatProps {
 #[component]
 pub fn Chat(props: ChatProps) -> Element {
     let mut input_ref = use_signal(|| props.input.clone());
+    let mut message_list_ref = use_signal(|| None::<web_sys::Element>);
     
     // Update local input when prop changes
     use_effect(move || {
         input_ref.set(props.input.clone());
+    });
+    
+    // Auto-scroll to bottom when new messages arrive
+    use_effect(move || {
+        let msg_count = props.messages.len();
+        if msg_count > 0 {
+            spawn(async move {
+                if let Some(element) = &*message_list_ref.read() {
+                    element.set_scroll_top(element.scroll_height());
+                }
+            });
+        }
     });
     
     let on_submit = props.on_submit.clone();
@@ -61,8 +74,13 @@ pub fn Chat(props: ChatProps) -> Element {
             style: "display: flex; flex-direction: column; height: 100%;",
             
             // Message list
-            div { class: "message-list",
-                style: "flex: 1; overflow-y: auto; padding: 1rem;",
+            div { 
+                class: "message-list",
+                style: "flex: 1; overflow-y: auto; padding: 1rem; scroll-behavior: smooth;",
+                onmounted: move |evt| {
+                    let element = evt.data.downcast::<web_sys::Element>().cloned();
+                    message_list_ref.set(element);
+                },
                 
                 for msg in props.messages.iter() {
                     div { key: "{msg.id}",
@@ -107,10 +125,11 @@ pub fn Chat(props: ChatProps) -> Element {
                         Control { class: "is-expanded",
                             textarea {
                                 class: "textarea",
-                                placeholder: "Type a message...",
+                                placeholder: if is_processing { "Please wait..." } else { "Type a message... (Enter to send, Shift+Enter for new line)" },
                                 value: "{input_ref}",
                                 disabled: is_processing,
-                                rows: 2,
+                                rows: 3,
+                                style: "resize: vertical; min-height: 80px;",
                                 onkeypress: handle_keypress,
                                 oninput: move |evt| {
                                     let value = evt.value();
@@ -125,9 +144,10 @@ pub fn Chat(props: ChatProps) -> Element {
                                 loading: is_processing,
                                 disabled: is_processing || input_ref.read().trim().is_empty(),
                                 onclick: handle_submit,
-                                span { class: "icon",
+                                span { class: "icon is-small",
                                     i { class: "fas fa-paper-plane" }
                                 }
+                                span { "Send" }
                             }
                         }
                     }
