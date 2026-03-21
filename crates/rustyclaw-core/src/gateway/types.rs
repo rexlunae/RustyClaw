@@ -18,6 +18,31 @@ pub struct GatewayOptions {
     pub tls_cert: Option<PathBuf>,
     /// Path to TLS private key file (PEM).
     pub tls_key: Option<PathBuf>,
+    /// SSH server listen address (e.g., "0.0.0.0:2222").
+    /// When set, the gateway will accept SSH connections on this address.
+    pub ssh_listen: Option<String>,
+    /// Run as SSH subsystem (stdio mode).
+    /// When true, the gateway reads/writes frames on stdin/stdout instead
+    /// of opening a TCP listener. Used for OpenSSH subsystem integration.
+    pub ssh_stdio: bool,
+    /// Path to SSH host key file. Defaults to ~/.rustyclaw/ssh_host_key.
+    pub ssh_host_key: Option<PathBuf>,
+    /// Path to authorized_clients file. Defaults to ~/.rustyclaw/authorized_clients.
+    pub ssh_authorized_clients: Option<PathBuf>,
+}
+
+impl Default for GatewayOptions {
+    fn default() -> Self {
+        Self {
+            listen: "127.0.0.1:9001".to_string(),
+            tls_cert: None,
+            tls_key: None,
+            ssh_listen: None,
+            ssh_stdio: false,
+            ssh_host_key: None,
+            ssh_authorized_clients: None,
+        }
+    }
 }
 
 // ── Chat protocol types ─────────────────────────────────────────────────────
