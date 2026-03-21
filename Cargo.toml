@@ -3,6 +3,7 @@ members = [
     "crates/rustyclaw-core",
     "crates/rustyclaw-cli",
     "crates/rustyclaw-tui",
+    "crates/rustyclaw-desktop",
 ]
 resolver = "3"
 
