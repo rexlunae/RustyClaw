@@ -347,12 +347,8 @@ impl MatrixCliMessenger {
 
         let sync_response: SyncResponse = response.json().await?;
         
-        // Update sync token and persist to disk
-        {
-            let mut token = self.sync_token.lock().await;
-            *token = Some(sync_response.next_batch.clone());
-            self.save_sync_token(&sync_response.next_batch);
-        }
+        // Store next_batch for later - we'll only save it after successful message extraction
+        let next_batch = sync_response.next_batch.clone();
 
         // Process invites if DM is enabled
         if self.dm_config.enabled {
@@ -449,6 +445,14 @@ impl MatrixCliMessenger {
                     }
                 }
             }
+        }
+
+        // Only update sync token AFTER successful message extraction.
+        // This prevents losing messages if extraction fails partway through.
+        {
+            let mut token = self.sync_token.lock().await;
+            *token = Some(next_batch.clone());
+            self.save_sync_token(&next_batch);
         }
 
         Ok(messages)
