@@ -96,6 +96,8 @@ pub(crate) enum GwEvent {
         thread_id: u64,
         context_summary: Option<String>,
     },
+    /// Hatching identity generated
+    HatchingResponse(String),
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -152,6 +154,10 @@ pub(crate) enum UserInput {
     /// Create a new thread
     #[allow(dead_code)]
     ThreadCreate(String),
+    /// Request identity generation for hatching
+    HatchingRequest,
+    /// Hatching response received - save to SOUL.md
+    HatchingComplete(String),
     Quit,
 }
 
@@ -973,6 +979,35 @@ impl App {
                         }
                     }
                 }
+                Ok(UserInput::HatchingRequest) => {
+                    // Send hatching prompt to gateway as a special chat
+                    if let Some(ref mut sink) = ws_sink {
+                        use futures_util::SinkExt;
+                        let hatching_prompt = crate::components::hatching_dialog::HATCHING_PROMPT;
+                        let messages = vec![
+                            ChatMessage::text("system", hatching_prompt),
+                            ChatMessage::text("user", "Generate my identity."),
+                        ];
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::Chat,
+                            payload: ClientPayload::Chat { messages },
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink
+                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                                .await;
+                        }
+                    }
+                }
+                Ok(UserInput::HatchingComplete(identity)) => {
+                    // Save identity to SOUL.md
+                    let soul_path = config.soul_path();
+                    if let Err(e) = std::fs::write(&soul_path, &identity) {
+                        tracing::warn!("Failed to write SOUL.md: {}", e);
+                    } else {
+                        tracing::info!("Saved hatched identity to {:?}", soul_path);
+                    }
+                }
                 Ok(UserInput::Quit) => break,
                 Err(sync_mpsc::TryRecvError::Empty) => {}
                 Err(sync_mpsc::TryRecvError::Disconnected) => break,
@@ -1291,6 +1326,7 @@ mod tui_component {
         let mut hatching_state: State<crate::components::hatching_dialog::HatchState> =
             hooks.use_state(|| crate::components::hatching_dialog::HatchState::Egg);
         let mut hatching_tick = hooks.use_state(|| 0usize);
+        let mut hatching_pending = hooks.use_state(|| false); // True when waiting for hatching response
 
         // ── User prompt dialog state ────────────────────────────────────
         let mut show_user_prompt = hooks.use_state(|| false);
@@ -1349,6 +1385,7 @@ mod tui_component {
         hooks.use_future({
             let rx_handle = Arc::clone(&gw_rx);
             let tx_for_history = Arc::clone(&user_tx);
+            let tx_for_ticker = Arc::clone(&user_tx);
             async move {
                 loop {
                     smol::Timer::after(Duration::from_millis(30)).await;
@@ -1458,7 +1495,23 @@ mod tui_component {
                                         // send it back to the tokio loop so it gets
                                         // appended to the conversation history.
                                         let completed_text = streaming_buf.read().clone();
-                                        if !completed_text.is_empty() {
+                                        
+                                        // Check if this was a hatching response
+                                        if hatching_pending.get() {
+                                            hatching_pending.set(false);
+                                            // Set hatching state to Awakened with the identity
+                                            hatching_state.set(
+                                                crate::components::hatching_dialog::HatchState::Awakened {
+                                                    identity: completed_text.clone(),
+                                                }
+                                            );
+                                            // Save to SOUL.md
+                                            if let Ok(guard) = tx_for_history.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.send(UserInput::HatchingComplete(completed_text));
+                                                }
+                                            }
+                                        } else if !completed_text.is_empty() {
                                             if let Ok(guard) = tx_for_history.lock() {
                                                 if let Some(ref tx) = *guard {
                                                     let _ = tx.send(UserInput::AssistantResponse(completed_text));
@@ -1469,10 +1522,12 @@ mod tui_component {
                                         stream_start.set(None);
                                         elapsed.set(String::new());
                                         streaming_buf.set(String::new());
-                                        // Refresh task list after response
-                                        if let Ok(guard) = tx_for_history.lock() {
-                                            if let Some(ref tx) = *guard {
-                                                let _ = tx.send(UserInput::RefreshTasks);
+                                        // Refresh task list after response (not for hatching)
+                                        if !hatching_pending.get() {
+                                            if let Ok(guard) = tx_for_history.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.send(UserInput::RefreshTasks);
+                                                }
                                             }
                                         }
                                     }
@@ -1693,6 +1748,12 @@ mod tui_component {
                                         // Unfocus sidebar after switch
                                         sidebar_focused.set(false);
                                     }
+                                    GwEvent::HatchingResponse(_identity) => {
+                                        // Hatching response is handled via ResponseDone
+                                        // since it comes through as streaming chunks.
+                                        // This event is currently unused but defined for
+                                        // potential future direct gateway hatching support.
+                                    }
                                 }
                             }
                         }
@@ -1702,7 +1763,7 @@ mod tui_component {
                     spinner_tick.set(spinner_tick.get().wrapping_add(1));
                     
                     // Animate hatching sequence (advance every 8 ticks ≈ 2 seconds)
-                    if show_hatching.get() {
+                    if show_hatching.get() && !hatching_pending.get() {
                         let tick = hatching_tick.get().wrapping_add(1);
                         hatching_tick.set(tick);
                         if tick % 8 == 0 {
@@ -1710,8 +1771,13 @@ mod tui_component {
                             let should_connect = state.advance();
                             hatching_state.set(state);
                             if should_connect {
-                                // TODO: Send hatching prompt to gateway
-                                // For now, just show a placeholder
+                                // Send hatching request to gateway
+                                hatching_pending.set(true);
+                                if let Ok(guard) = tx_for_ticker.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::HatchingRequest);
+                                    }
+                                }
                             }
                         }
                     }
