@@ -84,6 +84,11 @@ pub trait Messenger: Send + Sync {
 
     /// Disconnect the messenger
     async fn disconnect(&mut self) -> Result<()>;
+
+    /// Set typing indicator (optional - default is no-op)
+    async fn set_typing(&self, _channel: &str, _typing: bool) -> Result<()> {
+        Ok(())
+    }
 }
 
 // ── Messenger manager ───────────────────────────────────────────────────────
@@ -205,7 +210,7 @@ pub use signal_cli::SignalCliMessenger;
 #[cfg(feature = "matrix-cli")]
 mod matrix_cli;
 #[cfg(feature = "matrix-cli")]
-pub use matrix_cli::MatrixCliMessenger;
+pub use matrix_cli::{MatrixCliMessenger, MatrixDmConfig};
 
 #[cfg(feature = "telegram-cli")]
 mod telegram_cli;

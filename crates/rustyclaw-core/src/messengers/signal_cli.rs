@@ -314,6 +314,25 @@ impl Messenger for SignalCliMessenger {
         self.connected = false;
         Ok(())
     }
+
+    async fn set_typing(&self, channel: &str, typing: bool) -> Result<()> {
+        if !self.connected {
+            return Ok(());
+        }
+
+        // signal-cli supports sendTyping command
+        let action = if typing { "start" } else { "stop" };
+        let normalized = Self::normalize_phone_number(channel);
+        
+        // Best effort - ignore errors
+        let _ = self.execute_signal_cli(&[
+            "sendTyping",
+            "--recipient", &normalized,
+            action,
+        ]).await;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]

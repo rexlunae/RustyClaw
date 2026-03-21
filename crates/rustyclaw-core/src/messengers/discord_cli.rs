@@ -214,4 +214,26 @@ impl Messenger for DiscordCliMessenger {
         *self.connected.lock().await = false;
         Ok(())
     }
+
+    async fn set_typing(&self, channel: &str, typing: bool) -> Result<()> {
+        if !typing {
+            return Ok(()); // Discord typing auto-expires after ~10 seconds
+        }
+
+        let url = format!("{}/channels/{}/typing", DISCORD_API_BASE, channel);
+        
+        let response = self.client
+            .post(&url)
+            .header("Authorization", format!("Bot {}", self.token))
+            .send()
+            .await
+            .context("Failed to send typing indicator")?;
+
+        if !response.status().is_success() {
+            // Non-fatal, just log
+            eprintln!("Failed to send Discord typing indicator: {}", response.status());
+        }
+
+        Ok(())
+    }
 }

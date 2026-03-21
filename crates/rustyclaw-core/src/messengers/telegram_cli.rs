@@ -227,4 +227,30 @@ impl Messenger for TelegramCliMessenger {
         *self.connected.lock().await = false;
         Ok(())
     }
+
+    async fn set_typing(&self, channel: &str, typing: bool) -> Result<()> {
+        if !typing {
+            return Ok(()); // Telegram typing auto-expires, no need to clear
+        }
+        
+        let url = format!("{}/sendChatAction", self.base_url);
+        let body = serde_json::json!({
+            "chat_id": channel,
+            "action": "typing"
+        });
+
+        let response = self.client
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to send typing indicator")?;
+
+        if !response.status().is_success() {
+            // Non-fatal, just log
+            eprintln!("Failed to send Telegram typing indicator: {}", response.status());
+        }
+
+        Ok(())
+    }
 }
