@@ -210,6 +210,14 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> Result<String
 
     let mut output = String::from("📊 Session Status\n\n");
 
+    // Include model information from runtime context
+    if let Some((provider, model, base_url)) = crate::runtime_ctx::get_model_info() {
+        output.push_str("## Model\n");
+        output.push_str(&format!("Provider: {}\n", provider));
+        output.push_str(&format!("Model: {}\n", model));
+        output.push_str(&format!("Base URL: {}\n\n", base_url));
+    }
+
     if let Some(key) = session_key {
         if let Some(session) = mgr.get(key) {
             output.push_str(&format!("Session: {}\n", session.key));
@@ -229,6 +237,7 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> Result<String
             .filter(|s| s.status == SessionStatus::Active)
             .count();
 
+        output.push_str("## Sessions\n");
         output.push_str(&format!("Active sessions: {}\n", active));
         output.push_str(&format!("Total sessions: {}\n", all_sessions.len()));
         output.push_str(&format!("Timestamp: {} ms\n", now.as_millis()));
