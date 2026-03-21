@@ -91,6 +91,10 @@ pub struct Config {
     /// Messenger polling interval in milliseconds (default: 2000).
     #[serde(default)]
     pub messenger_poll_interval_ms: Option<u32>,
+    /// Maximum concurrent message processing tasks (default: 1 = sequential).
+    /// Set to 2+ to allow agent to handle new messages while processing others.
+    #[serde(default)]
+    pub messenger_max_concurrent: Option<usize>,
     /// Per-tool permission overrides. Tools not listed here default to Allow.
     #[serde(default)]
     pub tool_permissions: HashMap<String, crate::tools::ToolPermission>,
@@ -254,6 +258,7 @@ impl Default for Config {
             clawhub_token: None,
             system_prompt: None,
             messenger_poll_interval_ms: None,
+            messenger_max_concurrent: None,
             tool_permissions: HashMap::new(),
             tls_cert: None,
             tls_key: None,
