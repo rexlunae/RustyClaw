@@ -86,6 +86,10 @@ pub struct MatrixCliMessenger {
     dm_config: MatrixDmConfig,
     /// Dynamically accepted DM room IDs (from auto-accept)
     dm_rooms: Arc<Mutex<HashSet<String>>>,
+    /// Directory for persisting state (sync token, etc.)
+    state_dir: Option<std::path::PathBuf>,
+    /// Messages from initial sync, waiting to be returned
+    pending_messages: Arc<Mutex<Vec<Message>>>,
 }
 
 impl MatrixCliMessenger {
@@ -109,6 +113,8 @@ impl MatrixCliMessenger {
             allowed_chats: HashSet::new(),
             dm_config: MatrixDmConfig::default(),
             dm_rooms: Arc::new(Mutex::new(HashSet::new())),
+            state_dir: None,
+            pending_messages: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -133,7 +139,15 @@ impl MatrixCliMessenger {
             allowed_chats: HashSet::new(),
             dm_config: MatrixDmConfig::default(),
             dm_rooms: Arc::new(Mutex::new(HashSet::new())),
+            state_dir: None,
+            pending_messages: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Set state directory for persisting sync token
+    pub fn with_state_dir(mut self, dir: std::path::PathBuf) -> Self {
+        self.state_dir = Some(dir);
+        self
     }
 
     /// Set allowed chat room IDs
@@ -154,6 +168,27 @@ impl MatrixCliMessenger {
             .as_ref()
             .map(|token| format!("Bearer {}", token))
             .ok_or_else(|| anyhow::anyhow!("No access token available"))
+    }
+
+    /// Load sync token from disk if state_dir is configured
+    fn load_sync_token(&self) -> Option<String> {
+        let state_dir = self.state_dir.as_ref()?;
+        let token_path = state_dir.join("matrix_sync_token");
+        std::fs::read_to_string(&token_path).ok()
+    }
+
+    /// Save sync token to disk if state_dir is configured
+    fn save_sync_token(&self, token: &str) {
+        if let Some(ref state_dir) = self.state_dir {
+            let token_path = state_dir.join("matrix_sync_token");
+            if let Err(e) = std::fs::create_dir_all(state_dir) {
+                eprintln!("Failed to create state dir: {}", e);
+                return;
+            }
+            if let Err(e) = std::fs::write(&token_path, token) {
+                eprintln!("Failed to save sync token: {}", e);
+            }
+        }
     }
 
     /// Login with password and get access token
@@ -312,10 +347,11 @@ impl MatrixCliMessenger {
 
         let sync_response: SyncResponse = response.json().await?;
         
-        // Update sync token
+        // Update sync token and persist to disk
         {
             let mut token = self.sync_token.lock().await;
             *token = Some(sync_response.next_batch.clone());
+            self.save_sync_token(&sync_response.next_batch);
         }
 
         // Process invites if DM is enabled
@@ -543,8 +579,18 @@ impl Messenger for MatrixCliMessenger {
             }
         }
 
-        // Test the connection by doing an initial sync
-        self.sync(Some(0)).await?;
+        // Note: We intentionally do NOT load persisted sync token on restart.
+        // Starting fresh ensures we get recent messages (last ~10 per room).
+        // The slight risk of re-processing messages on restart is acceptable.
+        // The persisted token is saved for potential future use (e.g., quick restart).
+
+        // Do initial sync and store any messages for first receive_messages() call
+        let initial_messages = self.sync(Some(0)).await?;
+        if !initial_messages.is_empty() {
+            eprintln!("Initial sync returned {} messages", initial_messages.len());
+            let mut pending = self.pending_messages.lock().await;
+            pending.extend(initial_messages);
+        }
         
         self.connected = true;
         Ok(())
@@ -559,9 +605,17 @@ impl Messenger for MatrixCliMessenger {
     }
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
-        // sync() now takes &self and uses Arc<Mutex> for sync_token
-        let result = self.sync(Some(1000)).await;
-        result
+        // First, return any pending messages from initial sync
+        {
+            let mut pending = self.pending_messages.lock().await;
+            if !pending.is_empty() {
+                let messages = std::mem::take(&mut *pending);
+                return Ok(messages);
+            }
+        }
+        
+        // Then do normal sync for new messages
+        self.sync(Some(1000)).await
     }
 
     fn is_connected(&self) -> bool {

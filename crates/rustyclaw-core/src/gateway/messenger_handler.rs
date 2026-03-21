@@ -251,6 +251,12 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 None, // device_id
             );
             
+            // Set state directory for sync token persistence
+            if let Some(dirs) = directories::ProjectDirs::from("", "", "rustyclaw") {
+                let state_dir = dirs.data_dir().join("matrix").join(&name);
+                messenger = messenger.with_state_dir(state_dir);
+            }
+            
             // Set allowed chats if configured
             if !config.allowed_chats.is_empty() {
                 messenger = messenger.with_allowed_chats(config.allowed_chats.clone());
