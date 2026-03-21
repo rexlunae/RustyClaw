@@ -1700,6 +1700,22 @@ mod tui_component {
 
                     // Update spinner and elapsed timer
                     spinner_tick.set(spinner_tick.get().wrapping_add(1));
+                    
+                    // Animate hatching sequence (advance every 8 ticks ≈ 2 seconds)
+                    if show_hatching.get() {
+                        let tick = hatching_tick.get().wrapping_add(1);
+                        hatching_tick.set(tick);
+                        if tick % 8 == 0 {
+                            let mut state = hatching_state.read().clone();
+                            let should_connect = state.advance();
+                            hatching_state.set(state);
+                            if should_connect {
+                                // TODO: Send hatching prompt to gateway
+                                // For now, just show a placeholder
+                            }
+                        }
+                    }
+                    
                     if let Some(start) = stream_start.get() {
                         let d = start.elapsed();
                         let secs = d.as_secs();
@@ -1893,6 +1909,34 @@ mod tui_component {
                                         }
                                     }
                                 }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
+                    // ── Hatching dialog ─────────────────────────────
+                    if show_hatching.get() {
+                        match code {
+                            KeyCode::Enter => {
+                                // If awakened, close the dialog
+                                let state = hatching_state.read().clone();
+                                if matches!(
+                                    state,
+                                    crate::components::hatching_dialog::HatchState::Awakened { .. }
+                                ) {
+                                    show_hatching.set(false);
+                                    let mut m = messages.read().clone();
+                                    m.push(DisplayMessage::success("Identity established! Welcome to RustyClaw."));
+                                    messages.set(m);
+                                }
+                            }
+                            KeyCode::Esc => {
+                                // Allow skipping hatching
+                                show_hatching.set(false);
+                                let mut m = messages.read().clone();
+                                m.push(DisplayMessage::info("Hatching skipped. You can customize SOUL.md manually."));
+                                messages.set(m);
                             }
                             _ => {}
                         }
@@ -2444,6 +2488,7 @@ mod tui_component {
 
         // Clone props into owned values so closures below don't borrow `props`.
         let prop_soul_name = props.soul_name.clone();
+        let prop_soul_name_for_hatching = props.soul_name.clone();
         let prop_model_label = props.model_label.clone();
         let prop_provider_id = props.provider_id.clone();
         let prop_hint = props.hint.clone();
@@ -2469,6 +2514,7 @@ mod tui_component {
                     && !show_secrets_dialog.get()
                     && !show_skills_dialog.get()
                     && !show_tool_perms_dialog.get()
+                    && !show_hatching.get()
                     && !sidebar_focused.get(),
                 on_change: move |new_val: String| {
                     input_value.set(new_val.clone());
@@ -2537,6 +2583,9 @@ mod tui_component {
                 tool_perms_data: tool_perms_dialog_data.read().clone(),
                 tool_perms_selected: tool_perms_selected.get(),
                 tool_perms_scroll_offset: tool_perms_scroll_offset.get(),
+                show_hatching: show_hatching.get(),
+                hatching_state: hatching_state.read().clone(),
+                hatching_agent_name: prop_soul_name_for_hatching,
             )
         }
     }

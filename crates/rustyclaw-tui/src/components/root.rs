@@ -7,6 +7,7 @@ use iocraft::prelude::*;
 
 use crate::components::auth_dialog::AuthDialog;
 use crate::components::command_menu::CommandMenu;
+use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
 use crate::components::messages::Messages;
 use crate::components::secrets_dialog::{SecretInfo, SecretsDialog};
@@ -107,6 +108,11 @@ pub struct RootProps {
     pub tool_perms_data: Vec<ToolPermInfo>,
     pub tool_perms_selected: Option<usize>,
     pub tool_perms_scroll_offset: usize,
+
+    // hatching dialog overlay (first run)
+    pub show_hatching: bool,
+    pub hatching_state: crate::components::hatching_dialog::HatchState,
+    pub hatching_agent_name: String,
 }
 
 #[component]
@@ -136,6 +142,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let tool_perms_scroll = props.tool_perms_scroll_offset;
     #[allow(unused_variables)]
     let show_tool_perms = props.show_tool_perms_dialog;
+    
+    let show_hatching = props.show_hatching;
+    let hatching_state = props.hatching_state.clone();
+    let hatching_agent_name = props.hatching_agent_name.clone();
 
     element! {
         View(
@@ -349,6 +359,26 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             tools: tool_perms_data,
                             selected: tool_perms_selected,
                             scroll_offset: tool_perms_scroll,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Hatching dialog overlay (first run) ─────────────────────
+            #(if show_hatching {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        HatchingDialog(
+                            state: hatching_state,
+                            agent_name: hatching_agent_name,
                         )
                     }
                 }.into_any()
