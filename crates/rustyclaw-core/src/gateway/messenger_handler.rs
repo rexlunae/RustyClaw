@@ -243,13 +243,30 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .context("Matrix-CLI requires 'access_token'")?;
 
-            let messenger = MatrixCliMessenger::with_token(
+            let mut messenger = MatrixCliMessenger::with_token(
                 name.clone(),
                 homeserver,
                 user_id,
                 access_token,
                 None, // device_id
             );
+            
+            // Set allowed chats if configured
+            if !config.allowed_chats.is_empty() {
+                messenger = messenger.with_allowed_chats(config.allowed_chats.clone());
+            }
+            
+            // Set DM config if present
+            if let Some(ref dm) = config.dm {
+                use crate::messengers::MatrixDmConfig;
+                let dm_config = MatrixDmConfig {
+                    enabled: dm.enabled,
+                    policy: dm.policy.clone().unwrap_or_else(|| "allowlist".to_string()),
+                    allow_from: dm.allow_from.clone(),
+                };
+                messenger = messenger.with_dm_config(dm_config);
+            }
+            
             Box::new(messenger)
         }
         #[cfg(not(feature = "matrix-cli"))]
@@ -323,7 +340,17 @@ pub async fn run_messenger_loop(
                 // Process each message
                 for (messenger_type, msg) in messages {
                     eprintln!("DEBUG: Processing message from {} in {}", msg.sender, messenger_type);
-                    if let Err(e) = process_incoming_message(
+                    
+                    // Set typing indicator before processing
+                    if let Some(channel) = &msg.channel {
+                        let mgr = messenger_mgr.lock().await;
+                        if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                            let _ = messenger.set_typing(channel, true).await;
+                        }
+                    }
+                    
+                    let channel_for_typing = msg.channel.clone();
+                    let result = process_incoming_message(
                         &http,
                         &config,
                         &messenger_mgr,
@@ -337,8 +364,17 @@ pub async fn run_messenger_loop(
                         &messenger_type,
                         msg,
                     )
-                    .await
-                    {
+                    .await;
+                    
+                    // Clear typing indicator after processing
+                    if let Some(channel) = channel_for_typing {
+                        let mgr = messenger_mgr.lock().await;
+                        if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                            let _ = messenger.set_typing(&channel, false).await;
+                        }
+                    }
+                    
+                    if let Err(e) = result {
                         eprintln!("DEBUG: Error processing message: {}", e);
                         error!(error = %e, "Error processing message");
                     }

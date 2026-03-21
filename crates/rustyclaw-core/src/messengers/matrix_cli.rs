@@ -12,6 +12,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
@@ -36,6 +37,7 @@ struct SyncResponse {
 #[derive(Debug, Deserialize)]
 struct RoomsResponse {
     join: Option<serde_json::Map<String, Value>>,
+    invite: Option<serde_json::Map<String, Value>>,
 }
 
 /// Matrix API response for sending messages
@@ -55,6 +57,17 @@ struct RoomEvent {
     origin_server_ts: u64,
 }
 
+/// DM configuration for Matrix messenger
+#[derive(Debug, Clone, Default)]
+pub struct MatrixDmConfig {
+    /// Whether DMs are enabled
+    pub enabled: bool,
+    /// DM policy: "allowlist", "open", or "pairing"
+    pub policy: String,
+    /// List of user IDs allowed to send DMs (for allowlist policy)
+    pub allow_from: Vec<String>,
+}
+
 /// Matrix messenger implementation using HTTP API
 pub struct MatrixCliMessenger {
     name: String,
@@ -66,6 +79,12 @@ pub struct MatrixCliMessenger {
     client: Client,
     connected: bool,
     sync_token: Arc<Mutex<Option<String>>>,
+    /// Configured allowed chat room IDs (explicit allowlist)
+    allowed_chats: HashSet<String>,
+    /// DM configuration
+    dm_config: MatrixDmConfig,
+    /// Dynamically accepted DM room IDs (from auto-accept)
+    dm_rooms: Arc<Mutex<HashSet<String>>>,
 }
 
 impl MatrixCliMessenger {
@@ -86,6 +105,9 @@ impl MatrixCliMessenger {
             client: Client::new(),
             connected: false,
             sync_token: Arc::new(Mutex::new(None)),
+            allowed_chats: HashSet::new(),
+            dm_config: MatrixDmConfig::default(),
+            dm_rooms: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -107,7 +129,22 @@ impl MatrixCliMessenger {
             client: Client::new(),
             connected: false,
             sync_token: Arc::new(Mutex::new(None)),
+            allowed_chats: HashSet::new(),
+            dm_config: MatrixDmConfig::default(),
+            dm_rooms: Arc::new(Mutex::new(HashSet::new())),
         }
+    }
+
+    /// Set allowed chat room IDs
+    pub fn with_allowed_chats(mut self, chats: Vec<String>) -> Self {
+        self.allowed_chats = chats.into_iter().collect();
+        self
+    }
+
+    /// Set DM configuration
+    pub fn with_dm_config(mut self, config: MatrixDmConfig) -> Self {
+        self.dm_config = config;
+        self
     }
 
     /// Build authorization header
@@ -154,6 +191,55 @@ impl MatrixCliMessenger {
         self.device_id = Some(login_response.device_id);
         
         Ok(())
+    }
+
+    /// Join a room by ID
+    async fn join_room(&self, room_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/_matrix/client/v3/rooms/{}/join",
+            self.homeserver_url,
+            urlencoding::encode(room_id)
+        );
+
+        let response = self.client
+            .post(&url)
+            .header("Authorization", self.auth_header()?)
+            .header("Content-Type", "application/json")
+            .body("{}")
+            .send()
+            .await
+            .context("Failed to join room")?;
+
+        if !response.status().is_success() {
+            let error = response.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to join room: {}", error);
+        }
+
+        Ok(())
+    }
+
+    /// Get list of joined rooms
+    async fn get_joined_rooms(&self) -> Result<Vec<String>> {
+        let url = format!("{}/_matrix/client/v3/joined_rooms", self.homeserver_url);
+
+        let response = self.client
+            .get(&url)
+            .header("Authorization", self.auth_header()?)
+            .send()
+            .await
+            .context("Failed to get joined rooms")?;
+
+        if !response.status().is_success() {
+            anyhow::bail!("Failed to get joined rooms: {}", response.status());
+        }
+
+        #[derive(Deserialize)]
+        struct JoinedRoomsResponse {
+            joined_rooms: Vec<String>,
+        }
+
+        let resp: JoinedRoomsResponse = response.json().await?;
+        Ok(resp.joined_rooms)
     }
 
     /// Resolve room ID from alias or return as-is if already an ID
@@ -231,17 +317,70 @@ impl MatrixCliMessenger {
             *token = Some(sync_response.next_batch.clone());
         }
 
+        // Process invites if DM is enabled
+        if self.dm_config.enabled {
+            if let Some(ref rooms) = sync_response.rooms {
+                if let Some(ref invites) = rooms.invite {
+                    for (room_id, invite_data) in invites {
+                        // Find who sent the invite
+                        if let Some(invite_state) = invite_data.get("invite_state") {
+                            if let Some(events) = invite_state.get("events") {
+                                if let Some(events_array) = events.as_array() {
+                                    for event in events_array {
+                                        if event.get("type").and_then(|t| t.as_str()) == Some("m.room.member") {
+                                            if let Some(sender) = event.get("sender").and_then(|s| s.as_str()) {
+                                                // Check if we should auto-accept
+                                                let should_accept = match self.dm_config.policy.as_str() {
+                                                    "open" => true,
+                                                    "allowlist" => self.dm_config.allow_from.iter().any(|u| u == sender),
+                                                    _ => false,
+                                                };
+                                                
+                                                if should_accept {
+                                                    // Accept the invite
+                                                    if let Err(e) = self.join_room(room_id).await {
+                                                        eprintln!("Failed to auto-accept invite from {}: {}", sender, e);
+                                                    } else {
+                                                        // Track as DM room
+                                                        let mut dm_rooms = self.dm_rooms.lock().await;
+                                                        dm_rooms.insert(room_id.clone());
+                                                        eprintln!("Auto-accepted DM invite from {} to room {}", sender, room_id);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         let mut messages = Vec::new();
 
-        if let Some(ref rooms) = sync_response.rooms {
-            if let Some(ref joined) = rooms.join {
-            }
-        } else {
-        }
+        // Get current DM rooms for filtering
+        let dm_rooms = self.dm_rooms.lock().await.clone();
+        eprintln!("DEBUG: sync - allowed_chats: {:?}, dm_rooms: {:?}", self.allowed_chats, dm_rooms);
         
         if let Some(rooms) = sync_response.rooms {
             if let Some(joined_rooms) = rooms.join {
+                eprintln!("DEBUG: sync - checking {} joined rooms", joined_rooms.len());
                 for (room_id, room_data) in joined_rooms {
+                    // Check if this room is allowed
+                    let in_allowed_chats = self.allowed_chats.contains(&room_id);
+                    let in_dm_rooms = dm_rooms.contains(&room_id);
+                    
+                    // If we have an allowlist OR dm_rooms, only process rooms in one of them
+                    if !self.allowed_chats.is_empty() || !dm_rooms.is_empty() {
+                        if !in_allowed_chats && !in_dm_rooms {
+                            eprintln!("DEBUG: skipping room {} (not in allowed lists)", room_id);
+                            continue;
+                        }
+                    }
+                    eprintln!("DEBUG: processing room {}", room_id);
+                    
                     if let Some(timeline) = room_data.get("timeline") {
                         if let Some(events) = timeline.get("events") {
                             if let Some(events_array) = events.as_array() {
@@ -266,20 +405,48 @@ impl MatrixCliMessenger {
                                                 }
                                             }
                                         }
-                                    } else {
                                     }
                                 }
-                            } else {
                             }
-                        } else {
                         }
-                    } else {
                     }
                 }
             }
         }
 
         Ok(messages)
+    }
+
+    /// Set typing indicator for a room
+    async fn set_typing(&self, room_id: &str, typing: bool) -> Result<()> {
+        let resolved_room_id = self.resolve_room_id(room_id).await?;
+        let url = format!(
+            "{}/_matrix/client/v3/rooms/{}/typing/{}",
+            self.homeserver_url,
+            urlencoding::encode(&resolved_room_id),
+            urlencoding::encode(&self.user_id)
+        );
+
+        let body = if typing {
+            json!({ "typing": true, "timeout": 30000 })
+        } else {
+            json!({ "typing": false })
+        };
+
+        let response = self.client
+            .put(&url)
+            .header("Authorization", self.auth_header()?)
+            .json(&body)
+            .send()
+            .await
+            .context("Failed to set typing indicator")?;
+
+        if !response.status().is_success() {
+            // Non-fatal - just log and continue
+            eprintln!("Failed to set typing indicator: {}", response.status());
+        }
+
+        Ok(())
     }
 
     /// Send a plain text message to a room
@@ -352,6 +519,22 @@ impl Messenger for MatrixCliMessenger {
             anyhow::bail!("No access token available and no password provided");
         }
 
+        // If DM is enabled, load existing joined rooms that aren't in allowed_chats
+        // These are likely DM rooms from previous sessions
+        if self.dm_config.enabled {
+            if let Ok(joined) = self.get_joined_rooms().await {
+                let mut dm_rooms = self.dm_rooms.lock().await;
+                for room_id in joined {
+                    if !self.allowed_chats.contains(&room_id) {
+                        dm_rooms.insert(room_id);
+                    }
+                }
+                if !dm_rooms.is_empty() {
+                    eprintln!("Loaded {} existing DM rooms", dm_rooms.len());
+                }
+            }
+        }
+
         // Test the connection by doing an initial sync
         self.sync(Some(0)).await?;
         
@@ -397,6 +580,10 @@ impl Messenger for MatrixCliMessenger {
         }
         
         Ok(())
+    }
+
+    async fn set_typing(&self, channel: &str, typing: bool) -> Result<()> {
+        MatrixCliMessenger::set_typing(self, channel, typing).await
     }
 }
 

@@ -258,6 +258,13 @@ impl Messenger for SlackCliMessenger {
         *self.connected.lock().await = false;
         Ok(())
     }
+
+    async fn set_typing(&self, _channel: &str, _typing: bool) -> Result<()> {
+        // Slack doesn't have a typing indicator API for bots
+        // The users.setPresence endpoint only sets away/auto status
+        // Just no-op for now
+        Ok(())
+    }
 }
 
 /// Parse Slack timestamp (e.g., "1234567890.123456") to Unix timestamp

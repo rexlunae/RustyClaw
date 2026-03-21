@@ -308,14 +308,17 @@ pub async fn run_gateway(
         drop(vault_guard);
 
         if let Some(session) = session_from_import {
+            eprintln!("DEBUG: Using imported session token");
             debug!("Using imported session token");
             Some(Arc::new(session))
         } else {
             // Fall back to OAuth token
             if let Some(oauth) = model_ctx.as_ref().and_then(|ctx| ctx.api_key.clone()) {
+                eprintln!("DEBUG: Falling back to OAuth token");
                 debug!("Falling back to OAuth token");
                 Some(Arc::new(CopilotSession::new(oauth)))
             } else {
+                eprintln!("DEBUG: No OAuth token available either - copilot_session will be None!");
                 warn!("No OAuth token available either");
                 None
             }

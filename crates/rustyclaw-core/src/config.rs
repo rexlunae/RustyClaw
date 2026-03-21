@@ -205,6 +205,25 @@ pub struct MessengerConfig {
     /// List of already-paired user IDs.
     #[serde(default)]
     pub paired_users: Vec<String>,
+
+    // ── DM configuration (Matrix, etc.) ────────────────────────────────
+    /// DM handling configuration.
+    #[serde(default)]
+    pub dm: Option<DmConfig>,
+}
+
+/// DM (Direct Message) configuration for messengers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct DmConfig {
+    /// Whether DMs are enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// DM policy: "allowlist" (only allow_from users), "open" (anyone), "pairing" (require code).
+    #[serde(default)]
+    pub policy: Option<String>,
+    /// List of user IDs allowed to send DMs (for "allowlist" policy).
+    #[serde(default)]
+    pub allow_from: Vec<String>,
 }
 
 fn default_true() -> bool {
