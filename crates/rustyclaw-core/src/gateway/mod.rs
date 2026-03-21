@@ -4,6 +4,16 @@
 //! from TUI clients, manages authentication, and dispatches chat requests to
 //! model providers. It also polls configured messengers (Telegram, Discord, etc.)
 //! for incoming messages and routes them through the model.
+//!
+//! ## Transport Abstraction
+//!
+//! The gateway supports multiple transport protocols through the `Transport` trait:
+//!
+//! - **WebSocket**: The default transport, using `tokio-tungstenite`.
+//! - **SSH**: Native SSH server using `russh` (requires `ssh` feature).
+//! - **SSH Subsystem**: Stdio-based transport for OpenSSH subsystem mode.
+//!
+//! See the `transport` and `ssh` modules for details.
 
 mod auth;
 pub mod canvas_handler;
@@ -23,7 +33,13 @@ mod secrets_handler;
 mod skills_handler;
 pub mod task_handler;
 mod tool_executor;
+pub mod transport;
 mod types;
+
+#[cfg(feature = "ssh")]
+pub mod ssh;
+#[cfg(not(feature = "ssh"))]
+pub mod ssh;
 
 // Re-export protocol types
 pub use protocol::{
@@ -39,6 +55,17 @@ pub use types::{
 
 // Re-export messenger handler types
 pub use messenger_handler::{SharedMessengerManager, create_messenger_manager, run_messenger_loop};
+
+// Re-export transport types
+pub use transport::{
+    PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter,
+    WebSocketTransport,
+};
+
+// Re-export SSH types (when feature enabled, stdio transport always available)
+pub use ssh::StdioTransport;
+#[cfg(feature = "ssh")]
+pub use ssh::{SshConfig, SshServer, add_authorized_client, key_fingerprint, load_authorized_clients};
 
 use crate::config::Config;
 use crate::observability::ObserverEvent;

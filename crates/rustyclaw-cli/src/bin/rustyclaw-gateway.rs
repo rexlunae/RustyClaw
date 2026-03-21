@@ -88,6 +88,18 @@ struct RunArgs {
     /// Path to TLS private key file (PEM) for WSS connections
     #[arg(long, value_name = "PATH")]
     tls_key: Option<std::path::PathBuf>,
+    /// SSH server listen address (e.g., 0.0.0.0:2222)
+    #[arg(long, value_name = "ADDR")]
+    ssh_listen: Option<String>,
+    /// Run as SSH subsystem (stdio mode for OpenSSH integration)
+    #[arg(long)]
+    ssh_stdio: bool,
+    /// Path to SSH host key (default: ~/.rustyclaw/ssh_host_key)
+    #[arg(long, value_name = "PATH")]
+    ssh_host_key: Option<std::path::PathBuf>,
+    /// Path to authorized_clients file (default: ~/.rustyclaw/authorized_clients)
+    #[arg(long, value_name = "PATH")]
+    ssh_authorized_clients: Option<std::path::PathBuf>,
 }
 
 impl Default for RunArgs {
@@ -103,6 +115,10 @@ impl Default for RunArgs {
             listen: None,
             tls_cert: None,
             tls_key: None,
+            ssh_listen: None,
+            ssh_stdio: false,
+            ssh_host_key: None,
+            ssh_authorized_clients: None,
         }
     }
 }
@@ -136,6 +152,12 @@ async fn main() -> Result<()> {
         None => RunArgs::default(),
     };
 
+    // SSH stdio mode runs without any TCP listeners — just stdin/stdout
+    if args.ssh_stdio {
+        println!("{}", t::icon_ok("Running in SSH subsystem mode (stdio)"));
+        return run_ssh_stdio_mode(config, args).await;
+    }
+
     let host = match args.bind {
         GatewayBind::Loopback => "127.0.0.1",
         GatewayBind::Lan => "0.0.0.0",
@@ -158,6 +180,17 @@ async fn main() -> Result<()> {
             t::info(&format!("{}://{}", scheme, listen))
         ))
     );
+
+    // Print SSH listen address if configured
+    if let Some(ref ssh_addr) = args.ssh_listen {
+        println!(
+            "{}",
+            t::icon_ok(&format!(
+                "SSH server listening on {}",
+                t::info(ssh_addr)
+            ))
+        );
+    }
 
     // ── Open the secrets vault ───────────────────────────────────────────
     //
@@ -329,6 +362,10 @@ async fn main() -> Result<()> {
                 listen,
                 tls_cert,
                 tls_key,
+                ssh_listen: args.ssh_listen.clone(),
+                ssh_stdio: args.ssh_stdio,
+                ssh_host_key: args.ssh_host_key.clone(),
+                ssh_authorized_clients: args.ssh_authorized_clients.clone(),
             },
             model_ctx,
             shared_vault,
@@ -343,4 +380,89 @@ async fn main() -> Result<()> {
     daemon::remove_pid(&settings_dir);
 
     result
+}
+
+/// Run the gateway in SSH subsystem (stdio) mode.
+///
+/// This mode is used when the gateway is invoked via OpenSSH's subsystem
+/// mechanism. Instead of listening on TCP, we read/write frames on stdin/stdout.
+async fn run_ssh_stdio_mode(config: Config, args: RunArgs) -> Result<()> {
+    use rustyclaw_core::gateway::{StdioTransport, Transport};
+    
+    // Get username from SSH environment
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("SSH_USER"))
+        .ok();
+    
+    // Create the stdio transport
+    let mut transport = StdioTransport::new(username);
+    
+    // ── Open the secrets vault ───────────────────────────────────────────
+    let vault = {
+        let creds_dir = config.credentials_dir();
+        let env_password = std::env::var("RUSTYCLAW_VAULT_PASSWORD").ok();
+        if env_password.is_some() {
+            // SAFETY: single-threaded at this point.
+            unsafe {
+                std::env::remove_var("RUSTYCLAW_VAULT_PASSWORD");
+            }
+        }
+
+        if config.secrets_password_protected {
+            if let Some(pw) = env_password {
+                SecretsManager::with_password(&creds_dir, pw)
+            } else {
+                // In stdio mode, we can't prompt for password
+                SecretsManager::locked(&creds_dir)
+            }
+        } else {
+            SecretsManager::new(&creds_dir)
+        }
+    };
+
+    let shared_vault: rustyclaw_core::gateway::SharedVault =
+        std::sync::Arc::new(tokio::sync::Mutex::new(vault));
+
+    // ── Resolve model context ────────────────────────────────────────────
+    let model_ctx = {
+        let env_key = std::env::var("RUSTYCLAW_MODEL_API_KEY").ok();
+
+        if let Some(ref key) = env_key {
+            unsafe {
+                std::env::remove_var("RUSTYCLAW_MODEL_API_KEY");
+            }
+
+            let api_key = if key.is_empty() { None } else { Some(key.clone()) };
+            ModelContext::from_config(&config, api_key).ok()
+        } else {
+            let mut v = shared_vault.lock().await;
+            ModelContext::resolve(&config, &mut v).ok()
+        }
+    };
+
+    // Load skills
+    let skills_dir = config.skills_dir();
+    let mut sm = rustyclaw_core::skills::SkillManager::new(skills_dir);
+    let _ = sm.load_skills();
+    if let Some(url) = config.clawhub_url.as_deref() {
+        sm.set_registry(url, config.clawhub_token.clone());
+    }
+    let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
+        std::sync::Arc::new(tokio::sync::Mutex::new(sm));
+
+    // Set up cancellation
+    let cancel = CancellationToken::new();
+    let cancel_for_signal = cancel.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        cancel_for_signal.cancel();
+    });
+
+    // TODO: Run the actual connection handler with the stdio transport
+    // For now, this is a stub that just logs and exits
+    eprintln!("SSH stdio mode not yet fully implemented");
+    eprintln!("Transport peer info: {:?}", transport.peer_info());
+    
+    transport.close().await?;
+    Ok(())
 }
