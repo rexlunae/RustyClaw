@@ -279,10 +279,12 @@ pub async fn run_messenger_loop(
     copilot_session: Option<Arc<super::CopilotSession>>,
     cancel: CancellationToken,
 ) -> Result<()> {
+    eprintln!("DEBUG: run_messenger_loop() called");
     // If no model context, we can't process messages
     let model_ctx = match model_ctx {
         Some(ctx) => ctx,
         None => {
+            eprintln!("DEBUG: No model context, returning early");
             warn!("No model context — messenger loop disabled");
             return Ok(());
         }
@@ -296,6 +298,7 @@ pub async fn run_messenger_loop(
 
     let http = reqwest::Client::new();
 
+    eprintln!("DEBUG: Starting messenger loop with poll_interval={}ms", poll_interval.as_millis());
     info!(
         poll_interval_ms = poll_interval.as_millis(),
         "Starting messenger loop"
@@ -304,18 +307,22 @@ pub async fn run_messenger_loop(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
+                eprintln!("DEBUG: Messenger loop cancelled");
                 info!("Shutting down messenger loop");
                 break;
             }
             _ = tokio::time::sleep(poll_interval) => {
+                eprintln!("DEBUG: Polling messengers...");
                 // Poll all messengers for incoming messages
                 let messages = {
                     let mgr = messenger_mgr.lock().await;
                     poll_all_messengers(&mgr).await
                 };
+                eprintln!("DEBUG: Got {} messages", messages.len());
 
                 // Process each message
                 for (messenger_type, msg) in messages {
+                    eprintln!("DEBUG: Processing message from {} in {}", msg.sender, messenger_type);
                     if let Err(e) = process_incoming_message(
                         &http,
                         &config,
@@ -332,8 +339,10 @@ pub async fn run_messenger_loop(
                     )
                     .await
                     {
+                        eprintln!("DEBUG: Error processing message: {}", e);
                         error!(error = %e, "Error processing message");
                     }
+                    eprintln!("DEBUG: Message processing complete");
                 }
             }
         }

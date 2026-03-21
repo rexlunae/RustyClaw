@@ -339,9 +339,12 @@ pub async fn run_gateway(
     //
     // If messengers are configured, we poll them for incoming messages
     // and route them through the model.
+    eprintln!("DEBUG: messengers configured: {}", config.messengers.len());
     let messenger_mgr = if !config.messengers.is_empty() {
+        eprintln!("DEBUG: Creating messenger manager...");
         match messenger_handler::create_messenger_manager(&config).await {
             Ok(mgr) => {
+                eprintln!("DEBUG: Messenger manager created successfully");
                 let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));
 
                 // Spawn messenger loop
@@ -355,7 +358,10 @@ pub async fn run_gateway(
                 let mgr_clone = shared_mgr.clone();
                 let messenger_copilot = copilot_session.clone();
 
+                eprintln!("DEBUG: Spawning messenger loop task...");
                 tokio::spawn(async move {
+                    eprintln!("DEBUG: Messenger loop task started");
+                    eprintln!("DEBUG: messenger_ctx.is_some() = {}", messenger_ctx.is_some());
                     if let Err(e) = messenger_handler::run_messenger_loop(
                         messenger_config,
                         mgr_clone,
@@ -369,8 +375,10 @@ pub async fn run_gateway(
                     )
                     .await
                     {
+                        eprintln!("DEBUG: Messenger loop error: {}", e);
                         error!(error = %e, "Messenger loop error");
                     }
+                    eprintln!("DEBUG: Messenger loop exited");
                 });
 
                 Some(shared_mgr)

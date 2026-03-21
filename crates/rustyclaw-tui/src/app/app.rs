@@ -224,6 +224,9 @@ impl App {
         // ── Gather static info for the component ────────────────────────
         // Use the configured agent_name — no need to parse SOUL.md
         let soul_name = self.config.agent_name.clone();
+        
+        // Check if soul needs hatching (first run or default content)
+        let needs_hatching = self.soul_manager.needs_hatching();
 
         let provider = self
             .config
@@ -364,6 +367,7 @@ impl App {
                     model_label: model_label,
                     provider_id: provider.clone(),
                     hint: hint,
+                    needs_hatching: needs_hatching,
                 ))
                 .fullscreen()
                 .disable_mouse_capture(),
@@ -1236,6 +1240,8 @@ mod tui_component {
         /// Active provider ID (e.g. "openrouter") for provider-scoped completions.
         pub provider_id: String,
         pub hint: String,
+        /// Whether the soul needs hatching (first run).
+        pub needs_hatching: bool,
     }
 
     // ── Static channels ─────────────────────────────────────────────────
@@ -1279,6 +1285,12 @@ mod tui_component {
         let mut show_vault_unlock = hooks.use_state(|| false);
         let mut vault_password = hooks.use_state(|| String::new());
         let mut vault_error = hooks.use_state(|| String::new());
+
+        // ── Hatching dialog state ───────────────────────────────────────
+        let mut show_hatching = hooks.use_state(|| props.needs_hatching);
+        let mut hatching_state: State<crate::components::hatching_dialog::HatchState> =
+            hooks.use_state(|| crate::components::hatching_dialog::HatchState::Egg);
+        let mut hatching_tick = hooks.use_state(|| 0usize);
 
         // ── User prompt dialog state ────────────────────────────────────
         let mut show_user_prompt = hooks.use_state(|| false);
