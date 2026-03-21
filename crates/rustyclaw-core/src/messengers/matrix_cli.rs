@@ -583,17 +583,25 @@ impl Messenger for MatrixCliMessenger {
             }
         }
 
-        // Note: We intentionally do NOT load persisted sync token on restart.
-        // Starting fresh ensures we get recent messages (last ~10 per room).
-        // The slight risk of re-processing messages on restart is acceptable.
-        // The persisted token is saved for potential future use (e.g., quick restart).
+        // Load persisted sync token if available.
+        // This ensures we only process NEW messages after restart, not re-process old ones.
+        // The sync token represents our last known position in the event stream.
+        if let Some(saved_token) = self.load_sync_token() {
+            eprintln!("Loaded persisted sync token: {}", saved_token);
+            let mut token = self.sync_token.lock().await;
+            *token = Some(saved_token);
+        }
 
-        // Do initial sync and store any messages for first receive_messages() call
+        // Do initial sync to catch up on any messages since last run.
+        // If we have a persisted token, this returns only NEW messages.
+        // If no token (fresh start), this returns recent messages (~10 per room).
         let initial_messages = self.sync(Some(0)).await?;
         if !initial_messages.is_empty() {
-            eprintln!("Initial sync returned {} messages", initial_messages.len());
+            eprintln!("Initial sync returned {} new messages", initial_messages.len());
             let mut pending = self.pending_messages.lock().await;
             pending.extend(initial_messages);
+        } else {
+            eprintln!("Initial sync: no new messages (caught up)");
         }
         
         self.connected = true;
