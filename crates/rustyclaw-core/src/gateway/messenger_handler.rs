@@ -291,6 +291,9 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
 ///
 /// This polls all configured messengers for incoming messages and routes
 /// them through the model for processing with full tool support.
+///
+/// When `messenger_max_concurrent` > 1, messages are processed concurrently.
+/// The loop continues polling for new messages while processing tasks run.
 pub async fn run_messenger_loop(
     config: Config,
     messenger_mgr: SharedMessengerManager,
@@ -315,11 +318,21 @@ pub async fn run_messenger_loop(
 
     let poll_interval =
         Duration::from_millis(config.messenger_poll_interval_ms.unwrap_or(2000).max(500) as u64);
+    
+    // Concurrent processing setup
+    let max_concurrent = config.messenger_max_concurrent.unwrap_or(1);
+    let concurrent_mode = max_concurrent > 1;
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+    
+    if concurrent_mode {
+        eprintln!("DEBUG: Concurrent mode enabled, max_concurrent={}", max_concurrent);
+        info!(max_concurrent, "Concurrent message processing enabled");
+    }
 
     // Per-chat conversation history
     let conversations: ConversationStore = Arc::new(Mutex::new(HashMap::new()));
 
-    let http = reqwest::Client::new();
+    let http = Arc::new(reqwest::Client::new());
 
     eprintln!("DEBUG: Starting messenger loop with poll_interval={}ms", poll_interval.as_millis());
     info!(
@@ -347,44 +360,105 @@ pub async fn run_messenger_loop(
                 for (messenger_type, msg) in messages {
                     eprintln!("DEBUG: Processing message from {} in {}", msg.sender, messenger_type);
                     
-                    // Set typing indicator before processing
-                    if let Some(channel) = &msg.channel {
-                        let mgr = messenger_mgr.lock().await;
-                        if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
-                            let _ = messenger.set_typing(channel, true).await;
+                    if concurrent_mode {
+                        // Spawn message processing as a background task
+                        let http = Arc::clone(&http);
+                        let config = config.clone();
+                        let messenger_mgr = Arc::clone(&messenger_mgr);
+                        let model_ctx = Arc::clone(&model_ctx);
+                        let vault = Arc::clone(&vault);
+                        let skill_mgr = Arc::clone(&skill_mgr);
+                        let task_mgr = Arc::clone(&task_mgr);
+                        let model_registry = Arc::clone(&model_registry);
+                        let copilot_session = copilot_session.clone();
+                        let conversations = Arc::clone(&conversations);
+                        let semaphore = Arc::clone(&semaphore);
+                        let messenger_type = messenger_type.clone();
+                        
+                        tokio::spawn(async move {
+                            // Acquire permit (blocks if at capacity)
+                            let _permit = semaphore.acquire().await;
+                            
+                            // Set typing indicator
+                            if let Some(channel) = &msg.channel {
+                                let mgr = messenger_mgr.lock().await;
+                                if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                                    let _ = messenger.set_typing(channel, true).await;
+                                }
+                            }
+                            
+                            let channel_for_typing = msg.channel.clone();
+                            let result = process_incoming_message(
+                                &http,
+                                &config,
+                                &messenger_mgr,
+                                &model_ctx,
+                                &vault,
+                                &skill_mgr,
+                                &task_mgr,
+                                &model_registry,
+                                copilot_session.as_deref(),
+                                &conversations,
+                                &messenger_type,
+                                msg,
+                            )
+                            .await;
+                            
+                            // Clear typing indicator
+                            if let Some(channel) = channel_for_typing {
+                                let mgr = messenger_mgr.lock().await;
+                                if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                                    let _ = messenger.set_typing(&channel, false).await;
+                                }
+                            }
+                            
+                            if let Err(e) = result {
+                                eprintln!("DEBUG: Error processing message: {}", e);
+                                error!(error = %e, "Error processing message");
+                            }
+                        });
+                        eprintln!("DEBUG: Message processing spawned (concurrent)");
+                    } else {
+                        // Sequential mode (original behavior)
+                        // Set typing indicator before processing
+                        if let Some(channel) = &msg.channel {
+                            let mgr = messenger_mgr.lock().await;
+                            if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                                let _ = messenger.set_typing(channel, true).await;
+                            }
                         }
-                    }
-                    
-                    let channel_for_typing = msg.channel.clone();
-                    let result = process_incoming_message(
-                        &http,
-                        &config,
-                        &messenger_mgr,
-                        &model_ctx,
-                        &vault,
-                        &skill_mgr,
-                        &task_mgr,
-                        &model_registry,
-                        copilot_session.as_deref(),
-                        &conversations,
-                        &messenger_type,
-                        msg,
-                    )
-                    .await;
-                    
-                    // Clear typing indicator after processing
-                    if let Some(channel) = channel_for_typing {
-                        let mgr = messenger_mgr.lock().await;
-                        if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
-                            let _ = messenger.set_typing(&channel, false).await;
+                        
+                        let channel_for_typing = msg.channel.clone();
+                        let result = process_incoming_message(
+                            &http,
+                            &config,
+                            &messenger_mgr,
+                            &model_ctx,
+                            &vault,
+                            &skill_mgr,
+                            &task_mgr,
+                            &model_registry,
+                            copilot_session.as_deref(),
+                            &conversations,
+                            &messenger_type,
+                            msg,
+                        )
+                        .await;
+                        
+                        // Clear typing indicator after processing
+                        if let Some(channel) = channel_for_typing {
+                            let mgr = messenger_mgr.lock().await;
+                            if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                                let _ = messenger.set_typing(&channel, false).await;
+                            }
                         }
+                        
+                        if let Err(e) = result {
+                            eprintln!("DEBUG: Error processing message: {}", e);
+                            error!(error = %e, "Error processing message");
+                        }
+                        eprintln!("DEBUG: Message processing complete");
                     }
-                    
-                    if let Err(e) = result {
-                        eprintln!("DEBUG: Error processing message: {}", e);
-                        error!(error = %e, "Error processing message");
-                    }
-                    eprintln!("DEBUG: Message processing complete");
                 }
             }
         }
