@@ -1,10 +1,10 @@
 //! MCP manager for handling multiple server connections.
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use super::client::McpClient;
 use super::config::{McpConfig, McpServerConfig};
