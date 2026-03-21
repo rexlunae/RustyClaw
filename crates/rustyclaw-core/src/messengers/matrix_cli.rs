@@ -294,11 +294,10 @@ impl MatrixCliMessenger {
 
         // Handle reply-to if provided
         if let Some(reply_event_id) = reply_to {
-            let reply_body = format!("> <@{}> {}\n\n{}", 
-                                   reply_event_id, 
-                                   "Previous message", // We'd need to fetch the original to show proper content
-                                   content);
-            message_content["body"] = json!(reply_body);
+            // Note: Modern Matrix clients use m.relates_to for threading and ignore the
+            // fallback body. We don't include the legacy "> <@user> text" fallback since
+            // we don't have the original message content readily available, and the
+            // malformed fallback causes visual garbage in some clients.
             message_content["m.relates_to"] = json!({
                 "m.in_reply_to": {
                     "event_id": reply_event_id
