@@ -276,6 +276,7 @@ pub async fn handle_run(
             listen,
             tls_cert,
             tls_key,
+            ..Default::default()
         },
         model_ctx,
         shared_vault,
