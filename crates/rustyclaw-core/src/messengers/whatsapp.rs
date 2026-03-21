@@ -271,24 +271,9 @@ impl Messenger for WhatsAppMessenger {
         Ok(())
     }
 
-    async fn set_typing(&self, channel: &str, typing: bool) -> Result<()> {
-        let client = match &self.client {
-            Some(c) => c,
-            None => return Ok(()),
-        };
-        
-        let jid = match Self::parse_jid(channel) {
-            Ok(j) => j,
-            Err(_) => return Ok(()),
-        };
-
-        // WhatsApp presence API - ignore errors as this is non-critical
-        if typing {
-            let _ = client.send_composing(jid).await;
-        } else {
-            let _ = client.send_paused(jid).await;
-        }
-
+    async fn set_typing(&self, _channel: &str, _typing: bool) -> Result<()> {
+        // wa-rs doesn't expose presence/typing APIs yet
+        // TODO: Add when wa-rs supports it
         Ok(())
     }
 }
