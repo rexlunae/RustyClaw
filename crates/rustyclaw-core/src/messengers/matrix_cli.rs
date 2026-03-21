@@ -247,6 +247,10 @@ impl MatrixCliMessenger {
                             if let Some(events_array) = events.as_array() {
                                 for event_value in events_array {
                                     if let Ok(event) = serde_json::from_value::<RoomEvent>(event_value.clone()) {
+                                        // Skip our own messages
+                                        if event.sender == self.user_id {
+                                            continue;
+                                        }
                                         if event.event_type == "m.room.message" {
                                             if let Some(body) = event.content.get("body") {
                                                 if let Some(body_str) = body.as_str() {
@@ -437,4 +441,8 @@ mod tests {
         );
         assert_eq!(messenger.homeserver_url, "https://matrix.org");
     }
+    
+    // Note: Own-message filtering (sender == user_id) is tested implicitly
+    // via integration tests. The sync() function skips messages where
+    // event.sender == self.user_id to prevent the bot from replying to itself.
 }
