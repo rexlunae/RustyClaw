@@ -856,10 +856,13 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         When responding:\n\
         - Be concise and appropriate for chat\n\
         - You have access to tools — use them when helpful\n\
-        - For proactive sends, use the `message` tool",
+        - For proactive sends, use the `message` tool\n\
+        \n\
+        {}",
         msg.channel.as_deref().unwrap_or("direct"),
         msg.sender,
-        messenger_type
+        messenger_type,
+        get_platform_formatting_guide(messenger_type)
     ));
 
     // Add runtime info
@@ -871,6 +874,66 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
     ));
 
     parts.join("\n\n")
+}
+
+/// Get platform-specific formatting guidance for the system prompt.
+fn get_platform_formatting_guide(messenger_type: &str) -> String {
+    match messenger_type {
+        "matrix" | "matrix-cli" => "\
+### Formatting (Matrix)\n\
+- **Markdown supported**: bold, italic, code, links, lists\n\
+- Tables render in most clients (Element, FluffyChat)\n\
+- Code blocks with syntax highlighting: ```rust\n\
+- Headers work but keep them minimal in chat".to_string(),
+
+        "discord" => "\
+### Formatting (Discord)\n\
+- **Markdown supported**: bold, italic, strikethrough, code, links\n\
+- **NO tables** — use bullet lists instead\n\
+- Code blocks with syntax highlighting: ```rust\n\
+- Wrap multiple URLs in <> to suppress embeds: `<https://example.com>`\n\
+- Headers don't render — use **bold** for emphasis".to_string(),
+
+        "telegram" => "\
+### Formatting (Telegram)\n\
+- **Markdown supported**: bold, italic, code, links\n\
+- **NO tables** — use bullet lists instead\n\
+- Code blocks work but no syntax highlighting in all clients\n\
+- Keep messages concise — long messages get truncated".to_string(),
+
+        "whatsapp" => "\
+### Formatting (WhatsApp)\n\
+- **Limited formatting**: *bold*, _italic_, ~strikethrough~, ```code```\n\
+- **NO markdown links** — just paste URLs directly\n\
+- **NO tables, NO headers** — use plain text with line breaks\n\
+- **NO bullet points** — use dashes or numbers manually\n\
+- Keep it simple and conversational".to_string(),
+
+        "slack" => "\
+### Formatting (Slack)\n\
+- **Mrkdwn** (not standard markdown): *bold*, _italic_, ~strike~, `code`\n\
+- **NO tables** — use bullet lists\n\
+- Code blocks: ```code``` (no syntax highlighting)\n\
+- Links: <https://url|display text>\n\
+- Use emoji reactions when appropriate".to_string(),
+
+        "signal" => "\
+### Formatting (Signal)\n\
+- **NO formatting support** — plain text only\n\
+- Just write naturally without markdown\n\
+- URLs will auto-link".to_string(),
+
+        "irc" => "\
+### Formatting (IRC)\n\
+- **NO formatting** — plain text only\n\
+- Keep lines short (typically <400 chars)\n\
+- No markdown, no special characters".to_string(),
+
+        _ => "\
+### Formatting\n\
+- Use plain text to be safe\n\
+- Avoid complex markdown unless you know the platform supports it".to_string(),
+    }
 }
 
 /// Build the Tool Usage Guidelines section for system prompts.
