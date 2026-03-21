@@ -32,6 +32,10 @@ pub struct Message {
     pub reply_to: Option<String>,
     #[serde(default)]
     pub media: Option<Vec<MediaAttachment>>,
+    /// Whether this message is from a direct/private conversation.
+    /// Used to determine session type (Main vs Group) for workspace context injection.
+    #[serde(default)]
+    pub is_direct: bool,
 }
 
 /// Media attachment in a message

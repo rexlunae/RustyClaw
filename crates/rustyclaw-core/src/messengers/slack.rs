@@ -133,6 +133,7 @@ impl SlackMessenger {
                 channel: Some(channel.to_string()),
                 reply_to: msg["thread_ts"].as_str().map(|s| s.to_string()),
                 media: None,
+                                        is_direct: false, // TODO: implement DM detection
             });
         }
 

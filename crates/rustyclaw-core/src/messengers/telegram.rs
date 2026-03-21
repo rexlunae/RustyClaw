@@ -154,6 +154,7 @@ impl Messenger for TelegramMessenger {
                         .as_i64()
                         .map(|id| id.to_string()),
                     media: None,
+                                        is_direct: false, // TODO: implement DM detection
                 });
             }
         }
