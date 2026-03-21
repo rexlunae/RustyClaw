@@ -9,6 +9,7 @@
 use super::{Message, Messenger, SendOptions};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
+use pulldown_cmark::{html, Parser};
 use reqwest::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -458,9 +459,16 @@ impl MatrixCliMessenger {
             .unwrap()
             .as_millis();
 
+        // Convert markdown to HTML for formatted display
+        let parser = Parser::new(content);
+        let mut html_output = String::new();
+        html::push_html(&mut html_output, parser);
+
         let mut message_content = json!({
             "msgtype": "m.text",
-            "body": content
+            "body": content,
+            "format": "org.matrix.custom.html",
+            "formatted_body": html_output
         });
 
         // Handle reply-to if provided
