@@ -79,6 +79,9 @@ scraper = { version = "0.25" }
 html2md = { version = "0.2" }
 urlencoding = "2.1"
 
+# Markdown to HTML for Matrix formatted messages
+pulldown-cmark = "0.12"
+
 # Time handling
 chrono = "0.4"
 zip = "8.1"
