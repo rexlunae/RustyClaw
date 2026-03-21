@@ -324,8 +324,8 @@ pub async fn run_messenger_loop(
     let concurrent_mode = max_concurrent > 1;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
     
+    eprintln!("DEBUG: messenger_max_concurrent={}, concurrent_mode={}", max_concurrent, concurrent_mode);
     if concurrent_mode {
-        eprintln!("DEBUG: Concurrent mode enabled, max_concurrent={}", max_concurrent);
         info!(max_concurrent, "Concurrent message processing enabled");
     }
 
