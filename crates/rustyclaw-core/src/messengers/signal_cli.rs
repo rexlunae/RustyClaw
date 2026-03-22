@@ -292,9 +292,10 @@ impl Messenger for SignalCliMessenger {
                                 sender,
                                 content: message_text.to_string(),
                                 timestamp,
-                                channel,
+                                channel: channel.clone(),
                                 reply_to: None, // signal-cli JSON doesn't include reply info easily
                                 media: None,    // TODO: Handle attachments
+                                is_direct: channel.is_none(), // Direct if no group
                             });
                         }
                     }

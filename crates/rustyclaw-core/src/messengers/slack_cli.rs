@@ -238,6 +238,7 @@ impl Messenger for SlackCliMessenger {
                             channel: Some(channel.clone()),
                             reply_to: None,
                             media: None,
+                            is_direct: false, // Slack DM detection would need channel type check
                         });
                     }
                 }
