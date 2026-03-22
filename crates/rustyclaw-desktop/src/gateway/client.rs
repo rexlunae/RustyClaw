@@ -2,7 +2,11 @@
 
 use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
-use rustyclaw_core::gateway::{ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType};
+use rustyclaw_core::gateway::{
+    ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerPayload, StatusType,
+    deserialize_frame, serialize_frame,
+};
+use rustyclaw_core::gateway::protocol::types::ChatMessage;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -39,14 +43,21 @@ impl GatewayClient {
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 let frame = command_to_frame(cmd);
-                let data = bincode::serde::encode_to_vec(&frame, bincode::config::standard())
-                    .unwrap_or_default();
                 
-                if write.send(Message::Binary(data.into())).await.is_err() {
-                    let _ = event_tx_clone.send(GatewayEvent::Disconnected {
-                        reason: Some("Send failed".into()),
-                    }).await;
-                    break;
+                match serialize_frame(&frame) {
+                    Ok(data) => {
+                        if write.send(Message::Binary(data)).await.is_err() {
+                            let _ = event_tx_clone.send(GatewayEvent::Disconnected {
+                                reason: Some("Send failed".into()),
+                            }).await;
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        let _ = event_tx_clone.send(GatewayEvent::Error {
+                            message: format!("Failed to serialize frame: {}", e),
+                        }).await;
+                    }
                 }
             }
         });
@@ -56,26 +67,26 @@ impl GatewayClient {
             while let Some(msg) = read.next().await {
                 match msg {
                     Ok(Message::Binary(data)) => {
-                        if let Ok((frame, _)) = bincode::serde::decode_from_slice::<ServerFrame, _>(
-                            &data,
-                            bincode::config::standard(),
-                        ) {
-                            if let Some(event) = frame_to_event(frame) {
-                                if event_tx.send(event).await.is_err() {
-                                    break;
+                        match deserialize_frame::<ServerFrame>(&data) {
+                            Ok(frame) => {
+                                if let Some(event) = frame_to_event(frame) {
+                                    if event_tx.send(event).await.is_err() {
+                                        break;
+                                    }
                                 }
+                            }
+                            Err(e) => {
+                                let _ = event_tx.send(GatewayEvent::Error {
+                                    message: format!("Failed to deserialize frame: {}", e),
+                                }).await;
                             }
                         }
                     }
-                    Ok(Message::Text(text)) => {
-                        // Try JSON fallback
-                        if let Ok(frame) = serde_json::from_str::<ServerFrame>(&text) {
-                            if let Some(event) = frame_to_event(frame) {
-                                if event_tx.send(event).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
+                    Ok(Message::Text(_)) => {
+                        // Text frames are not supported by the gateway
+                        let _ = event_tx.send(GatewayEvent::Error {
+                            message: "Text frames not supported by gateway".into(),
+                        }).await;
                     }
                     Ok(Message::Close(_)) => {
                         let _ = event_tx.send(GatewayEvent::Disconnected { reason: None }).await;
@@ -142,28 +153,25 @@ impl GatewayClient {
 
 /// Convert a gateway command to a client frame.
 fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
-    use rustyclaw_core::gateway::ClientFrameType;
-    
     match cmd {
-        GatewayCommand::Chat { message } => ClientFrame {
-            frame_type: ClientFrameType::Chat,
-            payload: ClientPayload::Chat { message },
+        GatewayCommand::Chat { message } => {
+            let chat_msg = ChatMessage::text("user", &message);
+            ClientFrame {
+                frame_type: ClientFrameType::Chat,
+                payload: ClientPayload::Chat { messages: vec![chat_msg] },
+            }
         },
         GatewayCommand::Auth { code } => ClientFrame {
-            frame_type: ClientFrameType::Auth,
-            payload: ClientPayload::Auth { code },
+            frame_type: ClientFrameType::AuthResponse,
+            payload: ClientPayload::AuthResponse { code },
         },
         GatewayCommand::VaultUnlock { password } => ClientFrame {
-            frame_type: ClientFrameType::VaultUnlock,
-            payload: ClientPayload::VaultUnlock { password },
+            frame_type: ClientFrameType::UnlockVault,
+            payload: ClientPayload::UnlockVault { password },
         },
         GatewayCommand::ToolApprove { id, approved } => ClientFrame {
-            frame_type: ClientFrameType::ToolApproval,
-            payload: ClientPayload::ToolApproval {
-                id,
-                approved,
-                modified_args: None,
-            },
+            frame_type: ClientFrameType::ToolApprovalResponse,
+            payload: ClientPayload::ToolApprovalResponse { id, approved },
         },
         GatewayCommand::ThreadSwitch { thread_id } => ClientFrame {
             frame_type: ClientFrameType::ThreadSwitch,
@@ -171,7 +179,7 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
         },
         GatewayCommand::ThreadCreate { label } => ClientFrame {
             frame_type: ClientFrameType::ThreadCreate,
-            payload: ClientPayload::ThreadCreate { label },
+            payload: ClientPayload::ThreadCreate { label: label.unwrap_or_else(|| "New Thread".into()) },
         },
         GatewayCommand::SecretsList => ClientFrame {
             frame_type: ClientFrameType::SecretsList,
@@ -179,7 +187,7 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
         },
         GatewayCommand::Cancel => ClientFrame {
             frame_type: ClientFrameType::Cancel,
-            payload: ClientPayload::Cancel,
+            payload: ClientPayload::Empty,
         },
     }
 }

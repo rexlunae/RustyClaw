@@ -91,9 +91,9 @@ pub enum GatewayEvent {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreadInfoDto {
     pub id: u64,
-    pub label: Option<String>,
+    pub label: String,
     pub description: Option<String>,
-    pub status: String,
+    pub status: Option<String>,
     pub is_foreground: bool,
     pub message_count: usize,
 }
