@@ -392,9 +392,15 @@ impl MatrixCliMessenger {
         }
 
         let mut messages = Vec::new();
+        
+        // Track whether any allowed rooms appeared in this sync.
+        // We only advance the sync token if allowed rooms were present,
+        // to avoid skipping messages when sync returns only non-allowed room events.
+        let mut allowed_rooms_in_sync = false;
 
         // Get current DM rooms for filtering
         let dm_rooms = self.dm_rooms.lock().await.clone();
+        let has_room_filters = !self.allowed_chats.is_empty() || !dm_rooms.is_empty();
         eprintln!("DEBUG: sync - allowed_chats: {:?}, dm_rooms: {:?}", self.allowed_chats, dm_rooms);
         
         if let Some(rooms) = sync_response.rooms {
@@ -404,13 +410,16 @@ impl MatrixCliMessenger {
                     // Check if this room is allowed
                     let in_allowed_chats = self.allowed_chats.contains(&room_id);
                     let in_dm_rooms = dm_rooms.contains(&room_id);
+                    let is_allowed_room = in_allowed_chats || in_dm_rooms;
                     
                     // If we have an allowlist OR dm_rooms, only process rooms in one of them
-                    if !self.allowed_chats.is_empty() || !dm_rooms.is_empty() {
-                        if !in_allowed_chats && !in_dm_rooms {
+                    if has_room_filters {
+                        if !is_allowed_room {
                             eprintln!("DEBUG: skipping room {} (not in allowed lists)", room_id);
                             continue;
                         }
+                        // An allowed room appeared in this sync
+                        allowed_rooms_in_sync = true;
                     }
                     eprintln!("DEBUG: processing room {}", room_id);
                     
@@ -450,12 +459,21 @@ impl MatrixCliMessenger {
             }
         }
 
-        // Only update sync token AFTER successful message extraction.
-        // This prevents losing messages if extraction fails partway through.
-        {
+        // Only advance sync token if:
+        // 1. We extracted messages, OR
+        // 2. Allowed rooms appeared in sync (even with no messages = caught up), OR
+        // 3. No room filters configured (process everything)
+        //
+        // This prevents the token from advancing when sync only contains
+        // events for non-allowed rooms, which would cause us to miss messages.
+        let should_advance_token = !messages.is_empty() || allowed_rooms_in_sync || !has_room_filters;
+        
+        if should_advance_token {
             let mut token = self.sync_token.lock().await;
             *token = Some(next_batch.clone());
             self.save_sync_token(&next_batch);
+        } else {
+            eprintln!("DEBUG: sync - NOT advancing token (no allowed rooms in response)");
         }
 
         Ok(messages)
