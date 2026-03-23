@@ -5156,6 +5156,48 @@ dependencies = [
 
 [[package]]
 name = "russh"
+version = "0.44.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6500eedfaf8cd81597899d896908a4b9cd5cb566db875e843c04ccf92add2c16"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "async-trait",
+ "bitflags",
+ "byteorder",
+ "cbc",
+ "chacha20 0.9.1",
+ "ctr",
+ "curve25519-dalek",
+ "digest",
+ "elliptic-curve",
+ "flate2",
+ "futures",
+ "generic-array",
+ "hex-literal",
+ "hmac",
+ "log",
+ "num-bigint",
+ "once_cell",
+ "p256",
+ "p384",
+ "p521",
+ "poly1305",
+ "rand 0.8.5",
+ "rand_core 0.6.4",
+ "russh-cryptovec 0.7.3",
+ "russh-keys",
+ "sha1",
+ "sha2",
+ "ssh-encoding",
+ "ssh-key",
+ "subtle",
+ "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "russh"
 version = "0.52.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bcc2b4e549ed83a4e36517807367b538c6d00b603ce138637f50a2218222e23f"
@@ -5495,7 +5537,7 @@ dependencies = [
  "rmcp",
  "rpassword",
  "rusqlite",
- "russh",
+ "russh 0.52.1",
  "russh-keys",
  "rustls-pemfile",
  "schemars",
@@ -5537,6 +5579,7 @@ name = "rustyclaw-tui"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "clap",
  "colored",
@@ -5549,6 +5592,8 @@ dependencies = [
  "qrcode",
  "reqwest 0.13.2",
  "rpassword",
+ "russh 0.44.1",
+ "russh-keys",
  "rustyclaw-core",
  "serde",
  "serde_json",

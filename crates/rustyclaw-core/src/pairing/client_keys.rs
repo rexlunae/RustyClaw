@@ -23,6 +23,25 @@ pub struct ClientKeyPair {
 }
 
 impl ClientKeyPair {
+    /// Load or generate a client keypair at the default location.
+    ///
+    /// If `comment` is None, generates "rustyclaw@client".
+    pub fn load_or_generate(comment: Option<String>) -> Result<Self> {
+        let path = default_client_key_path();
+        let comment = comment.or_else(|| Some("rustyclaw@client".to_string()));
+        load_or_generate_client_keypair(&path, comment)
+    }
+    
+    /// Load the private key for SSH authentication.
+    #[cfg(feature = "ssh")]
+    pub fn load_private_key(&self) -> Result<russh_keys::key::KeyPair> {
+        let path = default_client_key_path();
+        let key_data = std::fs::read_to_string(&path)
+            .context("Failed to read private key")?;
+        russh_keys::decode_secret_key(&key_data, None)
+            .context("Failed to decode private key")
+    }
+    
     /// Get the public key in OpenSSH format (for display/copy).
     pub fn public_key_openssh(&self) -> String {
         #[cfg(feature = "ssh")]

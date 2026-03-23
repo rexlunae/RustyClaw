@@ -436,6 +436,8 @@ pub async fn run_gateway(
                 .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
             authorized_clients_path: options.ssh_authorized_clients.clone()
                 .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
+            allow_password: false,
+            require_pubkey: true,
         };
         
         match SshServer::new(ssh_config.clone()).await {

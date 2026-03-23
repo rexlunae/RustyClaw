@@ -135,6 +135,12 @@ pub(crate) enum GwEvent {
         provider: String,
         provider_display: String,
     },
+    /// SSH pairing connection succeeded
+    PairingSuccess {
+        gateway_name: String,
+    },
+    /// SSH pairing connection failed
+    PairingError(String),
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -209,6 +215,12 @@ pub(crate) enum UserInput {
     },
     /// Cancel the current provider-flow dialog
     CancelProviderFlow,
+    /// Initiate SSH pairing connection
+    PairingConnect {
+        host: String,
+        port: u16,
+        public_key: String,
+    },
     Quit,
 }
 
@@ -1412,6 +1424,27 @@ impl App {
                 Ok(UserInput::CancelProviderFlow) => {
                     // User cancelled — nothing to do
                 }
+                Ok(UserInput::PairingConnect { host, port, public_key }) => {
+                    // Initiate SSH connection for pairing
+                    #[cfg(feature = "ssh")]
+                    {
+                        let gw_tx_pair = gw_tx.clone();
+                        tokio::spawn(async move {
+                            match crate::pairing::connect_and_pair(&host, port, &public_key).await {
+                                Ok(gateway_name) => {
+                                    let _ = gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
+                                }
+                                Err(e) => {
+                                    let _ = gw_tx_pair.send(GwEvent::PairingError(e.to_string()));
+                                }
+                            }
+                        });
+                    }
+                    #[cfg(not(feature = "ssh"))]
+                    {
+                        let _ = gw_tx.send(GwEvent::PairingError("SSH feature not enabled".to_string()));
+                    }
+                }
                 Ok(UserInput::Quit) => break,
                 Err(sync_mpsc::TryRecvError::Empty) => {}
                 Err(sync_mpsc::TryRecvError::Disconnected) => break,
@@ -2251,6 +2284,26 @@ mod tui_component {
                                         model_selector_loading.set(false);
                                         show_model_selector.set(true);
                                     }
+                                    GwEvent::PairingSuccess { gateway_name } => {
+                                        // Pairing succeeded — update dialog state
+                                        pairing_step.set(crate::components::pairing_dialog::PairingStep::Complete);
+                                        pairing_error.set(String::new());
+                                        let mut m = messages.read().clone();
+                                        m.push(DisplayMessage::success(format!(
+                                            "Successfully paired with gateway: {}", gateway_name
+                                        )));
+                                        messages.set(m);
+                                    }
+                                    GwEvent::PairingError(err) => {
+                                        // Pairing failed — show error
+                                        pairing_step.set(crate::components::pairing_dialog::PairingStep::EnterGateway);
+                                        pairing_error.set(err.clone());
+                                        let mut m = messages.read().clone();
+                                        m.push(DisplayMessage::error(format!(
+                                            "Pairing failed: {}", err
+                                        )));
+                                        messages.set(m);
+                                    }
                                 }
                             }
                         }
@@ -2660,13 +2713,25 @@ mod tui_component {
                                     }
                                     PairingStep::EnterGateway => {
                                         let host = pairing_host.read().clone();
+                                        let port_str = pairing_port.read().clone();
+                                        let public_key = pairing_public_key.read().clone();
+                                        
                                         if host.is_empty() {
                                             pairing_error.set("Host is required".to_string());
                                         } else {
-                                            // TODO: Actually connect via SSH
+                                            let port: u16 = port_str.parse().unwrap_or(2222);
                                             pairing_step.set(PairingStep::Connecting);
-                                            // For now, simulate success after a moment
-                                            pairing_step.set(PairingStep::Complete);
+                                            
+                                            // Send connection request to async handler
+                                            if let Ok(guard) = tx_for_keys.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.send(UserInput::PairingConnect {
+                                                        host,
+                                                        port,
+                                                        public_key,
+                                                    });
+                                                }
+                                            }
                                         }
                                     }
                                     PairingStep::Connecting => {
@@ -3280,12 +3345,12 @@ mod tui_component {
                                 {
                                     use rustyclaw_core::pairing::{
                                         ClientKeyPair,
-                                        fingerprint::key_fingerprint,
-                                        fingerprint::format_fingerprint_art,
+                                        key_fingerprint,
+                                        format_fingerprint_art,
                                     };
                                     match ClientKeyPair::load_or_generate(None) {
                                         Ok(kp) => {
-                                            pairing_public_key.set(kp.public_key_openssh.clone());
+                                            pairing_public_key.set(kp.public_key_openssh());
                                             let fp = key_fingerprint(&kp);
                                             pairing_fingerprint_art.set(format_fingerprint_art(&fp));
                                             pairing_fingerprint.set(fp);
