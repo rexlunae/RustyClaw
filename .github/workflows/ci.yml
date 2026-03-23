@@ -88,7 +88,7 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Install Linux system dependencies for desktop GUI
-        if: runner.os == 'Linux' && !matrix.use_cross
+        if: runner.os == 'Linux' && matrix.use_cross == false
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
