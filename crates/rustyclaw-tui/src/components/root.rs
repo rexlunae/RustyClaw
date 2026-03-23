@@ -153,6 +153,7 @@ pub struct RootProps {
     pub pairing_public_key: String,
     pub pairing_fingerprint: String,
     pub pairing_fingerprint_art: String,
+    pub pairing_qr_ascii: String,
     pub pairing_host: String,
     pub pairing_port: String,
     pub pairing_error: String,
@@ -221,6 +222,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let pairing_public_key = std::mem::take(&mut props.pairing_public_key);
     let pairing_fingerprint = std::mem::take(&mut props.pairing_fingerprint);
     let pairing_fingerprint_art = std::mem::take(&mut props.pairing_fingerprint_art);
+    let pairing_qr_ascii = std::mem::take(&mut props.pairing_qr_ascii);
     let pairing_host = std::mem::take(&mut props.pairing_host);
     let pairing_port = std::mem::take(&mut props.pairing_port);
     let pairing_error = std::mem::take(&mut props.pairing_error);
@@ -567,7 +569,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             public_key: pairing_public_key,
                             fingerprint: pairing_fingerprint,
                             fingerprint_art: pairing_fingerprint_art,
-                            qr_ascii: String::new(),
+                            qr_ascii: pairing_qr_ascii,
                             gateway_host: pairing_host,
                             gateway_port: pairing_port,
                             active_field: pairing_field,

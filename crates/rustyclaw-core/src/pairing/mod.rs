@@ -54,6 +54,7 @@ pub use authorized::{
 
 pub use qr::{
     generate_pairing_qr,
+    generate_pairing_qr_ascii,
     parse_pairing_qr,
     PairingData,
 };

@@ -1774,6 +1774,7 @@ mod tui_component {
         let mut pairing_public_key = hooks.use_state(|| String::new());
         let mut pairing_fingerprint = hooks.use_state(|| String::new());
         let mut pairing_fingerprint_art = hooks.use_state(|| String::new());
+        let mut pairing_qr_ascii = hooks.use_state(|| String::new());
         let mut pairing_host = hooks.use_state(|| String::new());
         let mut pairing_port = hooks.use_state(|| "2222".to_string());
         let mut pairing_error = hooks.use_state(|| String::new());
@@ -3347,13 +3348,23 @@ mod tui_component {
                                         ClientKeyPair,
                                         key_fingerprint,
                                         format_fingerprint_art,
+                                        generate_pairing_qr_ascii,
+                                        PairingData,
                                     };
                                     match ClientKeyPair::load_or_generate(None) {
                                         Ok(kp) => {
-                                            pairing_public_key.set(kp.public_key_openssh());
+                                            let pk = kp.public_key_openssh();
+                                            pairing_public_key.set(pk.clone());
                                             let fp = key_fingerprint(&kp);
                                             pairing_fingerprint_art.set(format_fingerprint_art(&fp));
                                             pairing_fingerprint.set(fp);
+                                            
+                                            // Generate QR code for pairing
+                                            let pairing_data = PairingData::client(&pk, None);
+                                            match generate_pairing_qr_ascii(&pairing_data) {
+                                                Ok(qr) => pairing_qr_ascii.set(qr),
+                                                Err(_) => pairing_qr_ascii.set(String::new()),
+                                            }
                                         }
                                         Err(e) => {
                                             pairing_error.set(format!("Key generation failed: {}", e));
@@ -3523,6 +3534,7 @@ mod tui_component {
                 pairing_public_key: pairing_public_key.read().clone(),
                 pairing_fingerprint: pairing_fingerprint.read().clone(),
                 pairing_fingerprint_art: pairing_fingerprint_art.read().clone(),
+                pairing_qr_ascii: pairing_qr_ascii.read().clone(),
                 pairing_host: pairing_host.read().clone(),
                 pairing_port: pairing_port.read().clone(),
                 pairing_error: pairing_error.read().clone(),
