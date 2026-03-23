@@ -87,6 +87,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Install Linux system dependencies for desktop GUI
+        if: runner.os == 'Linux' && !matrix.use_cross
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
 
       - name: Install cross
         if: matrix.use_cross
@@ -96,7 +102,8 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            cross check --target ${{ matrix.target }} ${{ matrix.features }}
+            # Cross-compilation: exclude desktop client due to GTK system dependencies
+            cross check --target ${{ matrix.target }} ${{ matrix.features }} --exclude rustyclaw-desktop
           else
             cargo check --target ${{ matrix.target }} ${{ matrix.features }}
           fi
@@ -111,13 +118,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux system dependencies for desktop GUI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev
+
       - uses: Swatinem/rust-cache@v2
       
       - name: Run unit tests (default features)
-        run: cargo test --lib --bins
+        run: cargo test --lib --bins --exclude rustyclaw-desktop
       
       - name: Run unit tests (no default features)
-        run: cargo test --lib --bins --no-default-features
+        run: cargo test --lib --bins --no-default-features --exclude rustyclaw-desktop
       
       - name: Run doc tests
         run: cargo test --doc
