@@ -58,14 +58,12 @@ pub use messenger_handler::{SharedMessengerManager, create_messenger_manager, ru
 
 // Re-export transport types
 pub use transport::{
-    PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter,
-    WebSocketTransport,
+    ConnectionInfo, Transport, TransportError, TransportFactory, TransportListener, TransportMessage, MessageType,
 };
 
-// Re-export SSH types (when feature enabled, stdio transport always available)
-pub use ssh::StdioTransport;
+// Re-export SSH types (when feature enabled)
 #[cfg(feature = "ssh")]
-pub use ssh::{SshConfig, SshServer, add_authorized_client, key_fingerprint, load_authorized_clients};
+pub use ssh::{SshTransportConfig, SshTransport, SshTransportFactory};
 
 use crate::config::Config;
 use crate::observability::ObserverEvent;
@@ -432,7 +430,17 @@ pub async fn run_gateway(
         None
     };
 
-    info!(address = %addr, "Gateway listening");
+        // Test bind early to detect binding errors before logging success
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(test_listener) => {
+                drop(test_listener); // Release immediately - axum will bind again
+                info!(address = %addr, "Gateway listening");
+            }
+            Err(e) => {
+                error!(address = %addr, error = %e, "Failed to bind gateway");
+                return Err(anyhow::Error::from(e));
+            }
+        }
     if messenger_mgr.is_some() {
         info!("Messenger polling enabled");
     }
