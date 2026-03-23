@@ -23,6 +23,7 @@ mcp = ["dep:rmcp", "dep:schemars"]
 matrix = ["dep:matrix-sdk"]
 whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", "dep:wa-rs-ureq-http"]
 ssh = ["dep:russh", "dep:russh-keys", "dep:rand_core", "dep:sha2"]
+qr = ["dep:image"]
 # CLI-based messengers (tier 1) - no heavy deps, just HTTP
 signal-cli = []
 matrix-cli = []  # Matrix CLI messenger using HTTP API (no external deps)
@@ -105,6 +106,9 @@ russh = { version = "0.52", features = ["async-trait"], optional = true }
 russh-keys = { version = "0.44", optional = true }
 rand_core = { version = "0.6", optional = true }
 sha2 = { version = "0.10", optional = true }
+
+# QR code generation (optional)
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

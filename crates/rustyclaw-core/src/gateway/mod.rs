@@ -424,16 +424,71 @@ pub async fn run_gateway(
         None
     };
 
+    // ── Start SSH server if configured ──────────────────────────────
+    #[cfg(feature = "ssh")]
+    let mut ssh_server: Option<SshServer> = if let Some(ref ssh_listen) = options.ssh_listen {
+        let ssh_addr: SocketAddr = ssh_listen.parse()
+            .with_context(|| format!("Invalid SSH listen address: {}", ssh_listen))?;
+        
+        let ssh_config = SshConfig {
+            listen_addr: ssh_addr,
+            host_key_path: options.ssh_host_key.clone()
+                .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
+            authorized_clients_path: options.ssh_authorized_clients.clone()
+                .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
+        };
+        
+        match SshServer::new(ssh_config.clone()).await {
+            Ok(mut server) => {
+                if let Err(e) = server.listen(ssh_addr).await {
+                    error!(error = %e, "Failed to start SSH server");
+                    None
+                } else {
+                    info!(address = %ssh_addr, "SSH server listening");
+                    Some(server)
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to initialize SSH server");
+                None
+            }
+        }
+    } else {
+        None
+    };
+    
+    #[cfg(not(feature = "ssh"))]
+    let ssh_server: Option<()> = None;
+    let _ = &options.ssh_listen; // Suppress unused warning
+
     info!(address = %addr, "Gateway listening");
     if messenger_mgr.is_some() {
         info!("Messenger polling enabled");
     }
+    #[cfg(feature = "ssh")]
+    if ssh_server.is_some() {
+        info!("SSH transport enabled");
+    }
 
     loop {
+        // Create SSH accept future if server is available
+        #[cfg(feature = "ssh")]
+        let ssh_accept = async {
+            if let Some(ref mut server) = ssh_server {
+                server.accept().await
+            } else {
+                // Never resolves if no SSH server
+                std::future::pending().await
+            }
+        };
+        #[cfg(not(feature = "ssh"))]
+        let ssh_accept = std::future::pending::<Result<Box<dyn Transport>>>();
+
         tokio::select! {
             _ = cancel.cancelled() => {
                 break;
             }
+            // WebSocket connections (existing path)
             accepted = listener.accept() => {
                 let (stream, peer) = accepted?;
                 let shared_cfg = shared_config.clone();
@@ -481,9 +536,238 @@ pub async fn run_gateway(
                     }
                 });
             }
+            // SSH connections (new path)
+            ssh_result = ssh_accept => {
+                match ssh_result {
+                    Ok(transport) => {
+                        let peer_info = transport.peer_info().clone();
+                        info!(
+                            transport = %peer_info.transport_type,
+                            user = ?peer_info.username,
+                            fingerprint = ?peer_info.key_fingerprint,
+                            "SSH connection accepted"
+                        );
+                        
+                        let shared_cfg = shared_config.clone();
+                        let shared_ctx = shared_model_ctx.clone();
+                        let session_clone = copilot_session.clone();
+                        let vault_clone = vault.clone();
+                        let skill_clone = skill_mgr.clone();
+                        let task_mgr_clone = task_mgr.clone();
+                        let observer_clone = observer.clone();
+                        let child_cancel = cancel.child_token();
+                        
+                        tokio::spawn(async move {
+                            if let Err(err) = handle_transport_connection(
+                                transport,
+                                shared_cfg,
+                                shared_ctx,
+                                session_clone,
+                                vault_clone,
+                                skill_clone,
+                                task_mgr_clone,
+                                observer_clone,
+                                child_cancel,
+                            ).await {
+                                debug!(error = %err, "SSH connection error");
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "SSH accept error");
+                    }
+                }
+            }
         }
     }
 
+    Ok(())
+}
+
+/// Handle a connection using the Transport trait.
+///
+/// This is the transport-agnostic connection handler that works with any
+/// transport implementation (SSH, stdio, future transports). For SSH
+/// connections, authentication is already completed at the transport layer
+/// via public key, so we skip TOTP.
+async fn handle_transport_connection(
+    transport: Box<dyn Transport>,
+    shared_config: SharedConfig,
+    shared_model_ctx: SharedModelCtx,
+    copilot_session: Option<Arc<CopilotSession>>,
+    vault: SharedVault,
+    skill_mgr: SharedSkillManager,
+    task_mgr: SharedTaskManager,
+    observer: Option<SharedObserver>,
+    cancel: CancellationToken,
+) -> Result<()> {
+    let peer_info = transport.peer_info().clone();
+    let (mut reader, mut writer) = transport.into_split();
+    
+    // Snapshot config and model context for this connection
+    let config = shared_config.read().await.clone();
+    let model_ctx = shared_model_ctx.read().await.clone();
+    
+    // Thread manager for multi-task conversations
+    let threads_path = config.sessions_dir().join("threads.json");
+    let mut thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
+    let mut thread_events_rx = thread_mgr.subscribe();
+    
+    // SSH connections are pre-authenticated via public key
+    // No TOTP challenge needed
+    info!(
+        transport = %peer_info.transport_type,
+        user = ?peer_info.username,
+        "Transport connection authenticated"
+    );
+    
+    // Check vault status
+    let vault_is_locked = {
+        let v = vault.lock().await;
+        v.is_locked()
+    };
+    
+    // Send hello frame
+    let hello_frame = ServerFrame {
+        frame_type: ServerFrameType::Hello,
+        payload: ServerPayload::Hello {
+            version: "rustyclaw".to_string(),
+            settings_dir: config.settings_dir.to_string_lossy().to_string(),
+            vault_locked: vault_is_locked,
+            provider: model_ctx.as_ref().map(|c| c.provider.clone()),
+            model: model_ctx.as_ref().map(|c| c.model.clone()),
+        },
+    };
+    writer.send(&hello_frame).await?;
+    
+    if vault_is_locked {
+        let status_frame = ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Status {
+                status_type: StatusType::VaultLocked,
+                detail: "Secrets vault is locked — provide password to unlock".to_string(),
+            },
+        };
+        writer.send(&status_frame).await?;
+    }
+    
+    // Report model status
+    let http = reqwest::Client::new();
+    if let Some(ref ctx) = model_ctx {
+        let display = crate_providers::display_name_for_provider(&ctx.provider);
+        
+        // Model configured status
+        let detail = format!("{} / {}", display, ctx.model);
+        writer.send(&ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Status {
+                status_type: StatusType::ModelConfigured,
+                detail,
+            },
+        }).await?;
+        
+        // Credentials status
+        if ctx.api_key.is_some() {
+            writer.send(&ServerFrame {
+                frame_type: ServerFrameType::Status,
+                payload: ServerPayload::Status {
+                    status_type: StatusType::CredentialsLoaded,
+                    detail: format!("{} API key loaded", display),
+                },
+            }).await?;
+        }
+        
+        // Probe connection
+        let probe_ctx = ctx.clone();
+        writer.send(&ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Status {
+                status_type: StatusType::ModelConnecting,
+                detail: format!("Probing {} …", ctx.base_url),
+            },
+        }).await?;
+        
+        match providers::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref()).await {
+            ProbeResult::Ready | ProbeResult::Connected { .. } => {
+                writer.send(&ServerFrame {
+                    frame_type: ServerFrameType::Status,
+                    payload: ServerPayload::Status {
+                        status_type: StatusType::ModelReady,
+                        detail: format!("{} / {} ready", display, ctx.model),
+                    },
+                }).await?;
+            }
+            ProbeResult::AuthError { detail } => {
+                writer.send(&ServerFrame {
+                    frame_type: ServerFrameType::Status,
+                    payload: ServerPayload::Status {
+                        status_type: StatusType::ModelError,
+                        detail: format!("{} auth failed: {}", display, detail),
+                    },
+                }).await?;
+            }
+            ProbeResult::Unreachable { detail } => {
+                writer.send(&ServerFrame {
+                    frame_type: ServerFrameType::Status,
+                    payload: ServerPayload::Status {
+                        status_type: StatusType::ModelError,
+                        detail: format!("{} probe failed: {}", display, detail),
+                    },
+                }).await?;
+            }
+        }
+    } else {
+        writer.send(&ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Status {
+                status_type: StatusType::NoModel,
+                detail: "No model configured — clients must send full credentials".to_string(),
+            },
+        }).await?;
+    }
+    
+    // TODO: Main message loop
+    // For now, just log that we connected and return
+    // The full message loop will be ported in a follow-up PR
+    info!(transport = %peer_info.transport_type, "Transport connection ready");
+    
+    // Keep connection open until cancelled or client disconnects
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => {
+                info!("Transport connection cancelled");
+                break;
+            }
+            frame = reader.recv() => {
+                match frame {
+                    Ok(Some(client_frame)) => {
+                        // For now, just log received frames
+                        // TODO: Route to message handlers (chat, control, etc.)
+                        debug!(?client_frame, "Received frame from transport");
+                        
+                        // Echo back an acknowledgment for now
+                        writer.send(&ServerFrame {
+                            frame_type: ServerFrameType::Status,
+                            payload: ServerPayload::Status {
+                                status_type: StatusType::Info,
+                                detail: "Frame received (transport handler WIP)".to_string(),
+                            },
+                        }).await?;
+                    }
+                    Ok(None) => {
+                        info!("Transport connection closed by client");
+                        break;
+                    }
+                    Err(e) => {
+                        warn!(error = %e, "Transport receive error");
+                        break;
+                    }
+                }
+            }
+        }
+    }
+    
+    writer.close().await?;
     Ok(())
 }
 

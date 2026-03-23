@@ -54,6 +54,36 @@ enum GatewayCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Manage SSH pairing and authorized clients
+    #[command(subcommand)]
+    Pair(PairCommands),
+}
+
+#[derive(Debug, Subcommand)]
+enum PairCommands {
+    /// List authorized clients
+    List,
+    /// Add a new authorized client
+    Add {
+        /// Public key in OpenSSH format (ssh-ed25519 AAAA...)
+        #[arg(value_name = "PUBLIC_KEY")]
+        key: String,
+        /// Optional name/comment for the client
+        #[arg(long, short)]
+        name: Option<String>,
+    },
+    /// Remove an authorized client by fingerprint
+    Remove {
+        /// Key fingerprint (SHA256:...)
+        #[arg(value_name = "FINGERPRINT")]
+        fingerprint: String,
+    },
+    /// Show pairing QR code for this gateway
+    Qr {
+        /// Gateway host:port (required for QR generation)
+        #[arg(long, value_name = "HOST:PORT")]
+        host: String,
+    },
 }
 
 #[derive(Debug, clap::Args)]
@@ -147,6 +177,11 @@ async fn main() -> Result<()> {
                     t::muted("(detailed status probe not yet implemented)")
                 );
             }
+            return Ok(());
+        }
+        Some(GatewayCommands::Pair(pair_cmd)) => {
+            return handle_pair_command(pair_cmd).await;
+        }
             return Ok(());
         }
         None => RunArgs::default(),
@@ -464,5 +499,135 @@ async fn run_ssh_stdio_mode(config: Config, args: RunArgs) -> Result<()> {
     eprintln!("Transport peer info: {:?}", transport.peer_info());
     
     transport.close().await?;
+    Ok(())
+}
+
+/// Handle pairing subcommands.
+async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
+    use rustyclaw_core::pairing::{
+        default_authorized_clients_path,
+        load_authorized_clients,
+        add_authorized_client,
+        remove_authorized_client,
+    };
+    
+    let auth_path = default_authorized_clients_path();
+    
+    match cmd {
+        PairCommands::List => {
+            let clients = load_authorized_clients(&auth_path)?;
+            
+            if clients.clients.is_empty() {
+                println!("{}", t::muted("No authorized clients"));
+                println!();
+                println!("Add a client with:");
+                println!("  {} pair add <PUBLIC_KEY> --name <NAME>", t::info("rustyclaw-gateway"));
+                return Ok(());
+            }
+            
+            println!("{}", t::header("Authorized Clients"));
+            println!();
+            
+            for (i, client) in clients.clients.iter().enumerate() {
+                let name = client.comment.as_deref().unwrap_or("(unnamed)");
+                println!(
+                    "{}. {} {}",
+                    i + 1,
+                    t::info(name),
+                    t::muted(&format!("({})", &client.fingerprint))
+                );
+            }
+            
+            println!();
+            println!(
+                "{} {}",
+                t::muted("File:"),
+                auth_path.display()
+            );
+        }
+        
+        PairCommands::Add { key, name } => {
+            match add_authorized_client(&auth_path, &key, name.as_deref()) {
+                Ok(client) => {
+                    println!(
+                        "{} Added client: {}",
+                        t::icon_ok(""),
+                        t::info(client.comment.as_deref().unwrap_or("(unnamed)"))
+                    );
+                    println!(
+                        "  {} {}",
+                        t::muted("Fingerprint:"),
+                        client.fingerprint
+                    );
+                }
+                Err(e) => {
+                    eprintln!("{} Failed to add client: {}", t::icon_err(""), e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        
+        PairCommands::Remove { fingerprint } => {
+            match remove_authorized_client(&auth_path, &fingerprint) {
+                Ok(true) => {
+                    println!(
+                        "{} Removed client with fingerprint: {}",
+                        t::icon_ok(""),
+                        fingerprint
+                    );
+                }
+                Ok(false) => {
+                    eprintln!(
+                        "{} No client found with fingerprint: {}",
+                        t::icon_err(""),
+                        fingerprint
+                    );
+                    std::process::exit(1);
+                }
+                Err(e) => {
+                    eprintln!("{} Failed to remove client: {}", t::icon_err(""), e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        
+        PairCommands::Qr { host } => {
+            #[cfg(feature = "qr")]
+            {
+                use rustyclaw_core::pairing::{PairingData, generate_pairing_qr_ascii};
+                
+                // Generate gateway pairing data
+                // For now, we use a placeholder key - in production, this would be the host key's public part
+                let data = PairingData::gateway(
+                    "ssh-ed25519 (host key would go here)",
+                    &host,
+                    Some("RustyClaw Gateway".to_string()),
+                );
+                
+                match generate_pairing_qr_ascii(&data) {
+                    Ok(qr) => {
+                        println!("{}", t::header("Gateway Pairing QR Code"));
+                        println!();
+                        println!("{}", qr);
+                        println!();
+                        println!("Scan this QR code with a RustyClaw client to pair.");
+                        println!("Gateway address: {}", t::info(&host));
+                    }
+                    Err(e) => {
+                        eprintln!("{} Failed to generate QR code: {}", t::icon_err(""), e);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            
+            #[cfg(not(feature = "qr"))]
+            {
+                eprintln!("{} QR code feature not enabled", t::icon_err(""));
+                eprintln!("Rebuild with: cargo build --features qr");
+                std::process::exit(1);
+            }
+        }
+    }
+    
     Ok(())
 }

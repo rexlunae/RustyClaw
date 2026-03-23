@@ -8,6 +8,7 @@ pub mod input_bar;
 pub mod message_bubble;
 pub mod messages;
 pub mod model_selector_dialog;
+pub mod pairing_dialog;
 pub mod provider_selector_dialog;
 pub mod root;
 pub mod secrets_dialog;
