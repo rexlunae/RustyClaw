@@ -91,10 +91,22 @@ pub fn PairingDialog(props: &PairingDialogProps) -> impl Into<AnyElement<'static
 
                 // Step-specific content
                 #(match props.step {
-                    PairingStep::ShowKey => render_show_key(props).into_any(),
-                    PairingStep::EnterGateway => render_enter_gateway(props).into_any(),
-                    PairingStep::Connecting => render_connecting(props).into_any(),
-                    PairingStep::Complete => render_complete(props).into_any(),
+                    PairingStep::ShowKey => {
+                        let el: AnyElement<'static> = render_show_key(props).into();
+                        el
+                    },
+                    PairingStep::EnterGateway => {
+                        let el: AnyElement<'static> = render_enter_gateway(props).into();
+                        el
+                    },
+                    PairingStep::Connecting => {
+                        let el: AnyElement<'static> = render_connecting(props).into();
+                        el
+                    },
+                    PairingStep::Complete => {
+                        let el: AnyElement<'static> = render_complete(props).into();
+                        el
+                    },
                 })
             }
         }

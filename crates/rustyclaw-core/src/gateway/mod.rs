@@ -631,7 +631,7 @@ async fn handle_transport_connection(
     let hello_frame = ServerFrame {
         frame_type: ServerFrameType::Hello,
         payload: ServerPayload::Hello {
-            version: "rustyclaw".to_string(),
+            agent: "rustyclaw".to_string(),
             settings_dir: config.settings_dir.to_string_lossy().to_string(),
             vault_locked: vault_is_locked,
             provider: model_ctx.as_ref().map(|c| c.provider.clone()),
@@ -644,7 +644,7 @@ async fn handle_transport_connection(
         let status_frame = ServerFrame {
             frame_type: ServerFrameType::Status,
             payload: ServerPayload::Status {
-                status_type: StatusType::VaultLocked,
+                status: StatusType::VaultLocked,
                 detail: "Secrets vault is locked — provide password to unlock".to_string(),
             },
         };
@@ -661,7 +661,7 @@ async fn handle_transport_connection(
         writer.send(&ServerFrame {
             frame_type: ServerFrameType::Status,
             payload: ServerPayload::Status {
-                status_type: StatusType::ModelConfigured,
+                status: StatusType::ModelConfigured,
                 detail,
             },
         }).await?;
@@ -671,7 +671,7 @@ async fn handle_transport_connection(
             writer.send(&ServerFrame {
                 frame_type: ServerFrameType::Status,
                 payload: ServerPayload::Status {
-                    status_type: StatusType::CredentialsLoaded,
+                    status: StatusType::CredentialsLoaded,
                     detail: format!("{} API key loaded", display),
                 },
             }).await?;
@@ -682,7 +682,7 @@ async fn handle_transport_connection(
         writer.send(&ServerFrame {
             frame_type: ServerFrameType::Status,
             payload: ServerPayload::Status {
-                status_type: StatusType::ModelConnecting,
+                status: StatusType::ModelConnecting,
                 detail: format!("Probing {} …", ctx.base_url),
             },
         }).await?;
@@ -692,7 +692,7 @@ async fn handle_transport_connection(
                 writer.send(&ServerFrame {
                     frame_type: ServerFrameType::Status,
                     payload: ServerPayload::Status {
-                        status_type: StatusType::ModelReady,
+                        status: StatusType::ModelReady,
                         detail: format!("{} / {} ready", display, ctx.model),
                     },
                 }).await?;
@@ -701,7 +701,7 @@ async fn handle_transport_connection(
                 writer.send(&ServerFrame {
                     frame_type: ServerFrameType::Status,
                     payload: ServerPayload::Status {
-                        status_type: StatusType::ModelError,
+                        status: StatusType::ModelError,
                         detail: format!("{} auth failed: {}", display, detail),
                     },
                 }).await?;
@@ -710,7 +710,7 @@ async fn handle_transport_connection(
                 writer.send(&ServerFrame {
                     frame_type: ServerFrameType::Status,
                     payload: ServerPayload::Status {
-                        status_type: StatusType::ModelError,
+                        status: StatusType::ModelError,
                         detail: format!("{} probe failed: {}", display, detail),
                     },
                 }).await?;
@@ -720,7 +720,7 @@ async fn handle_transport_connection(
         writer.send(&ServerFrame {
             frame_type: ServerFrameType::Status,
             payload: ServerPayload::Status {
-                status_type: StatusType::NoModel,
+                status: StatusType::NoModel,
                 detail: "No model configured — clients must send full credentials".to_string(),
             },
         }).await?;
@@ -745,14 +745,8 @@ async fn handle_transport_connection(
                         // TODO: Route to message handlers (chat, control, etc.)
                         debug!(?client_frame, "Received frame from transport");
                         
-                        // Echo back an acknowledgment for now
-                        writer.send(&ServerFrame {
-                            frame_type: ServerFrameType::Status,
-                            payload: ServerPayload::Status {
-                                status_type: StatusType::Info,
-                                detail: "Frame received (transport handler WIP)".to_string(),
-                            },
-                        }).await?;
+                        // TODO: Handle incoming frames properly
+                        // For now, just log receipt - no acknowledgment needed
                     }
                     Ok(None) => {
                         info!("Transport connection closed by client");
