@@ -116,6 +116,9 @@ pub type SharedConfig = Arc<RwLock<Config>>;
 /// Shared model context, updated on reload.
 pub type SharedModelCtx = Arc<RwLock<Option<Arc<ModelContext>>>>;
 
+/// Shared Copilot session, updated when provider changes.
+pub type SharedCopilotSession = Arc<RwLock<Option<Arc<CopilotSession>>>>;
+
 /// Shared task manager for first-class task orchestration.
 pub type SharedTaskManager = Arc<crate::tasks::TaskManager>;
 
@@ -194,6 +197,79 @@ fn try_import_openclaw_token(vault: &mut SecretsManager) -> Option<CopilotSessio
         token.to_string(),
         expires_at,
     ))
+}
+
+/// Initialize a CopilotSession if the provider requires one.
+///
+/// Checks multiple sources in order:
+/// 1. Imported session token from vault (GITHUB_COPILOT_SESSION)
+/// 2. Fresh token from OpenClaw (~/.openclaw/credentials/github-copilot.token.json)
+/// 3. OAuth token from model context
+async fn init_copilot_session(
+    provider: &str,
+    api_key: Option<&str>,
+    vault: &SharedVault,
+) -> Option<Arc<CopilotSession>> {
+    if !crate_providers::needs_copilot_session(provider) {
+        return None;
+    }
+
+    let mut vault_guard = vault.lock().await;
+    let session_result = vault_guard.get_secret("GITHUB_COPILOT_SESSION", true);
+
+    let mut session_from_import = match &session_result {
+        Ok(Some(json_str)) => {
+            debug!("Found GITHUB_COPILOT_SESSION in vault");
+            serde_json::from_str::<serde_json::Value>(json_str)
+                .ok()
+                .and_then(|json| {
+                    let token = json.get("session_token")?.as_str()?.to_string();
+                    let expires_at = json.get("expires_at")?.as_i64()?;
+
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64;
+
+                    let remaining = expires_at - now;
+                    debug!(remaining_seconds = remaining, "Session expiry check");
+
+                    if remaining > 60 {
+                        Some(CopilotSession::from_session_token(token, expires_at))
+                    } else {
+                        debug!("Session expired or expiring soon");
+                        None
+                    }
+                })
+        }
+        Ok(None) => {
+            debug!("GITHUB_COPILOT_SESSION not found in vault");
+            None
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to read GITHUB_COPILOT_SESSION");
+            None
+        }
+    };
+
+    // If vault session is expired/missing, try to auto-import from OpenClaw
+    if session_from_import.is_none() {
+        if let Some(session) = try_import_openclaw_token(&mut vault_guard) {
+            session_from_import = Some(session);
+        }
+    }
+    drop(vault_guard);
+
+    if let Some(session) = session_from_import {
+        debug!("Using imported session token");
+        Some(Arc::new(session))
+    } else if let Some(oauth) = api_key {
+        debug!("Falling back to OAuth token");
+        Some(Arc::new(CopilotSession::new(oauth.to_string())))
+    } else {
+        warn!("No OAuth token available for Copilot provider");
+        None
+    }
 }
 
 /// Run the gateway WebSocket server.
@@ -278,81 +354,14 @@ pub async fn run_gateway(
             (None, None) => None,
         };
 
-    // If the provider uses Copilot session tokens, check for:
-    // 1. Imported session token (GITHUB_COPILOT_SESSION) - use until expiry
-    // 2. Fresh token from OpenClaw (~/.openclaw/credentials/github-copilot.token.json)
-    // 3. OAuth token (GITHUB_COPILOT_TOKEN) - can refresh sessions
-    let copilot_session: Option<Arc<CopilotSession>> = if model_ctx
-        .as_ref()
-        .map(|ctx| crate_providers::needs_copilot_session(&ctx.provider))
-        .unwrap_or(false)
-    {
-        // First check for imported session token in our vault
-        let mut vault_guard = vault.lock().await;
-        let session_result = vault_guard.get_secret("GITHUB_COPILOT_SESSION", true);
-
-        let mut session_from_import = match &session_result {
-            Ok(Some(json_str)) => {
-                debug!("Found GITHUB_COPILOT_SESSION in vault");
-                serde_json::from_str::<serde_json::Value>(json_str)
-                    .ok()
-                    .and_then(|json| {
-                        let token = json.get("session_token")?.as_str()?.to_string();
-                        let expires_at = json.get("expires_at")?.as_i64()?;
-
-                        let now = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64;
-
-                        let remaining = expires_at - now;
-                        debug!(remaining_seconds = remaining, "Session expiry check");
-
-                        if remaining > 60 {
-                            Some(CopilotSession::from_session_token(token, expires_at))
-                        } else {
-                            debug!("Session expired or expiring soon");
-                            None
-                        }
-                    })
-            }
-            Ok(None) => {
-                debug!("GITHUB_COPILOT_SESSION not found in vault");
-                None
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to read GITHUB_COPILOT_SESSION");
-                None
-            }
-        };
-
-        // If vault session is expired/missing, try to auto-import from OpenClaw
-        if session_from_import.is_none() {
-            if let Some(session) = try_import_openclaw_token(&mut vault_guard) {
-                session_from_import = Some(session);
-            }
-        }
-        drop(vault_guard);
-
-        if let Some(session) = session_from_import {
-            eprintln!("DEBUG: Using imported session token");
-            debug!("Using imported session token");
-            Some(Arc::new(session))
-        } else {
-            // Fall back to OAuth token
-            if let Some(oauth) = model_ctx.as_ref().and_then(|ctx| ctx.api_key.clone()) {
-                eprintln!("DEBUG: Falling back to OAuth token");
-                debug!("Falling back to OAuth token");
-                Some(Arc::new(CopilotSession::new(oauth)))
-            } else {
-                eprintln!("DEBUG: No OAuth token available either - copilot_session will be None!");
-                warn!("No OAuth token available either");
-                None
-            }
-        }
+    // Initialize Copilot session if needed (uses the new helper function)
+    let copilot_session: Option<Arc<CopilotSession>> = if let Some(ref ctx) = model_ctx {
+        init_copilot_session(&ctx.provider, ctx.api_key.as_deref(), &vault).await
     } else {
         None
     };
+    // Wrap in shared type so it can be updated when models change
+    let shared_copilot_session: SharedCopilotSession = Arc::new(RwLock::new(copilot_session));
 
     let model_ctx = model_ctx.map(Arc::new);
     
@@ -386,7 +395,8 @@ pub async fn run_gateway(
                 let messenger_models = model_registry.clone();
                 let messenger_cancel = cancel.child_token();
                 let mgr_clone = shared_mgr.clone();
-                let messenger_copilot = copilot_session.clone();
+                // Read current copilot session from shared state
+                let messenger_copilot = shared_copilot_session.read().await.clone();
 
                 eprintln!("DEBUG: Spawning messenger loop task...");
                 tokio::spawn(async move {
@@ -436,7 +446,7 @@ pub async fn run_gateway(
                 let (stream, peer) = accepted?;
                 let shared_cfg = shared_config.clone();
                 let shared_ctx = shared_model_ctx.clone();
-                let session_clone = copilot_session.clone();
+                let shared_session = shared_copilot_session.clone();
                 let vault_clone = vault.clone();
                 let skill_clone = skill_mgr.clone();
                 let task_mgr_clone = task_mgr.clone();
@@ -460,7 +470,7 @@ pub async fn run_gateway(
 
                     if let Err(err) = handle_connection(
                         boxed_stream, peer, shared_cfg, shared_ctx,
-                        session_clone, vault_clone, skill_clone, task_mgr_clone,
+                        shared_session, vault_clone, skill_clone, task_mgr_clone,
                         observer_clone, limiter_clone, child_cancel,
                     ).await {
                         debug!(peer = %peer, error = %err, "Connection error");
@@ -603,7 +613,7 @@ async fn handle_connection(
     peer: SocketAddr,
     shared_config: SharedConfig,
     shared_model_ctx: SharedModelCtx,
-    copilot_session: Option<Arc<CopilotSession>>,
+    shared_copilot_session: SharedCopilotSession,
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: SharedTaskManager,
@@ -837,6 +847,9 @@ async fn handle_connection(
             )
             .await
             .context("Failed to send model_connecting status")?;
+
+            // Read current copilot session from shared state
+            let copilot_session = shared_copilot_session.read().await.clone();
 
             match providers::validate_model_connection(
                 &http,
@@ -1215,6 +1228,17 @@ async fn handle_connection(
                                             ("(none)".to_string(), "(none)".to_string())
                                         };
 
+                                        // Reinitialize Copilot session if the new model needs it
+                                        if let Some(ref ctx) = new_model_ctx {
+                                            let new_session = init_copilot_session(
+                                                &ctx.provider,
+                                                ctx.api_key.as_deref(),
+                                                &vault,
+                                            ).await;
+                                            let mut session = shared_copilot_session.write().await;
+                                            *session = new_session;
+                                        }
+
                                         {
                                             let mut cfg = shared_config.write().await;
                                             *cfg = new_config;
@@ -1282,6 +1306,8 @@ async fn handle_connection(
 
                                 // Re-read model_ctx from shared state for each dispatch
                                 let current_model_ctx = shared_model_ctx.read().await.clone();
+                                // Re-read copilot session from shared state
+                                let copilot_session = shared_copilot_session.read().await.clone();
                                 let workspace_dir = config.workspace_dir();
 
                                 // Inject thread context into system prompt if available

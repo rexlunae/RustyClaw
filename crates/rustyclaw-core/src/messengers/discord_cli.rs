@@ -194,6 +194,7 @@ impl Messenger for DiscordCliMessenger {
                             channel: Some(msg.channel_id),
                             reply_to: None,
                             media: None,
+                            is_direct: false, // Discord DM detection would need channel type check
                         });
                     }
                 }
