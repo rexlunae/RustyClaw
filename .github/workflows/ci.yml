@@ -102,8 +102,8 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           if [ "${{ matrix.use_cross }}" = "true" ]; then
-            # Cross-compilation: exclude desktop client due to GTK system dependencies
-            cross check --target ${{ matrix.target }} ${{ matrix.features }} --exclude rustyclaw-desktop
+            # Cross-compilation: build only core packages (exclude desktop client)
+            cross check --target ${{ matrix.target }} ${{ matrix.features }} --package rustyclaw-core --package rustyclaw-cli --package rustyclaw-tui
           else
             cargo check --target ${{ matrix.target }} ${{ matrix.features }}
           fi
@@ -126,10 +126,10 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       
       - name: Run unit tests (default features)
-        run: cargo test --lib --bins --exclude rustyclaw-desktop
+        run: cargo test --lib --bins --package rustyclaw-core --package rustyclaw-cli --package rustyclaw-tui
       
       - name: Run unit tests (no default features)
-        run: cargo test --lib --bins --no-default-features --exclude rustyclaw-desktop
+        run: cargo test --lib --bins --no-default-features --package rustyclaw-core --package rustyclaw-cli --package rustyclaw-tui
       
       - name: Run doc tests
         run: cargo test --doc
