@@ -432,7 +432,17 @@ pub async fn run_gateway(
         None
     };
 
-    info!(address = %addr, "Gateway listening");
+        // Test bind early to detect binding errors before logging success
+        match tokio::net::TcpListener::bind(&addr).await {
+            Ok(test_listener) => {
+                drop(test_listener); // Release immediately - axum will bind again
+                info!(address = %addr, "Gateway listening");
+            }
+            Err(e) => {
+                error!(address = %addr, error = %e, "Failed to bind gateway");
+                return Err(RustyclawError::Io(e));
+            }
+        }
     if messenger_mgr.is_some() {
         info!("Messenger polling enabled");
     }
