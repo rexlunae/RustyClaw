@@ -32,6 +32,7 @@ pub fn key_fingerprint_short(keypair: &ClientKeyPair) -> String {
 }
 
 /// Calculate fingerprint from an OpenSSH public key string.
+#[cfg(feature = "ssh")]
 pub fn calculate_fingerprint_from_openssh(public_key_openssh: &str) -> String {
     use base64::Engine;
     use sha2::{Sha256, Digest};
@@ -60,10 +61,18 @@ pub fn calculate_fingerprint_from_openssh(public_key_openssh: &str) -> String {
     format!("SHA256:{}", fingerprint)
 }
 
+/// Calculate fingerprint from an OpenSSH public key string.
+/// Stub implementation when ssh feature is disabled.
+#[cfg(not(feature = "ssh"))]
+pub fn calculate_fingerprint_from_openssh(_public_key_openssh: &str) -> String {
+    "SHA256:unavailable".to_string()
+}
+
 /// Generate ASCII art representation of a key fingerprint.
 ///
 /// Similar to `ssh-keygen -lv`, this creates a visual hash that makes
 /// it easier to verify keys by eye.
+#[cfg(feature = "ssh")]
 pub fn format_fingerprint_art(fingerprint: &str) -> String {
     use base64::Engine;
     
@@ -135,6 +144,14 @@ pub fn format_fingerprint_art(fingerprint: &str) -> String {
     output.push_str("+----[SHA256]--------+");
     
     output
+}
+
+/// Stub implementation when ssh feature is disabled.
+#[cfg(not(feature = "ssh"))]
+pub fn format_fingerprint_art(_fingerprint: &str) -> String {
+    "+---[ED25519 256]----+\n\
+     |  (ssh disabled)   |\n\
+     +----[SHA256]--------+".to_string()
 }
 
 #[cfg(test)]

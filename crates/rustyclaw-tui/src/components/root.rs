@@ -13,6 +13,7 @@ use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
 use crate::components::messages::Messages;
 use crate::components::model_selector_dialog::ModelSelectorDialog;
+use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
 use crate::components::secrets_dialog::{SecretInfo, SecretsDialog};
 use crate::components::sidebar::Sidebar;
@@ -144,6 +145,17 @@ pub struct RootProps {
     pub model_selector_models: Vec<String>,
     pub model_selector_cursor: usize,
     pub model_selector_loading: bool,
+
+    // pairing dialog overlay (SSH pairing)
+    pub show_pairing: bool,
+    pub pairing_step: crate::components::pairing_dialog::PairingStep,
+    pub pairing_field: crate::components::pairing_dialog::PairingField,
+    pub pairing_public_key: String,
+    pub pairing_fingerprint: String,
+    pub pairing_fingerprint_art: String,
+    pub pairing_host: String,
+    pub pairing_port: String,
+    pub pairing_error: String,
 }
 
 #[component]
@@ -201,6 +213,17 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let model_sel_models = std::mem::take(&mut props.model_selector_models);
     let model_sel_cursor = props.model_selector_cursor;
     let model_sel_loading = props.model_selector_loading;
+
+    // Pairing dialog state
+    let show_pairing = props.show_pairing;
+    let pairing_step = props.pairing_step;
+    let pairing_field = props.pairing_field;
+    let pairing_public_key = std::mem::take(&mut props.pairing_public_key);
+    let pairing_fingerprint = std::mem::take(&mut props.pairing_fingerprint);
+    let pairing_fingerprint_art = std::mem::take(&mut props.pairing_fingerprint_art);
+    let pairing_host = std::mem::take(&mut props.pairing_host);
+    let pairing_port = std::mem::take(&mut props.pairing_port);
+    let pairing_error = std::mem::take(&mut props.pairing_error);
 
     element! {
         View(
@@ -522,6 +545,34 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             cursor: model_sel_cursor,
                             loading: model_sel_loading,
                             spinner_tick: devflow_tick,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Pairing dialog overlay ──────────────────────────────────
+            #(if show_pairing {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        PairingDialog(
+                            step: pairing_step,
+                            public_key: pairing_public_key,
+                            fingerprint: pairing_fingerprint,
+                            fingerprint_art: pairing_fingerprint_art,
+                            qr_ascii: String::new(),
+                            gateway_host: pairing_host,
+                            gateway_port: pairing_port,
+                            active_field: pairing_field,
+                            error: pairing_error,
+                            success: String::new(),
                         )
                     }
                 }.into_any()

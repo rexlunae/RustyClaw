@@ -1732,6 +1732,19 @@ mod tui_component {
         let mut hatching_tick = hooks.use_state(|| 0usize);
         let mut hatching_pending = hooks.use_state(|| false); // True when waiting for hatching response
 
+        // ── Pairing dialog state ────────────────────────────────────────
+        let mut show_pairing = hooks.use_state(|| false);
+        let mut pairing_step: State<crate::components::pairing_dialog::PairingStep> =
+            hooks.use_state(|| crate::components::pairing_dialog::PairingStep::ShowKey);
+        let mut pairing_field: State<crate::components::pairing_dialog::PairingField> =
+            hooks.use_state(|| crate::components::pairing_dialog::PairingField::Host);
+        let mut pairing_public_key = hooks.use_state(|| String::new());
+        let mut pairing_fingerprint = hooks.use_state(|| String::new());
+        let mut pairing_fingerprint_art = hooks.use_state(|| String::new());
+        let mut pairing_host = hooks.use_state(|| String::new());
+        let mut pairing_port = hooks.use_state(|| "2222".to_string());
+        let mut pairing_error = hooks.use_state(|| String::new());
+
         // ── User prompt dialog state ────────────────────────────────────
         let mut show_user_prompt = hooks.use_state(|| false);
         let mut user_prompt_id = hooks.use_state(|| String::new());
@@ -2606,6 +2619,110 @@ mod tui_component {
                         return;
                     }
 
+                    // ── Pairing dialog ──────────────────────────────
+                    if show_pairing.get() {
+                        use crate::components::pairing_dialog::{PairingStep, PairingField};
+                        let step = pairing_step.read().clone();
+                        match code {
+                            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                should_quit.set(true);
+                                if let Ok(guard) = tx_for_keys.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::Quit);
+                                    }
+                                }
+                            }
+                            KeyCode::Esc => {
+                                match step {
+                                    PairingStep::ShowKey => {
+                                        // Cancel — close dialog
+                                        show_pairing.set(false);
+                                    }
+                                    PairingStep::EnterGateway => {
+                                        // Go back to ShowKey
+                                        pairing_step.set(PairingStep::ShowKey);
+                                        pairing_error.set(String::new());
+                                    }
+                                    PairingStep::Connecting => {
+                                        // Cancel connection
+                                        pairing_step.set(PairingStep::EnterGateway);
+                                    }
+                                    PairingStep::Complete => {
+                                        show_pairing.set(false);
+                                    }
+                                }
+                            }
+                            KeyCode::Enter => {
+                                match step {
+                                    PairingStep::ShowKey => {
+                                        // Proceed to EnterGateway
+                                        pairing_step.set(PairingStep::EnterGateway);
+                                    }
+                                    PairingStep::EnterGateway => {
+                                        let host = pairing_host.read().clone();
+                                        if host.is_empty() {
+                                            pairing_error.set("Host is required".to_string());
+                                        } else {
+                                            // TODO: Actually connect via SSH
+                                            pairing_step.set(PairingStep::Connecting);
+                                            // For now, simulate success after a moment
+                                            pairing_step.set(PairingStep::Complete);
+                                        }
+                                    }
+                                    PairingStep::Connecting => {
+                                        // Wait for connection
+                                    }
+                                    PairingStep::Complete => {
+                                        show_pairing.set(false);
+                                    }
+                                }
+                            }
+                            KeyCode::Tab if step == PairingStep::EnterGateway => {
+                                // Toggle between host and port fields
+                                let field = pairing_field.read().clone();
+                                pairing_field.set(match field {
+                                    PairingField::Host => PairingField::Port,
+                                    PairingField::Port => PairingField::Host,
+                                });
+                            }
+                            KeyCode::Char(c) if step == PairingStep::EnterGateway => {
+                                let field = pairing_field.read().clone();
+                                match field {
+                                    PairingField::Host => {
+                                        let mut h = pairing_host.read().clone();
+                                        h.push(c);
+                                        pairing_host.set(h);
+                                    }
+                                    PairingField::Port => {
+                                        if c.is_ascii_digit() {
+                                            let mut p = pairing_port.read().clone();
+                                            p.push(c);
+                                            pairing_port.set(p);
+                                        }
+                                    }
+                                }
+                                pairing_error.set(String::new());
+                            }
+                            KeyCode::Backspace if step == PairingStep::EnterGateway => {
+                                let field = pairing_field.read().clone();
+                                match field {
+                                    PairingField::Host => {
+                                        let mut h = pairing_host.read().clone();
+                                        h.pop();
+                                        pairing_host.set(h);
+                                    }
+                                    PairingField::Port => {
+                                        let mut p = pairing_port.read().clone();
+                                        p.pop();
+                                        pairing_port.set(p);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
                     // ── Hatching dialog ─────────────────────────────
                     if show_hatching.get() {
                         match code {
@@ -3155,6 +3272,40 @@ mod tui_component {
                         KeyCode::Down => {
                             scroll_offset.set((scroll_offset.get() - 1).max(0));
                         }
+                        // Ctrl+Shift+P opens pairing dialog
+                        KeyCode::Char('P') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            if !show_pairing.get() {
+                                // Generate keypair and populate dialog
+                                #[cfg(feature = "ssh")]
+                                {
+                                    use rustyclaw_core::pairing::{
+                                        ClientKeyPair,
+                                        fingerprint::key_fingerprint,
+                                        fingerprint::format_fingerprint_art,
+                                    };
+                                    match ClientKeyPair::load_or_generate(None) {
+                                        Ok(kp) => {
+                                            pairing_public_key.set(kp.public_key_openssh.clone());
+                                            let fp = key_fingerprint(&kp);
+                                            pairing_fingerprint_art.set(format_fingerprint_art(&fp));
+                                            pairing_fingerprint.set(fp);
+                                        }
+                                        Err(e) => {
+                                            pairing_error.set(format!("Key generation failed: {}", e));
+                                        }
+                                    }
+                                }
+                                #[cfg(not(feature = "ssh"))]
+                                {
+                                    pairing_error.set("SSH feature not enabled".to_string());
+                                }
+                                pairing_step.set(crate::components::pairing_dialog::PairingStep::ShowKey);
+                                pairing_field.set(crate::components::pairing_dialog::PairingField::Host);
+                                pairing_host.set(String::new());
+                                pairing_port.set("2222".to_string());
+                                show_pairing.set(true);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3210,6 +3361,7 @@ mod tui_component {
                     && !show_api_key_dialog.get()
                     && !show_device_flow.get()
                     && !show_model_selector.get()
+                    && !show_pairing.get()
                     && !sidebar_focused.get(),
                 on_change: move |new_val: String| {
                     input_value.set(new_val.clone());
@@ -3300,6 +3452,15 @@ mod tui_component {
                 model_selector_models: model_selector_models.read().clone(),
                 model_selector_cursor: model_selector_cursor.get(),
                 model_selector_loading: model_selector_loading.get(),
+                show_pairing: show_pairing.get(),
+                pairing_step: pairing_step.read().clone(),
+                pairing_field: pairing_field.read().clone(),
+                pairing_public_key: pairing_public_key.read().clone(),
+                pairing_fingerprint: pairing_fingerprint.read().clone(),
+                pairing_fingerprint_art: pairing_fingerprint_art.read().clone(),
+                pairing_host: pairing_host.read().clone(),
+                pairing_port: pairing_port.read().clone(),
+                pairing_error: pairing_error.read().clone(),
             )
         }
     }
