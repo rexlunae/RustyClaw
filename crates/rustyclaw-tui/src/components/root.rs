@@ -5,11 +5,15 @@
 
 use iocraft::prelude::*;
 
+use crate::components::api_key_dialog::ApiKeyDialog;
 use crate::components::auth_dialog::AuthDialog;
 use crate::components::command_menu::CommandMenu;
+use crate::components::device_flow_dialog::DeviceFlowDialog;
 use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
 use crate::components::messages::Messages;
+use crate::components::model_selector_dialog::ModelSelectorDialog;
+use crate::components::provider_selector_dialog::ProviderSelectorDialog;
 use crate::components::secrets_dialog::{SecretInfo, SecretsDialog};
 use crate::components::sidebar::Sidebar;
 use crate::components::skills_dialog::{SkillInfo, SkillsDialog};
@@ -113,6 +117,33 @@ pub struct RootProps {
     pub show_hatching: bool,
     pub hatching_state: crate::components::hatching_dialog::HatchState,
     pub hatching_agent_name: String,
+
+    // provider selector dialog overlay
+    pub show_provider_selector: bool,
+    pub provider_selector_items: Vec<String>,
+    pub provider_selector_ids: Vec<String>,
+    pub provider_selector_hints: Vec<String>,
+    pub provider_selector_cursor: usize,
+
+    // API key dialog overlay
+    pub show_api_key_dialog: bool,
+    pub api_key_provider_display: String,
+    pub api_key_input_len: usize,
+    pub api_key_help_url: String,
+    pub api_key_help_text: String,
+
+    // device flow dialog overlay
+    pub show_device_flow: bool,
+    pub device_flow_url: String,
+    pub device_flow_code: String,
+    pub device_flow_tick: usize,
+
+    // model selector dialog overlay
+    pub show_model_selector: bool,
+    pub model_selector_provider_display: String,
+    pub model_selector_models: Vec<String>,
+    pub model_selector_cursor: usize,
+    pub model_selector_loading: bool,
 }
 
 #[component]
@@ -146,6 +177,30 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let show_hatching = props.show_hatching;
     let hatching_state = props.hatching_state.clone();
     let hatching_agent_name = props.hatching_agent_name.clone();
+
+    // Provider / model selection dialog state
+    let show_provider_sel = props.show_provider_selector;
+    let provider_sel_items = std::mem::take(&mut props.provider_selector_items);
+    let provider_sel_ids = std::mem::take(&mut props.provider_selector_ids);
+    let provider_sel_hints = std::mem::take(&mut props.provider_selector_hints);
+    let provider_sel_cursor = props.provider_selector_cursor;
+
+    let show_apikey = props.show_api_key_dialog;
+    let apikey_display = props.api_key_provider_display.clone();
+    let apikey_input_len = props.api_key_input_len;
+    let apikey_help_url = props.api_key_help_url.clone();
+    let apikey_help_text = props.api_key_help_text.clone();
+
+    let show_devflow = props.show_device_flow;
+    let devflow_url = props.device_flow_url.clone();
+    let devflow_code = props.device_flow_code.clone();
+    let devflow_tick = props.device_flow_tick;
+
+    let show_model_sel = props.show_model_selector;
+    let model_sel_display = props.model_selector_provider_display.clone();
+    let model_sel_models = std::mem::take(&mut props.model_selector_models);
+    let model_sel_cursor = props.model_selector_cursor;
+    let model_sel_loading = props.model_selector_loading;
 
     element! {
         View(
@@ -379,6 +434,94 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         HatchingDialog(
                             state: hatching_state,
                             agent_name: hatching_agent_name,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Provider selector dialog overlay ────────────────────────
+            #(if show_provider_sel {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        ProviderSelectorDialog(
+                            providers: provider_sel_items,
+                            provider_ids: provider_sel_ids,
+                            auth_hints: provider_sel_hints,
+                            cursor: provider_sel_cursor,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── API key dialog overlay ──────────────────────────────────
+            #(if show_apikey {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        ApiKeyDialog(
+                            provider_display: apikey_display,
+                            input_len: apikey_input_len,
+                            help_url: apikey_help_url,
+                            help_text: apikey_help_text,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Device flow dialog overlay ──────────────────────────────
+            #(if show_devflow {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        DeviceFlowDialog(
+                            url: devflow_url,
+                            code: devflow_code,
+                            tick: devflow_tick,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Model selector dialog overlay ───────────────────────────
+            #(if show_model_sel {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        ModelSelectorDialog(
+                            provider_display: model_sel_display,
+                            models: model_sel_models,
+                            cursor: model_sel_cursor,
+                            loading: model_sel_loading,
+                            spinner_tick: devflow_tick,
                         )
                     }
                 }.into_any()
