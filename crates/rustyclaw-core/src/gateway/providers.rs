@@ -7,7 +7,8 @@ use super::types::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProbeResult,
     ProviderRequest, ToolCallResult,
 };
-use super::{ServerFrame, ServerFrameType, ServerPayload, WsWriter};
+use super::transport::TransportWriter;
+use super::{ServerFrame, ServerFrameType, ServerPayload};
 use crate::providers;
 use crate::tools;
 
@@ -61,14 +62,14 @@ pub async fn send_with_retry(builder: reqwest::RequestBuilder) -> Result<reqwest
 // ── Streaming helpers ───────────────────────────────────────────────────────
 
 /// Send a single chunk frame as binary.
-pub async fn send_chunk(writer: &mut WsWriter, delta: &str) -> Result<()> {
+pub async fn send_chunk(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
     server::send_chunk(writer, delta)
         .await
         .context("Failed to send chunk frame")
 }
 
 /// Send a thinking_start frame as binary.
-pub async fn send_thinking_start(writer: &mut WsWriter) -> Result<()> {
+pub async fn send_thinking_start(writer: &mut dyn TransportWriter) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThinkingStart,
         payload: ServerPayload::ThinkingStart,
@@ -79,7 +80,7 @@ pub async fn send_thinking_start(writer: &mut WsWriter) -> Result<()> {
 }
 
 /// Send a thinking_delta frame as binary.
-pub async fn send_thinking_delta(writer: &mut WsWriter, delta: &str) -> Result<()> {
+pub async fn send_thinking_delta(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThinkingDelta,
         payload: ServerPayload::ThinkingDelta {
@@ -92,7 +93,7 @@ pub async fn send_thinking_delta(writer: &mut WsWriter, delta: &str) -> Result<(
 }
 
 /// Send a thinking_end frame as binary.
-pub async fn send_thinking_end(writer: &mut WsWriter, _summary: Option<&str>) -> Result<()> {
+pub async fn send_thinking_end(writer: &mut dyn TransportWriter, _summary: Option<&str>) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThinkingEnd,
         payload: ServerPayload::ThinkingEnd,
@@ -103,7 +104,7 @@ pub async fn send_thinking_end(writer: &mut WsWriter, _summary: Option<&str>) ->
 }
 
 /// Send the response_done sentinel frame as binary.
-pub async fn send_response_done(writer: &mut WsWriter) -> Result<()> {
+pub async fn send_response_done(writer: &mut dyn TransportWriter) -> Result<()> {
     server::send_response_done(writer, true)
         .await
         .context("Failed to send response_done frame")
@@ -338,7 +339,7 @@ pub async fn compact_conversation(
     http: &reqwest::Client,
     resolved: &mut ProviderRequest,
     context_limit: usize,
-    writer: &mut WsWriter,
+    writer: &mut dyn TransportWriter,
 ) -> Result<()> {
     let msgs = &resolved.messages;
     if msgs.len() < 4 {
@@ -1061,7 +1062,7 @@ pub async fn call_openai_with_tools(
 pub async fn call_anthropic_with_tools(
     http: &reqwest::Client,
     req: &ProviderRequest,
-    mut writer: Option<&mut WsWriter>,
+    mut writer: Option<&mut dyn TransportWriter>,
 ) -> Result<ModelResponse> {
     use futures_util::StreamExt;
 
@@ -1126,7 +1127,7 @@ pub async fn call_anthropic_with_tools(
     // Send immediate "waiting" indicator BEFORE the HTTP request
     // This is where the model processing time is spent
     if let Some(ref mut w) = writer {
-        server::send_stream_start(w).await?;
+        server::send_stream_start(*w).await?;
     }
 
     let api_key = req.api_key.as_deref().unwrap_or("");

@@ -63,16 +63,24 @@
 //! ```
 
 use super::protocol::{ClientFrame, ServerFrame, deserialize_frame, serialize_frame};
-use super::transport::{PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter};
-use anyhow::{Context, Result};
+use super::transport::{PeerInfo, Transport, TransportReader, TransportType, TransportWriter};
+use anyhow::Result;
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+#[cfg(feature = "ssh")]
+use anyhow::Context;
+#[cfg(feature = "ssh")]
+use std::collections::HashMap;
+#[cfg(feature = "ssh")]
+use std::net::SocketAddr;
+#[cfg(feature = "ssh")]
+use std::sync::Arc;
+#[cfg(feature = "ssh")]
 use tokio::sync::{Mutex, mpsc};
-use tracing::{debug, error, info, warn};
+#[cfg(feature = "ssh")]
+use tracing::{error, info, warn};
 
 #[cfg(feature = "ssh")]
 use russh::server::{Auth, Handler, Msg, Server, Session};

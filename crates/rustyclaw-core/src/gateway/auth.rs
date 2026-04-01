@@ -1,15 +1,12 @@
 use anyhow::Result;
-use futures_util::StreamExt;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, instrument, warn};
 
-use super::protocol::server;
+use super::transport::TransportReader;
 use super::{ClientFrameType, ClientPayload, CopilotSession};
 use crate::providers;
 
@@ -138,50 +135,33 @@ pub async fn resolve_bearer_token(
 
 /// Wait for an `auth_response` frame from the client.
 ///
-/// Reads WebSocket binary messages until we get a frame with
+/// Reads frames from the transport until we get a frame with
 /// `ClientFrameType::AuthResponse`, or the connection drops.
 #[instrument(skip(reader))]
-pub async fn wait_for_auth_response<S>(
-    reader: &mut futures_util::stream::SplitStream<WebSocketStream<S>>,
-) -> Result<String>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
+pub async fn wait_for_auth_response(
+    reader: &mut dyn TransportReader,
+) -> Result<String> {
     debug!("Waiting for auth_response frame");
-    while let Some(msg) = reader.next().await {
-        match msg {
-            Ok(Message::Binary(data)) => {
-                // Deserialize bincode frame
-                match server::parse_client_frame(&data) {
-                    Ok(frame) => {
-                        if frame.frame_type == ClientFrameType::AuthResponse {
-                            if let ClientPayload::AuthResponse { code } = frame.payload {
-                                debug!("Received valid auth_response");
-                                return Ok(code);
-                            }
-                            anyhow::bail!("AuthResponse frame has wrong payload type");
-                        }
-                        // Ignore non-auth frames during the handshake.
+    loop {
+        match reader.recv().await {
+            Ok(Some(frame)) => {
+                if frame.frame_type == ClientFrameType::AuthResponse {
+                    if let ClientPayload::AuthResponse { code } = frame.payload {
+                        debug!("Received valid auth_response");
+                        return Ok(code);
                     }
-                    Err(e) => {
-                        warn!(bytes = data.len(), error = %e, "Failed to parse client frame during auth handshake");
-                        // Continue waiting for valid frame
-                    }
+                    anyhow::bail!("AuthResponse frame has wrong payload type");
                 }
+                // Ignore non-auth frames during the handshake.
             }
-            Ok(Message::Close(_)) => {
+            Ok(None) => {
                 warn!("Client disconnected during authentication");
                 anyhow::bail!("Client disconnected during authentication");
             }
             Err(e) => {
-                warn!(error = %e, "WebSocket error during authentication");
-                anyhow::bail!("WebSocket error during authentication: {}", e);
-            }
-            _ => {
-                // Ignore ping/pong/text
+                warn!(error = %e, "Transport error during authentication");
+                anyhow::bail!("Transport error during authentication: {}", e);
             }
         }
     }
-    warn!("Connection closed before authentication completed");
-    anyhow::bail!("Connection closed before authentication completed")
 }
