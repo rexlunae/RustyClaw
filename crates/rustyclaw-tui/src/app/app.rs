@@ -30,6 +30,7 @@ use crate::gateway_client;
 
 /// Events pushed from the gateway reader into the iocraft render component.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) enum GwEvent {
     Disconnected(String),
     AuthChallenge,

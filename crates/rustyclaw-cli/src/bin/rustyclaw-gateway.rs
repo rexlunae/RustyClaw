@@ -419,7 +419,7 @@ async fn main() -> Result<()> {
 ///
 /// This mode is used when the gateway is invoked via OpenSSH's subsystem
 /// mechanism. Instead of listening on TCP, we read/write frames on stdin/stdout.
-async fn run_ssh_stdio_mode(config: Config, args: RunArgs) -> Result<()> {
+async fn run_ssh_stdio_mode(config: Config, _args: RunArgs) -> Result<()> {
     use rustyclaw_core::gateway::{StdioTransport, Transport};
     
     // Get username from SSH environment
@@ -457,7 +457,7 @@ async fn run_ssh_stdio_mode(config: Config, args: RunArgs) -> Result<()> {
         std::sync::Arc::new(tokio::sync::Mutex::new(vault));
 
     // ── Resolve model context ────────────────────────────────────────────
-    let model_ctx = {
+    let _model_ctx = {
         let env_key = std::env::var("RUSTYCLAW_MODEL_API_KEY").ok();
 
         if let Some(ref key) = env_key {
@@ -480,7 +480,7 @@ async fn run_ssh_stdio_mode(config: Config, args: RunArgs) -> Result<()> {
     if let Some(url) = config.clawhub_url.as_deref() {
         sm.set_registry(url, config.clawhub_token.clone());
     }
-    let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
+    let _shared_skills: rustyclaw_core::gateway::SharedSkillManager =
         std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
     // Set up cancellation
@@ -523,7 +523,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 return Ok(());
             }
             
-            println!("{}", t::header("Authorized Clients"));
+            println!("{}", t::heading("Authorized Clients"));
             println!();
             
             for (i, client) in clients.clients.iter().enumerate() {
@@ -559,7 +559,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                     );
                 }
                 Err(e) => {
-                    eprintln!("{} Failed to add client: {}", t::icon_err(""), e);
+                    eprintln!("{} Failed to add client: {}", t::icon_fail(""), e);
                     std::process::exit(1);
                 }
             }
@@ -577,52 +577,42 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 Ok(false) => {
                     eprintln!(
                         "{} No client found with fingerprint: {}",
-                        t::icon_err(""),
+                        t::icon_fail(""),
                         fingerprint
                     );
                     std::process::exit(1);
                 }
                 Err(e) => {
-                    eprintln!("{} Failed to remove client: {}", t::icon_err(""), e);
+                    eprintln!("{} Failed to remove client: {}", t::icon_fail(""), e);
                     std::process::exit(1);
                 }
             }
         }
         
         PairCommands::Qr { host } => {
-            #[cfg(feature = "qr")]
-            {
-                use rustyclaw_core::pairing::{PairingData, generate_pairing_qr_ascii};
-                
-                // Generate gateway pairing data
-                // For now, we use a placeholder key - in production, this would be the host key's public part
-                let data = PairingData::gateway(
-                    "ssh-ed25519 (host key would go here)",
-                    &host,
-                    Some("RustyClaw Gateway".to_string()),
-                );
-                
-                match generate_pairing_qr_ascii(&data) {
-                    Ok(qr) => {
-                        println!("{}", t::header("Gateway Pairing QR Code"));
-                        println!();
-                        println!("{}", qr);
-                        println!();
-                        println!("Scan this QR code with a RustyClaw client to pair.");
-                        println!("Gateway address: {}", t::info(&host));
-                    }
-                    Err(e) => {
-                        eprintln!("{} Failed to generate QR code: {}", t::icon_err(""), e);
-                        std::process::exit(1);
-                    }
-                }
-            }
+            use rustyclaw_core::pairing::{PairingData, generate_pairing_qr_ascii};
             
-            #[cfg(not(feature = "qr"))]
-            {
-                eprintln!("{} QR code feature not enabled", t::icon_err(""));
-                eprintln!("Rebuild with: cargo build --features qr");
-                std::process::exit(1);
+            // Generate gateway pairing data
+            // For now, we use a placeholder key - in production, this would be the host key's public part
+            let data = PairingData::gateway(
+                "ssh-ed25519 (host key would go here)",
+                &host,
+                Some("RustyClaw Gateway".to_string()),
+            );
+            
+            match generate_pairing_qr_ascii(&data) {
+                Ok(qr) => {
+                    println!("{}", t::heading("Gateway Pairing QR Code"));
+                    println!();
+                    println!("{}", qr);
+                    println!();
+                    println!("Scan this QR code with a RustyClaw client to pair.");
+                    println!("Gateway address: {}", t::info(&host));
+                }
+                Err(e) => {
+                    eprintln!("{} Failed to generate QR code: {}", t::icon_fail(""), e);
+                    std::process::exit(1);
+                }
             }
         }
     }
