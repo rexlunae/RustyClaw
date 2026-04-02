@@ -10,18 +10,18 @@
 //! - The main loop selects between client messages and model responses
 //! - Thread switching is allowed while models are running
 
+use crate::gateway::protocol::frames::{ServerFrame, serialize_frame};
+use crate::gateway::transport::TransportWriter;
 use crate::threads::ThreadId;
-use futures_util::Sink;
-use std::pin::Pin;
-use std::task::{Context, Poll};
+use anyhow::Result;
+use async_trait::async_trait;
 use tokio::sync::mpsc;
-use tokio_tungstenite::tungstenite::Message;
 
 /// A message from a spawned model task back to the main connection handler.
 #[derive(Debug, Clone)]
 pub enum ModelTaskMessage {
-    /// A raw WebSocket message to send to the client
-    RawMessage(Message),
+    /// A serialized frame to send to the client.
+    Frame(Vec<u8>),
     
     /// The model task completed successfully.
     /// The main loop should update thread state.
@@ -49,10 +49,11 @@ pub fn channel() -> (ModelTaskTx, ModelTaskRx) {
     mpsc::channel(256)
 }
 
-/// A sink that sends WebSocket messages through a channel.
+/// A transport writer that sends frames through a channel.
 /// 
-/// This implements `Sink<Message>` so it can be used with `send_frame` and other
-/// functions that expect a WebSocket writer.
+/// This implements `TransportWriter` so it can be used with `send_frame`
+/// and other functions that expect a writer, routing the frames back to
+/// the main connection handler for dispatch.
 pub struct ChannelSink {
     tx: ModelTaskTx,
     thread_id: ThreadId,
@@ -80,29 +81,17 @@ impl ChannelSink {
     }
 }
 
-impl Sink<Message> for ChannelSink {
-    type Error = mpsc::error::SendError<ModelTaskMessage>;
-
-    fn poll_ready(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        // Channel is always ready (bounded but non-blocking poll)
-        Poll::Ready(Ok(()))
+#[async_trait]
+impl TransportWriter for ChannelSink {
+    async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+        let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
+        self.tx.send(ModelTaskMessage::Frame(data))
+            .await
+            .map_err(|_| anyhow::anyhow!("channel closed"))
     }
 
-    fn start_send(self: Pin<&mut Self>, item: Message) -> Result<(), Self::Error> {
-        // Use try_send to avoid blocking
-        self.tx.try_send(ModelTaskMessage::RawMessage(item))
-            .map_err(|e| mpsc::error::SendError(match e {
-                mpsc::error::TrySendError::Full(m) => m,
-                mpsc::error::TrySendError::Closed(m) => m,
-            }))
-    }
-
-    fn poll_flush(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn poll_close(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
+    async fn close(&mut self) -> Result<()> {
+        Ok(())
     }
 }
 

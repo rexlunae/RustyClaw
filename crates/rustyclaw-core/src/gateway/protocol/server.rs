@@ -4,23 +4,14 @@
 
 use super::frames::{
     ClientFrame, SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload, TaskInfoDto,
-    deserialize_frame, serialize_frame,
+    deserialize_frame,
 };
+use crate::gateway::transport::TransportWriter;
 use anyhow::Result;
-use futures_util::SinkExt;
-use tokio_tungstenite::tungstenite::Message;
 
-/// Send a ServerFrame as a binary WebSocket message.
-/// Works with any sink that accepts Binary messages.
-pub async fn send_frame<S>(writer: &mut S, frame: &ServerFrame) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
-    let bytes = serialize_frame(frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-    writer
-        .send(Message::Binary(bytes.into()))
-        .await
-        .map_err(|_e| anyhow::anyhow!("send failed"))
+/// Send a ServerFrame via any transport writer.
+pub async fn send_frame(writer: &mut dyn TransportWriter, frame: &ServerFrame) -> Result<()> {
+    writer.send(frame).await
 }
 
 /// Parse a ClientFrame from binary WebSocket message bytes.
@@ -29,17 +20,14 @@ pub fn parse_client_frame(bytes: &[u8]) -> Result<ClientFrame> {
 }
 
 /// Build and send a hello frame.
-pub async fn send_hello<S>(
-    writer: &mut S,
+pub async fn send_hello(
+    writer: &mut dyn TransportWriter,
     agent: &str,
     settings_dir: &str,
     vault_locked: bool,
     provider: Option<&str>,
     model: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::Hello,
         payload: ServerPayload::Hello {
@@ -54,10 +42,7 @@ where
 }
 
 /// Build and send an auth challenge frame.
-pub async fn send_auth_challenge<S>(writer: &mut S, method: &str) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_auth_challenge(writer: &mut dyn TransportWriter, method: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::AuthChallenge,
         payload: ServerPayload::AuthChallenge {
@@ -68,15 +53,12 @@ where
 }
 
 /// Build and send an auth result frame.
-pub async fn send_auth_result<S>(
-    writer: &mut S,
+pub async fn send_auth_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
     retry: Option<bool>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::AuthResult,
         payload: ServerPayload::AuthResult {
@@ -89,10 +71,7 @@ where
 }
 
 /// Build and send an error frame.
-pub async fn send_error<S>(writer: &mut S, message: &str) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_error(writer: &mut dyn TransportWriter, message: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::Error,
         payload: ServerPayload::Error {
@@ -104,10 +83,7 @@ where
 }
 
 /// Build and send an info frame.
-pub async fn send_info<S>(writer: &mut S, message: &str) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_info(writer: &mut dyn TransportWriter, message: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::Info,
         payload: ServerPayload::Info {
@@ -118,14 +94,11 @@ where
 }
 
 /// Build and send a status frame.
-pub async fn send_status<S>(
-    writer: &mut S,
+pub async fn send_status(
+    writer: &mut dyn TransportWriter,
     status: super::frames::StatusType,
     detail: &str,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::Status,
         payload: ServerPayload::Status {
@@ -137,10 +110,7 @@ where
 }
 
 /// Build and send a vault_unlocked frame.
-pub async fn send_vault_unlocked<S>(writer: &mut S, ok: bool, message: Option<&str>) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_vault_unlocked(writer: &mut dyn TransportWriter, ok: bool, message: Option<&str>) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::VaultUnlocked,
         payload: ServerPayload::VaultUnlocked {
@@ -152,14 +122,11 @@ where
 }
 
 /// Build and send a secrets_list_result frame.
-pub async fn send_secrets_list_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_list_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     entries: Vec<SecretEntryDto>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsListResult,
         payload: ServerPayload::SecretsListResult { ok, entries },
@@ -168,10 +135,7 @@ where
 }
 
 /// Build and send a secrets_store_result frame.
-pub async fn send_secrets_store_result<S>(writer: &mut S, ok: bool, message: &str) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_secrets_store_result(writer: &mut dyn TransportWriter, ok: bool, message: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsStoreResult,
         payload: ServerPayload::SecretsStoreResult {
@@ -183,16 +147,13 @@ where
 }
 
 /// Build and send a secrets_get_result frame.
-pub async fn send_secrets_get_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_get_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     key: &str,
     value: Option<&str>,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsGetResult,
         payload: ServerPayload::SecretsGetResult {
@@ -206,14 +167,11 @@ where
 }
 
 /// Build and send a secrets_delete_result frame.
-pub async fn send_secrets_delete_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_delete_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsDeleteResult,
         payload: ServerPayload::SecretsDeleteResult {
@@ -225,15 +183,12 @@ where
 }
 
 /// Build and send a secrets_peek_result frame.
-pub async fn send_secrets_peek_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_peek_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     fields: Vec<(String, String)>,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsPeekResult,
         payload: ServerPayload::SecretsPeekResult {
@@ -246,14 +201,11 @@ where
 }
 
 /// Build and send a secrets_set_policy_result frame.
-pub async fn send_secrets_set_policy_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_set_policy_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsSetPolicyResult,
         payload: ServerPayload::SecretsSetPolicyResult {
@@ -265,14 +217,11 @@ where
 }
 
 /// Build and send a secrets_set_disabled_result frame.
-pub async fn send_secrets_set_disabled_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_set_disabled_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsSetDisabledResult,
         payload: ServerPayload::SecretsSetDisabledResult {
@@ -284,14 +233,11 @@ where
 }
 
 /// Build and send a secrets_delete_credential_result frame.
-pub async fn send_secrets_delete_credential_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_delete_credential_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsDeleteCredentialResult,
         payload: ServerPayload::SecretsDeleteCredentialResult {
@@ -303,10 +249,7 @@ where
 }
 
 /// Build and send a secrets_has_totp_result frame.
-pub async fn send_secrets_has_totp_result<S>(writer: &mut S, has_totp: bool) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_secrets_has_totp_result(writer: &mut dyn TransportWriter, has_totp: bool) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsHasTotpResult,
         payload: ServerPayload::SecretsHasTotpResult { has_totp },
@@ -315,15 +258,12 @@ where
 }
 
 /// Build and send a secrets_setup_totp_result frame.
-pub async fn send_secrets_setup_totp_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_setup_totp_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     uri: Option<&str>,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsSetupTotpResult,
         payload: ServerPayload::SecretsSetupTotpResult {
@@ -336,14 +276,11 @@ where
 }
 
 /// Build and send a secrets_verify_totp_result frame.
-pub async fn send_secrets_verify_totp_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_verify_totp_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsVerifyTotpResult,
         payload: ServerPayload::SecretsVerifyTotpResult {
@@ -355,14 +292,11 @@ where
 }
 
 /// Build and send a secrets_remove_totp_result frame.
-pub async fn send_secrets_remove_totp_result<S>(
-    writer: &mut S,
+pub async fn send_secrets_remove_totp_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsRemoveTotpResult,
         payload: ServerPayload::SecretsRemoveTotpResult {
@@ -374,16 +308,13 @@ where
 }
 
 /// Build and send a reload_result frame.
-pub async fn send_reload_result<S>(
-    writer: &mut S,
+pub async fn send_reload_result(
+    writer: &mut dyn TransportWriter,
     ok: bool,
     provider: &str,
     model: &str,
     message: Option<&str>,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ReloadResult,
         payload: ServerPayload::ReloadResult {
@@ -397,10 +328,7 @@ where
 }
 
 /// Build and send a chunk frame.
-pub async fn send_chunk<S>(writer: &mut S, delta: &str) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_chunk(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::Chunk,
         payload: ServerPayload::Chunk {
@@ -411,10 +339,7 @@ where
 }
 
 /// Build and send a response done frame.
-pub async fn send_response_done<S>(writer: &mut S, ok: bool) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_response_done(writer: &mut dyn TransportWriter, ok: bool) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ResponseDone,
         payload: ServerPayload::ResponseDone { ok },
@@ -423,10 +348,7 @@ where
 }
 
 /// Build and send a stream start frame.
-pub async fn send_stream_start<S>(writer: &mut S) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_stream_start(writer: &mut dyn TransportWriter) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::StreamStart,
         payload: ServerPayload::StreamStart,
@@ -435,10 +357,7 @@ where
 }
 
 /// Build and send a tool call frame.
-pub async fn send_tool_call<S>(writer: &mut S, id: &str, name: &str, arguments: &str) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_tool_call(writer: &mut dyn TransportWriter, id: &str, name: &str, arguments: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ToolCall,
         payload: ServerPayload::ToolCall {
@@ -451,16 +370,13 @@ where
 }
 
 /// Build and send a tool result frame.
-pub async fn send_tool_result<S>(
-    writer: &mut S,
+pub async fn send_tool_result(
+    writer: &mut dyn TransportWriter,
     id: &str,
     name: &str,
     result: &str,
     is_error: bool,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ToolResult,
         payload: ServerPayload::ToolResult {
@@ -474,15 +390,12 @@ where
 }
 
 /// Build and send a tool approval request frame.
-pub async fn send_tool_approval_request<S>(
-    writer: &mut S,
+pub async fn send_tool_approval_request(
+    writer: &mut dyn TransportWriter,
     id: &str,
     name: &str,
     arguments: &str,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ToolApprovalRequest,
         payload: ServerPayload::ToolApprovalRequest {
@@ -495,14 +408,11 @@ where
 }
 
 /// Build and send a user-prompt request frame (for the `ask_user` tool).
-pub async fn send_user_prompt_request<S>(
-    writer: &mut S,
+pub async fn send_user_prompt_request(
+    writer: &mut dyn TransportWriter,
     id: &str,
     prompt: &crate::user_prompt_types::UserPrompt,
-) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::UserPromptRequest,
         payload: ServerPayload::UserPromptRequest {
@@ -514,10 +424,7 @@ where
 }
 
 /// Build and send a tasks update frame.
-pub async fn send_tasks_update<S>(writer: &mut S, tasks: Vec<TaskInfoDto>) -> Result<()>
-where
-    S: SinkExt<Message> + Unpin,
-{
+pub async fn send_tasks_update(writer: &mut dyn TransportWriter, tasks: Vec<TaskInfoDto>) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::TasksUpdate,
         payload: ServerPayload::TasksUpdate { tasks },

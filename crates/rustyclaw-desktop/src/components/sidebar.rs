@@ -102,8 +102,8 @@ pub fn Sidebar(props: SidebarProps) -> Element {
             p { class: "menu-label", "Sessions" }
             
             Button {
-                color: Color::Primary,
-                size: Size::Small,
+                color: BulmaColor::Primary,
+                size: BulmaSize::Small,
                 fullwidth: true,
                 onclick: move |_| props.on_new_thread.call(()),
                 
@@ -149,8 +149,8 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 style: "margin-top: auto; padding-top: 1rem; border-top: 1px solid #dbdbdb;",
                 
                 Button {
-                    color: Color::Light,
-                    size: Size::Small,
+                    color: BulmaColor::Light,
+                    size: BulmaSize::Small,
                     fullwidth: true,
                     onclick: move |_| props.on_settings.call(()),
                     

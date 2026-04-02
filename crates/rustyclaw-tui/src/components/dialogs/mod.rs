@@ -55,6 +55,20 @@ pub struct FetchModelsLoading {
     pub tick: usize,
 }
 
+// ── Device flow ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct DeviceFlowState {
+    /// Which provider initiated the flow (e.g. "github-copilot")
+    pub provider: String,
+    /// Verification URL the user should visit
+    pub url: String,
+    /// The one-time user code to enter on that page
+    pub code: String,
+    /// Spinner tick for the "waiting…" animation
+    pub tick: usize,
+}
+
 // ── Credentials ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

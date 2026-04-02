@@ -22,7 +22,7 @@ rustyclaw-core = { path = "../rustyclaw-core", default-features = false }
 # Dioxus framework
 # Note: "desktop" feature requires GTK dev libraries (libgtk-3-dev on Debian/Ubuntu)
 # For webview-based desktop: libwebkit2gtk-4.0-dev
-dioxus = { version = "0.6", features = ["desktop"] }
+dioxus = { version = "0.7", features = ["desktop"] }
 dioxus-bulma = "0.7.2"
 
 # UUID generation for message IDs

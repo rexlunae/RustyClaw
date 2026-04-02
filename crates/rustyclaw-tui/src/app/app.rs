@@ -98,6 +98,43 @@ pub(crate) enum GwEvent {
     },
     /// Hatching identity generated
     HatchingResponse(String),
+    /// Open the provider selector dialog
+    ShowProviderSelector {
+        providers: Vec<String>,
+        provider_ids: Vec<String>,
+        auth_hints: Vec<String>,
+    },
+    /// Open the API key input dialog
+    PromptApiKey {
+        provider: String,
+        provider_display: String,
+        help_url: String,
+        help_text: String,
+    },
+    /// Show the device flow verification dialog
+    DeviceFlowCode {
+        provider: String,
+        url: String,
+        code: String,
+    },
+    /// Device flow completed — dismiss dialog and store token
+    DeviceFlowDone,
+    /// Device flow succeeded — store token and proceed to model selection
+    DeviceFlowToken {
+        provider: String,
+        token: String,
+    },
+    /// Open the model selector dialog
+    ShowModelSelector {
+        provider: String,
+        provider_display: String,
+        models: Vec<String>,
+    },
+    /// Model fetch is in progress (show loading spinner)
+    FetchModelsLoading {
+        provider: String,
+        provider_display: String,
+    },
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -158,6 +195,20 @@ pub(crate) enum UserInput {
     HatchingRequest,
     /// Hatching response received - save to SOUL.md
     HatchingComplete(String),
+    /// User selected a provider from the selector dialog
+    SelectProvider(String),
+    /// User submitted an API key in the dialog
+    SubmitApiKey {
+        provider: String,
+        key: String,
+    },
+    /// User selected a model from the selector dialog
+    SelectModel {
+        provider: String,
+        model: String,
+    },
+    /// Cancel the current provider-flow dialog
+    CancelProviderFlow,
     Quit,
 }
 
@@ -801,6 +852,30 @@ impl App {
                                 }
                             });
                         }
+                        CommandAction::ShowProviderSelector => {
+                            // Build the provider list and send it to the UI
+                            let providers: Vec<String> = rustyclaw_core::providers::PROVIDERS
+                                .iter()
+                                .map(|p| p.display.to_string())
+                                .collect();
+                            let ids: Vec<String> = rustyclaw_core::providers::PROVIDERS
+                                .iter()
+                                .map(|p| p.id.to_string())
+                                .collect();
+                            let hints: Vec<String> = rustyclaw_core::providers::PROVIDERS
+                                .iter()
+                                .map(|p| match p.auth_method {
+                                    rustyclaw_core::providers::AuthMethod::ApiKey => "apikey".to_string(),
+                                    rustyclaw_core::providers::AuthMethod::DeviceFlow => "deviceflow".to_string(),
+                                    rustyclaw_core::providers::AuthMethod::None => "none".to_string(),
+                                })
+                                .collect();
+                            let _ = gw_tx.send(GwEvent::ShowProviderSelector {
+                                providers,
+                                provider_ids: ids,
+                                auth_hints: hints,
+                            });
+                        }
                         _ => {}
                     }
                 }
@@ -1007,6 +1082,335 @@ impl App {
                     } else {
                         tracing::info!("Saved hatched identity to {:?}", soul_path);
                     }
+                }
+                Ok(UserInput::SelectProvider(provider_id)) => {
+                    // User picked a provider from the selector dialog.
+                    // Check if auth is needed and route accordingly.
+                    let def = rustyclaw_core::providers::provider_by_id(&provider_id);
+                    if let Some(def) = def {
+                        match def.auth_method {
+                            rustyclaw_core::providers::AuthMethod::None => {
+                                // No auth needed — go straight to model fetch.
+                                // Update config first.
+                                let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                                config.model = Some(rustyclaw_core::config::ModelProvider {
+                                    provider: provider_id.clone(),
+                                    model: existing_model,
+                                    base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                });
+                                let _ = config.save(None);
+                                // Reload gateway
+                                if let Some(ref mut sink) = ws_sink {
+                                    use futures_util::SinkExt;
+                                    let frame = ClientFrame {
+                                        frame_type: ClientFrameType::Reload,
+                                        payload: ClientPayload::Reload,
+                                    };
+                                    if let Ok(data) = serialize_frame(&frame) {
+                                        let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                    }
+                                }
+                                // Trigger model selector (show loading)
+                                let display = def.display.to_string();
+                                let pid = provider_id.clone();
+                                let _ = gw_tx.send(GwEvent::FetchModelsLoading {
+                                    provider: pid.clone(),
+                                    provider_display: display.clone(),
+                                });
+                                let gw_tx2 = gw_tx.clone();
+                                let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                                tokio::spawn(async move {
+                                    match rustyclaw_core::providers::fetch_models(&pid, None, base.as_deref()).await {
+                                        Ok(models) => {
+                                            let _ = gw_tx2.send(GwEvent::ShowModelSelector {
+                                                provider: pid,
+                                                provider_display: display,
+                                                models,
+                                            });
+                                        }
+                                        Err(e) => {
+                                            let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                        }
+                                    }
+                                });
+                            }
+                            rustyclaw_core::providers::AuthMethod::ApiKey => {
+                                // Check if we already have a key stored
+                                let has_key = def.secret_key.and_then(|sk| {
+                                    secrets_manager
+                                        .get_secret(sk, true)
+                                        .ok()
+                                        .flatten()
+                                        .or_else(|| std::env::var(sk).ok())
+                                });
+                                if has_key.is_some() {
+                                    // Key exists — set provider and fetch models
+                                    let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                                    config.model = Some(rustyclaw_core::config::ModelProvider {
+                                        provider: provider_id.clone(),
+                                        model: existing_model,
+                                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                    });
+                                    let _ = config.save(None);
+                                    if let Some(ref mut sink) = ws_sink {
+                                        use futures_util::SinkExt;
+                                        let frame = ClientFrame {
+                                            frame_type: ClientFrameType::Reload,
+                                            payload: ClientPayload::Reload,
+                                        };
+                                        if let Ok(data) = serialize_frame(&frame) {
+                                            let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                        }
+                                    }
+                                    let display = def.display.to_string();
+                                    let pid = provider_id.clone();
+                                    let key = has_key;
+                                    let _ = gw_tx.send(GwEvent::FetchModelsLoading {
+                                        provider: pid.clone(),
+                                        provider_display: display.clone(),
+                                    });
+                                    let gw_tx2 = gw_tx.clone();
+                                    let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                                    tokio::spawn(async move {
+                                        match rustyclaw_core::providers::fetch_models(&pid, key.as_deref(), base.as_deref()).await {
+                                            Ok(models) => {
+                                                let _ = gw_tx2.send(GwEvent::ShowModelSelector {
+                                                    provider: pid,
+                                                    provider_display: display,
+                                                    models,
+                                                });
+                                            }
+                                            Err(e) => {
+                                                let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    // No key — prompt for one
+                                    let _ = gw_tx.send(GwEvent::PromptApiKey {
+                                        provider: provider_id.clone(),
+                                        provider_display: def.display.to_string(),
+                                        help_url: def.help_url.unwrap_or("").to_string(),
+                                        help_text: def.help_text.unwrap_or("").to_string(),
+                                    });
+                                }
+                            }
+                            rustyclaw_core::providers::AuthMethod::DeviceFlow => {
+                                // Check if we already have a token stored
+                                let has_token = def.secret_key.and_then(|sk| {
+                                    secrets_manager
+                                        .get_secret(sk, true)
+                                        .ok()
+                                        .flatten()
+                                        .or_else(|| std::env::var(sk).ok())
+                                });
+                                if has_token.is_some() {
+                                    // Token exists — set provider and fetch models
+                                    let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                                    config.model = Some(rustyclaw_core::config::ModelProvider {
+                                        provider: provider_id.clone(),
+                                        model: existing_model,
+                                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                    });
+                                    let _ = config.save(None);
+                                    if let Some(ref mut sink) = ws_sink {
+                                        use futures_util::SinkExt;
+                                        let frame = ClientFrame {
+                                            frame_type: ClientFrameType::Reload,
+                                            payload: ClientPayload::Reload,
+                                        };
+                                        if let Ok(data) = serialize_frame(&frame) {
+                                            let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                        }
+                                    }
+                                    let display = def.display.to_string();
+                                    let pid = provider_id.clone();
+                                    let token = has_token;
+                                    let _ = gw_tx.send(GwEvent::FetchModelsLoading {
+                                        provider: pid.clone(),
+                                        provider_display: display.clone(),
+                                    });
+                                    let gw_tx2 = gw_tx.clone();
+                                    let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                                    tokio::spawn(async move {
+                                        match rustyclaw_core::providers::fetch_models(&pid, token.as_deref(), base.as_deref()).await {
+                                            Ok(models) => {
+                                                let _ = gw_tx2.send(GwEvent::ShowModelSelector {
+                                                    provider: pid,
+                                                    provider_display: display,
+                                                    models,
+                                                });
+                                            }
+                                            Err(e) => {
+                                                let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    // No token — start device flow
+                                    if let Some(df_config) = def.device_flow {
+                                        let pid = provider_id.clone();
+                                        let display = def.display.to_string();
+                                        let gw_tx2 = gw_tx.clone();
+                                        let _ = gw_tx.send(GwEvent::Info(format!(
+                                            "Starting device flow for {}…", display
+                                        )));
+                                        tokio::spawn(async move {
+                                            match rustyclaw_core::providers::start_device_flow(df_config).await {
+                                                Ok(auth_resp) => {
+                                                    let _ = gw_tx2.send(GwEvent::DeviceFlowCode {
+                                                        provider: pid.clone(),
+                                                        url: auth_resp.verification_uri.clone(),
+                                                        code: auth_resp.user_code.clone(),
+                                                    });
+                                                    // Poll for the token with the interval from the response
+                                                    let interval = std::time::Duration::from_secs(
+                                                        auth_resp.interval.max(5),
+                                                    );
+                                                    let deadline = tokio::time::Instant::now()
+                                                        + std::time::Duration::from_secs(auth_resp.expires_in);
+                                                    loop {
+                                                        tokio::time::sleep(interval).await;
+                                                        if tokio::time::Instant::now() >= deadline {
+                                                            let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
+                                                            let _ = gw_tx2.send(GwEvent::Error(
+                                                                "Device flow timed out — please try again.".to_string(),
+                                                            ));
+                                                            break;
+                                                        }
+                                                        match rustyclaw_core::providers::poll_device_token(
+                                                            df_config, &auth_resp.device_code,
+                                                        ).await {
+                                                            Ok(Some(token)) => {
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
+                                                                let _ = gw_tx2.send(GwEvent::Success(format!(
+                                                                    "✓ {} authenticated!", display
+                                                                )));
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowToken {
+                                                                    provider: pid.clone(),
+                                                                    token,
+                                                                });
+                                                                break;
+                                                            }
+                                                            Ok(None) => {
+                                                                // Still pending — continue polling
+                                                            }
+                                                            Err(e) => {
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
+                                                                let _ = gw_tx2.send(GwEvent::Error(format!(
+                                                                    "Device flow failed: {}", e
+                                                                )));
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    let _ = gw_tx2.send(GwEvent::Error(format!(
+                                                        "Failed to start device flow: {}", e
+                                                    )));
+                                                }
+                                            }
+                                        });
+                                    } else {
+                                        let _ = gw_tx.send(GwEvent::Error(
+                                            "Device flow not configured for this provider.".to_string(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(UserInput::SubmitApiKey { provider, key }) => {
+                    // Store the API key in the secrets vault
+                    let secret_key_name = rustyclaw_core::providers::secret_key_for_provider(&provider)
+                        .unwrap_or("API_KEY");
+                    let display = rustyclaw_core::providers::display_name_for_provider(&provider).to_string();
+                    match secrets_manager.store_secret(secret_key_name, &key) {
+                        Ok(()) => {
+                            let _ = gw_tx.send(GwEvent::Success(format!(
+                                "✓ API key for {} stored securely.", display,
+                            )));
+                        }
+                        Err(e) => {
+                            let _ = gw_tx.send(GwEvent::Warning(format!(
+                                "Failed to store API key: {}. Key is set for this session only.", e,
+                            )));
+                        }
+                    }
+                    // Update config with the new provider
+                    let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                    config.model = Some(rustyclaw_core::config::ModelProvider {
+                        provider: provider.clone(),
+                        model: existing_model,
+                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                    });
+                    let _ = config.save(None);
+                    // Reload gateway
+                    if let Some(ref mut sink) = ws_sink {
+                        use futures_util::SinkExt;
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::Reload,
+                            payload: ClientPayload::Reload,
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                        }
+                    }
+                    // Now fetch models
+                    let pid = provider.clone();
+                    let _ = gw_tx.send(GwEvent::FetchModelsLoading {
+                        provider: pid.clone(),
+                        provider_display: display.clone(),
+                    });
+                    let gw_tx2 = gw_tx.clone();
+                    let api_key = Some(key);
+                    let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                    tokio::spawn(async move {
+                        match rustyclaw_core::providers::fetch_models(&pid, api_key.as_deref(), base.as_deref()).await {
+                            Ok(models) => {
+                                let _ = gw_tx2.send(GwEvent::ShowModelSelector {
+                                    provider: pid,
+                                    provider_display: display,
+                                    models,
+                                });
+                            }
+                            Err(e) => {
+                                let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                            }
+                        }
+                    });
+                }
+                Ok(UserInput::SelectModel { provider, model }) => {
+                    // Update config with the selected model
+                    config.model = Some(rustyclaw_core::config::ModelProvider {
+                        provider: provider.clone(),
+                        model: Some(model.clone()),
+                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                    });
+                    if let Err(e) = config.save(None) {
+                        let _ = gw_tx.send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                    } else {
+                        let display = rustyclaw_core::providers::display_name_for_provider(&provider);
+                        let _ = gw_tx.send(GwEvent::Info(format!(
+                            "Model set to {} / {}. Reloading gateway…", display, model,
+                        )));
+                        // Reload gateway so the new provider + model take effect
+                        if let Some(ref mut sink) = ws_sink {
+                            use futures_util::SinkExt;
+                            let frame = ClientFrame {
+                                frame_type: ClientFrameType::Reload,
+                                payload: ClientPayload::Reload,
+                            };
+                            if let Ok(data) = serialize_frame(&frame) {
+                                let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                            }
+                        }
+                    }
+                }
+                Ok(UserInput::CancelProviderFlow) => {
+                    // User cancelled — nothing to do
                 }
                 Ok(UserInput::Quit) => break,
                 Err(sync_mpsc::TryRecvError::Empty) => {}
@@ -1337,6 +1741,33 @@ mod tui_component {
         let mut user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>> =
             hooks.use_state(|| None);
         let mut user_prompt_selected = hooks.use_state(|| 0usize);
+
+        // ── Provider / model selection dialog state ─────────────────────
+        let mut show_provider_selector = hooks.use_state(|| false);
+        let mut provider_selector_items: State<Vec<String>> = hooks.use_state(Vec::new);
+        let mut provider_selector_ids: State<Vec<String>> = hooks.use_state(Vec::new);
+        let mut provider_selector_hints: State<Vec<String>> = hooks.use_state(Vec::new);
+        let mut provider_selector_cursor = hooks.use_state(|| 0usize);
+
+        let mut show_api_key_dialog = hooks.use_state(|| false);
+        let mut api_key_provider = hooks.use_state(|| String::new());
+        let mut api_key_provider_display = hooks.use_state(|| String::new());
+        let mut api_key_input = hooks.use_state(|| String::new());
+        let mut api_key_help_url = hooks.use_state(|| String::new());
+        let mut api_key_help_text = hooks.use_state(|| String::new());
+
+        let mut show_device_flow = hooks.use_state(|| false);
+        let mut device_flow_provider = hooks.use_state(|| String::new());
+        let mut device_flow_url = hooks.use_state(|| String::new());
+        let mut device_flow_code = hooks.use_state(|| String::new());
+        let mut device_flow_tick = hooks.use_state(|| 0usize);
+
+        let mut show_model_selector = hooks.use_state(|| false);
+        let mut model_selector_provider = hooks.use_state(|| String::new());
+        let mut model_selector_provider_display = hooks.use_state(|| String::new());
+        let mut model_selector_models: State<Vec<String>> = hooks.use_state(Vec::new);
+        let mut model_selector_cursor = hooks.use_state(|| 0usize);
+        let mut model_selector_loading = hooks.use_state(|| false);
 
         // ── Thread state (unified tasks + threads) ───────────────────────
         let mut threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
@@ -1754,6 +2185,59 @@ mod tui_component {
                                         // This event is currently unused but defined for
                                         // potential future direct gateway hatching support.
                                     }
+                                    GwEvent::ShowProviderSelector { providers, provider_ids, auth_hints } => {
+                                        provider_selector_items.set(providers);
+                                        provider_selector_ids.set(provider_ids);
+                                        provider_selector_hints.set(auth_hints);
+                                        provider_selector_cursor.set(0);
+                                        show_provider_selector.set(true);
+                                    }
+                                    GwEvent::PromptApiKey { provider, provider_display, help_url, help_text } => {
+                                        api_key_provider.set(provider);
+                                        api_key_provider_display.set(provider_display);
+                                        api_key_input.set(String::new());
+                                        api_key_help_url.set(help_url);
+                                        api_key_help_text.set(help_text);
+                                        show_api_key_dialog.set(true);
+                                    }
+                                    GwEvent::DeviceFlowCode { provider, url, code } => {
+                                        device_flow_provider.set(provider);
+                                        device_flow_url.set(url);
+                                        device_flow_code.set(code);
+                                        device_flow_tick.set(0);
+                                        show_device_flow.set(true);
+                                    }
+                                    GwEvent::DeviceFlowDone => {
+                                        show_device_flow.set(false);
+                                    }
+                                    GwEvent::DeviceFlowToken { provider, token } => {
+                                        // Forward the obtained token to the tokio loop
+                                        // for storage + model fetching, reusing SubmitApiKey.
+                                        if let Ok(guard) = tx_for_history.lock() {
+                                            if let Some(ref tx) = *guard {
+                                                let _ = tx.send(UserInput::SubmitApiKey {
+                                                    provider,
+                                                    key: token,
+                                                });
+                                            }
+                                        }
+                                    }
+                                    GwEvent::FetchModelsLoading { provider, provider_display } => {
+                                        model_selector_provider.set(provider);
+                                        model_selector_provider_display.set(provider_display);
+                                        model_selector_models.set(Vec::new());
+                                        model_selector_cursor.set(0);
+                                        model_selector_loading.set(true);
+                                        show_model_selector.set(true);
+                                    }
+                                    GwEvent::ShowModelSelector { provider, provider_display, models } => {
+                                        model_selector_provider.set(provider);
+                                        model_selector_provider_display.set(provider_display);
+                                        model_selector_models.set(models);
+                                        model_selector_cursor.set(0);
+                                        model_selector_loading.set(false);
+                                        show_model_selector.set(true);
+                                    }
                                 }
                             }
                         }
@@ -1761,6 +2245,11 @@ mod tui_component {
 
                     // Update spinner and elapsed timer
                     spinner_tick.set(spinner_tick.get().wrapping_add(1));
+
+                    // Animate device flow spinner
+                    if show_device_flow.get() {
+                        device_flow_tick.set(device_flow_tick.get().wrapping_add(1));
+                    }
                     
                     // Animate hatching sequence (advance every 8 ticks ≈ 2 seconds)
                     if show_hatching.get() && !hatching_pending.get() {
@@ -1927,6 +2416,142 @@ mod tui_component {
                                             id,
                                             approved,
                                         });
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
+                    // ── Provider selector dialog ────────────────────
+                    if show_provider_selector.get() {
+                        match code {
+                            KeyCode::Esc => {
+                                show_provider_selector.set(false);
+                            }
+                            KeyCode::Up => {
+                                let cur = provider_selector_cursor.get();
+                                if cur > 0 {
+                                    provider_selector_cursor.set(cur - 1);
+                                }
+                            }
+                            KeyCode::Down => {
+                                let cur = provider_selector_cursor.get();
+                                let len = provider_selector_ids.read().len();
+                                if cur + 1 < len {
+                                    provider_selector_cursor.set(cur + 1);
+                                }
+                            }
+                            KeyCode::Enter => {
+                                let cur = provider_selector_cursor.get();
+                                let ids = provider_selector_ids.read().clone();
+                                if let Some(id) = ids.get(cur) {
+                                    show_provider_selector.set(false);
+                                    if let Ok(guard) = tx_for_keys.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.send(UserInput::SelectProvider(id.clone()));
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
+                    // ── API key dialog ──────────────────────────────
+                    if show_api_key_dialog.get() {
+                        match code {
+                            KeyCode::Esc => {
+                                show_api_key_dialog.set(false);
+                                api_key_input.set(String::new());
+                            }
+                            KeyCode::Char(c) => {
+                                let mut val = api_key_input.read().clone();
+                                val.push(c);
+                                api_key_input.set(val);
+                            }
+                            KeyCode::Backspace => {
+                                let mut val = api_key_input.read().clone();
+                                val.pop();
+                                api_key_input.set(val);
+                            }
+                            KeyCode::Enter => {
+                                let key_val = api_key_input.read().clone();
+                                if !key_val.is_empty() {
+                                    let provider = api_key_provider.read().clone();
+                                    show_api_key_dialog.set(false);
+                                    api_key_input.set(String::new());
+                                    if let Ok(guard) = tx_for_keys.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.send(UserInput::SubmitApiKey {
+                                                provider,
+                                                key: key_val,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
+                    // ── Device flow dialog ──────────────────────────
+                    if show_device_flow.get() {
+                        match code {
+                            KeyCode::Esc => {
+                                show_device_flow.set(false);
+                                if let Ok(guard) = tx_for_keys.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::CancelProviderFlow);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
+                    // ── Model selector dialog ───────────────────────
+                    if show_model_selector.get() {
+                        match code {
+                            KeyCode::Esc => {
+                                show_model_selector.set(false);
+                            }
+                            KeyCode::Up => {
+                                if !model_selector_loading.get() {
+                                    let cur = model_selector_cursor.get();
+                                    if cur > 0 {
+                                        model_selector_cursor.set(cur - 1);
+                                    }
+                                }
+                            }
+                            KeyCode::Down => {
+                                if !model_selector_loading.get() {
+                                    let cur = model_selector_cursor.get();
+                                    let len = model_selector_models.read().len();
+                                    if cur + 1 < len {
+                                        model_selector_cursor.set(cur + 1);
+                                    }
+                                }
+                            }
+                            KeyCode::Enter => {
+                                if !model_selector_loading.get() {
+                                    let cur = model_selector_cursor.get();
+                                    let models = model_selector_models.read().clone();
+                                    if let Some(model) = models.get(cur) {
+                                        let provider = model_selector_provider.read().clone();
+                                        show_model_selector.set(false);
+                                        if let Ok(guard) = tx_for_keys.lock() {
+                                            if let Some(ref tx) = *guard {
+                                                let _ = tx.send(UserInput::SelectModel {
+                                                    provider,
+                                                    model: model.clone(),
+                                                });
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -2581,6 +3206,10 @@ mod tui_component {
                     && !show_skills_dialog.get()
                     && !show_tool_perms_dialog.get()
                     && !show_hatching.get()
+                    && !show_provider_selector.get()
+                    && !show_api_key_dialog.get()
+                    && !show_device_flow.get()
+                    && !show_model_selector.get()
                     && !sidebar_focused.get(),
                 on_change: move |new_val: String| {
                     input_value.set(new_val.clone());
@@ -2652,6 +3281,25 @@ mod tui_component {
                 show_hatching: show_hatching.get(),
                 hatching_state: hatching_state.read().clone(),
                 hatching_agent_name: prop_soul_name_for_hatching,
+                show_provider_selector: show_provider_selector.get(),
+                provider_selector_items: provider_selector_items.read().clone(),
+                provider_selector_ids: provider_selector_ids.read().clone(),
+                provider_selector_hints: provider_selector_hints.read().clone(),
+                provider_selector_cursor: provider_selector_cursor.get(),
+                show_api_key_dialog: show_api_key_dialog.get(),
+                api_key_provider_display: api_key_provider_display.read().clone(),
+                api_key_input_len: api_key_input.read().len(),
+                api_key_help_url: api_key_help_url.read().clone(),
+                api_key_help_text: api_key_help_text.read().clone(),
+                show_device_flow: show_device_flow.get(),
+                device_flow_url: device_flow_url.read().clone(),
+                device_flow_code: device_flow_code.read().clone(),
+                device_flow_tick: device_flow_tick.get(),
+                show_model_selector: show_model_selector.get(),
+                model_selector_provider_display: model_selector_provider_display.read().clone(),
+                model_selector_models: model_selector_models.read().clone(),
+                model_selector_cursor: model_selector_cursor.get(),
+                model_selector_loading: model_selector_loading.get(),
             )
         }
     }

@@ -1,10 +1,14 @@
+pub mod api_key_dialog;
 pub mod auth_dialog;
 pub mod command_menu;
+pub mod device_flow_dialog;
 pub mod dialogs;
 pub mod hatching_dialog;
 pub mod input_bar;
 pub mod message_bubble;
 pub mod messages;
+pub mod model_selector_dialog;
+pub mod provider_selector_dialog;
 pub mod root;
 pub mod secrets_dialog;
 pub mod sidebar;

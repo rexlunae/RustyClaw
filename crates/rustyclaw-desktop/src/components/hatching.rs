@@ -148,7 +148,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                     
                     if *step.read() > 1 {
                         Button {
-                            color: Color::Light,
+                            color: BulmaColor::Light,
                             onclick: handle_back,
                             
                             span { class: "icon",
@@ -158,14 +158,14 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                         }
                     } else {
                         Button {
-                            color: Color::Light,
+                            color: BulmaColor::Light,
                             onclick: move |_| props.on_cancel.call(()),
                             "Cancel"
                         }
                     }
                     
                     Button {
-                        color: Color::Primary,
+                        color: BulmaColor::Primary,
                         disabled: *step.read() == 1 && name.read().trim().is_empty(),
                         onclick: handle_next,
                         

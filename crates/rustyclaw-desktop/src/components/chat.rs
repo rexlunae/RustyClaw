@@ -121,7 +121,7 @@ pub fn Chat(props: ChatProps) -> Element {
                         }
                         Control {
                             Button {
-                                color: Color::Primary,
+                                color: BulmaColor::Primary,
                                 loading: is_processing,
                                 disabled: is_processing || input_ref.read().trim().is_empty(),
                                 onclick: handle_submit,

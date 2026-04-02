@@ -2,7 +2,7 @@
 
 use anyhow::{anyhow, Result};
 use futures::{SinkExt, StreamExt};
-use rustyclaw_core::gateway::{ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType};
+use rustyclaw_core::gateway::{ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 use tokio_tungstenite::{connect_async, tungstenite::Message};
@@ -147,22 +147,23 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
     match cmd {
         GatewayCommand::Chat { message } => ClientFrame {
             frame_type: ClientFrameType::Chat,
-            payload: ClientPayload::Chat { message },
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", &message)],
+            },
         },
         GatewayCommand::Auth { code } => ClientFrame {
-            frame_type: ClientFrameType::Auth,
-            payload: ClientPayload::Auth { code },
+            frame_type: ClientFrameType::AuthResponse,
+            payload: ClientPayload::AuthResponse { code },
         },
         GatewayCommand::VaultUnlock { password } => ClientFrame {
-            frame_type: ClientFrameType::VaultUnlock,
-            payload: ClientPayload::VaultUnlock { password },
+            frame_type: ClientFrameType::UnlockVault,
+            payload: ClientPayload::UnlockVault { password },
         },
         GatewayCommand::ToolApprove { id, approved } => ClientFrame {
-            frame_type: ClientFrameType::ToolApproval,
-            payload: ClientPayload::ToolApproval {
+            frame_type: ClientFrameType::ToolApprovalResponse,
+            payload: ClientPayload::ToolApprovalResponse {
                 id,
                 approved,
-                modified_args: None,
             },
         },
         GatewayCommand::ThreadSwitch { thread_id } => ClientFrame {
@@ -179,7 +180,7 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
         },
         GatewayCommand::Cancel => ClientFrame {
             frame_type: ClientFrameType::Cancel,
-            payload: ClientPayload::Cancel,
+            payload: ClientPayload::Empty,
         },
     }
 }

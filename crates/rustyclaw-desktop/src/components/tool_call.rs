@@ -48,7 +48,10 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
             div { 
                 class: "message-header",
                 style: "cursor: pointer; padding: 0.5rem 0.75rem;",
-                onclick: move |_| is_collapsed.set(!*is_collapsed.read()),
+                onclick: move |_| {
+                    let val = *is_collapsed.read();
+                    is_collapsed.set(!val);
+                },
                 
                 span { class: "icon is-small",
                     i { class: "fas fa-wrench" }

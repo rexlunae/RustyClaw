@@ -103,8 +103,8 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                     style: "margin-top: 0.5rem;",
                                     
                                     Button {
-                                        size: Size::Small,
-                                        color: if *copied.read() { Color::Success } else { Color::Light },
+                                        size: BulmaSize::Small,
+                                        color: if *copied.read() { BulmaColor::Success } else { BulmaColor::Light },
                                         onclick: handle_copy,
                                         
                                         span { class: "icon is-small",
@@ -118,8 +118,8 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                             div { style: "margin-top: 0.5rem;",
                                 p { class: "has-text-grey", "No keypair generated" }
                                 Button {
-                                    size: Size::Small,
-                                    color: Color::Primary,
+                                    size: BulmaSize::Small,
+                                    color: BulmaColor::Primary,
                                     onclick: move |_| props.on_generate_key.call(()),
                                     
                                     span { class: "icon is-small",
@@ -210,13 +210,13 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     style: "justify-content: flex-end;",
                     
                     Button {
-                        color: Color::Light,
+                        color: BulmaColor::Light,
                         onclick: move |_| props.on_cancel.call(()),
                         "Cancel"
                     }
                     
                     Button {
-                        color: Color::Primary,
+                        color: BulmaColor::Primary,
                         onclick: move |_| props.on_connect.call(()),
                         
                         span { class: "icon",

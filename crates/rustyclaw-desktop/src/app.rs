@@ -139,7 +139,7 @@ pub fn App() -> Element {
                 // Status bar
                 if let Some(msg) = &state.read().status_message {
                     Notification {
-                        color: Color::Info,
+                        color: BulmaColor::Info,
                         style: "margin: 0; border-radius: 0;",
                         
                         button { 
