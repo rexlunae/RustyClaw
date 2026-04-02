@@ -182,8 +182,6 @@ async fn main() -> Result<()> {
         Some(GatewayCommands::Pair(pair_cmd)) => {
             return handle_pair_command(pair_cmd).await;
         }
-            return Ok(());
-        }
         None => RunArgs::default(),
     };
 
