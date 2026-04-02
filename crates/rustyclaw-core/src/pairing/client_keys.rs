@@ -131,7 +131,7 @@ pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
 
 #[cfg(not(feature = "ssh"))]
 pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
-    let key_data = std::fs::read_to_string(path)
+    let _key_data = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read key file: {}", path.display()))?;
     
     // Parse just enough to extract the public key line

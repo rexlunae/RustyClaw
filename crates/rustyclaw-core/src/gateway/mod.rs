@@ -353,7 +353,7 @@ pub async fn run_gateway(
         None
     };
     // Wrap in shared type so it can be updated when models change
-    let shared_copilot_session: SharedCopilotSession = Arc::new(RwLock::new(copilot_session));
+    let shared_copilot_session: SharedCopilotSession = Arc::new(RwLock::new(copilot_session.clone()));
 
     let model_ctx = model_ctx.map(Arc::new);
     
@@ -460,7 +460,7 @@ pub async fn run_gateway(
     };
     
     #[cfg(not(feature = "ssh"))]
-    let ssh_server: Option<()> = None;
+    let _ssh_server: Option<()> = None;
     let _ = &options.ssh_listen; // Suppress unused warning
 
     info!(address = %addr, "Gateway listening");
@@ -598,9 +598,9 @@ async fn handle_transport_connection(
     shared_model_ctx: SharedModelCtx,
     copilot_session: Option<Arc<CopilotSession>>,
     vault: SharedVault,
-    skill_mgr: SharedSkillManager,
-    task_mgr: SharedTaskManager,
-    observer: Option<SharedObserver>,
+    _skill_mgr: SharedSkillManager,
+    _task_mgr: SharedTaskManager,
+    _observer: Option<SharedObserver>,
     cancel: CancellationToken,
 ) -> Result<()> {
     let peer_info = transport.peer_info().clone();
@@ -612,8 +612,8 @@ async fn handle_transport_connection(
     
     // Thread manager for multi-task conversations
     let threads_path = config.sessions_dir().join("threads.json");
-    let mut thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
-    let mut thread_events_rx = thread_mgr.subscribe();
+    let thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
+    let _thread_events_rx = thread_mgr.subscribe();
     
     // SSH connections are pre-authenticated via public key
     // No TOTP challenge needed
