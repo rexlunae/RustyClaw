@@ -31,9 +31,10 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let on_complete = props.on_complete.clone();
     
     let handle_next = move |_| {
-        if *step.read() == 1 && !name.read().trim().is_empty() {
+        let current_step = *step.read();
+        if current_step == 1 && !name.read().trim().is_empty() {
             step.set(2);
-        } else if *step.read() == 2 {
+        } else if current_step == 2 {
             on_complete.call(HatchingResult {
                 name: name.read().trim().to_string(),
                 personality: if personality.read().trim().is_empty() {
@@ -46,14 +47,18 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     };
     
     let handle_back = move |_| {
-        if *step.read() > 1 {
-            step.set(*step.read() - 1);
+        let current_step = *step.read();
+        if current_step > 1 {
+            step.set(current_step - 1);
         }
     };
     
     if !props.visible {
         return rsx! {};
     }
+    
+    let current_step = *step.read();
+    let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
     
     rsx! {
         div { class: "modal is-active",
@@ -79,17 +84,17 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                         style: "display: flex; justify-content: center; margin-bottom: 1.5rem;",
                         
                         span { 
-                            class: if *step.read() >= 1 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
+                            class: if current_step >= 1 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
                             "1"
                         }
                         span { style: "width: 50px; height: 2px; background: #dbdbdb; align-self: center;" }
                         span { 
-                            class: if *step.read() >= 2 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
+                            class: if current_step >= 2 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
                             "2"
                         }
                     }
                     
-                    match *step.read() {
+                    match current_step {
                         1 => rsx! {
                             div { class: "content",
                                 h4 { "What's your name?" }
@@ -146,7 +151,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                 footer { class: "modal-card-foot",
                     style: "justify-content: space-between;",
                     
-                    if *step.read() > 1 {
+                    if current_step > 1 {
                         Button {
                             color: BulmaColor::Light,
                             onclick: handle_back,
@@ -166,10 +171,10 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                     
                     Button {
                         color: BulmaColor::Primary,
-                        disabled: *step.read() == 1 && name.read().trim().is_empty(),
+                        disabled: is_next_disabled,
                         onclick: handle_next,
                         
-                        if *step.read() == 2 {
+                        if current_step == 2 {
                             span { class: "icon",
                                 i { class: "fas fa-check" }
                             }

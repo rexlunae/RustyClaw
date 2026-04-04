@@ -102,32 +102,30 @@ pub fn Chat(props: ChatProps) -> Element {
             div { class: "input-area",
                 style: "padding: 1rem; border-top: 1px solid #dbdbdb;",
                 
-                Field {
-                    Field_addons { class: "is-expanded",
-                        Control { class: "is-expanded",
-                            textarea {
-                                class: "textarea",
-                                placeholder: "Type a message...",
-                                value: "{input_ref}",
-                                disabled: is_processing,
-                                rows: 2,
-                                onkeypress: handle_keypress,
-                                oninput: move |evt| {
-                                    let value = evt.value();
-                                    input_ref.set(value.clone());
-                                    props.on_input_change.call(value);
-                                },
-                            }
+                Field { addons: true,
+                    Control { expanded: true,
+                        textarea {
+                            class: "textarea",
+                            placeholder: "Type a message...",
+                            value: "{input_ref}",
+                            disabled: is_processing,
+                            rows: 2,
+                            onkeypress: handle_keypress,
+                            oninput: move |evt| {
+                                let value = evt.value();
+                                input_ref.set(value.clone());
+                                props.on_input_change.call(value);
+                            },
                         }
-                        Control {
-                            Button {
-                                color: BulmaColor::Primary,
-                                loading: is_processing,
-                                disabled: is_processing || input_ref.read().trim().is_empty(),
-                                onclick: handle_submit,
-                                span { class: "icon",
-                                    i { class: "fas fa-paper-plane" }
-                                }
+                    }
+                    Control {
+                        Button {
+                            color: BulmaColor::Primary,
+                            loading: is_processing,
+                            disabled: is_processing || input_ref.read().trim().is_empty(),
+                            onclick: handle_submit,
+                            span { class: "icon",
+                                i { class: "fas fa-paper-plane" }
                             }
                         }
                     }

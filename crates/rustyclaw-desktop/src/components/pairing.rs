@@ -162,7 +162,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                             
                             div { class: "column is-8",
                                 Field {
-                                    label: "Host",
+                                    FieldLabel { "Host" }
                                     Control { class: "has-icons-left",
                                         input {
                                             class: "input",
@@ -184,7 +184,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                             
                             div { class: "column is-4",
                                 Field {
-                                    label: "Port",
+                                    FieldLabel { "Port" }
                                     Control {
                                         input {
                                             class: "input",
@@ -240,7 +240,8 @@ pub fn generate_qr_code(data: &str) -> Option<String> {
     
     let mut png_data = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
-    encoder.encode(
+    use image::ImageEncoder;
+    encoder.write_image(
         image.as_raw(),
         image.width(),
         image.height(),

@@ -63,7 +63,7 @@
 //! ```
 
 use super::protocol::{ClientFrame, ServerFrame, deserialize_frame, serialize_frame};
-use super::transport::{PeerInfo, Transport, TransportReader, TransportType, TransportWriter};
+use super::transport::{PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -80,7 +80,10 @@ use std::sync::Arc;
 #[cfg(feature = "ssh")]
 use tokio::sync::{Mutex, mpsc};
 #[cfg(feature = "ssh")]
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
+
+#[cfg(feature = "ssh")]
+use std::path::Path;
 
 #[cfg(feature = "ssh")]
 use russh::server::{Auth, Handler, Msg, Server, Session};

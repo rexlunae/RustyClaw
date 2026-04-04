@@ -8,7 +8,7 @@ mod sidebar;
 mod tool_call;
 
 pub use chat::Chat;
-pub use hatching::HatchingDialog;
+pub use hatching::{HatchingDialog, HatchingResult};
 pub use message::MessageBubble;
 pub use pairing::PairingDialog;
 pub use sidebar::Sidebar;

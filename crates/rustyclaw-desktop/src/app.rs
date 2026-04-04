@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::components::{Chat, HatchingDialog, PairingDialog, Sidebar};
+use crate::components::{Chat, HatchingDialog, HatchingResult, PairingDialog, Sidebar};
 use crate::gateway::{GatewayClient, GatewayEvent};
 use crate::state::{AppState, ChatMessage, ConnectionStatus, MessageRole, ThreadInfo};
 
@@ -152,7 +152,7 @@ pub fn App() -> Element {
                 
                 // Chat area
                 Chat {
-                    messages: state.read().messages.iter().cloned().collect(),
+                    messages: state.read().messages.iter().cloned().collect::<Vec<_>>(),
                     input: state.read().input.clone(),
                     is_processing: state.read().is_processing,
                     is_thinking: state.read().is_thinking,

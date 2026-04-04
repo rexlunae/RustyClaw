@@ -24,7 +24,7 @@ impl GatewayClient {
     /// Connect to a gateway at the given URL.
     pub async fn connect(url: &str) -> Result<Self> {
         let url = Url::parse(url)?;
-        let (ws_stream, _) = connect_async(&url).await?;
+        let (ws_stream, _) = connect_async(url.as_str()).await?;
         let (mut write, mut read) = ws_stream.split();
         
         // Channels for communication
@@ -172,7 +172,7 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
         },
         GatewayCommand::ThreadCreate { label } => ClientFrame {
             frame_type: ClientFrameType::ThreadCreate,
-            payload: ClientPayload::ThreadCreate { label },
+            payload: ClientPayload::ThreadCreate { label: label.unwrap_or_default() },
         },
         GatewayCommand::SecretsList => ClientFrame {
             frame_type: ClientFrameType::SecretsList,
@@ -268,9 +268,9 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
                 .into_iter()
                 .map(|t| ThreadInfoDto {
                     id: t.id,
-                    label: t.label,
+                    label: Some(t.label),
                     description: t.description,
-                    status: t.status,
+                    status: t.status.unwrap_or_default(),
                     is_foreground: t.is_foreground,
                     message_count: t.message_count,
                 })

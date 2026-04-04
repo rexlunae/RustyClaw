@@ -20,7 +20,7 @@ impl Default for ConnectionStatus {
 }
 
 /// A chat message in the conversation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ChatMessage {
     pub id: String,
     pub role: MessageRole,
@@ -38,7 +38,7 @@ pub enum MessageRole {
 }
 
 /// Information about a tool call.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ToolCallInfo {
     pub id: String,
     pub name: String,
@@ -49,7 +49,7 @@ pub struct ToolCallInfo {
 }
 
 /// Thread/session info.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ThreadInfo {
     pub id: u64,
     pub label: Option<String>,
