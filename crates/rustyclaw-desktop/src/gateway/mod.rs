@@ -4,4 +4,4 @@ mod client;
 mod protocol;
 
 pub use client::GatewayClient;
-pub use protocol::GatewayEvent;
+pub use protocol::{GatewayCommand, GatewayEvent};

@@ -5,8 +5,8 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::components::{Chat, HatchingDialog, HatchingResult, PairingDialog, Sidebar};
-use crate::gateway::{GatewayClient, GatewayEvent};
+use crate::components::{Chat, HatchingDialog, HatchingResult, PairingDialog, Sidebar, generate_qr_code};
+use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
 use crate::state::{AppState, ChatMessage, ConnectionStatus, MessageRole, ThreadInfo};
 
 /// Main application component.
@@ -76,7 +76,7 @@ pub fn App() -> Element {
         if let Some(client) = gw {
             spawn(async move {
                 let client_guard = client.lock().await;
-                let _ = client_guard.send(crate::gateway::protocol::GatewayCommand::ThreadCreate { label: None }).await;
+                let _ = client_guard.send(GatewayCommand::ThreadCreate { label: None }).await;
             });
         }
     };
@@ -86,7 +86,7 @@ pub fn App() -> Element {
         if let Some(client) = gw {
             spawn(async move {
                 let client_guard = client.lock().await;
-                let _ = client_guard.send(crate::gateway::protocol::GatewayCommand::ThreadSwitch { thread_id }).await;
+                let _ = client_guard.send(GatewayCommand::ThreadSwitch { thread_id }).await;
             });
         }
         // Clear messages when switching
@@ -165,7 +165,7 @@ pub fn App() -> Element {
         // Dialogs
         HatchingDialog {
             visible: *show_hatching.read(),
-            on_complete: move |result| {
+            on_complete: move |result: HatchingResult| {
                 state.write().agent_name = Some(result.name);
                 show_hatching.set(false);
             },
@@ -191,7 +191,7 @@ pub fn App() -> Element {
                 // Generate keypair (placeholder)
                 public_key.set(Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... desktop-client".to_string()));
                 if let Some(key) = &*public_key.read() {
-                    qr_code_url.set(crate::components::pairing::generate_qr_code(key));
+                    qr_code_url.set(generate_qr_code(key));
                 }
             },
             on_cancel: move |_| show_pairing.set(false),

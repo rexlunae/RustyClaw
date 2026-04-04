@@ -38,7 +38,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
     // Reset copied state after 2 seconds
     use_effect(move || {
         if *copied.read() {
-            let _ = tokio::spawn(async move {
+            spawn(async move {
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                 copied.set(false);
             });
@@ -49,8 +49,9 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
         return rsx! {};
     }
     
+    let public_key = props.public_key.clone();
     let handle_copy = move |_| {
-        if let Some(key) = &props.public_key {
+        if let Some(key) = &public_key {
             // In a real implementation, use clipboard API
             // For now, just mark as copied
             tracing::info!("Copy public key: {}", key);
