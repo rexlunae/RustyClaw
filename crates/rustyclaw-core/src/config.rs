@@ -30,6 +30,52 @@ pub struct SandboxConfig {
     pub allow_paths: Vec<PathBuf>,
 }
 
+/// SSH transport configuration for the gateway.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct SshGatewayConfig {
+    /// Whether the SSH transport is enabled.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Mode: "standalone" (dedicated SSH port) or "subsystem" (OpenSSH subsystem).
+    #[serde(default = "SshGatewayConfig::default_mode")]
+    pub mode: String,
+    /// Bind address for standalone mode (e.g., "0.0.0.0:2222").
+    #[serde(default = "SshGatewayConfig::default_bind")]
+    pub bind: String,
+    /// Path to the SSH host key file.
+    /// Default: `<settings_dir>/ssh_host_key`
+    #[serde(default)]
+    pub host_key: Option<PathBuf>,
+    /// Path to the authorized_clients file.
+    /// Default: `<settings_dir>/authorized_clients`
+    #[serde(default)]
+    pub authorized_keys: Option<PathBuf>,
+}
+
+impl SshGatewayConfig {
+    fn default_mode() -> String {
+        "standalone".to_string()
+    }
+
+    fn default_bind() -> String {
+        "0.0.0.0:2222".to_string()
+    }
+
+    /// Resolve the host key path, falling back to `<settings_dir>/ssh_host_key`.
+    pub fn host_key_path(&self, settings_dir: &std::path::Path) -> PathBuf {
+        self.host_key
+            .clone()
+            .unwrap_or_else(|| settings_dir.join("ssh_host_key"))
+    }
+
+    /// Resolve the authorized_clients path, falling back to `<settings_dir>/authorized_clients`.
+    pub fn authorized_keys_path(&self, settings_dir: &std::path::Path) -> PathBuf {
+        self.authorized_keys
+            .clone()
+            .unwrap_or_else(|| settings_dir.join("authorized_clients"))
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// Root state directory (e.g. `~/.rustyclaw`).
@@ -104,6 +150,9 @@ pub struct Config {
     /// Path to TLS private key file (PEM) for WSS gateway connections.
     #[serde(default)]
     pub tls_key: Option<PathBuf>,
+    /// SSH transport configuration for the gateway.
+    #[serde(default)]
+    pub ssh: Option<SshGatewayConfig>,
     /// Pre-compaction memory flush configuration.
     #[serde(default)]
     pub memory_flush: MemoryFlushConfig,
@@ -262,6 +311,7 @@ impl Default for Config {
             tool_permissions: HashMap::new(),
             tls_cert: None,
             tls_key: None,
+            ssh: None,
             memory_flush: MemoryFlushConfig::default(),
             workspace_context: WorkspaceContextConfig::default(),
             mnemo: None,

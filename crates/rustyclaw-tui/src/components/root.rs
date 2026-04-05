@@ -138,6 +138,7 @@ pub struct RootProps {
     pub device_flow_url: String,
     pub device_flow_code: String,
     pub device_flow_tick: usize,
+    pub device_flow_browser_opened: bool,
 
     // model selector dialog overlay
     pub show_model_selector: bool,
@@ -186,7 +187,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let tool_perms_scroll = props.tool_perms_scroll_offset;
     #[allow(unused_variables)]
     let show_tool_perms = props.show_tool_perms_dialog;
-    
+
     let show_hatching = props.show_hatching;
     let hatching_state = props.hatching_state.clone();
     let hatching_agent_name = props.hatching_agent_name.clone();
@@ -208,6 +209,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let devflow_url = props.device_flow_url.clone();
     let devflow_code = props.device_flow_code.clone();
     let devflow_tick = props.device_flow_tick;
+    let devflow_browser_opened = props.device_flow_browser_opened;
 
     let show_model_sel = props.show_model_selector;
     let model_sel_display = props.model_selector_provider_display.clone();
@@ -524,6 +526,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             url: devflow_url,
                             code: devflow_code,
                             tick: devflow_tick,
+                            browser_opened: devflow_browser_opened,
                         )
                     }
                 }.into_any()

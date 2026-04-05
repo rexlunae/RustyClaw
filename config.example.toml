@@ -21,6 +21,15 @@ use_secrets = true
 # tls_cert = "/path/to/cert.pem"
 # tls_key = "/path/to/key.pem"
 
+# SSH transport configuration for the gateway.
+# Allows clients to connect via SSH instead of WebSocket.
+# [ssh]
+# enabled = true
+# mode = "standalone"                              # "standalone" or "subsystem"
+# bind = "0.0.0.0:2222"                            # Listen address for standalone mode
+# host_key = "/home/user/.rustyclaw/ssh_host_key"  # Auto-generated if missing
+# authorized_keys = "/home/user/.rustyclaw/authorized_clients"
+
 # Messenger configurations
 # [[messengers]]
 # name = "slack"

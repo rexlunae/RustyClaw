@@ -363,12 +363,12 @@ pub async fn run_gateway(
     let shared_copilot_session: SharedCopilotSession = Arc::new(RwLock::new(copilot_session.clone()));
 
     let model_ctx = model_ctx.map(Arc::new);
-    
+
     // Store model info in global runtime context for tool access
     if let Some(ref ctx) = model_ctx {
         crate::runtime_ctx::set_model_info(&ctx.provider, &ctx.model, &ctx.base_url);
     }
-    
+
     let shared_config: SharedConfig = Arc::new(RwLock::new(config.clone()));
     let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
     let rate_limiter = auth::new_rate_limiter();
@@ -477,6 +477,106 @@ pub async fn run_gateway(
     #[cfg(feature = "ssh")]
     if ssh_server.is_some() {
         info!("SSH transport enabled");
+    }
+
+    // ── Start SSH server if configured ──────────────────────────────
+    //
+    // The SSH server runs in a background task and feeds accepted
+    // connections into `handle_connection`, just like WebSocket accepts.
+    #[cfg(feature = "ssh")]
+    {
+        // Determine SSH listen address from CLI option or config
+        let ssh_addr: Option<String> = options.ssh_listen.clone().or_else(|| {
+            config.ssh.as_ref().and_then(|ssh_cfg| {
+                if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
+                    Some(ssh_cfg.bind.clone())
+                } else {
+                    None
+                }
+            })
+        });
+
+        if let Some(ssh_listen) = ssh_addr {
+            let ssh_cfg = {
+                let host_key = options.ssh_host_key.clone().unwrap_or_else(|| {
+                    config.ssh.as_ref()
+                        .map(|s| s.host_key_path(&config.settings_dir))
+                        .unwrap_or_else(|| config.settings_dir.join("ssh_host_key"))
+                });
+                let authorized = options.ssh_authorized_clients.clone().unwrap_or_else(|| {
+                    config.ssh.as_ref()
+                        .map(|s| s.authorized_keys_path(&config.settings_dir))
+                        .unwrap_or_else(|| config.settings_dir.join("authorized_clients"))
+                });
+                ssh::SshConfig {
+                    host_key_path: host_key,
+                    authorized_clients_path: authorized,
+                    allow_password: false,
+                    require_pubkey: true,
+                }
+            };
+
+            match ssh::SshServer::new(ssh_cfg).await {
+                Ok(mut ssh_server) => {
+                    let bind_addr: std::net::SocketAddr = ssh_listen.parse()
+                        .unwrap_or_else(|_| "0.0.0.0:2222".parse().unwrap());
+
+                    if let Err(e) = ssh_server.listen(bind_addr).await {
+                        error!(error = %e, "Failed to start SSH server");
+                    } else {
+                        info!(address = %bind_addr, "SSH server listening");
+
+                        // Spawn a task that accepts SSH connections and handles them
+                        let ssh_config = shared_config.clone();
+                        let ssh_model_ctx = shared_model_ctx.clone();
+                        let ssh_copilot = shared_copilot_session.clone();
+                        let ssh_vault = vault.clone();
+                        let ssh_skills = skill_mgr.clone();
+                        let ssh_tasks = task_mgr.clone();
+                        let ssh_observer = observer.clone();
+                        let ssh_limiter = rate_limiter.clone();
+                        let ssh_cancel = cancel.child_token();
+
+                        tokio::spawn(async move {
+                            loop {
+                                tokio::select! {
+                                    _ = ssh_cancel.cancelled() => break,
+                                    accepted = ssh_server.accept() => {
+                                        match accepted {
+                                            Ok(conn) => {
+                                                let cfg = ssh_config.clone();
+                                                let ctx = ssh_model_ctx.clone();
+                                                let ses = ssh_copilot.clone();
+                                                let v = ssh_vault.clone();
+                                                let sk = ssh_skills.clone();
+                                                let tm = ssh_tasks.clone();
+                                                let obs = ssh_observer.clone();
+                                                let lim = ssh_limiter.clone();
+                                                let cc = ssh_cancel.child_token();
+                                                tokio::spawn(async move {
+                                                    if let Err(err) = handle_connection(
+                                                        conn, cfg, ctx, ses, v, sk, tm, obs, lim, cc,
+                                                    ).await {
+                                                        debug!(error = %err, "SSH connection error");
+                                                    }
+                                                });
+                                            }
+                                            Err(e) => {
+                                                warn!(error = %e, "SSH accept error");
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    error!(error = %e, "Failed to initialize SSH server");
+                }
+            }
+        }
     }
 
     loop {
@@ -846,7 +946,7 @@ async fn send_threads_update(
     if let Ok(sess_mgr) = session_manager().lock() {
         let subagent_kinds = [SessionKind::Subagent, SessionKind::Cron];
         let active_sessions = sess_mgr.list(Some(&subagent_kinds), true, 50);
-        
+
         for session in active_sessions {
             // Generate a unique ID based on session key hash
             let id = {
@@ -892,7 +992,7 @@ async fn send_threads_update(
             foreground_id,
         },
     };
-    
+
     send_frame(writer, &frame).await
 }
 
@@ -921,7 +1021,7 @@ async fn handle_connection(
     // Load from persistent storage or create new with default "Main" thread.
     let threads_path = config.sessions_dir().join("threads.json");
     let mut thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
-    
+
     // Subscribe to thread events for push-based sidebar updates
     let mut thread_events_rx = thread_mgr.subscribe();
 
@@ -1232,7 +1332,7 @@ async fn handle_connection(
 
     // Channel for model task responses (concurrent execution).
     let (_model_task_tx, mut model_task_rx) = concurrent::channel();
-    
+
     // Track active model tasks per thread.
     let mut active_tasks = concurrent::ActiveTasks::new();
 
@@ -1829,24 +1929,24 @@ async fn handle_connection(
                         concurrent::ModelTaskMessage::Done { thread_id, response } => {
                             // Task completed - remove from active tasks
                             active_tasks.remove(&thread_id);
-                            
+
                             // Record assistant response in thread history if provided
                             if let Some(text) = response {
                                 if let Some(thread) = thread_mgr.get_mut(thread_id) {
                                     thread.add_message(crate::threads::MessageRole::Assistant, &text);
                                 }
                             }
-                            
+
                             // Send updated thread list (status may have changed)
                             send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                            
+
                             // Persist thread state
                             let _ = thread_mgr.save_to_file(&threads_path);
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, message } => {
                             // Task failed - remove from active tasks
                             active_tasks.remove(&thread_id);
-                            
+
                             // Send error frame
                             let error_frame = ServerFrame {
                                 frame_type: ServerFrameType::Error,
@@ -1856,7 +1956,7 @@ async fn handle_connection(
                                 },
                             };
                             send_frame(&mut *writer, &error_frame).await?;
-                            
+
                             // Send updated thread list
                             send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
                         }
@@ -2548,4 +2648,79 @@ async fn dispatch_text_message(
     .await?;
     providers::send_response_done(writer).await?;
     Ok(())
+}
+
+/// Run the gateway for a single stdio transport connection.
+///
+/// This is the entry point for `--ssh-stdio` mode: the gateway reads/writes
+/// frames on stdin/stdout (via [`StdioTransport`]) and handles a single
+/// client connection.  All the same auth, chat, and tool logic applies as
+/// with WebSocket connections — SSH-authenticated connections skip TOTP.
+pub async fn run_stdio_gateway(
+    config: Config,
+    model_ctx: Option<ModelContext>,
+    vault: SharedVault,
+    skill_mgr: SharedSkillManager,
+    cancel: CancellationToken,
+) -> Result<()> {
+    // Create task manager
+    let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
+
+    // Create model registry
+    let model_registry = crate::models::create_model_registry();
+
+    // Register the credentials directory for sandbox enforcement
+    tools::set_credentials_dir(config.credentials_dir());
+    tools::set_vault(vault.clone());
+
+    // Initialize sandbox
+    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
+    tools::init_sandbox(
+        sandbox_mode,
+        config.workspace_dir(),
+        config.credentials_dir(),
+        config.sandbox.deny_paths.clone(),
+    );
+
+    // Store model info in global runtime context
+    if let Some(ref ctx) = model_ctx {
+        crate::runtime_ctx::set_model_info(&ctx.provider, &ctx.model, &ctx.base_url);
+    }
+
+    // Initialize Copilot session if needed
+    let copilot_session = if let Some(ref ctx) = model_ctx {
+        init_copilot_session(&ctx.provider, ctx.api_key.as_deref(), &vault).await
+    } else {
+        None
+    };
+    let shared_copilot_session: SharedCopilotSession = Arc::new(RwLock::new(copilot_session));
+
+    let model_ctx = model_ctx.map(Arc::new);
+    let shared_config: SharedConfig = Arc::new(RwLock::new(config));
+    let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx));
+    let rate_limiter = auth::new_rate_limiter();
+
+    // Get username from SSH environment
+    let username = std::env::var("USER")
+        .or_else(|_| std::env::var("SSH_USER"))
+        .ok();
+
+    // Create the stdio transport
+    let transport = StdioTransport::new(username);
+    let conn: Box<dyn transport::Transport> = Box::new(transport);
+
+    // Handle the single connection
+    handle_connection(
+        conn,
+        shared_config,
+        shared_model_ctx,
+        shared_copilot_session,
+        vault,
+        skill_mgr,
+        task_mgr,
+        None, // no observer
+        rate_limiter,
+        cancel,
+    )
+    .await
 }

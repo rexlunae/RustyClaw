@@ -421,15 +421,15 @@ async fn main() -> Result<()> {
 /// mechanism. Instead of listening on TCP, we read/write frames on stdin/stdout.
 async fn run_ssh_stdio_mode(config: Config, _args: RunArgs) -> Result<()> {
     use rustyclaw_core::gateway::{StdioTransport, Transport};
-    
+
     // Get username from SSH environment
     let username = std::env::var("USER")
         .or_else(|_| std::env::var("SSH_USER"))
         .ok();
-    
+
     // Create the stdio transport
     let mut transport = StdioTransport::new(username);
-    
+
     // ── Open the secrets vault ───────────────────────────────────────────
     let vault = {
         let creds_dir = config.credentials_dir();
@@ -495,7 +495,7 @@ async fn run_ssh_stdio_mode(config: Config, _args: RunArgs) -> Result<()> {
     // For now, this is a stub that just logs and exits
     eprintln!("SSH stdio mode not yet fully implemented");
     eprintln!("Transport peer info: {:?}", transport.peer_info());
-    
+
     transport.close().await?;
     Ok(())
 }
@@ -508,13 +508,13 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
         add_authorized_client,
         remove_authorized_client,
     };
-    
+
     let auth_path = default_authorized_clients_path();
-    
+
     match cmd {
         PairCommands::List => {
             let clients = load_authorized_clients(&auth_path)?;
-            
+
             if clients.clients.is_empty() {
                 println!("{}", t::muted("No authorized clients"));
                 println!();
@@ -522,10 +522,10 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 println!("  {} pair add <PUBLIC_KEY> --name <NAME>", t::info("rustyclaw-gateway"));
                 return Ok(());
             }
-            
+
             println!("{}", t::heading("Authorized Clients"));
             println!();
-            
+
             for (i, client) in clients.clients.iter().enumerate() {
                 let name = client.comment.as_deref().unwrap_or("(unnamed)");
                 println!(
@@ -535,7 +535,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                     t::muted(&format!("({})", &client.fingerprint))
                 );
             }
-            
+
             println!();
             println!(
                 "{} {}",
@@ -543,7 +543,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 auth_path.display()
             );
         }
-        
+
         PairCommands::Add { key, name } => {
             match add_authorized_client(&auth_path, &key, name.as_deref()) {
                 Ok(client) => {
@@ -564,7 +564,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 }
             }
         }
-        
+
         PairCommands::Remove { fingerprint } => {
             match remove_authorized_client(&auth_path, &fingerprint) {
                 Ok(true) => {
@@ -588,10 +588,10 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 }
             }
         }
-        
+
         PairCommands::Qr { host } => {
             use rustyclaw_core::pairing::{PairingData, generate_pairing_qr_ascii};
-            
+
             // Generate gateway pairing data
             // For now, we use a placeholder key - in production, this would be the host key's public part
             let data = PairingData::gateway(
@@ -599,7 +599,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 &host,
                 Some("RustyClaw Gateway".to_string()),
             );
-            
+
             match generate_pairing_qr_ascii(&data) {
                 Ok(qr) => {
                     println!("{}", t::heading("Gateway Pairing QR Code"));
@@ -616,6 +616,6 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
             }
         }
     }
-    
+
     Ok(())
 }

@@ -619,22 +619,56 @@ pub struct DeviceAuthResponse {
 }
 
 /// Response from the token endpoint.
+///
+/// Uses a flat struct with all-optional fields for robust deserialization.
+/// GitHub's token endpoint returns either a success object (with
+/// `access_token`) or an error object (with `error`), but
+/// `#[serde(untagged)]` enums are fragile and silently fail when the
+/// response shape differs even slightly from what's expected.
 #[derive(Debug, Deserialize)]
-#[serde(untagged)]
+pub struct RawTokenResponse {
+    pub access_token: Option<String>,
+    #[serde(default)]
+    pub refresh_token: Option<String>,
+    #[serde(default)]
+    pub expires_in: Option<u64>,
+    pub token_type: Option<String>,
+    pub error: Option<String>,
+    #[serde(default)]
+    pub error_description: Option<String>,
+}
+
+/// Interpreted token response for pattern-matching callers.
+#[derive(Debug)]
 pub enum TokenResponse {
     Success {
         access_token: String,
-        #[serde(default)]
         refresh_token: Option<String>,
-        #[serde(default)]
         expires_in: Option<u64>,
         token_type: String,
     },
     Pending {
         error: String,
-        #[serde(default)]
         error_description: Option<String>,
     },
+}
+
+impl From<RawTokenResponse> for TokenResponse {
+    fn from(raw: RawTokenResponse) -> Self {
+        if let Some(access_token) = raw.access_token {
+            TokenResponse::Success {
+                access_token,
+                token_type: raw.token_type.unwrap_or_else(|| "bearer".to_string()),
+                refresh_token: raw.refresh_token,
+                expires_in: raw.expires_in,
+            }
+        } else {
+            TokenResponse::Pending {
+                error: raw.error.unwrap_or_else(|| "unknown".to_string()),
+                error_description: raw.error_description,
+            }
+        }
+    }
 }
 
 /// Initiate OAuth device flow and return device code and verification URL.
@@ -699,14 +733,23 @@ pub async fn poll_device_token(
         .await
         .map_err(|e| format!("Failed to read response: {}", e))?;
 
-    // Try to parse as JSON
-    let token_response: TokenResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse token response: {}", e))?;
+    tracing::debug!("Device flow token poll response: {}", body);
+
+    // Parse as a flat struct first, then interpret.  This avoids the
+    // fragility of serde(untagged) which silently fails when the
+    // response shape is slightly unexpected.
+    let raw: RawTokenResponse = serde_json::from_str(&body)
+        .map_err(|e| format!("Failed to parse token response ({}): body={}", e, body))?;
+    let token_response: TokenResponse = raw.into();
 
     match token_response {
-        TokenResponse::Success { access_token, .. } => Ok(Some(access_token)),
+        TokenResponse::Success { access_token, .. } => {
+            tracing::info!("Device flow authentication succeeded");
+            Ok(Some(access_token))
+        }
         TokenResponse::Pending { error, .. } => {
             if error == "authorization_pending" || error == "slow_down" {
+                tracing::trace!("Device flow still pending: {}", error);
                 Ok(None) // Still waiting for user authorization
             } else {
                 Err(format!("Authentication failed: {}", error))
@@ -842,7 +885,8 @@ mod tests {
     fn test_token_response_parsing() {
         // Test successful token response
         let json = r#"{"access_token":"test_token","token_type":"bearer"}"#;
-        let response: TokenResponse = serde_json::from_str(json).unwrap();
+        let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
+        let response: TokenResponse = raw.into();
         match response {
             TokenResponse::Success { access_token, .. } => {
                 assert_eq!(access_token, "test_token");
@@ -852,10 +896,46 @@ mod tests {
 
         // Test pending response
         let json = r#"{"error":"authorization_pending"}"#;
-        let response: TokenResponse = serde_json::from_str(json).unwrap();
+        let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
+        let response: TokenResponse = raw.into();
         match response {
             TokenResponse::Pending { error, .. } => {
                 assert_eq!(error, "authorization_pending");
+            }
+            _ => panic!("Expected Pending variant"),
+        }
+
+        // Test success response with extra fields (e.g. scope)
+        let json = r#"{"access_token":"gho_xxx","token_type":"bearer","scope":"read:user"}"#;
+        let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
+        let response: TokenResponse = raw.into();
+        match response {
+            TokenResponse::Success { access_token, .. } => {
+                assert_eq!(access_token, "gho_xxx");
+            }
+            _ => panic!("Expected Success variant"),
+        }
+
+        // Test success response even if token_type is missing
+        let json = r#"{"access_token":"gho_xxx"}"#;
+        let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
+        let response: TokenResponse = raw.into();
+        match response {
+            TokenResponse::Success { access_token, token_type, .. } => {
+                assert_eq!(access_token, "gho_xxx");
+                assert_eq!(token_type, "bearer"); // defaults to "bearer"
+            }
+            _ => panic!("Expected Success variant"),
+        }
+
+        // Test error response with description
+        let json = r#"{"error":"access_denied","error_description":"user denied"}"#;
+        let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
+        let response: TokenResponse = raw.into();
+        match response {
+            TokenResponse::Pending { error, error_description } => {
+                assert_eq!(error, "access_denied");
+                assert_eq!(error_description, Some("user denied".to_string()));
             }
             _ => panic!("Expected Pending variant"),
         }

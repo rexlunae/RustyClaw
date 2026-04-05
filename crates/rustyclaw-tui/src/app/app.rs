@@ -294,7 +294,7 @@ impl App {
         // ── Gather static info for the component ────────────────────────
         // Use the configured agent_name — no need to parse SOUL.md
         let soul_name = self.config.agent_name.clone();
-        
+
         // Check if soul needs hatching (first run or default content)
         let needs_hatching = self.soul_manager.needs_hatching();
 
@@ -332,7 +332,13 @@ impl App {
         let gw_tx_conn = gw_tx.clone();
         let gateway_url_clone = gateway_url.clone();
 
-        // Use a oneshot for the write-half of the WS connection.
+        // ── Gateway sink abstraction ────────────────────────────────────
+        //
+        // GatewaySink wraps the write half for both WebSocket and SSH
+        // transports. For SSH, the TUI spawns `ssh user@host
+        // rustyclaw-gateway --ssh-stdio` and communicates over the
+        // subprocess's stdin/stdout using length-prefixed binary frames.
+
         type WsSink = futures_util::stream::SplitSink<
             tokio_tungstenite::WebSocketStream<
                 tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
@@ -340,7 +346,163 @@ impl App {
             tokio_tungstenite::tungstenite::Message,
         >;
 
-        let (sink_tx, sink_rx) = tokio::sync::oneshot::channel::<WsSink>();
+        enum GatewaySink {
+            WebSocket(WsSink),
+            Ssh(tokio::process::ChildStdin),
+        }
+
+        impl GatewaySink {
+            async fn send_binary(&mut self, data: Vec<u8>) -> Result<()> {
+                match self {
+                    GatewaySink::WebSocket(sink) => {
+                        use futures_util::SinkExt;
+                        sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
+                            .await
+                            .map_err(|e| anyhow::anyhow!(e))
+                    }
+                    GatewaySink::Ssh(stdin) => {
+                        use tokio::io::AsyncWriteExt;
+                        let len = data.len() as u32;
+                        stdin.write_all(&len.to_be_bytes()).await?;
+                        stdin.write_all(&data).await?;
+                        stdin.flush().await?;
+                        Ok(())
+                    }
+                }
+            }
+        }
+
+        let (sink_tx, sink_rx) = tokio::sync::oneshot::channel::<GatewaySink>();
+
+        let is_ssh = gateway_url.starts_with("ssh://");
+
+        if is_ssh {
+            // ── SSH transport ───────────────────────────────────────────
+            //
+            // Parse ssh://[user@]host[:port] and spawn the system SSH client.
+            // The gateway runs in --ssh-stdio mode on the remote end.
+            let gw_tx_ssh = gw_tx_conn.clone();
+            let _reader_handle = tokio::spawn(async move {
+                use tokio::io::AsyncReadExt;
+
+                let parsed = match url::Url::parse(&gateway_url_clone) {
+                    Ok(u) => u,
+                    Err(e) => {
+                        let _ = gw_tx_ssh.send(GwEvent::Error(format!("Invalid SSH URL: {}", e)));
+                        let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
+                        return;
+                    }
+                };
+
+                let host = parsed.host_str().unwrap_or("localhost").to_string();
+                let port = if parsed.port().is_some() {
+                    parsed.port()
+                } else {
+                    None
+                };
+                let user = if parsed.username().is_empty() {
+                    None
+                } else {
+                    Some(parsed.username().to_string())
+                };
+
+                // Build the SSH command
+                let mut cmd = tokio::process::Command::new("ssh");
+                cmd.arg("-T"); // no pseudo-terminal
+                if let Some(p) = port {
+                    cmd.arg("-p").arg(p.to_string());
+                }
+                let target = if let Some(u) = &user {
+                    format!("{}@{}", u, host)
+                } else {
+                    host.clone()
+                };
+                cmd.arg(&target);
+                cmd.arg("rustyclaw-gateway").arg("--ssh-stdio");
+
+                cmd.stdin(std::process::Stdio::piped());
+                cmd.stdout(std::process::Stdio::piped());
+                cmd.stderr(std::process::Stdio::null());
+
+                match cmd.spawn() {
+                    Ok(mut child) => {
+                        let stdin = child.stdin.take().unwrap();
+                        let mut stdout = child.stdout.take().unwrap();
+
+                        // Send the write-half to the main loop
+                        let _ = sink_tx.send(GatewaySink::Ssh(stdin));
+
+                        // Read length-prefixed frames from stdout
+                        let mut len_buf = [0u8; 4];
+                        loop {
+                            match stdout.read_exact(&mut len_buf).await {
+                                Ok(_) => {
+                                    let len = u32::from_be_bytes(len_buf) as usize;
+                                    if len > 16 * 1024 * 1024 {
+                                        let _ = gw_tx_ssh.send(GwEvent::Error(
+                                            "SSH frame too large".into(),
+                                        ));
+                                        break;
+                                    }
+                                    let mut frame_buf = vec![0u8; len];
+                                    if stdout.read_exact(&mut frame_buf).await.is_err() {
+                                        let _ = gw_tx_ssh
+                                            .send(GwEvent::Disconnected("SSH read error".into()));
+                                        break;
+                                    }
+                                    match deserialize_frame::<ServerFrame>(&frame_buf) {
+                                        Ok(frame) => {
+                                            let is_model_ready = matches!(
+                                                &frame.payload,
+                                                rustyclaw_core::gateway::ServerPayload::Status {
+                                                    status:
+                                                        rustyclaw_core::gateway::StatusType::ModelReady,
+                                                    ..
+                                                }
+                                            );
+                                            if is_model_ready {
+                                                if let rustyclaw_core::gateway::ServerPayload::Status { detail, .. } = &frame.payload {
+                                                    let _ = gw_tx_ssh.send(GwEvent::ModelReady(detail.clone()));
+                                                }
+                                            } else {
+                                                let fa = gateway_client::server_frame_to_action(&frame);
+                                                if let Some(action) = fa.action {
+                                                    let ev = action_to_gw_event(&action);
+                                                    if let Some(ev) = ev {
+                                                        let _ = gw_tx_ssh.send(ev);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let _ = gw_tx_ssh.send(GwEvent::Error(format!(
+                                                "Protocol error: {}",
+                                                e
+                                            )));
+                                        }
+                                    }
+                                }
+                                Err(_) => {
+                                    let _ = gw_tx_ssh
+                                        .send(GwEvent::Disconnected("SSH connection closed".into()));
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Wait for the child process to exit
+                        let _ = child.wait().await;
+                    }
+                    Err(e) => {
+                        drop(sink_tx);
+                        let _ = gw_tx_ssh
+                            .send(GwEvent::Error(format!("Failed to spawn ssh: {}", e)));
+                        let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
+                    }
+                }
+            });
+        } else {
+            // ── WebSocket transport ─────────────────────────────────────
 
         let _reader_handle = tokio::spawn(async move {
             use futures_util::StreamExt;
@@ -349,7 +511,7 @@ impl App {
             match connect_async(&gateway_url_clone).await {
                 Ok((ws, _)) => {
                     let (write, mut read) = StreamExt::split(ws);
-                    let _ = sink_tx.send(write);
+                    let _ = sink_tx.send(GatewaySink::WebSocket(write));
                     // Don't report Connected yet — wait for auth flow.
                     // The gateway will send AuthChallenge or Hello+Status frames.
 
@@ -416,8 +578,10 @@ impl App {
             }
         });
 
+        } // end WebSocket branch
+
         // Try to get the write-half.
-        let mut ws_sink: Option<WsSink> = match sink_rx.await {
+        let mut gw_sink: Option<GatewaySink> = match sink_rx.await {
             Ok(s) => Some(s),
             Err(_) => None,
         };
@@ -455,8 +619,7 @@ impl App {
             match user_rx.try_recv() {
                 Ok(UserInput::Chat(text)) => {
                     conversation.push(ChatMessage::text("user", &text));
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Chat,
                             payload: ClientPayload::Chat {
@@ -464,53 +627,42 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::AuthResponse(code)) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::AuthResponse,
                             payload: ClientPayload::AuthResponse { code },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::ToolApprovalResponse { id, approved }) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ToolApprovalResponse,
                             payload: ClientPayload::ToolApprovalResponse { id, approved },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::VaultUnlock(password)) => {
                     // Unlock locally so /secrets can read the vault
                     secrets_manager.set_password(password.clone());
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::UnlockVault,
                             payload: ClientPayload::UnlockVault { password },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
@@ -519,8 +671,7 @@ impl App {
                     dismissed,
                     value,
                 }) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::UserPromptResponse,
                             payload: ClientPayload::UserPromptResponse {
@@ -530,9 +681,7 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
@@ -557,18 +706,13 @@ impl App {
                         CommandAction::ShowSecrets => {
                             // Request secrets list from the gateway daemon
                             // (secrets live in the gateway's vault, not locally).
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::SecretsList,
                                     payload: ClientPayload::SecretsList,
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                             }
                         }
@@ -608,18 +752,13 @@ impl App {
                         }
                         CommandAction::ThreadNew(label) => {
                             // Send thread create to gateway
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadCreate,
                                     payload: ClientPayload::ThreadCreate { label },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                             }
                         }
@@ -631,25 +770,19 @@ impl App {
                         }
                         CommandAction::ThreadClose(id) => {
                             // Send thread close to gateway
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadClose,
                                     payload: ClientPayload::ThreadClose { thread_id: id },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                             }
                         }
                         CommandAction::ThreadRename(id, new_label) => {
                             // Send thread rename to gateway
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadRename,
                                     payload: ClientPayload::ThreadRename {
@@ -658,29 +791,20 @@ impl App {
                                     },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                             }
                         }
                         CommandAction::ThreadBackground => {
                             // Background the current foreground thread by switching
                             // to thread_id 0 (sentinel: no foreground thread).
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadSwitch,
                                     payload: ClientPayload::ThreadSwitch { thread_id: 0 },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                                 let _ = gw_tx.send(GwEvent::Info(
                                     "Current thread backgrounded. Use /thread fg <id> or sidebar to switch.".to_string(),
@@ -689,18 +813,13 @@ impl App {
                         }
                         CommandAction::ThreadForeground(id) => {
                             // Foreground a thread by ID — reuse ThreadSwitch
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadSwitch,
                                     payload: ClientPayload::ThreadSwitch { thread_id: id },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                             }
                         }
@@ -735,18 +854,13 @@ impl App {
                                     model_name
                                 )));
                                 // Send Reload frame so the gateway picks up the new config
-                                if let Some(ref mut sink) = ws_sink {
-                                    use futures_util::SinkExt;
+                                if let Some(ref mut sink) = gw_sink {
                                     let frame = ClientFrame {
                                         frame_type: ClientFrameType::Reload,
                                         payload: ClientPayload::Reload,
                                     };
                                     if let Ok(data) = serialize_frame(&frame) {
-                                        let _ = sink
-                                            .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                                data.into(),
-                                            ))
-                                            .await;
+                                        let _ = sink.send_binary(data).await;
                                     }
                                 }
                             }
@@ -770,36 +884,26 @@ impl App {
                                     "Provider set to {}. Reloading gateway…",
                                     provider_name
                                 )));
-                                if let Some(ref mut sink) = ws_sink {
-                                    use futures_util::SinkExt;
+                                if let Some(ref mut sink) = gw_sink {
                                     let frame = ClientFrame {
                                         frame_type: ClientFrameType::Reload,
                                         payload: ClientPayload::Reload,
                                     };
                                     if let Ok(data) = serialize_frame(&frame) {
-                                        let _ = sink
-                                            .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                                data.into(),
-                                            ))
-                                            .await;
+                                        let _ = sink.send_binary(data).await;
                                     }
                                 }
                             }
                         }
                         CommandAction::GatewayReload => {
                             // Send Reload frame to the gateway
-                            if let Some(ref mut sink) = ws_sink {
-                                use futures_util::SinkExt;
+                            if let Some(ref mut sink) = gw_sink {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::Reload,
                                     payload: ClientPayload::Reload,
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink
-                                        .send(tokio_tungstenite::tungstenite::Message::Binary(
-                                            data.into(),
-                                        ))
-                                        .await;
+                                    let _ = sink.send_binary(data).await;
                                 }
                             }
                         }
@@ -952,8 +1056,7 @@ impl App {
                         "SKILL" => "always",
                         _ => "ask",
                     };
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsSetPolicy,
                             payload: ClientPayload::SecretsSetPolicy {
@@ -963,114 +1066,90 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::DeleteSecret { name }) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsDeleteCredential,
                             payload: ClientPayload::SecretsDeleteCredential { name },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::AddSecret { name, value }) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsStore,
                             payload: ClientPayload::SecretsStore { key: name, value },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::RefreshSecrets) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsList,
                             payload: ClientPayload::SecretsList,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::RefreshTasks) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::TasksRequest,
                             payload: ClientPayload::TasksRequest { session: None },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::ThreadSwitch(thread_id)) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadSwitch,
                             payload: ClientPayload::ThreadSwitch { thread_id },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::RefreshThreads) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadList,
                             payload: ClientPayload::ThreadList,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::ThreadCreate(label)) => {
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadCreate,
                             payload: ClientPayload::ThreadCreate { label },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
                 Ok(UserInput::HatchingRequest) => {
                     // Send hatching prompt to gateway as a special chat
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let hatching_prompt = crate::components::hatching_dialog::HATCHING_PROMPT;
                         let messages = vec![
                             ChatMessage::text("system", hatching_prompt),
@@ -1081,9 +1160,7 @@ impl App {
                             payload: ClientPayload::Chat { messages },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink
-                                .send(tokio_tungstenite::tungstenite::Message::Binary(data.into()))
-                                .await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                 }
@@ -1113,14 +1190,13 @@ impl App {
                                 });
                                 let _ = config.save(None);
                                 // Reload gateway
-                                if let Some(ref mut sink) = ws_sink {
-                                    use futures_util::SinkExt;
+                                if let Some(ref mut sink) = gw_sink {
                                     let frame = ClientFrame {
                                         frame_type: ClientFrameType::Reload,
                                         payload: ClientPayload::Reload,
                                     };
                                     if let Ok(data) = serialize_frame(&frame) {
-                                        let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                        let _ = sink.send_binary(data).await;
                                     }
                                 }
                                 // Trigger model selector (show loading)
@@ -1165,14 +1241,13 @@ impl App {
                                         base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                                     });
                                     let _ = config.save(None);
-                                    if let Some(ref mut sink) = ws_sink {
-                                        use futures_util::SinkExt;
+                                    if let Some(ref mut sink) = gw_sink {
                                         let frame = ClientFrame {
                                             frame_type: ClientFrameType::Reload,
                                             payload: ClientPayload::Reload,
                                         };
                                         if let Ok(data) = serialize_frame(&frame) {
-                                            let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                            let _ = sink.send_binary(data).await;
                                         }
                                     }
                                     let display = def.display.to_string();
@@ -1226,14 +1301,13 @@ impl App {
                                         base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                                     });
                                     let _ = config.save(None);
-                                    if let Some(ref mut sink) = ws_sink {
-                                        use futures_util::SinkExt;
+                                    if let Some(ref mut sink) = gw_sink {
                                         let frame = ClientFrame {
                                             frame_type: ClientFrameType::Reload,
                                             payload: ClientPayload::Reload,
                                         };
                                         if let Ok(data) = serialize_frame(&frame) {
-                                            let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                            let _ = sink.send_binary(data).await;
                                         }
                                     }
                                     let display = def.display.to_string();
@@ -1361,14 +1435,13 @@ impl App {
                     });
                     let _ = config.save(None);
                     // Reload gateway
-                    if let Some(ref mut sink) = ws_sink {
-                        use futures_util::SinkExt;
+                    if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Reload,
                             payload: ClientPayload::Reload,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                            let _ = sink.send_binary(data).await;
                         }
                     }
                     // Now fetch models
@@ -1410,14 +1483,13 @@ impl App {
                             "Model set to {} / {}. Reloading gateway…", display, model,
                         )));
                         // Reload gateway so the new provider + model take effect
-                        if let Some(ref mut sink) = ws_sink {
-                            use futures_util::SinkExt;
+                        if let Some(ref mut sink) = gw_sink {
                             let frame = ClientFrame {
                                 frame_type: ClientFrameType::Reload,
                                 payload: ClientPayload::Reload,
                             };
                             if let Ok(data) = serialize_frame(&frame) {
-                                let _ = sink.send(tokio_tungstenite::tungstenite::Message::Binary(data.into())).await;
+                                let _ = sink.send_binary(data).await;
                             }
                         }
                     }
@@ -1810,6 +1882,7 @@ mod tui_component {
         let mut device_flow_url = hooks.use_state(|| String::new());
         let mut device_flow_code = hooks.use_state(|| String::new());
         let mut device_flow_tick = hooks.use_state(|| 0usize);
+        let mut device_flow_browser_opened = hooks.use_state(|| false);
 
         let mut show_model_selector = hooks.use_state(|| false);
         let mut model_selector_provider = hooks.use_state(|| String::new());
@@ -1975,7 +2048,7 @@ mod tui_component {
                                         // send it back to the tokio loop so it gets
                                         // appended to the conversation history.
                                         let completed_text = streaming_buf.read().clone();
-                                        
+
                                         // Check if this was a hatching response
                                         if hatching_pending.get() {
                                             hatching_pending.set(false);
@@ -2251,13 +2324,17 @@ mod tui_component {
                                     }
                                     GwEvent::DeviceFlowCode { provider, url, code } => {
                                         device_flow_provider.set(provider);
-                                        device_flow_url.set(url);
+                                        device_flow_url.set(url.clone());
                                         device_flow_code.set(code);
                                         device_flow_tick.set(0);
+                                        // Auto-open the verification URL in the browser
+                                        crate::components::device_flow_dialog::open_url_in_browser(&url);
+                                        device_flow_browser_opened.set(true);
                                         show_device_flow.set(true);
                                     }
                                     GwEvent::DeviceFlowDone => {
                                         show_device_flow.set(false);
+                                        device_flow_browser_opened.set(false);
                                     }
                                     GwEvent::DeviceFlowToken { provider, token } => {
                                         // Forward the obtained token to the tokio loop
@@ -2319,7 +2396,7 @@ mod tui_component {
                     if show_device_flow.get() {
                         device_flow_tick.set(device_flow_tick.get().wrapping_add(1));
                     }
-                    
+
                     // Animate hatching sequence (advance every 8 ticks ≈ 2 seconds)
                     if show_hatching.get() && !hatching_pending.get() {
                         let tick = hatching_tick.get().wrapping_add(1);
@@ -2339,7 +2416,7 @@ mod tui_component {
                             }
                         }
                     }
-                    
+
                     if let Some(start) = stream_start.get() {
                         let d = start.elapsed();
                         let secs = d.as_secs();
@@ -2572,10 +2649,19 @@ mod tui_component {
                         match code {
                             KeyCode::Esc => {
                                 show_device_flow.set(false);
+                                device_flow_browser_opened.set(false);
                                 if let Ok(guard) = tx_for_keys.lock() {
                                     if let Some(ref tx) = *guard {
                                         let _ = tx.send(UserInput::CancelProviderFlow);
                                     }
+                                }
+                            }
+                            KeyCode::Enter => {
+                                // Open (or re-open) the URL in the browser
+                                let url = device_flow_url.read().clone();
+                                if !url.is_empty() {
+                                    crate::components::device_flow_dialog::open_url_in_browser(&url);
+                                    device_flow_browser_opened.set(true);
                                 }
                             }
                             _ => {}
@@ -3525,6 +3611,7 @@ mod tui_component {
                 device_flow_url: device_flow_url.read().clone(),
                 device_flow_code: device_flow_code.read().clone(),
                 device_flow_tick: device_flow_tick.get(),
+                device_flow_browser_opened: device_flow_browser_opened.get(),
                 show_model_selector: show_model_selector.get(),
                 model_selector_provider_display: model_selector_provider_display.read().clone(),
                 model_selector_models: model_selector_models.read().clone(),
