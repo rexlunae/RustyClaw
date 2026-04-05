@@ -1,0 +1,61 @@
+[package]
+name = "rustyclaw-desktop"
+description = "Desktop GUI client for RustyClaw"
+keywords = ["ai", "agent", "gui", "desktop", "dioxus"]
+categories = ["gui"]
+default-run = "rustyclaw-desktop"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "rustyclaw-desktop"
+path = "src/main.rs"
+
+[dependencies]
+# Core library
+rustyclaw-core = { path = "../rustyclaw-core", default-features = false }
+
+# Dioxus framework
+# Note: "desktop" feature requires GTK dev libraries (libgtk-3-dev on Debian/Ubuntu)
+# For webview-based desktop: libwebkit2gtk-4.0-dev
+dioxus = { version = "0.7", features = ["desktop"] }
+dioxus-bulma = "0.7.2"
+
+# UUID generation for message IDs
+uuid = { version = "1", features = ["v4"] }
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Async runtime
+tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+futures = "0.3"
+
+# WebSocket client
+tokio-tungstenite = "0.28"
+url = "2"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+bincode = "2"
+
+# QR code generation for pairing
+qrcode = "0.14"
+image = { version = "0.25", default-features = false, features = ["png"] }
+base64 = "0.22"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+[features]
+default = []

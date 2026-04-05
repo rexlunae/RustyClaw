@@ -62,10 +62,12 @@ pub use transport::{
     WebSocketTransport,
 };
 
-// Re-export SSH types (when feature enabled, stdio transport always available)
-pub use ssh::StdioTransport;
+// Re-export SSH types (when feature enabled)
 #[cfg(feature = "ssh")]
-pub use ssh::{SshConfig, SshServer, add_authorized_client, key_fingerprint, load_authorized_clients};
+pub use ssh::{SshConfig, SshTransport};
+
+// Re-export stdio transport (always available)
+pub use ssh::StdioTransport;
 
 use crate::config::Config;
 use crate::observability::ObserverEvent;
