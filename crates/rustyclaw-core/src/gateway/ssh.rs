@@ -98,6 +98,8 @@ const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
 /// Configuration for the SSH transport.
 #[derive(Debug, Clone)]
 pub struct SshConfig {
+    /// Address to listen on (e.g., "0.0.0.0:2222").
+    pub listen_addr: std::net::SocketAddr,
     /// Path to the server's host key.
     pub host_key_path: PathBuf,
     /// Path to the authorized_clients file.
@@ -115,6 +117,7 @@ impl Default for SshConfig {
             .unwrap_or_else(|| PathBuf::from("."));
         
         Self {
+            listen_addr: "0.0.0.0:2222".parse().unwrap(),
             host_key_path: config_dir.join("ssh_host_key"),
             authorized_clients_path: config_dir.join("authorized_clients"),
             allow_password: false,

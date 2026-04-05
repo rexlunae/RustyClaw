@@ -30,6 +30,7 @@ use crate::gateway_client;
 
 /// Events pushed from the gateway reader into the iocraft render component.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub(crate) enum GwEvent {
     Disconnected(String),
     AuthChallenge,
@@ -135,6 +136,12 @@ pub(crate) enum GwEvent {
         provider: String,
         provider_display: String,
     },
+    /// SSH pairing connection succeeded
+    PairingSuccess {
+        gateway_name: String,
+    },
+    /// SSH pairing connection failed
+    PairingError(String),
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -209,6 +216,12 @@ pub(crate) enum UserInput {
     },
     /// Cancel the current provider-flow dialog
     CancelProviderFlow,
+    /// Initiate SSH pairing connection
+    PairingConnect {
+        host: String,
+        port: u16,
+        public_key: String,
+    },
     Quit,
 }
 
@@ -1412,6 +1425,28 @@ impl App {
                 Ok(UserInput::CancelProviderFlow) => {
                     // User cancelled — nothing to do
                 }
+                #[allow(unused_variables)]
+                Ok(UserInput::PairingConnect { host, port, public_key }) => {
+                    // Initiate SSH connection for pairing
+                    #[cfg(feature = "ssh")]
+                    {
+                        let gw_tx_pair = gw_tx.clone();
+                        tokio::spawn(async move {
+                            match crate::pairing::connect_and_pair(&host, port, &public_key).await {
+                                Ok(gateway_name) => {
+                                    let _ = gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
+                                }
+                                Err(e) => {
+                                    let _ = gw_tx_pair.send(GwEvent::PairingError(e.to_string()));
+                                }
+                            }
+                        });
+                    }
+                    #[cfg(not(feature = "ssh"))]
+                    {
+                        let _ = gw_tx.send(GwEvent::PairingError("SSH feature not enabled".to_string()));
+                    }
+                }
                 Ok(UserInput::Quit) => break,
                 Err(sync_mpsc::TryRecvError::Empty) => {}
                 Err(sync_mpsc::TryRecvError::Disconnected) => break,
@@ -1731,6 +1766,20 @@ mod tui_component {
             hooks.use_state(|| crate::components::hatching_dialog::HatchState::Egg);
         let mut hatching_tick = hooks.use_state(|| 0usize);
         let mut hatching_pending = hooks.use_state(|| false); // True when waiting for hatching response
+
+        // ── Pairing dialog state ────────────────────────────────────────
+        let mut show_pairing = hooks.use_state(|| false);
+        let mut pairing_step: State<crate::components::pairing_dialog::PairingStep> =
+            hooks.use_state(|| crate::components::pairing_dialog::PairingStep::ShowKey);
+        let mut pairing_field: State<crate::components::pairing_dialog::PairingField> =
+            hooks.use_state(|| crate::components::pairing_dialog::PairingField::Host);
+        let mut pairing_public_key = hooks.use_state(|| String::new());
+        let mut pairing_fingerprint = hooks.use_state(|| String::new());
+        let mut pairing_fingerprint_art = hooks.use_state(|| String::new());
+        let mut pairing_qr_ascii = hooks.use_state(|| String::new());
+        let mut pairing_host = hooks.use_state(|| String::new());
+        let mut pairing_port = hooks.use_state(|| "2222".to_string());
+        let mut pairing_error = hooks.use_state(|| String::new());
 
         // ── User prompt dialog state ────────────────────────────────────
         let mut show_user_prompt = hooks.use_state(|| false);
@@ -2238,6 +2287,26 @@ mod tui_component {
                                         model_selector_loading.set(false);
                                         show_model_selector.set(true);
                                     }
+                                    GwEvent::PairingSuccess { gateway_name } => {
+                                        // Pairing succeeded — update dialog state
+                                        pairing_step.set(crate::components::pairing_dialog::PairingStep::Complete);
+                                        pairing_error.set(String::new());
+                                        let mut m = messages.read().clone();
+                                        m.push(DisplayMessage::success(format!(
+                                            "Successfully paired with gateway: {}", gateway_name
+                                        )));
+                                        messages.set(m);
+                                    }
+                                    GwEvent::PairingError(err) => {
+                                        // Pairing failed — show error
+                                        pairing_step.set(crate::components::pairing_dialog::PairingStep::EnterGateway);
+                                        pairing_error.set(err.clone());
+                                        let mut m = messages.read().clone();
+                                        m.push(DisplayMessage::error(format!(
+                                            "Pairing failed: {}", err
+                                        )));
+                                        messages.set(m);
+                                    }
                                 }
                             }
                         }
@@ -2598,6 +2667,122 @@ mod tui_component {
                                         if let Some(ref tx) = *guard {
                                             let _ = tx.send(UserInput::VaultUnlock(pw));
                                         }
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
+                    // ── Pairing dialog ──────────────────────────────
+                    if show_pairing.get() {
+                        use crate::components::pairing_dialog::{PairingStep, PairingField};
+                        let step = pairing_step.read().clone();
+                        match code {
+                            KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                                should_quit.set(true);
+                                if let Ok(guard) = tx_for_keys.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::Quit);
+                                    }
+                                }
+                            }
+                            KeyCode::Esc => {
+                                match step {
+                                    PairingStep::ShowKey => {
+                                        // Cancel — close dialog
+                                        show_pairing.set(false);
+                                    }
+                                    PairingStep::EnterGateway => {
+                                        // Go back to ShowKey
+                                        pairing_step.set(PairingStep::ShowKey);
+                                        pairing_error.set(String::new());
+                                    }
+                                    PairingStep::Connecting => {
+                                        // Cancel connection
+                                        pairing_step.set(PairingStep::EnterGateway);
+                                    }
+                                    PairingStep::Complete => {
+                                        show_pairing.set(false);
+                                    }
+                                }
+                            }
+                            KeyCode::Enter => {
+                                match step {
+                                    PairingStep::ShowKey => {
+                                        // Proceed to EnterGateway
+                                        pairing_step.set(PairingStep::EnterGateway);
+                                    }
+                                    PairingStep::EnterGateway => {
+                                        let host = pairing_host.read().clone();
+                                        let port_str = pairing_port.read().clone();
+                                        let public_key = pairing_public_key.read().clone();
+                                        
+                                        if host.is_empty() {
+                                            pairing_error.set("Host is required".to_string());
+                                        } else {
+                                            let port: u16 = port_str.parse().unwrap_or(2222);
+                                            pairing_step.set(PairingStep::Connecting);
+                                            
+                                            // Send connection request to async handler
+                                            if let Ok(guard) = tx_for_keys.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.send(UserInput::PairingConnect {
+                                                        host,
+                                                        port,
+                                                        public_key,
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+                                    PairingStep::Connecting => {
+                                        // Wait for connection
+                                    }
+                                    PairingStep::Complete => {
+                                        show_pairing.set(false);
+                                    }
+                                }
+                            }
+                            KeyCode::Tab if step == PairingStep::EnterGateway => {
+                                // Toggle between host and port fields
+                                let field = pairing_field.read().clone();
+                                pairing_field.set(match field {
+                                    PairingField::Host => PairingField::Port,
+                                    PairingField::Port => PairingField::Host,
+                                });
+                            }
+                            KeyCode::Char(c) if step == PairingStep::EnterGateway => {
+                                let field = pairing_field.read().clone();
+                                match field {
+                                    PairingField::Host => {
+                                        let mut h = pairing_host.read().clone();
+                                        h.push(c);
+                                        pairing_host.set(h);
+                                    }
+                                    PairingField::Port => {
+                                        if c.is_ascii_digit() {
+                                            let mut p = pairing_port.read().clone();
+                                            p.push(c);
+                                            pairing_port.set(p);
+                                        }
+                                    }
+                                }
+                                pairing_error.set(String::new());
+                            }
+                            KeyCode::Backspace if step == PairingStep::EnterGateway => {
+                                let field = pairing_field.read().clone();
+                                match field {
+                                    PairingField::Host => {
+                                        let mut h = pairing_host.read().clone();
+                                        h.pop();
+                                        pairing_host.set(h);
+                                    }
+                                    PairingField::Port => {
+                                        let mut p = pairing_port.read().clone();
+                                        p.pop();
+                                        pairing_port.set(p);
                                     }
                                 }
                             }
@@ -3155,6 +3340,50 @@ mod tui_component {
                         KeyCode::Down => {
                             scroll_offset.set((scroll_offset.get() - 1).max(0));
                         }
+                        // Ctrl+Shift+P opens pairing dialog
+                        KeyCode::Char('P') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            if !show_pairing.get() {
+                                // Generate keypair and populate dialog
+                                #[cfg(feature = "ssh")]
+                                {
+                                    use rustyclaw_core::pairing::{
+                                        ClientKeyPair,
+                                        key_fingerprint,
+                                        format_fingerprint_art,
+                                        generate_pairing_qr_ascii,
+                                        PairingData,
+                                    };
+                                    match ClientKeyPair::load_or_generate(None) {
+                                        Ok(kp) => {
+                                            let pk = kp.public_key_openssh();
+                                            pairing_public_key.set(pk.clone());
+                                            let fp = key_fingerprint(&kp);
+                                            pairing_fingerprint_art.set(format_fingerprint_art(&fp));
+                                            pairing_fingerprint.set(fp);
+                                            
+                                            // Generate QR code for pairing
+                                            let pairing_data = PairingData::client(&pk, None);
+                                            match generate_pairing_qr_ascii(&pairing_data) {
+                                                Ok(qr) => pairing_qr_ascii.set(qr),
+                                                Err(_) => pairing_qr_ascii.set(String::new()),
+                                            }
+                                        }
+                                        Err(e) => {
+                                            pairing_error.set(format!("Key generation failed: {}", e));
+                                        }
+                                    }
+                                }
+                                #[cfg(not(feature = "ssh"))]
+                                {
+                                    pairing_error.set("SSH feature not enabled".to_string());
+                                }
+                                pairing_step.set(crate::components::pairing_dialog::PairingStep::ShowKey);
+                                pairing_field.set(crate::components::pairing_dialog::PairingField::Host);
+                                pairing_host.set(String::new());
+                                pairing_port.set("2222".to_string());
+                                show_pairing.set(true);
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -3210,6 +3439,7 @@ mod tui_component {
                     && !show_api_key_dialog.get()
                     && !show_device_flow.get()
                     && !show_model_selector.get()
+                    && !show_pairing.get()
                     && !sidebar_focused.get(),
                 on_change: move |new_val: String| {
                     input_value.set(new_val.clone());
@@ -3300,6 +3530,16 @@ mod tui_component {
                 model_selector_models: model_selector_models.read().clone(),
                 model_selector_cursor: model_selector_cursor.get(),
                 model_selector_loading: model_selector_loading.get(),
+                show_pairing: show_pairing.get(),
+                pairing_step: pairing_step.read().clone(),
+                pairing_field: pairing_field.read().clone(),
+                pairing_public_key: pairing_public_key.read().clone(),
+                pairing_fingerprint: pairing_fingerprint.read().clone(),
+                pairing_fingerprint_art: pairing_fingerprint_art.read().clone(),
+                pairing_qr_ascii: pairing_qr_ascii.read().clone(),
+                pairing_host: pairing_host.read().clone(),
+                pairing_port: pairing_port.read().clone(),
+                pairing_error: pairing_error.read().clone(),
             )
         }
     }

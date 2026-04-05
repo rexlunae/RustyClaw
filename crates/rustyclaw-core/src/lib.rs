@@ -24,6 +24,7 @@ pub mod messengers;
 pub mod mnemo;
 pub mod models;
 pub mod observability;
+pub mod pairing;
 pub mod process_manager;
 pub mod providers;
 pub mod protocols;
