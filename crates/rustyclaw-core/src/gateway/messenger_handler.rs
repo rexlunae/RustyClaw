@@ -1008,6 +1008,22 @@ fn get_platform_formatting_guide(messenger_type: &str) -> String {
 - Links: <https://url|display text>\n\
 - Use emoji reactions when appropriate".to_string(),
 
+        "msteams" => "\
+### Formatting (Microsoft Teams)\n\
+- **Markdown supported**: bold, italic, code, links, lists\n\
+- Tables render in Teams clients\n\
+- Code blocks with syntax highlighting\n\
+- Adaptive Cards supported for rich content\n\
+- Keep messages concise for readability".to_string(),
+
+        "googlechat" => "\
+### Formatting (Google Chat)\n\
+- **Basic markdown**: bold, italic, code, links\n\
+- **NO tables** — use bullet lists instead\n\
+- Code blocks supported\n\
+- Thread replies supported — prefer threading for related messages\n\
+- Keep messages concise".to_string(),
+
         "signal" => "\
 ### Formatting (Signal)\n\
 - **NO formatting support** — plain text only\n\

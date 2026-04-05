@@ -270,7 +270,7 @@ pub fn recommended_strategy(messenger_type: &str) -> StreamStrategy {
     match messenger_type {
         "telegram" | "discord" | "slack" => StreamStrategy::EditInPlace,
         "irc" | "webhook" => StreamStrategy::Chunked,
-        "teams" | "google_chat" => StreamStrategy::EditInPlace,
+        "msteams" | "googlechat" => StreamStrategy::EditInPlace,
         "imessage" => StreamStrategy::BufferAll,
         _ => StreamStrategy::BufferAll,
     }
