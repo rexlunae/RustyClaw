@@ -433,8 +433,10 @@ impl MemoryStore for SqliteMemoryStore {
 
     async fn flush(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        // wal_checkpoint returns (busy, log, checkpointed) rows — use query_row to discard them.
-        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).ok();
+        // wal_checkpoint returns (busy, log, checkpointed) rows — use query_row to consume them.
+        if let Err(e) = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())) {
+            tracing::warn!(error = %e, "WAL checkpoint failed during mnemo flush");
+        }
         Ok(())
     }
 }

@@ -110,7 +110,7 @@ ipnetwork = "0.21"
 oxidized-agentic-audit = "0.5"
 
 # SQLite with FTS5 for mnemo memory coprocessor
-rusqlite = { version = "0.32", features = ["bundled-full"] }
+rusqlite = { version = "0.37", features = ["bundled-full"] }
 
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"
@@ -153,6 +153,11 @@ schemars = "1.0.0-alpha.17"
 # Patches for crypto compatibility
 [patch.crates-io]
 curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag = "signal-curve25519-4.1.3" }
+
+# Override the chat-system git dependency to use our vendored copy which upgrades
+# rusqlite from 0.32 → 0.37, eliminating the libsqlite3-sys `links` conflict.
+[patch."https://github.com/rexlunae/chat-system"]
+chat-system = { path = "vendor/chat-system" }
 
 [profile.release]
 lto = true
