@@ -8,5 +8,6 @@ pub mod components;
 pub mod gateway_client;
 pub mod markdown;
 pub mod onboard;
+pub mod pairing;
 pub mod theme;
 pub mod types;

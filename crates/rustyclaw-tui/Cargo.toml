@@ -45,3 +45,20 @@ dirs.workspace = true
 reqwest.workspace = true
 shellexpand.workspace = true
 nucleo-matcher.workspace = true
+
+
+[features]
+default = []
+ssh = ["rustyclaw-core/ssh", "dep:russh", "dep:russh-keys", "dep:async-trait"]
+
+[dependencies.russh]
+version = "0.44"
+optional = true
+
+[dependencies.russh-keys]
+version = "0.44"
+optional = true
+
+[dependencies.async-trait]
+version = "0.1"
+optional = true
