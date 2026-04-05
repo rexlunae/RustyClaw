@@ -31,8 +31,11 @@ impl SqliteMemoryStore {
         let conn = rusqlite::Connection::open(path)
             .with_context(|| format!("Failed to open mnemo database: {:?}", path))?;
 
-        // Enable WAL mode
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;")?;
+        // Enable WAL mode.  PRAGMA journal_mode returns a result row, so we use
+        // query_row to consume it rather than execute_batch which rejects it in
+        // older rusqlite versions.
+        let _: String = conn.query_row("PRAGMA journal_mode=WAL", [], |row| row.get(0))?;
+        conn.pragma_update(None, "synchronous", "normal")?;
 
         // Create schema
         conn.execute_batch(VERSION_CHECK)?;
@@ -430,7 +433,8 @@ impl MemoryStore for SqliteMemoryStore {
 
     async fn flush(&self) -> Result<()> {
         let conn = self.conn.lock().unwrap();
-        conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
+        // wal_checkpoint returns (busy, log, checkpointed) rows — use query_row to discard them.
+        let _ = conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(())).ok();
         Ok(())
     }
 }

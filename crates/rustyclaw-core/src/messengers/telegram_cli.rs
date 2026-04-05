@@ -5,7 +5,8 @@
 //!
 //! This requires the `telegram-cli` feature to be enabled.
 
-use super::{Message, Messenger};
+use chat_system::message::Message;
+use chat_system::messenger::Messenger;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -210,7 +211,8 @@ impl Messenger for TelegramCliMessenger {
                         channel: Some(msg.chat.id.to_string()),
                         reply_to: None,
                         media: None,
-                                        is_direct: false, // TODO: implement DM detection
+                        is_direct: false, // TODO: implement DM detection
+                        reactions: None,
                     }
                 })
             })

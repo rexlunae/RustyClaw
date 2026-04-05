@@ -1,232 +1,72 @@
-//! Messenger implementations for various chat platforms.
+//! Messenger system — thin re-export layer over the `chat-system` crate.
 //!
-//! **DEPRECATION NOTICE**: Native messenger integrations are being phased out
-//! in favor of skill-based messaging via [Beeper](https://www.beeper.com) and
-//! the `claw-me-maybe` skill from ClawHub. The skill approach:
-//! - Requires no recompilation for new platforms
-//! - Handles 15+ platforms through one API
-//! - Is the recommended path in `rustyclaw onboard`
+//! All platform implementations (IRC, Discord, Telegram, Slack, Teams, Google Chat,
+//! iMessage, Console, Webhook, Matrix, WhatsApp, Signal) are provided by the
+//! [`chat_system`] crate.  This module re-exports the public API so that the rest
+//! of `rustyclaw-core` can continue to use `crate::messengers::*` paths.
 //!
-//! The native messengers below are retained for backwards compatibility but
-//! are largely untested. New development should focus on skill-based approaches.
+//! ## Pending PRs to chat-system
 //!
-//! Each messenger implements the `Messenger` trait and can be enabled
-//! via feature flags in Cargo.toml.
+//! The following CLI-based implementations are **not yet in chat-system** and are
+//! kept locally until the corresponding PRs are merged:
+//!
+//! - `matrix_cli` — Matrix over plain HTTP (no SDK), feature `matrix-cli`
+//! - `telegram_cli` — Telegram Bot API, feature `telegram-cli`
+//! - `discord_cli` — Discord REST API, feature `discord-cli`
+//! - `slack_cli` — Slack Web API, feature `slack-cli`
+//!
+//! Utility modules (`media`, `streaming`, `group_chat`) are also kept locally
+//! until they are contributed upstream to `chat-system`.
 
-use anyhow::Result;
-use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+// ── Core types and traits from chat-system ──────────────────────────────────
 
-// ── Core types ──────────────────────────────────────────────────────────────
+pub use chat_system::message::{MediaAttachment, Message, SendOptions};
+pub use chat_system::messenger::{Messenger, MessengerManager, PresenceStatus, SearchQuery};
 
-/// Represents a message in the messenger system
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Message {
-    pub id: String,
-    pub sender: String,
-    pub content: String,
-    pub timestamp: i64,
-    #[serde(default)]
-    pub channel: Option<String>,
-    #[serde(default)]
-    pub reply_to: Option<String>,
-    #[serde(default)]
-    pub media: Option<Vec<MediaAttachment>>,
-    /// Whether this message is from a direct/private conversation.
-    /// Used to determine session type (Main vs Group) for workspace context injection.
-    #[serde(default)]
-    pub is_direct: bool,
-}
+// ── Concrete messenger implementations from chat-system ─────────────────────
 
-/// Media attachment in a message
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MediaAttachment {
-    pub url: Option<String>,
-    pub path: Option<String>,
-    pub mime_type: Option<String>,
-    pub filename: Option<String>,
-}
+pub use chat_system::messengers::{
+    ConsoleMessenger, DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger,
+    SlackMessenger, TeamsMessenger, TelegramMessenger, WebhookMessenger,
+};
 
-/// Options for sending a message
-#[derive(Debug, Default)]
-pub struct SendOptions<'a> {
-    pub recipient: &'a str,
-    pub content: &'a str,
-    pub reply_to: Option<&'a str>,
-    pub silent: bool,
-    pub media: Option<&'a str>,
-}
+#[cfg(feature = "matrix")]
+pub use chat_system::messengers::MatrixMessenger;
 
-// ── Messenger trait ─────────────────────────────────────────────────────────
+#[cfg(feature = "signal-cli")]
+pub use chat_system::messengers::SignalCliMessenger;
 
-/// Trait for messenger implementations (OpenClaw compatible)
-#[async_trait]
-pub trait Messenger: Send + Sync {
-    /// Get the messenger name
-    fn name(&self) -> &str;
+#[cfg(feature = "whatsapp")]
+pub use chat_system::messengers::WhatsAppMessenger;
 
-    /// Get the messenger type (telegram, discord, signal, matrix, etc.)
-    fn messenger_type(&self) -> &str;
+// ── Utility modules (kept locally; pending PRs to chat-system) ──────────────
 
-    /// Initialize the messenger (connect, authenticate, etc.)
-    async fn initialize(&mut self) -> Result<()>;
-
-    /// Send a message to a recipient/channel
-    async fn send_message(&self, recipient: &str, content: &str) -> Result<String>;
-
-    /// Send a message with additional options
-    async fn send_message_with_options(&self, opts: SendOptions<'_>) -> Result<String> {
-        // Default implementation ignores options
-        self.send_message(opts.recipient, opts.content).await
-    }
-
-    /// Receive pending messages (non-blocking poll)
-    async fn receive_messages(&self) -> Result<Vec<Message>>;
-
-    /// Check if the messenger is connected
-    fn is_connected(&self) -> bool;
-
-    /// Disconnect the messenger
-    async fn disconnect(&mut self) -> Result<()>;
-
-    /// Set typing indicator (optional - default is no-op)
-    async fn set_typing(&self, _channel: &str, _typing: bool) -> Result<()> {
-        Ok(())
-    }
-}
-
-// ── Messenger manager ───────────────────────────────────────────────────────
-
-/// Manager for multiple messengers
-pub struct MessengerManager {
-    messengers: Vec<Box<dyn Messenger>>,
-}
-
-impl MessengerManager {
-    pub fn new() -> Self {
-        Self {
-            messengers: Vec::new(),
-        }
-    }
-
-    /// Add a messenger to the manager
-    pub fn add_messenger(&mut self, messenger: Box<dyn Messenger>) {
-        self.messengers.push(messenger);
-    }
-
-    /// Initialize all messengers
-    pub async fn initialize_all(&mut self) -> Result<()> {
-        for messenger in &mut self.messengers {
-            messenger.initialize().await?;
-        }
-        Ok(())
-    }
-
-    /// Get all messengers
-    pub fn get_messengers(&self) -> &[Box<dyn Messenger>] {
-        &self.messengers
-    }
-
-    /// Get a messenger by name
-    pub fn get_messenger(&self, name: &str) -> Option<&dyn Messenger> {
-        self.messengers
-            .iter()
-            .find(|m| m.name() == name)
-            .map(|b| &**b)
-    }
-
-    /// Get a messenger by type
-    pub fn get_messenger_by_type(&self, msg_type: &str) -> Option<&dyn Messenger> {
-        self.messengers
-            .iter()
-            .find(|m| m.messenger_type() == msg_type)
-            .map(|b| &**b)
-    }
-
-    /// Disconnect all messengers
-    pub async fn disconnect_all(&mut self) -> Result<()> {
-        for messenger in &mut self.messengers {
-            messenger.disconnect().await?;
-        }
-        Ok(())
-    }
-}
-
-impl Default for MessengerManager {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-// ── Built-in messengers ─────────────────────────────────────────────────────
-
-mod console;
-mod discord;
-mod google_chat;
 pub mod group_chat;
-mod imessage;
-mod irc;
 pub mod media;
-mod slack;
 pub mod streaming;
-mod teams;
-mod telegram;
-mod webhook;
 
-pub use console::ConsoleMessenger;
-pub use discord::DiscordMessenger;
-pub use google_chat::GoogleChatMessenger;
 pub use group_chat::GroupChatConfig;
-pub use imessage::IMessageMessenger;
-pub use irc::IrcMessenger;
 pub use media::{MediaConfig, MediaType};
-pub use slack::SlackMessenger;
-pub use streaming::{StreamBuffer, StreamConfig, StreamStrategy};
-pub use teams::TeamsMessenger;
-pub use telegram::TelegramMessenger;
-pub use webhook::WebhookMessenger;
+pub use streaming::{FlushAction, StreamBuffer, StreamConfig, StreamStrategy};
 
-// ── Additional messengers ───────────────────────────────────────────────────
-// Note: These are deprecated in favor of skill-based messaging (see module docs).
-// They remain compiled-in for backwards compatibility but are feature-gated.
-
-#[cfg(feature = "matrix")]
-mod matrix;
-#[cfg(feature = "matrix")]
-pub use matrix::MatrixMessenger;
-
-// Signal messenger removed — was incomplete and never had its dependencies (presage) added.
-// Use the signal-messenger-standalone skill or claw-me-maybe for Signal integration.
-// Now replaced with signal-cli based implementation below.
-
-#[cfg(feature = "whatsapp")]
-mod whatsapp;
-#[cfg(feature = "whatsapp")]
-pub use whatsapp::WhatsAppMessenger;
-
-// ── Tier 1: CLI-based messengers (lightweight HTTP/process wrappers) ────────
-
-#[cfg(feature = "signal-cli")]
-mod signal_cli;
-#[cfg(feature = "signal-cli")]
-pub use signal_cli::SignalCliMessenger;
+// ── CLI-based messengers (pending PRs to chat-system) ───────────────────────
 
 #[cfg(feature = "matrix-cli")]
-mod matrix_cli;
+pub mod matrix_cli;
 #[cfg(feature = "matrix-cli")]
 pub use matrix_cli::{MatrixCliMessenger, MatrixDmConfig};
 
 #[cfg(feature = "telegram-cli")]
-mod telegram_cli;
+pub mod telegram_cli;
 #[cfg(feature = "telegram-cli")]
 pub use telegram_cli::TelegramCliMessenger;
 
 #[cfg(feature = "discord-cli")]
-mod discord_cli;
+pub mod discord_cli;
 #[cfg(feature = "discord-cli")]
 pub use discord_cli::DiscordCliMessenger;
 
 #[cfg(feature = "slack-cli")]
-mod slack_cli;
+pub mod slack_cli;
 #[cfg(feature = "slack-cli")]
 pub use slack_cli::SlackCliMessenger;

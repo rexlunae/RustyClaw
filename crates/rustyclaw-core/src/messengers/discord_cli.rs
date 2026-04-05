@@ -6,7 +6,8 @@
 //!
 //! This requires the `discord-cli` feature to be enabled.
 
-use super::{Message, Messenger};
+use chat_system::message::Message;
+use chat_system::messenger::Messenger;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use reqwest::Client;
@@ -195,6 +196,7 @@ impl Messenger for DiscordCliMessenger {
                             reply_to: None,
                             media: None,
                             is_direct: false, // Discord DM detection would need channel type check
+                            reactions: None,
                         });
                     }
                 }

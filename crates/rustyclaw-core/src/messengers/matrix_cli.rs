@@ -6,7 +6,8 @@
 //!
 //! This requires the `matrix-cli` feature to be enabled.
 
-use super::{Message, Messenger, SendOptions};
+use chat_system::message::{Message, SendOptions};
+use chat_system::messenger::Messenger;
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use pulldown_cmark::{html, Parser};
@@ -446,6 +447,7 @@ impl MatrixCliMessenger {
                                                         reply_to: None,
                                                         media: None,
                                                         is_direct: is_dm,
+                                                        reactions: None,
                                                     });
                                                 }
                                             }

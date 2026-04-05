@@ -20,17 +20,16 @@ default = ["web-tools"]
 web-tools = ["dep:scraper", "dep:html2md"]
 browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp", "dep:schemars"]
-matrix = ["dep:matrix-sdk"]
-whatsapp = ["dep:wa-rs", "dep:wa-rs-sqlite-storage", "dep:wa-rs-tokio-transport", "dep:wa-rs-ureq-http"]
+matrix = ["chat-system/matrix"]
+whatsapp = ["chat-system/whatsapp"]
 ssh = ["dep:russh", "dep:russh-keys", "dep:rand_core", "dep:sha2"]
 # CLI-based messengers (tier 1) - no heavy deps, just HTTP
-signal-cli = []
+# These implementations remain in RustyClaw until PRs are merged into chat-system.
+signal-cli = ["chat-system/signal-cli"]
 matrix-cli = []  # Matrix CLI messenger using HTTP API (no external deps)
 telegram-cli = []
 discord-cli = []
 slack-cli = []
-# NOTE: matrix excluded from all-messengers due to matrix-sdk 0.16 recursion limit bug.
-# Use `--features matrix` explicitly if needed.
 all-messengers = ["whatsapp", "signal-cli", "matrix-cli", "telegram-cli", "discord-cli", "slack-cli"]
 full = ["web-tools", "browser", "mcp", "all-messengers", "ssh"]
 
@@ -94,12 +93,10 @@ chromiumoxide = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
-# Messengers (optional - matrix can hit recursion limits on some compilers)
-matrix-sdk = { workspace = true, optional = true }
-wa-rs = { workspace = true, optional = true }
-wa-rs-sqlite-storage = { workspace = true, optional = true }
-wa-rs-tokio-transport = { workspace = true, optional = true }
-wa-rs-ureq-http = { workspace = true, optional = true }
+# Messenger system — delegates all platform implementations to chat-system.
+# CLI-based messenger implementations (matrix_cli, telegram_cli, discord_cli, slack_cli)
+# remain local until the corresponding PRs are merged into chat-system.
+chat-system = { git = "https://github.com/rexlunae/chat-system", features = [] }
 
 # SSH transport (optional)
 russh = { version = "0.52", features = ["async-trait"], optional = true }
