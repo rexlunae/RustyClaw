@@ -1773,10 +1773,10 @@ mod tui_component {
             hooks.use_state(|| crate::components::pairing_dialog::PairingStep::ShowKey);
         let mut pairing_field: State<crate::components::pairing_dialog::PairingField> =
             hooks.use_state(|| crate::components::pairing_dialog::PairingField::Host);
-        let pairing_public_key = hooks.use_state(|| String::new());
-        let pairing_fingerprint = hooks.use_state(|| String::new());
-        let pairing_fingerprint_art = hooks.use_state(|| String::new());
-        let pairing_qr_ascii = hooks.use_state(|| String::new());
+        let mut pairing_public_key = hooks.use_state(|| String::new());
+        let mut pairing_fingerprint = hooks.use_state(|| String::new());
+        let mut pairing_fingerprint_art = hooks.use_state(|| String::new());
+        let mut pairing_qr_ascii = hooks.use_state(|| String::new());
         let mut pairing_host = hooks.use_state(|| String::new());
         let mut pairing_port = hooks.use_state(|| "2222".to_string());
         let mut pairing_error = hooks.use_state(|| String::new());

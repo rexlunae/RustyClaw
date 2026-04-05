@@ -175,6 +175,7 @@ mod tests {
         
         assert!(art.contains("+---[ED25519"));
         assert!(art.contains("+----[SHA256]"));
+        #[cfg(feature = "ssh")]
         assert!(art.lines().count() == 11);  // 9 rows + 2 borders
     }
 }

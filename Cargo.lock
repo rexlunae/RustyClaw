@@ -7007,7 +7007,7 @@ dependencies = [
  "aes",
  "aes-gcm",
  "async-trait",
- "bitflags",
+ "bitflags 2.11.0",
  "byteorder",
  "cbc",
  "chacha20 0.9.1",
