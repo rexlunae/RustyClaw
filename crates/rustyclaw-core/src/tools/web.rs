@@ -593,20 +593,27 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> Result<String, S
 }
 
 // ── Cookie helpers (sync) ───────────────────────────────────────────────────
+//
+// These are called from blocking HTTP code but may run inside a tokio runtime.
+// We use `block_in_place` to safely allow blocking in the current thread.
 
 fn get_cookie_header_sync(domain: &str, path: &str, is_secure: bool) -> Option<String> {
     let vault_ref = vault()?;
-    let mut vault_guard = vault_ref.blocking_lock();
-    vault_guard
-        .cookie_header_for_request(domain, path, is_secure, true)
-        .ok()
-        .flatten()
+    tokio::task::block_in_place(|| {
+        let mut vault_guard = vault_ref.blocking_lock();
+        vault_guard
+            .cookie_header_for_request(domain, path, is_secure, true)
+            .ok()
+            .flatten()
+    })
 }
 
 fn store_response_cookies_sync(domain: &str, headers: &[String]) {
     if let Some(vault_ref) = vault() {
-        let mut vault_guard = vault_ref.blocking_lock();
-        let _ = vault_guard.store_cookies_from_response(domain, headers, true);
+        tokio::task::block_in_place(|| {
+            let mut vault_guard = vault_ref.blocking_lock();
+            let _ = vault_guard.store_cookies_from_response(domain, headers, true);
+        });
     }
 }
 
