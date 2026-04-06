@@ -110,7 +110,7 @@ ipnetwork = "0.21"
 oxidized-agentic-audit = "0.5"
 
 # SQLite with FTS5 for mnemo memory coprocessor
-rusqlite = { version = "0.32", features = ["bundled-full"] }
+rusqlite = { version = "0.37", features = ["bundled-full"] }
 
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"
