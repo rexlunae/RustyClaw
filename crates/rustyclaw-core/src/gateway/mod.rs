@@ -497,6 +497,8 @@ pub async fn run_gateway(
         });
 
         if let Some(ssh_listen) = ssh_addr {
+            let bind_addr: std::net::SocketAddr = ssh_listen.parse()
+                .unwrap_or_else(|_| "0.0.0.0:2222".parse().unwrap());
             let ssh_cfg = {
                 let host_key = options.ssh_host_key.clone().unwrap_or_else(|| {
                     config.ssh.as_ref()
@@ -509,6 +511,7 @@ pub async fn run_gateway(
                         .unwrap_or_else(|| config.settings_dir.join("authorized_clients"))
                 });
                 ssh::SshConfig {
+                    listen_addr: bind_addr,
                     host_key_path: host_key,
                     authorized_clients_path: authorized,
                     allow_password: false,
@@ -518,8 +521,6 @@ pub async fn run_gateway(
 
             match ssh::SshServer::new(ssh_cfg).await {
                 Ok(mut ssh_server) => {
-                    let bind_addr: std::net::SocketAddr = ssh_listen.parse()
-                        .unwrap_or_else(|_| "0.0.0.0:2222".parse().unwrap());
 
                     if let Err(e) = ssh_server.listen(bind_addr).await {
                         error!(error = %e, "Failed to start SSH server");
