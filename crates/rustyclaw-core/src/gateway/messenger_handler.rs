@@ -269,15 +269,15 @@ fn generic_messenger_config(
             },
         )),
         #[cfg(feature = "whatsapp")]
-        "whatsapp" => Some(chat_system_config::MessengerConfig::WhatsApp(
-            chat_system_config::WhatsAppConfig {
-                name: name.clone(),
-                db_path: messenger_state_dir("whatsapp", &name)?
-                    .join(format!("{name}.db"))
-                    .to_string_lossy()
-                    .into_owned(),
-            },
-        )),
+        "whatsapp" => {
+            let db_path = whatsapp_state_dir(&name)?
+                .join(format!("{name}.db"))
+                .to_string_lossy()
+                .into_owned();
+            Some(chat_system_config::MessengerConfig::WhatsApp(
+                chat_system_config::WhatsAppConfig { name, db_path },
+            ))
+        }
         _ => None,
     };
 
@@ -285,11 +285,11 @@ fn generic_messenger_config(
 }
 
 #[cfg(feature = "whatsapp")]
-fn messenger_state_dir(kind: &str, name: &str) -> Result<std::path::PathBuf> {
+fn whatsapp_state_dir(name: &str) -> Result<std::path::PathBuf> {
     Ok(dirs::data_dir()
         .context("Failed to get data directory")?
         .join("rustyclaw")
-        .join(kind)
+        .join("whatsapp")
         .join(name))
 }
 
