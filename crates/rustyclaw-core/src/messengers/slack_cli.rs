@@ -100,12 +100,13 @@ impl SlackCliMessenger {
     /// Test authentication
     async fn auth_test(&self) -> Result<AuthTestResponse> {
         let url = format!("{}/auth.test", SLACK_API_BASE);
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header())
             .send()
             .await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -117,19 +118,21 @@ impl SlackCliMessenger {
             anyhow::bail!("Slack auth failed: {}", data.error.unwrap_or_default());
         }
 
-        data.data.ok_or_else(|| anyhow::anyhow!("No auth data in response"))
+        data.data
+            .ok_or_else(|| anyhow::anyhow!("No auth data in response"))
     }
 
     /// Send a message to a channel
     async fn post_message(&self, channel: &str, text: &str) -> Result<String> {
         let url = format!("{}/chat.postMessage", SLACK_API_BASE);
-        
+
         let body = serde_json::json!({
             "channel": channel,
             "text": text
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header())
             .header("Content-Type", "application/json")
@@ -158,19 +161,22 @@ impl SlackCliMessenger {
         let oldest = last_ts.get(channel).cloned();
         drop(last_ts);
 
-        let mut url = format!("{}/conversations.history?channel={}&limit={}", 
-                             SLACK_API_BASE, channel, limit);
-        
+        let mut url = format!(
+            "{}/conversations.history?channel={}&limit={}",
+            SLACK_API_BASE, channel, limit
+        );
+
         if let Some(ts) = oldest {
             url.push_str(&format!("&oldest={}", ts));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
             .await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -186,7 +192,10 @@ impl SlackCliMessenger {
 
         // Update last seen timestamp
         if let Some(latest) = messages.first() {
-            self.last_timestamps.lock().await.insert(channel.to_string(), latest.ts.clone());
+            self.last_timestamps
+                .lock()
+                .await
+                .insert(channel.to_string(), latest.ts.clone());
         }
 
         Ok(messages)
@@ -213,7 +222,10 @@ impl Messenger for SlackCliMessenger {
     }
 
     async fn initialize(&mut self) -> Result<()> {
-        let auth = self.auth_test().await.context("Failed to verify Slack token")?;
+        let auth = self
+            .auth_test()
+            .await
+            .context("Failed to verify Slack token")?;
         *self.connected.lock().await = true;
         tracing::info!("Slack connected as {} in team {}", auth.user, auth.team);
         Ok(())
@@ -274,7 +286,8 @@ impl Messenger for SlackCliMessenger {
 
 /// Parse Slack timestamp (e.g., "1234567890.123456") to Unix timestamp
 fn parse_slack_ts(ts: &str) -> i64 {
-    ts.split('.').next()
+    ts.split('.')
+        .next()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0)
 }

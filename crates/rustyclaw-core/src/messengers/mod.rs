@@ -1,11 +1,11 @@
 //! Messenger facade built on top of the shared `chat-system` crate.
 
-pub use chat_system::{
-    MediaAttachment, Message, Messenger, MessengerManager, PresenceStatus, SendOptions,
-};
 pub use chat_system::messengers::{
     ConsoleMessenger, DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger,
     SlackMessenger, TeamsMessenger, TelegramMessenger, WebhookMessenger,
+};
+pub use chat_system::{
+    MediaAttachment, Message, Messenger, MessengerManager, PresenceStatus, SendOptions,
 };
 
 pub mod group_chat;
