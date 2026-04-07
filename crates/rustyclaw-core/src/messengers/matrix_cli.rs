@@ -9,15 +9,14 @@
 use super::{Message, Messenger, SendOptions};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use pulldown_cmark::{html, Parser};
+use pulldown_cmark::{Parser, html};
 use reqwest::Client;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::sync::Mutex;
-
 
 /// Matrix API response for login
 #[derive(Debug, Deserialize)]
@@ -193,7 +192,9 @@ impl MatrixCliMessenger {
 
     /// Login with password and get access token
     async fn login(&mut self) -> Result<()> {
-        let password = self.password.as_ref()
+        let password = self
+            .password
+            .as_ref()
             .context("No password provided for login")?;
 
         let login_request = json!({
@@ -204,8 +205,9 @@ impl MatrixCliMessenger {
         });
 
         let url = format!("{}/_matrix/client/v3/login", self.homeserver_url);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&url)
             .json(&login_request)
             .send()
@@ -225,7 +227,7 @@ impl MatrixCliMessenger {
 
         self.access_token = Some(login_response.access_token);
         self.device_id = Some(login_response.device_id);
-        
+
         Ok(())
     }
 
@@ -237,7 +239,8 @@ impl MatrixCliMessenger {
             urlencoding::encode(room_id)
         );
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header()?)
             .header("Content-Type", "application/json")
@@ -258,7 +261,8 @@ impl MatrixCliMessenger {
     async fn get_joined_rooms(&self) -> Result<Vec<String>> {
         let url = format!("{}/_matrix/client/v3/joined_rooms", self.homeserver_url);
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header()?)
             .send()
@@ -288,10 +292,13 @@ impl MatrixCliMessenger {
         // If it's an alias, resolve it
         if room_id_or_alias.starts_with('#') {
             let encoded_alias = urlencoding::encode(room_id_or_alias);
-            let url = format!("{}/_matrix/client/v3/directory/room/{}", 
-                            self.homeserver_url, encoded_alias);
-            
-            let response = self.client
+            let url = format!(
+                "{}/_matrix/client/v3/directory/room/{}",
+                self.homeserver_url, encoded_alias
+            );
+
+            let response = self
+                .client
                 .get(&url)
                 .header("Authorization", self.auth_header()?)
                 .send()
@@ -317,7 +324,7 @@ impl MatrixCliMessenger {
     /// Perform a sync to get new messages
     async fn sync(&self, timeout_ms: Option<u64>) -> Result<Vec<Message>> {
         let mut url = format!("{}/_matrix/client/v3/sync", self.homeserver_url);
-        
+
         let mut params = Vec::new();
         {
             let token = self.sync_token.lock().await;
@@ -328,13 +335,14 @@ impl MatrixCliMessenger {
         if let Some(timeout) = timeout_ms {
             params.push(format!("timeout={}", timeout));
         }
-        
+
         if !params.is_empty() {
             url.push('?');
             url.push_str(&params.join("&"));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header()?)
             .send()
@@ -346,7 +354,7 @@ impl MatrixCliMessenger {
         }
 
         let sync_response: SyncResponse = response.json().await?;
-        
+
         // Store next_batch for later - we'll only save it after successful message extraction
         let next_batch = sync_response.next_batch.clone();
 
@@ -360,24 +368,40 @@ impl MatrixCliMessenger {
                             if let Some(events) = invite_state.get("events") {
                                 if let Some(events_array) = events.as_array() {
                                     for event in events_array {
-                                        if event.get("type").and_then(|t| t.as_str()) == Some("m.room.member") {
-                                            if let Some(sender) = event.get("sender").and_then(|s| s.as_str()) {
+                                        if event.get("type").and_then(|t| t.as_str())
+                                            == Some("m.room.member")
+                                        {
+                                            if let Some(sender) =
+                                                event.get("sender").and_then(|s| s.as_str())
+                                            {
                                                 // Check if we should auto-accept
-                                                let should_accept = match self.dm_config.policy.as_str() {
-                                                    "open" => true,
-                                                    "allowlist" => self.dm_config.allow_from.iter().any(|u| u == sender),
-                                                    _ => false,
-                                                };
-                                                
+                                                let should_accept =
+                                                    match self.dm_config.policy.as_str() {
+                                                        "open" => true,
+                                                        "allowlist" => self
+                                                            .dm_config
+                                                            .allow_from
+                                                            .iter()
+                                                            .any(|u| u == sender),
+                                                        _ => false,
+                                                    };
+
                                                 if should_accept {
                                                     // Accept the invite
                                                     if let Err(e) = self.join_room(room_id).await {
-                                                        eprintln!("Failed to auto-accept invite from {}: {}", sender, e);
+                                                        eprintln!(
+                                                            "Failed to auto-accept invite from {}: {}",
+                                                            sender, e
+                                                        );
                                                     } else {
                                                         // Track as DM room
-                                                        let mut dm_rooms = self.dm_rooms.lock().await;
+                                                        let mut dm_rooms =
+                                                            self.dm_rooms.lock().await;
                                                         dm_rooms.insert(room_id.clone());
-                                                        eprintln!("Auto-accepted DM invite from {} to room {}", sender, room_id);
+                                                        eprintln!(
+                                                            "Auto-accepted DM invite from {} to room {}",
+                                                            sender, room_id
+                                                        );
                                                     }
                                                 }
                                             }
@@ -392,7 +416,7 @@ impl MatrixCliMessenger {
         }
 
         let mut messages = Vec::new();
-        
+
         // Track whether any allowed rooms appeared in this sync.
         // We only advance the sync token if allowed rooms were present,
         // to avoid skipping messages when sync returns only non-allowed room events.
@@ -401,8 +425,11 @@ impl MatrixCliMessenger {
         // Get current DM rooms for filtering
         let dm_rooms = self.dm_rooms.lock().await.clone();
         let has_room_filters = !self.allowed_chats.is_empty() || !dm_rooms.is_empty();
-        eprintln!("DEBUG: sync - allowed_chats: {:?}, dm_rooms: {:?}", self.allowed_chats, dm_rooms);
-        
+        eprintln!(
+            "DEBUG: sync - allowed_chats: {:?}, dm_rooms: {:?}",
+            self.allowed_chats, dm_rooms
+        );
+
         if let Some(rooms) = sync_response.rooms {
             if let Some(joined_rooms) = rooms.join {
                 eprintln!("DEBUG: sync - checking {} joined rooms", joined_rooms.len());
@@ -411,7 +438,7 @@ impl MatrixCliMessenger {
                     let in_allowed_chats = self.allowed_chats.contains(&room_id);
                     let in_dm_rooms = dm_rooms.contains(&room_id);
                     let is_allowed_room = in_allowed_chats || in_dm_rooms;
-                    
+
                     // If we have an allowlist OR dm_rooms, only process rooms in one of them
                     if has_room_filters {
                         if !is_allowed_room {
@@ -422,12 +449,14 @@ impl MatrixCliMessenger {
                         allowed_rooms_in_sync = true;
                     }
                     eprintln!("DEBUG: processing room {}", room_id);
-                    
+
                     if let Some(timeline) = room_data.get("timeline") {
                         if let Some(events) = timeline.get("events") {
                             if let Some(events_array) = events.as_array() {
                                 for event_value in events_array {
-                                    if let Ok(event) = serde_json::from_value::<RoomEvent>(event_value.clone()) {
+                                    if let Ok(event) =
+                                        serde_json::from_value::<RoomEvent>(event_value.clone())
+                                    {
                                         // Skip our own messages
                                         if event.sender == self.user_id {
                                             continue;
@@ -441,7 +470,8 @@ impl MatrixCliMessenger {
                                                         id: event.event_id,
                                                         sender: event.sender,
                                                         content: body_str.to_string(),
-                                                        timestamp: (event.origin_server_ts / 1000) as i64,
+                                                        timestamp: (event.origin_server_ts / 1000)
+                                                            as i64,
                                                         channel: Some(room_id.clone()),
                                                         reply_to: None,
                                                         thread_id: None,
@@ -470,8 +500,9 @@ impl MatrixCliMessenger {
         //
         // This prevents the token from advancing when sync only contains
         // events for non-allowed rooms, which would cause us to miss messages.
-        let should_advance_token = !messages.is_empty() || allowed_rooms_in_sync || !has_room_filters;
-        
+        let should_advance_token =
+            !messages.is_empty() || allowed_rooms_in_sync || !has_room_filters;
+
         if should_advance_token {
             let mut token = self.sync_token.lock().await;
             *token = Some(next_batch.clone());
@@ -499,7 +530,8 @@ impl MatrixCliMessenger {
             json!({ "typing": false })
         };
 
-        let response = self.client
+        let response = self
+            .client
             .put(&url)
             .header("Authorization", self.auth_header()?)
             .json(&body)
@@ -516,9 +548,14 @@ impl MatrixCliMessenger {
     }
 
     /// Send a plain text message to a room
-    async fn send_text_message(&self, room_id: &str, content: &str, reply_to: Option<&str>) -> Result<String> {
+    async fn send_text_message(
+        &self,
+        room_id: &str,
+        content: &str,
+        reply_to: Option<&str>,
+    ) -> Result<String> {
         let resolved_room_id = self.resolve_room_id(room_id).await?;
-        
+
         let txn_id = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -549,12 +586,15 @@ impl MatrixCliMessenger {
             });
         }
 
-        let url = format!("{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}", 
-                         self.homeserver_url, 
-                         urlencoding::encode(&resolved_room_id),
-                         txn_id);
+        let url = format!(
+            "{}/_matrix/client/v3/rooms/{}/send/m.room.message/{}",
+            self.homeserver_url,
+            urlencoding::encode(&resolved_room_id),
+            txn_id
+        );
 
-        let response = self.client
+        let response = self
+            .client
             .put(&url)
             .header("Authorization", self.auth_header()?)
             .json(&message_content)
@@ -622,13 +662,16 @@ impl Messenger for MatrixCliMessenger {
         // If no token (fresh start), this returns recent messages (~10 per room).
         let initial_messages = self.sync(Some(0)).await?;
         if !initial_messages.is_empty() {
-            eprintln!("Initial sync returned {} new messages", initial_messages.len());
+            eprintln!(
+                "Initial sync returned {} new messages",
+                initial_messages.len()
+            );
             let mut pending = self.pending_messages.lock().await;
             pending.extend(initial_messages);
         } else {
             eprintln!("Initial sync: no new messages (caught up)");
         }
-        
+
         self.connected = true;
         Ok(())
     }
@@ -638,7 +681,8 @@ impl Messenger for MatrixCliMessenger {
     }
 
     async fn send_message_with_options(&self, opts: SendOptions<'_>) -> Result<String> {
-        self.send_text_message(opts.recipient, opts.content, opts.reply_to).await
+        self.send_text_message(opts.recipient, opts.content, opts.reply_to)
+            .await
     }
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
@@ -650,7 +694,7 @@ impl Messenger for MatrixCliMessenger {
                 return Ok(messages);
             }
         }
-        
+
         // Then do normal sync for new messages
         self.sync(Some(1000)).await
     }
@@ -662,8 +706,9 @@ impl Messenger for MatrixCliMessenger {
     async fn disconnect(&mut self) -> Result<()> {
         if let Some(access_token) = &self.access_token {
             let url = format!("{}/_matrix/client/v3/logout", self.homeserver_url);
-            
-            let _ = self.client
+
+            let _ = self
+                .client
                 .post(&url)
                 .header("Authorization", format!("Bearer {}", access_token))
                 .send()
@@ -677,7 +722,7 @@ impl Messenger for MatrixCliMessenger {
             let mut token = self.sync_token.lock().await;
             *token = None;
         }
-        
+
         Ok(())
     }
 
@@ -727,7 +772,7 @@ mod tests {
         );
         assert_eq!(messenger.homeserver_url, "https://matrix.org");
     }
-    
+
     // Note: Own-message filtering (sender == user_id) is tested implicitly
     // via integration tests. The sync() function skips messages where
     // event.sender == self.user_id to prevent the bot from replying to itself.

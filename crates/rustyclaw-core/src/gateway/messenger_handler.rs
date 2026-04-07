@@ -34,6 +34,12 @@ use crate::messengers::MatrixMessenger;
 #[cfg(feature = "matrix-cli")]
 use crate::messengers::MatrixCliMessenger;
 
+#[cfg(feature = "signal-cli")]
+use crate::messengers::SignalCliMessenger;
+
+#[cfg(feature = "whatsapp")]
+use crate::messengers::WhatsAppMessenger;
+
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
 
@@ -125,10 +131,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             Box::new(SlackMessenger::new(name, token))
         }
         "irc" => {
-            let server = config
-                .server
-                .clone()
-                .context("IRC requires 'server'")?;
+            let server = config.server.clone().context("IRC requires 'server'")?;
             let port = config.port.unwrap_or(6697);
             let nick = config
                 .nick
@@ -139,7 +142,9 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 messenger = messenger.with_channels(config.irc_channels.clone());
             }
             if config.password.is_some() {
-                warn!("IRC password auth is not supported by chat-system 0.1.1 and will be ignored");
+                warn!(
+                    "IRC password auth is not supported by chat-system 0.1.1 and will be ignored"
+                );
             }
             if let Some(tls) = config.use_tls {
                 messenger = messenger.with_tls(tls);
@@ -153,7 +158,9 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 (config.token.clone(), config.spaces.first().cloned())
             {
                 if config.spaces.len() > 1 {
-                    warn!("Google Chat API mode only supports one configured space; using the first entry");
+                    warn!(
+                        "Google Chat API mode only supports one configured space; using the first entry"
+                    );
                 }
                 if config.credentials_path.is_some() {
                     warn!("Google Chat credentials_path is not used with chat-system API mode");
@@ -208,7 +215,9 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             let messenger = if let Some(pwd) = password {
                 MatrixMessenger::new(name.clone(), homeserver, user_id, pwd)
             } else if access_token.is_some() {
-                anyhow::bail!("Matrix access_token auth is not supported by chat-system 0.1.1; configure a password instead")
+                anyhow::bail!(
+                    "Matrix access_token auth is not supported by chat-system 0.1.1; configure a password instead"
+                )
             } else {
                 anyhow::bail!("Matrix requires 'password'");
             };
@@ -240,18 +249,18 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 access_token,
                 None, // device_id
             );
-            
+
             // Set state directory for sync token persistence
             if let Some(dirs) = directories::ProjectDirs::from("", "", "rustyclaw") {
                 let state_dir = dirs.data_dir().join("matrix").join(&name);
                 messenger = messenger.with_state_dir(state_dir);
             }
-            
+
             // Set allowed chats if configured
             if !config.allowed_chats.is_empty() {
                 messenger = messenger.with_allowed_chats(config.allowed_chats.clone());
             }
-            
+
             // Set DM config if present
             if let Some(ref dm) = config.dm {
                 use crate::messengers::MatrixDmConfig;
@@ -262,19 +271,18 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 };
                 messenger = messenger.with_dm_config(dm_config);
             }
-            
+
             Box::new(messenger)
         }
         #[cfg(not(feature = "matrix-cli"))]
         "matrix-cli" => {
-            anyhow::bail!("Matrix-CLI messenger not compiled in. Rebuild with --features matrix-cli");
+            anyhow::bail!(
+                "Matrix-CLI messenger not compiled in. Rebuild with --features matrix-cli"
+            );
         }
         #[cfg(feature = "signal-cli")]
         "signal" | "signal-cli" => {
-            let phone = config
-                .phone
-                .clone()
-                .context("Signal requires 'phone'")?;
+            let phone = config.phone.clone().context("Signal requires 'phone'")?;
             Box::new(SignalCliMessenger::new(name, phone))
         }
         #[cfg(not(feature = "signal-cli"))]
@@ -288,7 +296,10 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .join("rustyclaw")
                 .join("whatsapp")
                 .join(format!("{name}.db"));
-            Box::new(WhatsAppMessenger::new(name, db_path.to_string_lossy().into_owned()))
+            Box::new(WhatsAppMessenger::new(
+                name,
+                db_path.to_string_lossy().into_owned(),
+            ))
         }
         #[cfg(not(feature = "whatsapp"))]
         "whatsapp" => {
@@ -301,7 +312,10 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
     Ok(messenger)
 }
 
-fn get_messenger_by_type<'a>(mgr: &'a MessengerManager, messenger_type: &str) -> Option<&'a dyn Messenger> {
+fn get_messenger_by_type<'a>(
+    mgr: &'a MessengerManager,
+    messenger_type: &str,
+) -> Option<&'a dyn Messenger> {
     mgr.messengers()
         .iter()
         .find(|messenger| messenger.messenger_type() == messenger_type)
@@ -339,13 +353,16 @@ pub async fn run_messenger_loop(
 
     let poll_interval =
         Duration::from_millis(config.messenger_poll_interval_ms.unwrap_or(2000).max(500) as u64);
-    
+
     // Concurrent processing setup
     let max_concurrent = config.messenger_max_concurrent.unwrap_or(1);
     let concurrent_mode = max_concurrent > 1;
     let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
-    
-    eprintln!("DEBUG: messenger_max_concurrent={}, concurrent_mode={}", max_concurrent, concurrent_mode);
+
+    eprintln!(
+        "DEBUG: messenger_max_concurrent={}, concurrent_mode={}",
+        max_concurrent, concurrent_mode
+    );
     if concurrent_mode {
         info!(max_concurrent, "Concurrent message processing enabled");
     }
@@ -355,7 +372,10 @@ pub async fn run_messenger_loop(
 
     let http = Arc::new(reqwest::Client::new());
 
-    eprintln!("DEBUG: Starting messenger loop with poll_interval={}ms", poll_interval.as_millis());
+    eprintln!(
+        "DEBUG: Starting messenger loop with poll_interval={}ms",
+        poll_interval.as_millis()
+    );
     info!(
         poll_interval_ms = poll_interval.as_millis(),
         "Starting messenger loop"
@@ -380,7 +400,7 @@ pub async fn run_messenger_loop(
                 // Process each message
                 for (messenger_type, msg) in messages {
                     eprintln!("DEBUG: Processing message from {} in {}", msg.sender, messenger_type);
-                    
+
                     if concurrent_mode {
                         // Spawn message processing as a background task
                         let http = Arc::clone(&http);
@@ -395,11 +415,11 @@ pub async fn run_messenger_loop(
                         let conversations = Arc::clone(&conversations);
                         let semaphore = Arc::clone(&semaphore);
                         let messenger_type = messenger_type.clone();
-                        
+
                         tokio::spawn(async move {
                             // Acquire permit (blocks if at capacity)
                             let _permit = semaphore.acquire().await;
-                            
+
                             // Set typing indicator
                             if let Some(channel) = &msg.channel {
                                 let mgr = messenger_mgr.lock().await;
@@ -407,7 +427,7 @@ pub async fn run_messenger_loop(
                                     let _ = messenger.set_typing(channel, true).await;
                                 }
                             }
-                            
+
                             let channel_for_typing = msg.channel.clone();
                             let result = process_incoming_message(
                                 &http,
@@ -424,7 +444,7 @@ pub async fn run_messenger_loop(
                                 msg,
                             )
                             .await;
-                            
+
                             // Clear typing indicator
                             if let Some(channel) = channel_for_typing {
                                 let mgr = messenger_mgr.lock().await;
@@ -432,7 +452,7 @@ pub async fn run_messenger_loop(
                                     let _ = messenger.set_typing(&channel, false).await;
                                 }
                             }
-                            
+
                             if let Err(e) = result {
                                 eprintln!("DEBUG: Error processing message: {}", e);
                                 error!(error = %e, "Error processing message");
@@ -448,7 +468,7 @@ pub async fn run_messenger_loop(
                                 let _ = messenger.set_typing(channel, true).await;
                             }
                         }
-                        
+
                         let channel_for_typing = msg.channel.clone();
                         let result = process_incoming_message(
                             &http,
@@ -465,7 +485,7 @@ pub async fn run_messenger_loop(
                             msg,
                         )
                         .await;
-                        
+
                         // Clear typing indicator after processing
                         if let Some(channel) = channel_for_typing {
                             let mgr = messenger_mgr.lock().await;
@@ -473,7 +493,7 @@ pub async fn run_messenger_loop(
                                 let _ = messenger.set_typing(&channel, false).await;
                             }
                         }
-                        
+
                         if let Err(e) = result {
                             eprintln!("DEBUG: Error processing message: {}", e);
                             error!(error = %e, "Error processing message");
@@ -612,7 +632,7 @@ async fn process_incoming_message(
     .await
     .ok()
     .flatten();
-    
+
     // Build request - ProviderRequest expects Vec<ChatMessage>
     let mut resolved = ProviderRequest {
         provider: model_ctx.provider.clone(),
@@ -896,9 +916,16 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
     // Build workspace context
     let workspace_ctx =
         WorkspaceContext::with_config(config.workspace_dir(), config.workspace_context.clone());
-    eprintln!("DEBUG: Building workspace context for session_type={:?}, workspace_dir={}", session_type, config.workspace_dir().display());
+    eprintln!(
+        "DEBUG: Building workspace context for session_type={:?}, workspace_dir={}",
+        session_type,
+        config.workspace_dir().display()
+    );
     let workspace_prompt = workspace_ctx.build_context(session_type);
-    eprintln!("DEBUG: Workspace prompt length: {} chars", workspace_prompt.len());
+    eprintln!(
+        "DEBUG: Workspace prompt length: {} chars",
+        workspace_prompt.len()
+    );
 
     // Combine base prompt, safety, workspace context, and messaging context
     let mut parts = vec![base_prompt, safety_section.to_string()];
@@ -991,7 +1018,8 @@ fn get_platform_formatting_guide(messenger_type: &str) -> String {
 - **Markdown supported**: bold, italic, code, links, lists\n\
 - Tables render in most clients (Element, FluffyChat)\n\
 - Code blocks with syntax highlighting: ```rust\n\
-- Headers work but keep them minimal in chat".to_string(),
+- Headers work but keep them minimal in chat"
+            .to_string(),
 
         "discord" => "\
 ### Formatting (Discord)\n\
@@ -999,14 +1027,16 @@ fn get_platform_formatting_guide(messenger_type: &str) -> String {
 - **NO tables** — use bullet lists instead\n\
 - Code blocks with syntax highlighting: ```rust\n\
 - Wrap multiple URLs in <> to suppress embeds: `<https://example.com>`\n\
-- Headers don't render — use **bold** for emphasis".to_string(),
+- Headers don't render — use **bold** for emphasis"
+            .to_string(),
 
         "telegram" => "\
 ### Formatting (Telegram)\n\
 - **Markdown supported**: bold, italic, code, links\n\
 - **NO tables** — use bullet lists instead\n\
 - Code blocks work but no syntax highlighting in all clients\n\
-- Keep messages concise — long messages get truncated".to_string(),
+- Keep messages concise — long messages get truncated"
+            .to_string(),
 
         "whatsapp" => "\
 ### Formatting (WhatsApp)\n\
@@ -1014,7 +1044,8 @@ fn get_platform_formatting_guide(messenger_type: &str) -> String {
 - **NO markdown links** — just paste URLs directly\n\
 - **NO tables, NO headers** — use plain text with line breaks\n\
 - **NO bullet points** — use dashes or numbers manually\n\
-- Keep it simple and conversational".to_string(),
+- Keep it simple and conversational"
+            .to_string(),
 
         "slack" => "\
 ### Formatting (Slack)\n\
@@ -1022,24 +1053,28 @@ fn get_platform_formatting_guide(messenger_type: &str) -> String {
 - **NO tables** — use bullet lists\n\
 - Code blocks: ```code``` (no syntax highlighting)\n\
 - Links: <https://url|display text>\n\
-- Use emoji reactions when appropriate".to_string(),
+- Use emoji reactions when appropriate"
+            .to_string(),
 
         "signal" => "\
 ### Formatting (Signal)\n\
 - **NO formatting support** — plain text only\n\
 - Just write naturally without markdown\n\
-- URLs will auto-link".to_string(),
+- URLs will auto-link"
+            .to_string(),
 
         "irc" => "\
 ### Formatting (IRC)\n\
 - **NO formatting** — plain text only\n\
 - Keep lines short (typically <400 chars)\n\
-- No markdown, no special characters".to_string(),
+- No markdown, no special characters"
+            .to_string(),
 
         _ => "\
 ### Formatting\n\
 - Use plain text to be safe\n\
-- Avoid complex markdown unless you know the platform supports it".to_string(),
+- Avoid complex markdown unless you know the platform supports it"
+            .to_string(),
     }
 }
 

@@ -92,7 +92,7 @@ impl TelegramCliMessenger {
     async fn get_me(&self) -> Result<Value> {
         let url = format!("{}/getMe", self.base_url);
         let response = self.client.get(&url).send().await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -100,20 +100,22 @@ impl TelegramCliMessenger {
         }
 
         let data: TelegramResponse<Value> = response.json().await?;
-        data.result.ok_or_else(|| anyhow::anyhow!("No result in response"))
+        data.result
+            .ok_or_else(|| anyhow::anyhow!("No result in response"))
     }
 
     /// Send a message to a chat
     async fn send_message_internal(&self, chat_id: &str, text: &str) -> Result<i64> {
         let url = format!("{}/sendMessage", self.base_url);
-        
+
         let body = serde_json::json!({
             "chat_id": chat_id,
             "text": text,
             "parse_mode": "HTML"
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -134,13 +136,13 @@ impl TelegramCliMessenger {
     async fn get_updates(&self, timeout: u64) -> Result<Vec<Update>> {
         let last_id = *self.last_update_id.lock().await;
         let mut url = format!("{}/getUpdates?timeout={}", self.base_url, timeout);
-        
+
         if let Some(offset) = last_id {
             url.push_str(&format!("&offset={}", offset + 1));
         }
 
         let response = self.client.get(&url).send().await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -180,7 +182,10 @@ impl Messenger for TelegramCliMessenger {
 
     async fn initialize(&mut self) -> Result<()> {
         // Verify token by calling getMe
-        let _bot_info = self.get_me().await.context("Failed to verify Telegram bot token")?;
+        let _bot_info = self
+            .get_me()
+            .await
+            .context("Failed to verify Telegram bot token")?;
         *self.connected.lock().await = true;
         tracing::info!("Telegram bot connected successfully");
         Ok(())
@@ -193,15 +198,16 @@ impl Messenger for TelegramCliMessenger {
 
     async fn receive_messages(&self) -> Result<Vec<Message>> {
         let updates = self.get_updates(30).await?;
-        
+
         let messages: Vec<Message> = updates
             .into_iter()
             .filter_map(|update| {
                 update.message.map(|msg| {
-                    let sender = msg.from
+                    let sender = msg
+                        .from
                         .map(|u| u.username.unwrap_or(u.first_name))
                         .unwrap_or_else(|| "unknown".to_string());
-                    
+
                     Message {
                         id: msg.message_id.to_string(),
                         sender,
@@ -237,14 +243,15 @@ impl Messenger for TelegramCliMessenger {
         if !typing {
             return Ok(()); // Telegram typing auto-expires, no need to clear
         }
-        
+
         let url = format!("{}/sendChatAction", self.base_url);
         let body = serde_json::json!({
             "chat_id": channel,
             "action": "typing"
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .json(&body)
             .send()
@@ -253,7 +260,10 @@ impl Messenger for TelegramCliMessenger {
 
         if !response.status().is_success() {
             // Non-fatal, just log
-            eprintln!("Failed to send Telegram typing indicator: {}", response.status());
+            eprintln!(
+                "Failed to send Telegram typing indicator: {}",
+                response.status()
+            );
         }
 
         Ok(())

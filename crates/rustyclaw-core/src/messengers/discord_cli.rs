@@ -73,12 +73,13 @@ impl DiscordCliMessenger {
     /// Get current user info to verify token
     async fn get_me(&self) -> Result<DiscordUser> {
         let url = format!("{}/users/@me", DISCORD_API_BASE);
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
             .await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -91,12 +92,13 @@ impl DiscordCliMessenger {
     /// Send a message to a channel
     async fn send_message_internal(&self, channel_id: &str, content: &str) -> Result<String> {
         let url = format!("{}/channels/{}/messages", DISCORD_API_BASE, channel_id);
-        
+
         let body = serde_json::json!({
             "content": content
         });
 
-        let response = self.client
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", self.auth_header())
             .json(&body)
@@ -115,23 +117,31 @@ impl DiscordCliMessenger {
     }
 
     /// Get messages from a channel
-    async fn get_channel_messages(&self, channel_id: &str, limit: u32) -> Result<Vec<DiscordMessage>> {
+    async fn get_channel_messages(
+        &self,
+        channel_id: &str,
+        limit: u32,
+    ) -> Result<Vec<DiscordMessage>> {
         let last_ids = self.last_message_ids.lock().await;
         let after_id = last_ids.get(channel_id).cloned();
         drop(last_ids);
 
-        let mut url = format!("{}/channels/{}/messages?limit={}", DISCORD_API_BASE, channel_id, limit);
-        
+        let mut url = format!(
+            "{}/channels/{}/messages?limit={}",
+            DISCORD_API_BASE, channel_id, limit
+        );
+
         if let Some(after) = after_id {
             url.push_str(&format!("&after={}", after));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .get(&url)
             .header("Authorization", self.auth_header())
             .send()
             .await?;
-        
+
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
@@ -142,7 +152,10 @@ impl DiscordCliMessenger {
 
         // Update last seen message ID
         if let Some(latest) = messages.first() {
-            self.last_message_ids.lock().await.insert(channel_id.to_string(), latest.id.clone());
+            self.last_message_ids
+                .lock()
+                .await
+                .insert(channel_id.to_string(), latest.id.clone());
         }
 
         Ok(messages)
@@ -169,9 +182,16 @@ impl Messenger for DiscordCliMessenger {
     }
 
     async fn initialize(&mut self) -> Result<()> {
-        let user = self.get_me().await.context("Failed to verify Discord bot token")?;
+        let user = self
+            .get_me()
+            .await
+            .context("Failed to verify Discord bot token")?;
         *self.connected.lock().await = true;
-        tracing::info!("Discord bot connected as {}#{}", user.username, user.discriminator);
+        tracing::info!(
+            "Discord bot connected as {}#{}",
+            user.username,
+            user.discriminator
+        );
         Ok(())
     }
 
@@ -226,8 +246,9 @@ impl Messenger for DiscordCliMessenger {
         }
 
         let url = format!("{}/channels/{}/typing", DISCORD_API_BASE, channel);
-        
-        let response = self.client
+
+        let response = self
+            .client
             .post(&url)
             .header("Authorization", format!("Bot {}", self.token))
             .send()
@@ -236,7 +257,10 @@ impl Messenger for DiscordCliMessenger {
 
         if !response.status().is_success() {
             // Non-fatal, just log
-            eprintln!("Failed to send Discord typing indicator: {}", response.status());
+            eprintln!(
+                "Failed to send Discord typing indicator: {}",
+                response.status()
+            );
         }
 
         Ok(())
