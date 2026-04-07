@@ -4,8 +4,6 @@
 // configuration, gateway protocol, secrets management, tool dispatch,
 // skills, providers, commands, and shared display types.
 
-#![recursion_limit = "256"]
-
 pub mod args;
 pub mod canvas;
 pub mod commands;
