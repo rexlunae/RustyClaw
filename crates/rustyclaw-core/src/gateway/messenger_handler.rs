@@ -6,12 +6,11 @@
 
 use crate::config::{Config, MessengerConfig};
 use crate::messengers::{
-    DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger, MediaAttachment,
-    Message, Messenger, MessengerManager, SendOptions, SlackMessenger, TeamsMessenger,
-    TelegramMessenger, WebhookMessenger,
+    GenericMessenger, MediaAttachment, Message, Messenger, MessengerManager, SendOptions,
 };
 use crate::tools;
 use anyhow::{Context, Result};
+use chat_system::config as chat_system_config;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -28,17 +27,8 @@ use super::{
     ToolCallResult,
 };
 
-#[cfg(feature = "matrix")]
-use crate::messengers::MatrixMessenger;
-
 #[cfg(feature = "matrix-cli")]
 use crate::messengers::MatrixCliMessenger;
-
-#[cfg(feature = "signal-cli")]
-use crate::messengers::SignalCliMessenger;
-
-#[cfg(feature = "whatsapp")]
-use crate::messengers::WhatsAppMessenger;
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
@@ -91,157 +81,14 @@ pub async fn create_messenger_manager(config: &Config) -> Result<MessengerManage
 
 /// Create a single messenger from config.
 async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>> {
+    if let Some(generic_config) = generic_messenger_config(config)? {
+        let mut messenger: Box<dyn Messenger> = Box::new(GenericMessenger::new(generic_config));
+        messenger.initialize().await?;
+        return Ok(messenger);
+    }
+
     let name = config.name.clone();
     let mut messenger: Box<dyn Messenger> = match config.messenger_type.as_str() {
-        "telegram" => {
-            let token = config
-                .token
-                .clone()
-                .or_else(|| std::env::var("TELEGRAM_BOT_TOKEN").ok())
-                .context("Telegram requires 'token' or TELEGRAM_BOT_TOKEN env var")?;
-            Box::new(TelegramMessenger::new(name, token))
-        }
-        "discord" => {
-            let token = config
-                .token
-                .clone()
-                .or_else(|| std::env::var("DISCORD_BOT_TOKEN").ok())
-                .context("Discord requires 'token' or DISCORD_BOT_TOKEN env var")?;
-            Box::new(DiscordMessenger::new(name, token))
-        }
-        "webhook" => {
-            let url = config
-                .webhook_url
-                .clone()
-                .or_else(|| std::env::var("WEBHOOK_URL").ok())
-                .context("Webhook requires 'webhook_url' or WEBHOOK_URL env var")?;
-            Box::new(WebhookMessenger::new(name, url))
-        }
-        "slack" => {
-            let token = config
-                .token
-                .clone()
-                .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok())
-                .context("Slack requires 'token' or SLACK_BOT_TOKEN env var")?;
-            let mut messenger = SlackMessenger::new(name, token);
-            if let Some(app_token) = config.app_token.clone() {
-                messenger = messenger.with_app_token(app_token);
-            }
-            if let Some(channel) = config.default_channel.clone() {
-                messenger = messenger.with_default_channel(channel);
-            }
-            Box::new(messenger)
-        }
-        "irc" => {
-            let server = config.server.clone().context("IRC requires 'server'")?;
-            let port = config.port.unwrap_or(6697);
-            let nick = config
-                .nick
-                .clone()
-                .unwrap_or_else(|| "RustyClaw".to_string());
-            let mut messenger = IrcMessenger::new(name, server, port, nick);
-            if !config.irc_channels.is_empty() {
-                messenger = messenger.with_channels(config.irc_channels.clone());
-            }
-            if let Some(password) = config.password.clone() {
-                messenger = messenger.with_password(password);
-            }
-            if let Some(tls) = config.use_tls {
-                messenger = messenger.with_tls(tls);
-            }
-            Box::new(messenger)
-        }
-        "google_chat" => {
-            if let Some(url) = config.webhook_url.clone() {
-                Box::new(GoogleChatMessenger::new(name, url))
-            } else if let Some(credentials_path) = config.credentials_path.clone() {
-                // Service account credentials file mode — supports multiple spaces
-                if config.spaces.is_empty() {
-                    anyhow::bail!(
-                        "Google Chat service account mode requires at least one entry in 'spaces'"
-                    );
-                }
-                Box::new(GoogleChatMessenger::with_credentials(
-                    name,
-                    credentials_path,
-                    config.spaces.clone(),
-                ))
-            } else if let (Some(token), Some(space_id)) =
-                (config.token.clone(), config.spaces.first().cloned())
-            {
-                let mut messenger = GoogleChatMessenger::new_api(name, token, space_id);
-                if config.spaces.len() > 1 {
-                    messenger = messenger.with_spaces(config.spaces[1..].to_vec());
-                }
-                Box::new(messenger)
-            } else {
-                anyhow::bail!(
-                    "Google Chat requires 'webhook_url', 'credentials_path' (service account), \
-                     or ('token' and one or more entries in 'spaces')"
-                );
-            }
-        }
-        "teams" => {
-            if let (Some(app_id), Some(app_password)) =
-                (config.app_id.clone(), config.app_password.clone())
-            {
-                Box::new(TeamsMessenger::with_bot_framework(name, app_id, app_password))
-            } else if let Some(url) = config.webhook_url.clone() {
-                Box::new(TeamsMessenger::new(name, url))
-            } else {
-                anyhow::bail!(
-                    "Teams requires either 'app_id' + 'app_password' for Bot Framework mode, \
-                     or 'webhook_url' for webhook mode"
-                );
-            }
-        }
-        "imessage" => {
-            if config.password.is_some() || std::env::var("BLUEBUBBLES_PASSWORD").is_ok() {
-                anyhow::bail!(
-                    "BlueBubbles-backed iMessage is no longer supported; chat-system uses the local macOS Messages database"
-                );
-            }
-            let mut messenger = IMessageMessenger::new(name);
-            if let Some(path) = config.server.clone() {
-                if path.contains("://") {
-                    anyhow::bail!(
-                        "BlueBubbles-backed iMessage is no longer supported; set 'server' to a local chat.db path or omit it"
-                    );
-                }
-                messenger = messenger.with_chat_db_path(path);
-            }
-            Box::new(messenger)
-        }
-        #[cfg(feature = "matrix")]
-        "matrix" => {
-            let homeserver = config
-                .homeserver
-                .clone()
-                .context("Matrix requires 'homeserver'")?;
-            let user_id = config
-                .user_id
-                .clone()
-                .context("Matrix requires 'user_id'")?;
-
-            let messenger = if let Some(access_token) = config.access_token.clone() {
-                MatrixMessenger::with_access_token(
-                    name.clone(),
-                    homeserver,
-                    user_id,
-                    access_token,
-                    None, // device_id
-                )
-            } else if let Some(pwd) = config.password.clone() {
-                MatrixMessenger::new(name.clone(), homeserver, user_id, pwd)
-            } else {
-                anyhow::bail!("Matrix requires 'access_token' or 'password'");
-            };
-            Box::new(messenger)
-        }
-        #[cfg(not(feature = "matrix"))]
-        "matrix" => {
-            anyhow::bail!("Matrix messenger not compiled in. Rebuild with --features matrix");
-        }
         #[cfg(feature = "matrix-cli")]
         "matrix-cli" => {
             let homeserver = config
@@ -295,36 +142,289 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 "Matrix-CLI messenger not compiled in. Rebuild with --features matrix-cli"
             );
         }
-        #[cfg(feature = "signal-cli")]
-        "signal" | "signal-cli" => {
-            let phone = config.phone.clone().context("Signal requires 'phone'")?;
-            Box::new(SignalCliMessenger::new(name, phone))
-        }
-        #[cfg(not(feature = "signal-cli"))]
-        "signal" | "signal-cli" => {
-            anyhow::bail!("Signal messenger not compiled in. Rebuild with --features signal-cli");
-        }
-        #[cfg(feature = "whatsapp")]
-        "whatsapp" => {
-            let db_path = dirs::data_dir()
-                .context("Failed to get data directory")?
-                .join("rustyclaw")
-                .join("whatsapp")
-                .join(format!("{name}.db"));
-            Box::new(WhatsAppMessenger::new(
-                name,
-                db_path.to_string_lossy().into_owned(),
-            ))
-        }
-        #[cfg(not(feature = "whatsapp"))]
-        "whatsapp" => {
-            anyhow::bail!("WhatsApp messenger not compiled in. Rebuild with --features whatsapp");
+        "irc" => build_irc_messenger(config, name)?,
+        "slack" => build_slack_messenger(config, name)?,
+        "google_chat" => build_google_chat_messenger(config, name)?,
+        "teams" => build_teams_messenger(config, name)?,
+        "imessage" => build_imessage_messenger(config, name)?,
+        #[cfg(feature = "matrix")]
+        "matrix" => build_matrix_messenger(config, name)?,
+        #[cfg(not(feature = "matrix"))]
+        "matrix" => {
+            anyhow::bail!("Matrix messenger not compiled in. Rebuild with --features matrix")
         }
         other => anyhow::bail!("Unknown messenger type: {}", other),
     };
 
     messenger.initialize().await?;
     Ok(messenger)
+}
+
+fn generic_messenger_config(
+    config: &MessengerConfig,
+) -> Result<Option<chat_system_config::MessengerConfig>> {
+    let name = config.name.clone();
+
+    let messenger = match config.messenger_type.as_str() {
+        "console" => Some(chat_system_config::MessengerConfig::Console(
+            chat_system_config::ConsoleConfig { name },
+        )),
+        "discord" => Some(chat_system_config::MessengerConfig::Discord(
+            chat_system_config::DiscordConfig {
+                name,
+                token: config.token.clone().context("Discord requires 'token'")?,
+            },
+        )),
+        "telegram" => Some(chat_system_config::MessengerConfig::Telegram(
+            chat_system_config::TelegramConfig {
+                name,
+                token: config.token.clone().context("Telegram requires 'token'")?,
+            },
+        )),
+        "webhook" => Some(chat_system_config::MessengerConfig::Webhook(
+            chat_system_config::WebhookConfig {
+                name,
+                url: config
+                    .webhook_url
+                    .clone()
+                    .context("Webhook requires 'webhook_url'")?,
+            },
+        )),
+        "slack" if config.app_token.is_none() && config.default_channel.is_none() => Some(
+            chat_system_config::MessengerConfig::Slack(chat_system_config::SlackConfig {
+                name,
+                token: config.token.clone().context("Slack requires 'token'")?,
+            }),
+        ),
+        "irc" if config.password.is_none() => Some(chat_system_config::MessengerConfig::Irc(
+            chat_system_config::IrcConfig {
+                name,
+                server: config.server.clone().context("IRC requires 'server'")?,
+                port: config.port.unwrap_or(6697),
+                nick: config
+                    .nick
+                    .clone()
+                    .unwrap_or_else(|| "RustyClaw".to_string()),
+                channels: config.irc_channels.clone(),
+                tls: config.use_tls.unwrap_or(false),
+            },
+        )),
+        "google_chat"
+            if config.credentials_path.is_none()
+                && (config.webhook_url.is_some()
+                    || (config.token.is_some() && config.spaces.len() == 1)) =>
+        {
+            Some(chat_system_config::MessengerConfig::GoogleChat(
+                chat_system_config::GoogleChatConfig {
+                    name,
+                    webhook_url: config.webhook_url.clone(),
+                    token: config.token.clone(),
+                    space_id: config.spaces.first().cloned(),
+                },
+            ))
+        }
+        "teams" if config.app_id.is_none() && config.app_password.is_none() => Some(
+            chat_system_config::MessengerConfig::Teams(chat_system_config::TeamsConfig {
+                name,
+                webhook_url: Some(
+                    config
+                        .webhook_url
+                        .clone()
+                        .context("Teams requires 'webhook_url'")?,
+                ),
+                token: None,
+                team_id: None,
+                channel_id: None,
+            }),
+        ),
+        "imessage" if config.server.is_none() && config.password.is_none() => {
+            Some(chat_system_config::MessengerConfig::IMessage(
+                chat_system_config::IMessageConfig { name },
+            ))
+        }
+        #[cfg(feature = "matrix")]
+        "matrix" if config.access_token.is_none() => Some(
+            chat_system_config::MessengerConfig::Matrix(chat_system_config::MatrixConfig {
+                name,
+                homeserver: config
+                    .homeserver
+                    .clone()
+                    .context("Matrix requires 'homeserver'")?,
+                username: config
+                    .user_id
+                    .clone()
+                    .context("Matrix requires 'user_id'")?,
+                password: config
+                    .password
+                    .clone()
+                    .context("Matrix requires 'password'")?,
+            }),
+        ),
+        #[cfg(feature = "signal-cli")]
+        "signal" | "signal-cli" => Some(chat_system_config::MessengerConfig::SignalCli(
+            chat_system_config::SignalCliConfig {
+                name,
+                phone_number: config.phone.clone().context("Signal requires 'phone'")?,
+                cli_path: "signal-cli".to_string(),
+            },
+        )),
+        #[cfg(feature = "whatsapp")]
+        "whatsapp" => Some(chat_system_config::MessengerConfig::WhatsApp(
+            chat_system_config::WhatsAppConfig {
+                name: name.clone(),
+                db_path: messenger_state_dir("whatsapp", &name)?
+                    .join(format!("{name}.db"))
+                    .to_string_lossy()
+                    .into_owned(),
+            },
+        )),
+        _ => None,
+    };
+
+    Ok(messenger)
+}
+
+#[cfg(feature = "whatsapp")]
+fn messenger_state_dir(kind: &str, name: &str) -> Result<std::path::PathBuf> {
+    Ok(dirs::data_dir()
+        .context("Failed to get data directory")?
+        .join("rustyclaw")
+        .join(kind)
+        .join(name))
+}
+
+fn build_irc_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
+    let mut messenger = crate::messengers::IrcMessenger::new(
+        name,
+        config.server.clone().context("IRC requires 'server'")?,
+        config.port.unwrap_or(6697),
+        config
+            .nick
+            .clone()
+            .unwrap_or_else(|| "RustyClaw".to_string()),
+    );
+    if !config.irc_channels.is_empty() {
+        messenger = messenger.with_channels(config.irc_channels.clone());
+    }
+    if let Some(password) = config.password.clone() {
+        messenger = messenger.with_password(password);
+    }
+    if let Some(tls) = config.use_tls {
+        messenger = messenger.with_tls(tls);
+    }
+    Ok(Box::new(messenger))
+}
+
+fn build_slack_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
+    let mut messenger = crate::messengers::SlackMessenger::new(
+        name,
+        config.token.clone().context("Slack requires 'token'")?,
+    );
+    if let Some(app_token) = config.app_token.clone() {
+        messenger = messenger.with_app_token(app_token);
+    }
+    if let Some(channel) = config.default_channel.clone() {
+        messenger = messenger.with_default_channel(channel);
+    }
+    Ok(Box::new(messenger))
+}
+
+fn build_google_chat_messenger(
+    config: &MessengerConfig,
+    name: String,
+) -> Result<Box<dyn Messenger>> {
+    if let Some(credentials_path) = config.credentials_path.clone() {
+        if config.spaces.is_empty() {
+            anyhow::bail!(
+                "Google Chat service account mode requires at least one entry in 'spaces'"
+            );
+        }
+        return Ok(Box::new(
+            crate::messengers::GoogleChatMessenger::with_credentials(
+                name,
+                credentials_path,
+                config.spaces.clone(),
+            ),
+        ));
+    }
+
+    if let (Some(token), Some(space_id)) = (config.token.clone(), config.spaces.first().cloned()) {
+        let mut messenger = crate::messengers::GoogleChatMessenger::new_api(name, token, space_id);
+        if config.spaces.len() > 1 {
+            messenger = messenger.with_spaces(config.spaces[1..].to_vec());
+        }
+        return Ok(Box::new(messenger));
+    }
+
+    anyhow::bail!(
+        "Google Chat requires 'webhook_url', 'credentials_path', or ('token' and one or more entries in 'spaces')"
+    )
+}
+
+fn build_teams_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
+    if let (Some(app_id), Some(app_password)) = (config.app_id.clone(), config.app_password.clone())
+    {
+        return Ok(Box::new(
+            crate::messengers::TeamsMessenger::with_bot_framework(name, app_id, app_password),
+        ));
+    }
+
+    anyhow::bail!(
+        "Teams requires either 'app_id' + 'app_password' for Bot Framework mode, or 'webhook_url' for webhook mode"
+    )
+}
+
+fn build_imessage_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
+    if config.password.is_some() {
+        anyhow::bail!(
+            "BlueBubbles-backed iMessage is no longer supported; chat-system uses the local macOS Messages database"
+        );
+    }
+
+    let mut messenger = crate::messengers::IMessageMessenger::new(name);
+    if let Some(path) = config.server.clone() {
+        if path.contains("://") {
+            anyhow::bail!(
+                "BlueBubbles-backed iMessage is no longer supported; set 'server' to a local chat.db path or omit it"
+            );
+        }
+        messenger = messenger.with_chat_db_path(path);
+    }
+    Ok(Box::new(messenger))
+}
+
+#[cfg(feature = "matrix")]
+fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
+    let homeserver = config
+        .homeserver
+        .clone()
+        .context("Matrix requires 'homeserver'")?;
+    let user_id = config
+        .user_id
+        .clone()
+        .context("Matrix requires 'user_id'")?;
+
+    let messenger = if let Some(access_token) = config.access_token.clone() {
+        crate::messengers::MatrixMessenger::with_access_token(
+            name,
+            homeserver,
+            user_id,
+            access_token,
+            None,
+        )
+    } else {
+        crate::messengers::MatrixMessenger::new(
+            name,
+            homeserver,
+            user_id,
+            config
+                .password
+                .clone()
+                .context("Matrix requires 'password'")?,
+        )
+    };
+
+    Ok(Box::new(messenger))
 }
 
 fn get_messenger_by_type<'a>(

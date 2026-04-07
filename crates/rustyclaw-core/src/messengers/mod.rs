@@ -5,7 +5,8 @@ pub use chat_system::messengers::{
     SlackMessenger, TeamsMessenger, TelegramMessenger, WebhookMessenger,
 };
 pub use chat_system::{
-    MediaAttachment, Message, Messenger, MessengerManager, PresenceStatus, SendOptions,
+    GenericMessenger, MediaAttachment, Message, Messenger, MessengerManager, PresenceStatus,
+    SendOptions,
 };
 
 pub mod group_chat;
