@@ -200,7 +200,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 anyhow::bail!(
                     "Teams requires 'webhook_url'. Bot Framework OAuth token exchange \
                      (app_id/app_password) is not yet supported by chat-system; \
-                     see https://github.com/rexlunae/chat-system"
+                     See: https://github.com/rexlunae/chat-system"
                 );
             }
         }
