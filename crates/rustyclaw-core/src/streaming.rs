@@ -78,6 +78,7 @@ pub async fn call_openai_streaming(
     let mut body = json!({
         "model": req.model,
         "messages": messages,
+        "max_tokens": 16384,
         "stream": true,
     });
 
@@ -226,12 +227,12 @@ pub async fn call_anthropic_streaming(
         })
         .collect();
 
-    // Determine max_tokens based on whether thinking is enabled
-    // Extended thinking requires higher max_tokens to accommodate thinking + response
+    // Allow generous output length to avoid truncation on long responses.
+    // Extended thinking needs even more room, but 16384 is a good baseline.
     let max_tokens = if req.thinking_budget.is_some() {
-        16384 // Allow room for thinking + response
+        32768
     } else {
-        4096
+        16384
     };
 
     let mut body = json!({

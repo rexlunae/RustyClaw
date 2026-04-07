@@ -957,6 +957,7 @@ pub async fn call_openai_with_tools(
     let mut body = json!({
         "model": req.model,
         "messages": messages,
+        "max_tokens": 16384,
         "stream": true,
         "stream_options": { "include_usage": true },
     });
@@ -1107,8 +1108,8 @@ pub async fn call_anthropic_with_tools(
     // Use streaming when we have a writer to forward chunks to
     let use_streaming = writer.is_some();
 
-    // Increase max_tokens when streaming to allow for longer responses
-    let max_tokens = if use_streaming { 16384 } else { 4096 };
+    // Allow generous output length to avoid truncation on long responses
+    let max_tokens = 16384;
 
     let mut body = json!({
         "model": req.model,
