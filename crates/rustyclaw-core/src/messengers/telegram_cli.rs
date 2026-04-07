@@ -209,8 +209,12 @@ impl Messenger for TelegramCliMessenger {
                         timestamp: msg.date,
                         channel: Some(msg.chat.id.to_string()),
                         reply_to: None,
+                        thread_id: None,
                         media: None,
-                                        is_direct: false, // TODO: implement DM detection
+                        is_direct: false, // TODO: implement DM detection
+                        message_type: Default::default(),
+                        edited_timestamp: None,
+                        reactions: None,
                     }
                 })
             })

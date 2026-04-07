@@ -14,7 +14,7 @@ authors = ["Erica Stith <erica@example.com>"]
 license = "MIT"
 homepage = "https://github.com/rexlunae/RustyClaw"
 repository = "https://github.com/rexlunae/RustyClaw"
-rust-version = "1.85"
+rust-version = "1.86"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal"))'] }
@@ -29,6 +29,7 @@ desktop = { description = "Enable desktop GUI client (requires GTK system librar
 # Internal crates
 rustyclaw-core = { path = "crates/rustyclaw-core", version = "0.3.0" }
 rustyclaw-tui = { path = "crates/rustyclaw-tui", version = "0.3.0" }
+chat-system = { version = "0.1.1", default-features = false }
 
 # Configuration and serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -128,18 +129,6 @@ crossterm = "0.28"
 
 # Fuzzy matching for TUI selectors
 nucleo-matcher = "0.3"
-
-# Matrix messenger support (0.16+ for libsqlite3-sys 0.35 compatibility with wa-rs)
-# NOTE: matrix-sdk 0.16 can hit Rust recursion limits on some compilers.
-# If you get "queries overflow the depth limit", try: RUSTFLAGS="--cfg recursion_limit=\"512\"" cargo build
-# Or disable the matrix feature: cargo build --no-default-features
-matrix-sdk = { version = "0.16", default-features = false, features = ["e2e-encryption", "sqlite", "rustls-tls"] }
-
-# WhatsApp Web support
-wa-rs = "0.2"
-wa-rs-sqlite-storage = "0.2"
-wa-rs-tokio-transport = "0.2"
-wa-rs-ureq-http = "0.2"
 
 # Browser automation
 chromiumoxide = { version = "0.7", default-features = false, features = ["tokio-runtime"] }

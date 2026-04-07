@@ -237,8 +237,12 @@ impl Messenger for SlackCliMessenger {
                             timestamp: parse_slack_ts(&msg.ts),
                             channel: Some(channel.clone()),
                             reply_to: None,
+                            thread_id: None,
                             media: None,
                             is_direct: false, // Slack DM detection would need channel type check
+                            message_type: Default::default(),
+                            edited_timestamp: None,
+                            reactions: None,
                         });
                     }
                 }
