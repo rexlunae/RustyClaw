@@ -444,8 +444,12 @@ impl MatrixCliMessenger {
                                                         timestamp: (event.origin_server_ts / 1000) as i64,
                                                         channel: Some(room_id.clone()),
                                                         reply_to: None,
+                                                        thread_id: None,
                                                         media: None,
                                                         is_direct: is_dm,
+                                                        message_type: Default::default(),
+                                                        edited_timestamp: None,
+                                                        reactions: None,
                                                     });
                                                 }
                                             }

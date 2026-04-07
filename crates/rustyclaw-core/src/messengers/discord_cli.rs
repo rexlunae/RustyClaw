@@ -193,8 +193,12 @@ impl Messenger for DiscordCliMessenger {
                             timestamp: 0, // Would need to parse ISO timestamp
                             channel: Some(msg.channel_id),
                             reply_to: None,
+                            thread_id: None,
                             media: None,
                             is_direct: false, // Discord DM detection would need channel type check
+                            message_type: Default::default(),
+                            edited_timestamp: None,
+                            reactions: None,
                         });
                     }
                 }

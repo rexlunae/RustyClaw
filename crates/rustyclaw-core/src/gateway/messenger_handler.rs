@@ -68,7 +68,7 @@ pub async fn create_messenger_manager(config: &Config) -> Result<MessengerManage
                     messenger_type = %messenger.messenger_type(),
                     "Messenger initialized"
                 );
-                manager.add_messenger(messenger);
+                manager = manager.add_boxed(messenger);
             }
             Err(e) => {
                 error!(
@@ -117,14 +117,12 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok())
                 .context("Slack requires 'token' or SLACK_BOT_TOKEN env var")?;
-            let mut messenger = SlackMessenger::new(name, token);
-            if let Some(ref app_token) = config.app_token {
-                messenger = messenger.with_app_token(app_token.clone());
+            if config.app_token.is_some() || config.default_channel.is_some() {
+                warn!(
+                    "Slack app_token/default_channel options are not used with chat-system; using token-only Slack messenger"
+                );
             }
-            if let Some(ref channel) = config.default_channel {
-                messenger = messenger.with_default_channel(channel.clone());
-            }
-            Box::new(messenger)
+            Box::new(SlackMessenger::new(name, token))
         }
         "irc" => {
             let server = config
@@ -140,8 +138,8 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             if !config.irc_channels.is_empty() {
                 messenger = messenger.with_channels(config.irc_channels.clone());
             }
-            if let Some(ref pass) = config.password {
-                messenger = messenger.with_password(pass.clone());
+            if config.password.is_some() {
+                warn!("IRC password auth is not supported by chat-system 0.1.1 and will be ignored");
             }
             if let Some(tls) = config.use_tls {
                 messenger = messenger.with_tls(tls);
@@ -149,43 +147,50 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             Box::new(messenger)
         }
         "google_chat" => {
-            let mut messenger = GoogleChatMessenger::new(name);
-            if let Some(ref url) = config.webhook_url {
-                messenger = messenger.with_webhook_url(url.clone());
+            if let Some(url) = config.webhook_url.clone() {
+                Box::new(GoogleChatMessenger::new(name, url))
+            } else if let (Some(token), Some(space_id)) =
+                (config.token.clone(), config.spaces.first().cloned())
+            {
+                if config.spaces.len() > 1 {
+                    warn!("Google Chat API mode only supports one configured space; using the first entry");
+                }
+                if config.credentials_path.is_some() {
+                    warn!("Google Chat credentials_path is not used with chat-system API mode");
+                }
+                Box::new(GoogleChatMessenger::new_api(name, token, space_id))
+            } else {
+                anyhow::bail!(
+                    "Google Chat requires either 'webhook_url' or ('token' and one entry in 'spaces')"
+                );
             }
-            if let Some(ref creds) = config.credentials_path {
-                messenger = messenger.with_credentials(creds.clone());
-            }
-            if !config.spaces.is_empty() {
-                messenger = messenger.with_spaces(config.spaces.clone());
-            }
-            Box::new(messenger)
         }
         "teams" => {
-            let mut messenger = TeamsMessenger::new(name);
-            if let Some(ref url) = config.webhook_url {
-                messenger = messenger.with_webhook_url(url.clone());
+            let url = config
+                .webhook_url
+                .clone()
+                .context("Teams requires 'webhook_url' with chat-system 0.1.1")?;
+            if config.app_id.is_some() || config.app_password.is_some() {
+                warn!("Teams app_id/app_password are not used with chat-system 0.1.1 webhook mode");
             }
-            if let (Some(app_id), Some(app_pass)) =
-                (&config.app_id, &config.app_password)
-            {
-                messenger =
-                    messenger.with_bot_framework(app_id.clone(), app_pass.clone());
-            }
-            Box::new(messenger)
+            Box::new(TeamsMessenger::new(name, url))
         }
         "imessage" => {
-            let server_url = config
-                .server
-                .clone()
-                .or_else(|| std::env::var("BLUEBUBBLES_URL").ok())
-                .context("iMessage requires 'server' (BlueBubbles URL) or BLUEBUBBLES_URL env var")?;
-            let password = config
-                .password
-                .clone()
-                .or_else(|| std::env::var("BLUEBUBBLES_PASSWORD").ok())
-                .context("iMessage requires 'password' (BlueBubbles password) or BLUEBUBBLES_PASSWORD env var")?;
-            Box::new(IMessageMessenger::new(name, server_url, password))
+            if config.password.is_some() || std::env::var("BLUEBUBBLES_PASSWORD").is_ok() {
+                anyhow::bail!(
+                    "BlueBubbles-backed iMessage is no longer supported; chat-system uses the local macOS Messages database"
+                );
+            }
+            let mut messenger = IMessageMessenger::new(name);
+            if let Some(path) = config.server.clone() {
+                if path.contains("://") {
+                    anyhow::bail!(
+                        "BlueBubbles-backed iMessage is no longer supported; set 'server' to a local chat.db path or omit it"
+                    );
+                }
+                messenger = messenger.with_chat_db_path(path);
+            }
+            Box::new(messenger)
         }
         #[cfg(feature = "matrix")]
         "matrix" => {
@@ -198,29 +203,14 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .context("Matrix requires 'user_id'")?;
             let password = config.password.clone();
-            let access_token = config.access_token.clone();
-
-            // Store path for Matrix SQLite database
-            let store_path = dirs::data_dir()
-                .context("Failed to get data directory")?
-                .join("rustyclaw")
-                .join("matrix")
-                .join(&name);
+            let access_token = config.access_token.as_ref();
 
             let messenger = if let Some(pwd) = password {
-                MatrixMessenger::with_password(name.clone(), homeserver, user_id, pwd, store_path)
-            } else if let Some(token) = access_token {
-                // Device ID is optional, defaults to "RUSTYCLAW" if not provided
-                MatrixMessenger::with_token(
-                    name.clone(),
-                    homeserver,
-                    user_id,
-                    token,
-                    None,
-                    store_path,
-                )
+                MatrixMessenger::new(name.clone(), homeserver, user_id, pwd)
+            } else if access_token.is_some() {
+                anyhow::bail!("Matrix access_token auth is not supported by chat-system 0.1.1; configure a password instead")
             } else {
-                anyhow::bail!("Matrix requires either 'password' or 'access_token'");
+                anyhow::bail!("Matrix requires 'password'");
             };
             Box::new(messenger)
         }
@@ -279,12 +269,43 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
         "matrix-cli" => {
             anyhow::bail!("Matrix-CLI messenger not compiled in. Rebuild with --features matrix-cli");
         }
-        // Signal messenger removed — use claw-me-maybe skill or signal-messenger-standalone
+        #[cfg(feature = "signal-cli")]
+        "signal" | "signal-cli" => {
+            let phone = config
+                .phone
+                .clone()
+                .context("Signal requires 'phone'")?;
+            Box::new(SignalCliMessenger::new(name, phone))
+        }
+        #[cfg(not(feature = "signal-cli"))]
+        "signal" | "signal-cli" => {
+            anyhow::bail!("Signal messenger not compiled in. Rebuild with --features signal-cli");
+        }
+        #[cfg(feature = "whatsapp")]
+        "whatsapp" => {
+            let db_path = dirs::data_dir()
+                .context("Failed to get data directory")?
+                .join("rustyclaw")
+                .join("whatsapp")
+                .join(format!("{name}.db"));
+            Box::new(WhatsAppMessenger::new(name, db_path.to_string_lossy().into_owned()))
+        }
+        #[cfg(not(feature = "whatsapp"))]
+        "whatsapp" => {
+            anyhow::bail!("WhatsApp messenger not compiled in. Rebuild with --features whatsapp");
+        }
         other => anyhow::bail!("Unknown messenger type: {}", other),
     };
 
     messenger.initialize().await?;
     Ok(messenger)
+}
+
+fn get_messenger_by_type<'a>(mgr: &'a MessengerManager, messenger_type: &str) -> Option<&'a dyn Messenger> {
+    mgr.messengers()
+        .iter()
+        .find(|messenger| messenger.messenger_type() == messenger_type)
+        .map(|messenger| messenger.as_ref())
 }
 
 /// Run the messenger polling loop.
@@ -382,7 +403,7 @@ pub async fn run_messenger_loop(
                             // Set typing indicator
                             if let Some(channel) = &msg.channel {
                                 let mgr = messenger_mgr.lock().await;
-                                if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                                if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
                                     let _ = messenger.set_typing(channel, true).await;
                                 }
                             }
@@ -407,7 +428,7 @@ pub async fn run_messenger_loop(
                             // Clear typing indicator
                             if let Some(channel) = channel_for_typing {
                                 let mgr = messenger_mgr.lock().await;
-                                if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                                if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
                                     let _ = messenger.set_typing(&channel, false).await;
                                 }
                             }
@@ -423,7 +444,7 @@ pub async fn run_messenger_loop(
                         // Set typing indicator before processing
                         if let Some(channel) = &msg.channel {
                             let mgr = messenger_mgr.lock().await;
-                            if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                            if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
                                 let _ = messenger.set_typing(channel, true).await;
                             }
                         }
@@ -448,7 +469,7 @@ pub async fn run_messenger_loop(
                         // Clear typing indicator after processing
                         if let Some(channel) = channel_for_typing {
                             let mgr = messenger_mgr.lock().await;
-                            if let Some(messenger) = mgr.get_messenger_by_type(&messenger_type) {
+                            if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
                                 let _ = messenger.set_typing(&channel, false).await;
                             }
                         }
@@ -471,7 +492,7 @@ pub async fn run_messenger_loop(
 async fn poll_all_messengers(mgr: &MessengerManager) -> Vec<(String, Message)> {
     let mut all_messages = Vec::new();
 
-    for messenger in mgr.get_messengers() {
+    for messenger in mgr.messengers() {
         match messenger.receive_messages().await {
             Ok(messages) => {
                 for msg in messages {
@@ -801,13 +822,14 @@ async fn process_incoming_message(
         && final_response.trim() != "HEARTBEAT_OK"
     {
         let mgr = messenger_mgr.lock().await;
-        if let Some(messenger) = mgr.get_messenger_by_type(messenger_type) {
+        if let Some(messenger) = get_messenger_by_type(&mgr, messenger_type) {
             let recipient = msg.channel.as_deref().unwrap_or(&msg.sender);
 
             let opts = SendOptions {
                 recipient,
                 content: &final_response,
                 reply_to: Some(&msg.id),
+                thread_id: None,
                 silent: false,
                 media: None,
             };
