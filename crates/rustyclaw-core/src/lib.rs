@@ -44,7 +44,9 @@ pub mod user_prompt_types;
 pub mod workspace_context;
 
 // Re-export messenger types at crate root for convenience
-pub use messengers::{Message, Messenger, MessengerManager, PresenceStatus, SendOptions};
+pub use messengers::{
+    GenericMessenger, Message, Messenger, MessengerManager, PresenceStatus, SendOptions,
+};
 
 // Re-export shared display types at crate root for convenience
 pub use types::{GatewayStatus, InputMode, MessageRole};
