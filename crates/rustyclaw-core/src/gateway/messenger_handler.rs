@@ -123,20 +123,14 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .clone()
                 .or_else(|| std::env::var("SLACK_BOT_TOKEN").ok())
                 .context("Slack requires 'token' or SLACK_BOT_TOKEN env var")?;
-            if config.app_token.is_some() {
-                warn!(
-                    "Slack Socket Mode (app_token) is not yet supported by chat-system; \
-                     using HTTP API polling instead. \
-                     See: https://github.com/rexlunae/chat-system"
-                );
+            let mut messenger = SlackMessenger::new(name, token);
+            if let Some(app_token) = config.app_token.clone() {
+                messenger = messenger.with_app_token(app_token);
             }
-            if config.default_channel.is_some() {
-                warn!(
-                    "Slack default_channel is not yet supported by chat-system; ignoring. \
-                     See: https://github.com/rexlunae/chat-system"
-                );
+            if let Some(channel) = config.default_channel.clone() {
+                messenger = messenger.with_default_channel(channel);
             }
-            Box::new(SlackMessenger::new(name, token))
+            Box::new(messenger)
         }
         "irc" => {
             let server = config.server.clone().context("IRC requires 'server'")?;
@@ -149,12 +143,8 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
             if !config.irc_channels.is_empty() {
                 messenger = messenger.with_channels(config.irc_channels.clone());
             }
-            if config.password.is_some() {
-                warn!(
-                    "IRC password auth (NickServ/SASL) is not yet supported by chat-system; \
-                     connecting without authentication. \
-                     See: https://github.com/rexlunae/chat-system"
-                );
+            if let Some(password) = config.password.clone() {
+                messenger = messenger.with_password(password);
             }
             if let Some(tls) = config.use_tls {
                 messenger = messenger.with_tls(tls);
@@ -164,43 +154,44 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
         "google_chat" => {
             if let Some(url) = config.webhook_url.clone() {
                 Box::new(GoogleChatMessenger::new(name, url))
+            } else if let Some(credentials_path) = config.credentials_path.clone() {
+                // Service account credentials file mode — supports multiple spaces
+                if config.spaces.is_empty() {
+                    anyhow::bail!(
+                        "Google Chat service account mode requires at least one entry in 'spaces'"
+                    );
+                }
+                Box::new(GoogleChatMessenger::with_credentials(
+                    name,
+                    credentials_path,
+                    config.spaces.clone(),
+                ))
             } else if let (Some(token), Some(space_id)) =
                 (config.token.clone(), config.spaces.first().cloned())
             {
+                let mut messenger = GoogleChatMessenger::new_api(name, token, space_id);
                 if config.spaces.len() > 1 {
-                    warn!(
-                        "Google Chat API mode only supports one configured space; using the first entry"
-                    );
+                    messenger = messenger.with_spaces(config.spaces[1..].to_vec());
                 }
-                if config.credentials_path.is_some() {
-                    warn!(
-                        "Google Chat service-account credentials_path is not yet supported by \
-                         chat-system API mode; supply a bearer token via 'token' instead. \
-                         See: https://github.com/rexlunae/chat-system"
-                    );
-                }
-                Box::new(GoogleChatMessenger::new_api(name, token, space_id))
+                Box::new(messenger)
             } else {
                 anyhow::bail!(
-                    "Google Chat requires either 'webhook_url' or ('token' and one entry in 'spaces')"
+                    "Google Chat requires 'webhook_url', 'credentials_path' (service account), \
+                     or ('token' and one or more entries in 'spaces')"
                 );
             }
         }
         "teams" => {
-            if let Some(url) = config.webhook_url.clone() {
-                if config.app_id.is_some() || config.app_password.is_some() {
-                    warn!(
-                        "Teams Bot Framework credentials (app_id/app_password) for OAuth token \
-                         exchange are not yet supported by chat-system; using webhook mode. \
-                         See: https://github.com/rexlunae/chat-system"
-                    );
-                }
+            if let (Some(app_id), Some(app_password)) =
+                (config.app_id.clone(), config.app_password.clone())
+            {
+                Box::new(TeamsMessenger::with_bot_framework(name, app_id, app_password))
+            } else if let Some(url) = config.webhook_url.clone() {
                 Box::new(TeamsMessenger::new(name, url))
             } else {
                 anyhow::bail!(
-                    "Teams requires 'webhook_url'. Bot Framework OAuth token exchange \
-                     (app_id/app_password) is not yet supported by chat-system; \
-                     See: https://github.com/rexlunae/chat-system"
+                    "Teams requires either 'app_id' + 'app_password' for Bot Framework mode, \
+                     or 'webhook_url' for webhook mode"
                 );
             }
         }
@@ -231,20 +222,19 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
                 .user_id
                 .clone()
                 .context("Matrix requires 'user_id'")?;
-            let password = config.password.clone();
-            let access_token = config.access_token.as_ref();
 
-            let messenger = if let Some(pwd) = password {
-                MatrixMessenger::new(name.clone(), homeserver, user_id, pwd)
-            } else if access_token.is_some() {
-                anyhow::bail!(
-                    "Matrix access_token auth is not yet supported by chat-system. \
-                     Use the 'matrix-cli' messenger type which supports token-based \
-                     authentication, or configure 'password' for the built-in Matrix messenger. \
-                     See: https://github.com/rexlunae/chat-system"
+            let messenger = if let Some(access_token) = config.access_token.clone() {
+                MatrixMessenger::with_access_token(
+                    name.clone(),
+                    homeserver,
+                    user_id,
+                    access_token,
+                    None, // device_id
                 )
+            } else if let Some(pwd) = config.password.clone() {
+                MatrixMessenger::new(name.clone(), homeserver, user_id, pwd)
             } else {
-                anyhow::bail!("Matrix requires 'password'");
+                anyhow::bail!("Matrix requires 'access_token' or 'password'");
             };
             Box::new(messenger)
         }
