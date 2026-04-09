@@ -19,7 +19,6 @@ mod memory_tools;
 pub mod npm;
 pub mod ollama;
 mod patch;
-mod pdf;
 mod runtime;
 mod secrets_tools;
 mod sessions_tools;
@@ -28,6 +27,7 @@ mod sysadmin;
 mod system_tools;
 pub mod uv;
 mod web;
+mod pdf;
 // UV tool
 use uv::exec_uv_manage;
 
