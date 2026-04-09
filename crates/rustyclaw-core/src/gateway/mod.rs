@@ -28,7 +28,7 @@ pub mod mcp_handler;
 mod messenger_handler;
 pub mod model_handler;
 pub mod protocol;
-mod providers;
+pub(crate) mod providers;
 mod secrets_handler;
 mod skills_handler;
 pub mod task_handler;
@@ -138,7 +138,7 @@ pub use protocol::server::{
 };
 
 // Re-export validate_model_connection for external use
-pub use providers::validate_model_connection;
+pub use crate::model_runtime::validate_model_connection;
 
 // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -797,7 +797,7 @@ async fn handle_transport_connection(
             },
         }).await?;
         
-        match providers::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref()).await {
+        match crate::model_runtime::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref()).await {
             ProbeResult::Ready | ProbeResult::Connected { .. } => {
                 writer.send(&ServerFrame {
                     frame_type: ServerFrameType::Status,
@@ -1252,7 +1252,7 @@ async fn handle_connection(
             // Read current copilot session from shared state
             let copilot_session = shared_copilot_session.read().await.clone();
 
-            match providers::validate_model_connection(
+            match crate::model_runtime::validate_model_connection(
                 &http,
                 &probe_ctx,
                 copilot_session.as_deref(),
@@ -1820,13 +1820,13 @@ async fn handle_connection(
                                                         api_key: ctx.api_key.clone(),
                                                     };
 
-                                                    let summary_result = if ctx.provider == "anthropic" {
-                                                        providers::call_anthropic_with_tools(&http, &summary_req, None).await
-                                                    } else if ctx.provider == "google" {
-                                                        providers::call_google_with_tools(&http, &summary_req).await
-                                                    } else {
-                                                        providers::call_openai_with_tools(&http, &summary_req).await
-                                                    };
+                                                    let summary_result =
+                                                        crate::model_runtime::execute_completion(
+                                                            &http,
+                                                            &summary_req,
+                                                            None,
+                                                        )
+                                                        .await;
 
                                                     match summary_result {
                                                         Ok(resp) if !resp.text.is_empty() => {
@@ -2347,14 +2347,7 @@ async fn dispatch_text_message(
             });
         }
 
-        let result = if resolved.provider == "anthropic" {
-            // Anthropic: use streaming mode with writer for real-time chunks
-            providers::call_anthropic_with_tools(http, &resolved, Some(writer)).await
-        } else if resolved.provider == "google" {
-            providers::call_google_with_tools(http, &resolved).await
-        } else {
-            providers::call_openai_with_tools(http, &resolved).await
-        };
+        let result = crate::model_runtime::execute_completion(http, &resolved, Some(writer)).await;
 
         // Record LLM response event
         let request_duration = request_start.elapsed();

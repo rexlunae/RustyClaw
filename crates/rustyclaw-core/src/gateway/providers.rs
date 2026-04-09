@@ -3,11 +3,11 @@ use serde_json::json;
 use tracing::{debug, trace, warn};
 
 use super::protocol::server;
+use super::transport::TransportWriter;
 use super::types::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProbeResult,
     ProviderRequest, ToolCallResult,
 };
-use super::transport::TransportWriter;
 use super::{ServerFrame, ServerFrameType, ServerPayload};
 use crate::providers;
 use crate::tools;
@@ -93,7 +93,10 @@ pub async fn send_thinking_delta(writer: &mut dyn TransportWriter, delta: &str) 
 }
 
 /// Send a thinking_end frame as binary.
-pub async fn send_thinking_end(writer: &mut dyn TransportWriter, _summary: Option<&str>) -> Result<()> {
+pub async fn send_thinking_end(
+    writer: &mut dyn TransportWriter,
+    _summary: Option<&str>,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThinkingEnd,
         payload: ServerPayload::ThinkingEnd,
@@ -397,13 +400,7 @@ pub async fn compact_conversation(
         api_key: resolved.api_key.clone(),
     };
 
-    let summary_result = if resolved.provider == "anthropic" {
-        call_anthropic_with_tools(http, &summary_req, None).await
-    } else if resolved.provider == "google" {
-        call_google_with_tools(http, &summary_req).await
-    } else {
-        call_openai_with_tools(http, &summary_req).await
-    };
+    let summary_result = crate::model_runtime::execute_completion(http, &summary_req, None).await;
 
     let summary = match summary_result {
         Ok(resp) if !resp.text.is_empty() => resp.text,

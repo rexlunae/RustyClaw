@@ -88,6 +88,11 @@ Connect to any LLM provider without code changes:
 - **OpenRouter** (200+ models)
 - **Any OpenAI-compatible endpoint**
 
+RustyClaw's model runtime now routes supported providers through `rig-core`,
+while preserving RustyClaw-owned gateway state, tool approvals, and local
+provider-specific fallbacks where needed (for example GitHub Copilot session
+flows).
+
 ### 🤖 Multi-Agent Orchestration
 
 Spawn sub-agents, steer them mid-task, coordinate across sessions:

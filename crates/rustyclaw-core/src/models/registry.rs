@@ -12,6 +12,8 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info};
 
+use crate::providers;
+
 /// Cost tier for a model — used to guide sub-agent model selection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -234,142 +236,66 @@ impl ModelRegistry {
 
     /// Populate with default models from known providers.
     fn populate_defaults(&mut self) {
-        // Anthropic
-        self.register(
-            ModelEntry::new("anthropic/claude-opus-4", "anthropic", CostTier::Premium)
-                .with_context(200_000)
-                .with_vision()
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("anthropic/claude-sonnet-4", "anthropic", CostTier::Standard)
-                .with_context(200_000)
-                .with_vision()
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("anthropic/claude-haiku-4", "anthropic", CostTier::Economy)
-                .with_context(200_000)
-                .with_vision(),
-        );
+        for provider in providers::PROVIDERS {
+            for model in provider.models {
+                let mut entry = ModelEntry::new(
+                    format!("{}/{}", provider.id, model),
+                    provider.id,
+                    infer_cost_tier(provider.id, model),
+                );
 
-        // OpenAI
-        self.register(
-            ModelEntry::new("openai/gpt-4.1", "openai", CostTier::Standard)
-                .with_context(128_000)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("openai/gpt-4.1-mini", "openai", CostTier::Economy)
-                .with_context(128_000)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("openai/gpt-4.1-nano", "openai", CostTier::Economy)
-                .with_context(128_000),
-        );
-        self.register(
-            ModelEntry::new("openai/o3", "openai", CostTier::Premium)
-                .with_context(200_000)
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("openai/o4-mini", "openai", CostTier::Standard)
-                .with_context(200_000)
-                .with_thinking(),
-        );
+                if let Some(context) = infer_context_window(provider.id, model) {
+                    entry = entry.with_context(context);
+                }
+                if infer_vision(provider.id, model) {
+                    entry = entry.with_vision();
+                }
+                if infer_thinking(provider.id, model) {
+                    entry = entry.with_thinking();
+                }
+                if let Some(note) = infer_note(provider.id, model) {
+                    entry = entry.with_notes(note);
+                }
 
-        // Google
-        self.register(
-            ModelEntry::new("google/gemini-2.5-pro", "google", CostTier::Standard)
-                .with_context(1_000_000)
-                .with_vision()
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("google/gemini-2.5-flash", "google", CostTier::Economy)
-                .with_context(1_000_000)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("google/gemini-2.0-flash", "google", CostTier::Economy)
-                .with_context(1_000_000)
-                .with_vision(),
-        );
+                self.register(entry);
+            }
+        }
 
-        // xAI
-        self.register(
-            ModelEntry::new("xai/grok-3", "xai", CostTier::Standard)
-                .with_context(131_072)
-                .with_vision(),
+        set_default_subagent_model(
+            &self.models,
+            &mut self.subagent_defaults,
+            TaskComplexity::Simple,
+            &["ollama/llama3.2:3b", "ollama/llama3.1", "ollama/"],
         );
-        self.register(
-            ModelEntry::new("xai/grok-3-mini", "xai", CostTier::Economy)
-                .with_context(131_072)
-                .with_thinking(),
-        );
-
-        // GitHub Copilot (via proxy)
-        self.register(
-            ModelEntry::new(
-                "github-copilot/claude-opus-4",
-                "github-copilot",
-                CostTier::Free,
-            )
-            .with_context(200_000)
-            .with_vision()
-            .with_thinking()
-            .with_notes("Via Copilot subscription"),
-        );
-        self.register(
-            ModelEntry::new(
-                "github-copilot/claude-sonnet-4",
-                "github-copilot",
-                CostTier::Free,
-            )
-            .with_context(200_000)
-            .with_vision()
-            .with_thinking()
-            .with_notes("Via Copilot subscription"),
-        );
-        self.register(
-            ModelEntry::new("github-copilot/gpt-4.1", "github-copilot", CostTier::Free)
-                .with_context(128_000)
-                .with_vision()
-                .with_notes("Via Copilot subscription"),
-        );
-
-        // Local (Ollama)
-        self.register(
-            ModelEntry::new("ollama/llama3.1", "ollama", CostTier::Free)
-                .with_context(128_000)
-                .with_notes("Local inference"),
-        );
-        self.register(
-            ModelEntry::new("ollama/llama3.2:3b", "ollama", CostTier::Free)
-                .with_context(128_000)
-                .with_notes("Lightweight local"),
-        );
-        self.register(
-            ModelEntry::new("ollama/qwen2.5-coder", "ollama", CostTier::Free)
-                .with_context(32_000)
-                .with_notes("Code-focused local"),
-        );
-
-        // Set default subagent models
-        self.subagent_defaults
-            .insert(TaskComplexity::Simple, "ollama/llama3.2:3b".to_string());
-        self.subagent_defaults.insert(
+        set_default_subagent_model(
+            &self.models,
+            &mut self.subagent_defaults,
             TaskComplexity::Medium,
-            "anthropic/claude-haiku-4".to_string(),
+            &[
+                "anthropic/claude-haiku",
+                "openai/gpt-4.1-mini",
+                "google/gemini-2.5-flash",
+            ],
         );
-        self.subagent_defaults.insert(
+        set_default_subagent_model(
+            &self.models,
+            &mut self.subagent_defaults,
             TaskComplexity::Complex,
-            "anthropic/claude-sonnet-4".to_string(),
+            &[
+                "anthropic/claude-sonnet",
+                "openai/gpt-4.1",
+                "google/gemini-2.5-pro",
+            ],
         );
-        self.subagent_defaults.insert(
+        set_default_subagent_model(
+            &self.models,
+            &mut self.subagent_defaults,
             TaskComplexity::Critical,
-            "anthropic/claude-opus-4".to_string(),
+            &[
+                "anthropic/claude-opus",
+                "openai/o3",
+                "google/gemini-2.5-pro",
+            ],
         );
     }
 
@@ -521,6 +447,89 @@ fn format_display_name(name: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn infer_cost_tier(provider: &str, model: &str) -> CostTier {
+    let model = model.to_lowercase();
+    if matches!(provider, "ollama" | "github-copilot" | "lmstudio" | "exo") {
+        return CostTier::Free;
+    }
+    if model.contains("opus") || model == "o3" || model.contains("pro") && model.contains("gemini")
+    {
+        return CostTier::Premium;
+    }
+    if model.contains("haiku")
+        || model.contains("mini")
+        || model.contains("nano")
+        || model.contains("flash")
+        || model.contains("free")
+        || model.contains("3b")
+    {
+        return CostTier::Economy;
+    }
+    CostTier::Standard
+}
+
+fn infer_context_window(provider: &str, model: &str) -> Option<u32> {
+    let model = model.to_lowercase();
+    if provider == "google" {
+        return Some(1_000_000);
+    }
+    if provider == "anthropic" || provider == "github-copilot" {
+        return Some(200_000);
+    }
+    if model == "o3" || model == "o4-mini" || model.starts_with("gpt-4.1") {
+        return Some(200_000);
+    }
+    if provider == "xai" {
+        return Some(131_072);
+    }
+    if provider == "ollama" && model.contains("qwen2.5-coder") {
+        return Some(32_000);
+    }
+    if provider == "ollama" {
+        return Some(128_000);
+    }
+    None
+}
+
+fn infer_vision(provider: &str, model: &str) -> bool {
+    provider == "google"
+        || provider == "github-copilot"
+        || matches!(provider, "openai" | "anthropic" | "xai")
+            && !model.to_lowercase().contains("nano")
+}
+
+fn infer_thinking(provider: &str, model: &str) -> bool {
+    let model = model.to_lowercase();
+    provider == "anthropic"
+        || provider == "github-copilot"
+        || model == "o3"
+        || model == "o4-mini"
+        || model.contains("thinking")
+}
+
+fn infer_note(provider: &str, model: &str) -> Option<&'static str> {
+    match provider {
+        "github-copilot" => Some("Via Copilot subscription"),
+        "ollama" | "lmstudio" | "exo" => Some("Local inference"),
+        _ if model.to_lowercase().contains("free") => Some("Provider free tier"),
+        _ => None,
+    }
+}
+
+fn set_default_subagent_model(
+    models: &HashMap<String, ModelEntry>,
+    defaults: &mut HashMap<TaskComplexity, String>,
+    complexity: TaskComplexity,
+    preferred_prefixes: &[&str],
+) {
+    for prefix in preferred_prefixes {
+        if let Some(id) = models.keys().find(|id| id.starts_with(prefix)) {
+            defaults.insert(complexity, id.clone());
+            return;
+        }
+    }
 }
 
 /// Generate system prompt section for sub-agent model selection guidance.

@@ -19,6 +19,7 @@ mod memory_tools;
 pub mod npm;
 pub mod ollama;
 mod patch;
+mod pdf;
 mod runtime;
 mod secrets_tools;
 mod sessions_tools;
@@ -27,7 +28,6 @@ mod sysadmin;
 mod system_tools;
 pub mod uv;
 mod web;
-mod pdf;
 // UV tool
 use uv::exec_uv_manage;
 
@@ -328,6 +328,13 @@ pub struct ToolDef {
     /// The sync function that executes the tool.
     /// This is wrapped in an async context by execute_tool.
     pub execute: SyncExecuteFn,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GenericToolDefinition {
+    pub name: String,
+    pub description: String,
+    pub parameters: Value,
 }
 
 impl std::fmt::Debug for ToolDef {
@@ -937,7 +944,7 @@ fn exec_thread_describe(args: &Value, _workspace_dir: &Path) -> Result<String, S
         "action": "set_description",
         "description": description,
     });
-    
+
     Ok(format!("{}{}", THREAD_UPDATE_MARKER, update))
 }
 
@@ -1388,6 +1395,25 @@ pub fn tools_openai() -> Vec<Value> {
                     }
                 }
             })
+        })
+        .collect()
+}
+
+pub fn tools_generic() -> Vec<GenericToolDefinition> {
+    all_tools()
+        .into_iter()
+        .map(|t| {
+            let params = resolve_params(t);
+            let (properties, required) = params_to_json_schema(&params);
+            GenericToolDefinition {
+                name: t.name.to_string(),
+                description: t.description.to_string(),
+                parameters: json!({
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                }),
+            }
         })
         .collect()
 }

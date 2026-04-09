@@ -936,7 +936,7 @@ impl App {
 
                             let gw_tx2 = gw_tx.clone();
                             tokio::spawn(async move {
-                                match rustyclaw_core::providers::fetch_models_detailed(
+                                match rustyclaw_core::model_runtime::list_models_detailed(
                                     &provider_id,
                                     api_key.as_deref(),
                                     base_url.as_deref(),
