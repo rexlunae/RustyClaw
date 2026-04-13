@@ -195,24 +195,8 @@ fn generic_messenger_config(
                 chat_system_config::IMessageConfig { name },
             ))
         }
-        #[cfg(feature = "matrix")]
-        "matrix" if config.access_token.is_none() => Some(
-            chat_system_config::MessengerConfig::Matrix(chat_system_config::MatrixConfig {
-                name,
-                homeserver: config
-                    .homeserver
-                    .clone()
-                    .context("Matrix requires 'homeserver'")?,
-                username: config
-                    .user_id
-                    .clone()
-                    .context("Matrix requires 'user_id'")?,
-                password: config
-                    .password
-                    .clone()
-                    .context("Matrix requires 'password'")?,
-            }),
-        ),
+        // Matrix is handled entirely by build_matrix_messenger to ensure
+        // state_dir, allowed_chats, and dm_config are always applied.
         #[cfg(feature = "signal-cli")]
         "signal" | "signal-cli" => Some(chat_system_config::MessengerConfig::SignalCli(
             chat_system_config::SignalCliConfig {
