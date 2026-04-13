@@ -27,8 +27,8 @@ use super::{
     ToolCallResult,
 };
 
-#[cfg(feature = "matrix-cli")]
-use crate::messengers::MatrixCliMessenger;
+#[cfg(feature = "matrix")]
+use crate::messengers::MatrixMessenger;
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
@@ -89,57 +89,10 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
 
     let name = config.name.clone();
     let mut messenger: Box<dyn Messenger> = match config.messenger_type.as_str() {
-        #[cfg(feature = "matrix-cli")]
-        "matrix-cli" => {
-            let homeserver = config
-                .homeserver
-                .clone()
-                .context("Matrix-CLI requires 'homeserver'")?;
-            let user_id = config
-                .user_id
-                .clone()
-                .context("Matrix-CLI requires 'user_id'")?;
-            let access_token = config
-                .access_token
-                .clone()
-                .context("Matrix-CLI requires 'access_token'")?;
-
-            let mut messenger = MatrixCliMessenger::with_token(
-                name.clone(),
-                homeserver,
-                user_id,
-                access_token,
-                None, // device_id
-            );
-
-            // Set state directory for sync token persistence
-            if let Some(dirs) = directories::ProjectDirs::from("", "", "rustyclaw") {
-                let state_dir = dirs.data_dir().join("matrix").join(&name);
-                messenger = messenger.with_state_dir(state_dir);
-            }
-
-            // Set allowed chats if configured
-            if !config.allowed_chats.is_empty() {
-                messenger = messenger.with_allowed_chats(config.allowed_chats.clone());
-            }
-
-            // Set DM config if present
-            if let Some(ref dm) = config.dm {
-                use crate::messengers::MatrixDmConfig;
-                let dm_config = MatrixDmConfig {
-                    enabled: dm.enabled,
-                    policy: dm.policy.clone().unwrap_or_else(|| "allowlist".to_string()),
-                    allow_from: dm.allow_from.clone(),
-                };
-                messenger = messenger.with_dm_config(dm_config);
-            }
-
-            Box::new(messenger)
-        }
-        #[cfg(not(feature = "matrix-cli"))]
+        // matrix-cli type removed - use "matrix" type instead (chat-system 0.1.3)
         "matrix-cli" => {
             anyhow::bail!(
-                "Matrix-CLI messenger not compiled in. Rebuild with --features matrix-cli"
+                "matrix-cli messenger type is deprecated. Use 'matrix' type instead."
             );
         }
         "irc" => build_irc_messenger(config, name)?,
@@ -394,6 +347,7 @@ fn build_imessage_messenger(config: &MessengerConfig, name: String) -> Result<Bo
 }
 
 #[cfg(feature = "matrix")]
+#[cfg(feature = "matrix")]
 fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
     let homeserver = config
         .homeserver
@@ -404,17 +358,17 @@ fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<
         .clone()
         .context("Matrix requires 'user_id'")?;
 
-    let messenger = if let Some(access_token) = config.access_token.clone() {
-        crate::messengers::MatrixMessenger::with_access_token(
-            name,
+    let mut messenger = if let Some(access_token) = config.access_token.clone() {
+        MatrixMessenger::with_access_token(
+            name.clone(),
             homeserver,
             user_id,
             access_token,
             None,
         )
     } else {
-        crate::messengers::MatrixMessenger::new(
-            name,
+        MatrixMessenger::new(
+            name.clone(),
             homeserver,
             user_id,
             config
@@ -423,6 +377,28 @@ fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<
                 .context("Matrix requires 'password'")?,
         )
     };
+
+    // Set state directory for sync token persistence
+    if let Some(dirs) = directories::ProjectDirs::from("", "", "rustyclaw") {
+        let state_dir = dirs.data_dir().join("matrix").join(&name);
+        messenger = messenger.with_state_dir(state_dir);
+    }
+
+    // Set allowed chats if configured
+    if !config.allowed_chats.is_empty() {
+        messenger = messenger.with_allowed_chats(config.allowed_chats.clone());
+    }
+
+    // Set DM config if present
+    if let Some(ref dm) = config.dm {
+        use crate::messengers::MatrixDmConfig;
+        let dm_config = MatrixDmConfig {
+            enabled: dm.enabled,
+            policy: dm.policy.clone().unwrap_or_else(|| "allowlist".to_string()),
+            allow_from: dm.allow_from.clone(),
+        };
+        messenger = messenger.with_dm_config(dm_config);
+    }
 
     Ok(Box::new(messenger))
 }
