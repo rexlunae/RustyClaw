@@ -59,6 +59,8 @@ use web::{exec_web_fetch, exec_web_search};
 
 // Memory operations
 use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
+#[cfg(feature = "steel-memory")]
+use memory_tools::exec_add_memory;
 
 // Cron operations
 use cron_tool::exec_cron;
@@ -236,6 +238,8 @@ pub fn tool_summary(name: &str) -> &'static str {
         "memory_get" => "Read agent memory files",
         "save_memory" => "Save memories (two-layer consolidation)",
         "search_history" => "Search HISTORY.md for past entries",
+        #[cfg(feature = "steel-memory")]
+        "add_memory" => "Add memory to semantic index",
         "cron" => "Manage scheduled jobs",
         "sessions_list" => "List active sessions",
         "sessions_spawn" => "Spawn async sub-agents (use cheaper models for simple tasks)",
@@ -359,6 +363,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &MEMORY_GET,
         &SAVE_MEMORY,
         &SEARCH_HISTORY,
+        #[cfg(feature = "steel-memory")]
+        &ADD_MEMORY,
         &CRON,
         &SESSIONS_LIST,
         &SESSIONS_SPAWN,
@@ -577,6 +583,16 @@ pub static SEARCH_HISTORY: ToolDef = ToolDef {
                   that match the query. Use to recall when something happened or find past events.",
     parameters: vec![],
     execute: exec_search_history,
+};
+
+#[cfg(feature = "steel-memory")]
+pub static ADD_MEMORY: ToolDef = ToolDef {
+    name: "add_memory",
+    description: "Add a memory to the semantic vector index. Use to store important facts, decisions, \
+                  or context that should be searchable later. Memories are embedded and stored in \
+                  .steel-memory/ for fast semantic retrieval.",
+    parameters: vec![],
+    execute: exec_add_memory,
 };
 
 pub static CRON: ToolDef = ToolDef {
@@ -1292,6 +1308,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "memory_get" => memory_get_params(),
         "save_memory" => save_memory_params(),
         "search_history" => search_history_params(),
+        #[cfg(feature = "steel-memory")]
+        "add_memory" => add_memory_params(),
         "cron" => cron_params(),
         "sessions_list" => sessions_list_params(),
         "sessions_spawn" => sessions_spawn_params(),

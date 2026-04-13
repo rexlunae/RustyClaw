@@ -402,6 +402,30 @@ pub fn search_history_params() -> Vec<ToolParam> {
     ]
 }
 
+#[cfg(feature = "steel-memory")]
+pub fn add_memory_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "content".into(),
+            description: "The memory content to store.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "wing".into(),
+            description: "Category/wing for the memory (e.g., 'preferences', 'facts', 'decisions'). Default: 'memory'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "room".into(),
+            description: "Subcategory/room within the wing. Default: 'general'.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
 pub fn secrets_list_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "prefix".into(),

@@ -20,6 +20,7 @@ default = ["web-tools"]
 web-tools = ["dep:scraper", "dep:html2md"]
 browser = ["dep:chromiumoxide"]
 mcp = ["dep:rmcp", "dep:schemars"]
+steel-memory = ["dep:steel-memory"]
 matrix = ["chat-system/matrix"]
 whatsapp = ["chat-system/whatsapp"]
 ssh = ["dep:russh", "dep:russh-keys", "dep:rand_core", "dep:sha2"]
@@ -31,7 +32,7 @@ telegram-cli = []
 discord-cli = []
 slack-cli = []
 all-messengers = ["whatsapp", "signal-cli", "matrix-cli", "telegram-cli", "discord-cli", "slack-cli"]
-full = ["web-tools", "browser", "mcp", "all-messengers", "ssh"]
+full = ["web-tools", "browser", "mcp", "all-messengers", "ssh", "steel-memory"]
 
 [dependencies]
 serde.workspace = true
@@ -93,6 +94,9 @@ chromiumoxide = { workspace = true, optional = true }
 # MCP (Model Context Protocol) client support
 rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
+
+# Steel Memory - semantic vector search memory palace
+steel-memory = { git = "https://github.com/rexlunae/steel-memory", package = "steel-memory", optional = true }
 
 # SSH transport (optional)
 russh = { version = "0.52", features = ["async-trait"], optional = true }

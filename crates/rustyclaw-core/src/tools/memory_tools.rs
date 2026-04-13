@@ -1,16 +1,23 @@
 //! Memory tools: memory_search, memory_get, and save_memory.
+//!
+//! When the `steel-memory` feature is enabled, memory_search uses semantic
+//! vector search with embeddings. Otherwise, it falls back to BM25 keyword search.
 
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
 
-/// Default half-life for temporal decay in days.
+/// Default half-life for temporal decay in days (BM25 fallback).
+#[cfg(not(feature = "steel-memory"))]
 const DEFAULT_HALF_LIFE_DAYS: f64 = 30.0;
 
 /// Search memory files for relevant content.
 ///
-/// Supports optional recency boosting via temporal decay. Recent memory files
-/// are weighted higher using exponential decay with a configurable half-life.
+/// With `steel-memory` feature: Uses semantic vector search with embeddings
+/// for better natural language understanding and recall.
+///
+/// Without: Uses BM25-style keyword matching with optional recency decay.
+#[cfg(feature = "steel-memory")]
 #[instrument(skip(args, workspace_dir), fields(query))]
 pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let query = args
@@ -21,14 +28,77 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     tracing::Span::current().record("query", query);
 
     let max_results = args.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
+    let min_score = args.get("minScore").and_then(|v| v.as_f64()).unwrap_or(0.3) as f32;
 
+    debug!(max_results, min_score, "Searching memory with steel-memory");
+
+    // Use steel-memory semantic search via blocking runtime
+    let workspace = workspace_dir.to_path_buf();
+    let query_owned = query.to_string();
+    
+    // Get current tokio runtime handle and block on async
+    let rt = tokio::runtime::Handle::try_current()
+        .map_err(|_| "No tokio runtime available")?;
+    
+    rt.block_on(async move {
+        let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
+        
+        // Index workspace (idempotent - will dedupe in future)
+        let _ = index.index_workspace().await;
+
+        let results = index.search(&query_owned, max_results, Some(min_score)).await?;
+
+        if results.is_empty() {
+            return Ok("No matching memories found.".to_string());
+        }
+
+        // Format results
+        let mut output = String::new();
+        output.push_str(&format!("Memory search results for: {} (semantic)\n\n", query_owned));
+
+        for (i, result) in results.iter().enumerate() {
+            // Truncate snippet to ~700 chars
+            let snippet = if result.content.len() > 700 {
+                format!("{}...", &result.content[..700])
+            } else {
+                result.content.clone()
+            };
+
+            output.push_str(&format!(
+                "{}. **{}** [{}/{}] (similarity: {:.2})\n",
+                i + 1,
+                result.path,
+                result.wing,
+                result.room,
+                result.similarity
+            ));
+            output.push_str(&format!("{}\n\n", snippet));
+            output.push_str(&format!("Source: {} (id: {})\n\n", result.path, result.id));
+        }
+
+        debug!(result_count = results.len(), "Memory search complete");
+        Ok(output)
+    })
+}
+
+/// BM25 fallback when steel-memory is not enabled.
+#[cfg(not(feature = "steel-memory"))]
+#[instrument(skip(args, workspace_dir), fields(query))]
+pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+    let query = args
+        .get("query")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: query".to_string())?;
+
+    tracing::Span::current().record("query", query);
+
+    let max_results = args.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
     let min_score = args.get("minScore").and_then(|v| v.as_f64()).unwrap_or(0.1);
 
-    // Recency boost options
     let use_recency = args
         .get("recencyBoost")
         .and_then(|v| v.as_bool())
-        .unwrap_or(true); // Enabled by default
+        .unwrap_or(true);
 
     let half_life_days = args
         .get("halfLifeDays")
@@ -37,10 +107,9 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
 
     debug!(
         max_results,
-        min_score, use_recency, half_life_days, "Searching memory"
+        min_score, use_recency, half_life_days, "Searching memory (BM25)"
     );
 
-    // Build index and search
     let index = crate::memory::MemoryIndex::index_workspace(workspace_dir)?;
 
     let results = if use_recency {
@@ -53,7 +122,6 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
         return Ok("No matching memories found.".to_string());
     }
 
-    // Filter by minimum score and format results
     let mut output = String::new();
     output.push_str(&format!("Memory search results for: {}\n", query));
     if use_recency {
@@ -71,7 +139,6 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
         }
         count += 1;
 
-        // Truncate snippet to ~700 chars
         let snippet = if result.chunk.text.len() > 700 {
             format!("{}...", &result.chunk.text[..700])
         } else {
@@ -121,6 +188,42 @@ pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, Str
     crate::memory::read_memory_file(workspace_dir, path, from_line, num_lines)
 }
 
+/// Add a memory to the semantic index (steel-memory only).
+#[cfg(feature = "steel-memory")]
+#[instrument(skip(args, workspace_dir))]
+pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+    let content = args
+        .get("content")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: content".to_string())?;
+
+    let wing = args
+        .get("wing")
+        .and_then(|v| v.as_str())
+        .unwrap_or("memory");
+
+    let room = args
+        .get("room")
+        .and_then(|v| v.as_str())
+        .unwrap_or("general");
+
+    debug!(content_len = content.len(), wing, room, "Adding memory");
+
+    let workspace = workspace_dir.to_path_buf();
+    let content_owned = content.to_string();
+    let wing_owned = wing.to_string();
+    let room_owned = room.to_string();
+    
+    let rt = tokio::runtime::Handle::try_current()
+        .map_err(|_| "No tokio runtime available")?;
+    
+    rt.block_on(async move {
+        let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
+        let id = index.add_memory(&content_owned, &wing_owned, &room_owned, None).await?;
+        Ok(format!("Memory added with ID: {}", id))
+    })
+}
+
 /// Save memory using two-layer consolidation.
 ///
 /// This tool allows the LLM to:
@@ -153,7 +256,6 @@ pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, St
     let memory_size = if let Some(content) = memory_update {
         consolidation.update_memory(workspace_dir, content)?
     } else {
-        // Read current size
         consolidation
             .read_memory(workspace_dir)
             .map(|s| s.len())

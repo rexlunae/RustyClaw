@@ -17,6 +17,8 @@ pub mod mcp;
 pub mod memory;
 pub mod memory_consolidation;
 pub mod memory_flush;
+#[cfg(feature = "steel-memory")]
+pub mod steel_memory;
 pub mod messengers;
 pub mod mnemo;
 pub mod models;
