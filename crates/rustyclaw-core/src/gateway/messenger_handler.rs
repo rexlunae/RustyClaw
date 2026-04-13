@@ -347,7 +347,6 @@ fn build_imessage_messenger(config: &MessengerConfig, name: String) -> Result<Bo
 }
 
 #[cfg(feature = "matrix")]
-#[cfg(feature = "matrix")]
 fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
     let homeserver = config
         .homeserver
