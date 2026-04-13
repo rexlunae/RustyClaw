@@ -30,17 +30,7 @@ mod matrix_cli;
 #[cfg(feature = "matrix-cli")]
 pub use matrix_cli::{MatrixCliMessenger, MatrixDmConfig};
 
-#[cfg(feature = "telegram-cli")]
-mod telegram_cli;
-#[cfg(feature = "telegram-cli")]
-pub use telegram_cli::TelegramCliMessenger;
-
-#[cfg(feature = "discord-cli")]
-mod discord_cli;
-#[cfg(feature = "discord-cli")]
-pub use discord_cli::DiscordCliMessenger;
-
-#[cfg(feature = "slack-cli")]
-mod slack_cli;
-#[cfg(feature = "slack-cli")]
-pub use slack_cli::SlackCliMessenger;
+// NOTE: telegram-cli, discord-cli, and slack-cli features removed.
+// Use TelegramMessenger, DiscordMessenger, SlackMessenger from chat-system instead.
+// MatrixCliMessenger kept temporarily for state_dir, allowed_chats, dm_config features
+// that need to be upstreamed to chat-system.
