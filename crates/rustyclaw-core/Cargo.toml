@@ -27,9 +27,8 @@ ssh = ["dep:russh", "dep:russh-keys", "dep:rand_core", "dep:sha2"]
 qr = ["dep:image"]
 # CLI-based messengers (tier 1) - no heavy deps, just HTTP
 signal-cli = ["chat-system/signal-cli"]
-matrix-cli = []  # Matrix CLI messenger using HTTP API (no external deps) - kept for state_dir/allowed_chats/dm_config
-# telegram-cli, discord-cli, slack-cli removed - use TelegramMessenger, DiscordMessenger, SlackMessenger from chat-system
-all-messengers = ["whatsapp", "signal-cli", "matrix-cli"]
+# matrix-cli removed - use matrix feature instead (chat-system 0.1.3 has all capabilities)
+all-messengers = ["whatsapp", "signal-cli", "matrix"]
 full = ["web-tools", "browser", "mcp", "all-messengers", "ssh", "steel-memory"]
 
 [dependencies]

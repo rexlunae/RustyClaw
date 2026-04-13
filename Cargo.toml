@@ -29,7 +29,7 @@ desktop = { description = "Enable desktop GUI client (requires GTK system librar
 # Internal crates
 rustyclaw-core = { path = "crates/rustyclaw-core", version = "0.3.0" }
 rustyclaw-tui = { path = "crates/rustyclaw-tui", version = "0.3.0" }
-chat-system = { version = "0.1.2", default-features = false }
+chat-system = { version = "0.1.3", default-features = false }
 
 # Configuration and serialization
 serde = { version = "1.0", features = ["derive"] }
