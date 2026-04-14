@@ -28,7 +28,6 @@ pub mod process_manager;
 pub mod protocols;
 pub mod providers;
 pub mod provider_registry;
-pub mod genai_bridge;
 pub mod retry;
 pub mod runtime;
 pub mod runtime_ctx;

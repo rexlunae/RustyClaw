@@ -4,7 +4,7 @@
 //! allowing new providers to be added via TOML config without code changes.
 
 use anyhow::{Context, Result};
-use genai::chat::{ChatMessage, ChatRequest, ChatResponse};
+use genai::chat::{ChatMessage, ChatRequest, ChatResponse, ChatStreamResponse};
 use genai::resolver::AuthData;
 use genai::{Client, ClientBuilder, ModelIden, ServiceTarget};
 use serde::{Deserialize, Serialize};
@@ -166,6 +166,11 @@ impl ProviderRegistry {
         Ok(Self { config, client })
     }
 
+    fn resolve_full_model(&self, model_ref: &str) -> Result<String> {
+        let resolved = self.resolve(model_ref)?;
+        Ok(format!("{}/{}", resolved.provider_id, resolved.model_name))
+    }
+
     /// Resolve a model reference to provider + model.
     ///
     /// Formats:
@@ -274,10 +279,19 @@ impl ProviderRegistry {
         model_ref: &str,
         messages: Vec<ChatMessage>,
     ) -> Result<ChatResponse> {
-        let resolved = self.resolve(model_ref)?;
-        let full_model = format!("{}/{}", resolved.provider_id, resolved.model_name);
+        self.chat_request(model_ref, ChatRequest::new(messages)).await
+    }
 
-        let request = ChatRequest::new(messages);
+    /// Execute a native genai chat request.
+    ///
+    /// Use this when the caller needs genai features such as top-level system
+    /// prompts or native tool definitions.
+    pub async fn chat_request(
+        &self,
+        model_ref: &str,
+        request: ChatRequest,
+    ) -> Result<ChatResponse> {
+        let full_model = self.resolve_full_model(model_ref)?;
 
         self.client
             .exec_chat(&full_model, request, None)
@@ -290,56 +304,23 @@ impl ProviderRegistry {
         &self,
         model_ref: &str,
         messages: Vec<ChatMessage>,
-    ) -> Result<genai::chat::ChatStreamResponse> {
-        let resolved = self.resolve(model_ref)?;
-        let full_model = format!("{}/{}", resolved.provider_id, resolved.model_name);
+    ) -> Result<ChatStreamResponse> {
+        self.chat_stream_request(model_ref, ChatRequest::new(messages))
+            .await
+    }
 
-        let request = ChatRequest::new(messages);
+    /// Execute a native genai streaming chat request.
+    pub async fn chat_stream_request(
+        &self,
+        model_ref: &str,
+        request: ChatRequest,
+    ) -> Result<ChatStreamResponse> {
+        let full_model = self.resolve_full_model(model_ref)?;
 
         self.client
             .exec_chat_stream(&full_model, request, None)
             .await
             .context("Chat stream request failed")
-    }
-
-    /// Execute a chat request with tools, using RustyClaw types.
-    ///
-    /// This is a bridge method that converts between RustyClaw's protocol types
-    /// and genai's types, allowing gradual migration from the hand-rolled
-    /// provider implementations.
-    ///
-    /// `tools` should be a slice of JSON tool definitions in OpenAI / OpenAI-compatible
-    /// format (`{ "type": "function", "function": { … } }`) or the flat
-    /// `{ "name", "description", "parameters" }` / Anthropic `input_schema` variants.
-    pub async fn call_with_tools(
-        &self,
-        provider: &str,
-        model: &str,
-        messages: &[crate::gateway::protocol::types::ChatMessage],
-        tools: Option<&[serde_json::Value]>,
-    ) -> Result<crate::gateway::protocol::types::ModelResponse> {
-        use crate::genai_bridge::{genai_to_rc_response, json_tools_to_genai, rc_to_genai_messages};
-
-        let model_ref = format!("{}/{}", provider, model);
-        let resolved = self.resolve(&model_ref)?;
-        let full_model = format!("{}/{}", resolved.provider_id, resolved.model_name);
-
-        let genai_messages = rc_to_genai_messages(messages);
-        let mut request = ChatRequest::new(genai_messages);
-
-        if let Some(tool_defs) = tools {
-            if !tool_defs.is_empty() {
-                request = request.with_tools(json_tools_to_genai(tool_defs));
-            }
-        }
-
-        let response = self
-            .client
-            .exec_chat(&full_model, request, None)
-            .await
-            .context("Chat request failed")?;
-
-        Ok(genai_to_rc_response(&response))
     }
 }
 
