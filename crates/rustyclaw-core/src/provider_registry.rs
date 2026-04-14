@@ -211,6 +211,38 @@ impl ProviderRegistry {
         self.config.providers.get(id)
     }
 
+    /// Get the base URL for a provider.
+    pub fn base_url(&self, id: &str) -> Option<&str> {
+        self.config
+            .providers
+            .get(id)
+            .and_then(|p| p.base_url.as_deref())
+    }
+
+    /// Get the environment variable name for a provider's API key.
+    pub fn api_key_env(&self, id: &str) -> Option<&str> {
+        self.config
+            .providers
+            .get(id)
+            .and_then(|p| p.api_key_env.as_deref())
+    }
+
+    /// Get the display name for a provider.
+    pub fn display_name(&self, id: &str) -> Option<&str> {
+        self.config
+            .providers
+            .get(id)
+            .and_then(|p| p.display_name.as_deref())
+    }
+
+    /// Get the default model for a provider.
+    pub fn default_model(&self, id: &str) -> Option<&str> {
+        self.config
+            .providers
+            .get(id)
+            .and_then(|p| p.default_model.as_deref())
+    }
+
     /// Execute a chat request.
     pub async fn chat(
         &self,
@@ -243,6 +275,27 @@ impl ProviderRegistry {
             .exec_chat_stream(&full_model, request, None)
             .await
             .context("Chat stream request failed")
+    }
+
+    /// Execute a chat request with tools, using RustyClaw types.
+    ///
+    /// This is a bridge method that converts between RustyClaw's protocol types
+    /// and genai's types, allowing gradual migration from the hand-rolled
+    /// provider implementations.
+    pub async fn call_with_tools(
+        &self,
+        provider: &str,
+        model: &str,
+        messages: &[crate::gateway::protocol::types::ChatMessage],
+        _tools: Option<&[serde_json::Value]>, // TODO: wire up tool definitions
+    ) -> Result<crate::gateway::protocol::types::ModelResponse> {
+        use crate::genai_bridge::{genai_to_rc_response, rc_to_genai_messages};
+
+        let model_ref = format!("{}/{}", provider, model);
+        let genai_messages = rc_to_genai_messages(messages);
+
+        let response = self.chat(&model_ref, genai_messages).await?;
+        Ok(genai_to_rc_response(&response))
     }
 }
 
