@@ -1,4 +1,7 @@
 //! Messenger facade built on top of the shared `chat-system` crate.
+//!
+//! All messenger implementations are now in the `chat-system` crate.
+//! This module re-exports them for backwards compatibility.
 
 pub use chat_system::messengers::{
     ConsoleMessenger, DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger,
@@ -9,15 +12,8 @@ pub use chat_system::{
     SendOptions,
 };
 
-pub mod group_chat;
-pub mod media;
-pub mod streaming;
-pub use group_chat::GroupChatConfig;
-pub use media::{MediaConfig, MediaType};
-pub use streaming::{StreamBuffer, StreamConfig, StreamStrategy};
-
 #[cfg(feature = "matrix")]
-pub use chat_system::messengers::{MatrixMessenger, MatrixDmConfig};
+pub use chat_system::messengers::{MatrixDmConfig, MatrixMessenger};
 
 #[cfg(feature = "whatsapp")]
 pub use chat_system::messengers::WhatsAppMessenger;
