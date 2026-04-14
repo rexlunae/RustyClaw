@@ -7,21 +7,107 @@
 use crate::gateway::protocol::types::{ChatMessage as RcChatMessage, ModelResponse, ParsedToolCall};
 use genai::chat::{
     ChatMessage as GenaiChatMessage, ChatResponse, ChatStreamEvent, MessageContent, StreamEnd, Tool,
+    ToolCall, ToolResponse,
 };
 
 // ── Message Conversions ─────────────────────────────────────────────────────
 
+/// Convert a JSON tool-calls array (OpenAI format) to a `Vec<genai::chat::ToolCall>`.
+///
+/// Handles the OpenAI / OpenAI-compatible format:
+/// ```json
+/// [{ "id": "...", "type": "function", "function": { "name": "...", "arguments": "{...}" } }]
+/// ```
+/// `arguments` may be a JSON-encoded string **or** a JSON object — both are normalised to
+/// a `serde_json::Value`.
+fn json_to_genai_tool_calls(tool_calls_json: &serde_json::Value) -> Vec<ToolCall> {
+    let array = match tool_calls_json.as_array() {
+        Some(a) => a,
+        None => return vec![],
+    };
+    array
+        .iter()
+        .filter_map(|tc| {
+            // OpenAI format: { "id": "...", "function": { "name": "...", "arguments": "..." } }
+            let call_id = tc
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+            let (fn_name, fn_arguments) = if let Some(func) = tc.get("function") {
+                let name = func
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                // `arguments` may be a pre-serialised JSON string or already an object.
+                let raw = func
+                    .get("arguments")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let parsed = if let Some(s) = raw.as_str() {
+                    serde_json::from_str(s).unwrap_or(serde_json::Value::Null)
+                } else {
+                    raw
+                };
+                (name, parsed)
+            } else {
+                // Flat format: { "name": "...", "arguments": { … } }
+                let name = tc
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let args = tc
+                    .get("arguments")
+                    .or_else(|| tc.get("parameters"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                (name, args)
+            };
+            Some(ToolCall {
+                call_id,
+                fn_name,
+                fn_arguments,
+                thought_signatures: None,
+            })
+        })
+        .collect()
+}
+
 /// Convert RustyClaw ChatMessage to genai ChatMessage.
+///
+/// Handles four roles:
+/// - `system` → `GenaiChatMessage::system`
+/// - `user`   → `GenaiChatMessage::user`
+/// - `assistant` → `GenaiChatMessage::assistant` **or** `assistant_tool_calls_with_thoughts`
+///   when `tool_calls` is present.
+/// - `tool` (tool result) → `GenaiChatMessage::user(ToolResponse { call_id, content })`
 pub fn rc_to_genai_message(msg: &RcChatMessage) -> GenaiChatMessage {
     match msg.role.as_str() {
         "system" => GenaiChatMessage::system(&msg.content),
         "user" => GenaiChatMessage::user(&msg.content),
-        "assistant" => GenaiChatMessage::assistant(&msg.content),
-        // For tool results, genai uses a different structure
+        "assistant" => {
+            // If the message carries tool calls, represent them properly.
+            if let Some(tc_json) = &msg.tool_calls {
+                let tool_calls = json_to_genai_tool_calls(tc_json);
+                if !tool_calls.is_empty() {
+                    return GenaiChatMessage::assistant_tool_calls_with_thoughts(
+                        tool_calls,
+                        vec![],
+                    );
+                }
+            }
+            GenaiChatMessage::assistant(&msg.content)
+        }
+        // Tool result: genai uses a ToolResponse carried inside a user message.
         "tool" => {
-            // Tool messages in RustyClaw have tool_call_id in a specific format
-            // For now, pass as user message (genai handles tool results differently)
-            GenaiChatMessage::user(&msg.content)
+            let call_id = msg.tool_call_id.clone().unwrap_or_default();
+            let tr = ToolResponse {
+                call_id,
+                content: msg.content.clone(),
+            };
+            GenaiChatMessage::user(tr)
         }
         _ => GenaiChatMessage::user(&msg.content),
     }
@@ -230,5 +316,65 @@ mod tests {
     fn test_extract_text_content_single() {
         let content = MessageContent::from_text("Hello world");
         assert_eq!(extract_text_content(&content), "Hello world");
+    }
+
+    #[test]
+    fn test_rc_to_genai_tool_result_message() {
+        let msg = RcChatMessage {
+            role: "tool".to_string(),
+            content: "42°C".to_string(),
+            tool_call_id: Some("call_abc".to_string()),
+            ..Default::default()
+        };
+        // Should not panic; genai encodes this as a user message carrying a ToolResponse.
+        let _genai_msg = rc_to_genai_message(&msg);
+    }
+
+    #[test]
+    fn test_rc_to_genai_assistant_with_tool_calls() {
+        use serde_json::json;
+        let tool_calls_json = json!([{
+            "id": "call_1",
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "arguments": "{\"city\": \"London\"}"
+            }
+        }]);
+        let msg = RcChatMessage {
+            role: "assistant".to_string(),
+            content: String::new(),
+            tool_calls: Some(tool_calls_json),
+            ..Default::default()
+        };
+        // Should use assistant_tool_calls_with_thoughts, not assistant("").
+        let _genai_msg = rc_to_genai_message(&msg);
+    }
+
+    #[test]
+    fn test_json_to_genai_tool_calls_openai_format() {
+        use serde_json::json;
+        let tc_json = json!([{
+            "id": "call_xyz",
+            "type": "function",
+            "function": {
+                "name": "search",
+                "arguments": "{\"query\": \"Rust\"}"
+            }
+        }]);
+        let calls = json_to_genai_tool_calls(&tc_json);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].call_id, "call_xyz");
+        assert_eq!(calls[0].fn_name, "search");
+        assert_eq!(calls[0].fn_arguments["query"], "Rust");
+    }
+
+    #[test]
+    fn test_json_to_genai_tool_calls_empty() {
+        use serde_json::json;
+        let calls = json_to_genai_tool_calls(&json!([]));
+        assert!(calls.is_empty());
+        let calls = json_to_genai_tool_calls(&json!(null));
+        assert!(calls.is_empty());
     }
 }
