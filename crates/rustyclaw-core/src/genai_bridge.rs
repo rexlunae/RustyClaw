@@ -40,8 +40,9 @@ pub fn genai_to_rc_response(resp: &ChatResponse) -> ModelResponse {
     let mut result = ModelResponse::default();
 
     // Extract text content using the API
-    if let Some(text) = resp.first_text() {
-        result.text = text.to_string();
+    if let Some(ref content) = resp.content {
+        result.text = content.joined_texts().unwrap_or_default();
+    }
     }
 
     // Extract tool calls using the method
