@@ -6,8 +6,7 @@
 
 use crate::gateway::protocol::types::{ChatMessage as RcChatMessage, ModelResponse, ParsedToolCall};
 use genai::chat::{
-    ChatMessage as GenaiChatMessage, ChatResponse, ChatStreamEvent, MessageContent,
-    StreamEnd,
+    ChatMessage as GenaiChatMessage, ChatResponse, ChatStreamEvent, MessageContent, StreamEnd, Tool,
 };
 
 // ── Message Conversions ─────────────────────────────────────────────────────
@@ -31,6 +30,61 @@ pub fn rc_to_genai_message(msg: &RcChatMessage) -> GenaiChatMessage {
 /// Convert a slice of RustyClaw messages to genai messages.
 pub fn rc_to_genai_messages(messages: &[RcChatMessage]) -> Vec<GenaiChatMessage> {
     messages.iter().map(rc_to_genai_message).collect()
+}
+
+// ── Tool Conversions ────────────────────────────────────────────────────────
+
+/// Convert a single JSON tool definition to a genai [`Tool`].
+///
+/// Handles two common formats:
+///
+/// * **OpenAI / OpenAI-compatible**
+///   ```json
+///   { "type": "function", "function": { "name": "...", "description": "...", "parameters": { … } } }
+///   ```
+/// * **Flat** (Anthropic `input_schema` or Google `parameters`)
+///   ```json
+///   { "name": "...", "description": "...", "parameters": { … } }
+///   { "name": "...", "description": "...", "input_schema": { … } }
+///   ```
+pub fn json_value_to_genai_tool(value: &serde_json::Value) -> Tool {
+    // OpenAI / OpenAI-compatible: nested under "function" key.
+    if let Some(func) = value.get("function") {
+        let name = func
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unknown");
+        let mut tool = Tool::new(name);
+        if let Some(desc) = func.get("description").and_then(|v| v.as_str()) {
+            tool = tool.with_description(desc);
+        }
+        if let Some(params) = func.get("parameters") {
+            tool = tool.with_schema(params.clone());
+        }
+        return tool;
+    }
+
+    // Flat format: name/description at top level, schema under "parameters" or "input_schema".
+    let name = value
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown");
+    let mut tool = Tool::new(name);
+    if let Some(desc) = value.get("description").and_then(|v| v.as_str()) {
+        tool = tool.with_description(desc);
+    }
+    let schema = value
+        .get("parameters")
+        .or_else(|| value.get("input_schema"));
+    if let Some(schema) = schema {
+        tool = tool.with_schema(schema.clone());
+    }
+    tool
+}
+
+/// Convert a slice of JSON tool definitions to a `Vec<genai::chat::Tool>`.
+pub fn json_tools_to_genai(tools: &[serde_json::Value]) -> Vec<Tool> {
+    tools.iter().map(json_value_to_genai_tool).collect()
 }
 
 // ── Response Conversions ────────────────────────────────────────────────────

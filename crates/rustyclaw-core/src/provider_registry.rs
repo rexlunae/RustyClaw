@@ -307,19 +307,38 @@ impl ProviderRegistry {
     /// This is a bridge method that converts between RustyClaw's protocol types
     /// and genai's types, allowing gradual migration from the hand-rolled
     /// provider implementations.
+    ///
+    /// `tools` should be a slice of JSON tool definitions in OpenAI / OpenAI-compatible
+    /// format (`{ "type": "function", "function": { … } }`) or the flat
+    /// `{ "name", "description", "parameters" }` / Anthropic `input_schema` variants.
     pub async fn call_with_tools(
         &self,
         provider: &str,
         model: &str,
         messages: &[crate::gateway::protocol::types::ChatMessage],
-        _tools: Option<&[serde_json::Value]>, // TODO: wire up tool definitions
+        tools: Option<&[serde_json::Value]>,
     ) -> Result<crate::gateway::protocol::types::ModelResponse> {
-        use crate::genai_bridge::{genai_to_rc_response, rc_to_genai_messages};
+        use crate::genai_bridge::{genai_to_rc_response, json_tools_to_genai, rc_to_genai_messages};
 
         let model_ref = format!("{}/{}", provider, model);
-        let genai_messages = rc_to_genai_messages(messages);
+        let resolved = self.resolve(&model_ref)?;
+        let full_model = format!("{}/{}", resolved.provider_id, resolved.model_name);
 
-        let response = self.chat(&model_ref, genai_messages).await?;
+        let genai_messages = rc_to_genai_messages(messages);
+        let mut request = ChatRequest::new(genai_messages);
+
+        if let Some(tool_defs) = tools {
+            if !tool_defs.is_empty() {
+                request = request.with_tools(json_tools_to_genai(tool_defs));
+            }
+        }
+
+        let response = self
+            .client
+            .exec_chat(&full_model, request, None)
+            .await
+            .context("Chat request failed")?;
+
         Ok(genai_to_rc_response(&response))
     }
 }
