@@ -174,24 +174,27 @@ impl ProviderRegistry {
     /// - "bare-model" -> auto-detect via genai
     ///
     /// Alias chains are followed iteratively; a cycle is detected via a visited
-    /// set and reported as an error naming the aliases involved.
+    /// set and reported as an error naming the exact aliases that form the cycle.
     pub fn resolve(&self, model_ref: &str) -> Result<ResolvedModel> {
         let mut current = model_ref;
+        // `path` preserves insertion order so we can slice out the exact cycle.
+        let mut path: Vec<&str> = Vec::new();
         let mut visited: HashSet<&str> = HashSet::new();
 
         loop {
-            // Detect alias cycles before following the next alias.
             if !visited.insert(current) {
+                // Find where in `path` the repeated alias first appeared and
+                // extract only that segment as the cycle description.
+                let cycle_start = path.iter().position(|&s| s == current).unwrap_or(0);
+                let cycle: Vec<&str> = path[cycle_start..].to_vec();
                 anyhow::bail!(
-                    "Circular alias detected while resolving '{}': cycle involves [{}]",
+                    "Circular alias detected while resolving '{}': {} -> {} (cycle)",
                     model_ref,
-                    visited
-                        .iter()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                        .join(", ")
+                    cycle.join(" -> "),
+                    current
                 );
             }
+            path.push(current);
 
             // Follow alias if one exists.
             if let Some(next) = self.config.model_aliases.get(current) {
