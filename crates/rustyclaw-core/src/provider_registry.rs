@@ -166,6 +166,8 @@ impl ProviderRegistry {
         Ok(Self { config, client })
     }
 
+    /// Resolve a user-facing model reference into the fully-qualified genai
+    /// model identifier (`provider/model`) expected by the client.
     fn resolve_full_model(&self, model_ref: &str) -> Result<String> {
         let resolved = self.resolve(model_ref)?;
         Ok(format!("{}/{}", resolved.provider_id, resolved.model_name))
@@ -307,6 +309,9 @@ impl ProviderRegistry {
     }
 
     /// Execute a native genai streaming chat request.
+    ///
+    /// Use this when the caller needs genai features such as top-level system
+    /// prompts or native tool definitions in streaming mode.
     pub async fn chat_stream_request(
         &self,
         model_ref: &str,
