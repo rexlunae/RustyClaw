@@ -417,6 +417,80 @@ pub fn builtin_providers() -> HashMap<String, ProviderConfig> {
         },
     );
 
+    // Local inference servers
+    providers.insert(
+        "lmstudio".to_string(),
+        ProviderConfig {
+            api: "openai-compatible".to_string(),
+            base_url: Some("http://localhost:1234/v1".to_string()),
+            api_key_env: None,
+            api_key_file: None,
+            api_key: None,
+            default_model: None,
+            display_name: Some("LM Studio (local)".to_string()),
+            help_url: Some("https://lmstudio.ai/".to_string()),
+        },
+    );
+
+    providers.insert(
+        "exo".to_string(),
+        ProviderConfig {
+            api: "openai-compatible".to_string(),
+            base_url: Some("http://localhost:52415/v1".to_string()),
+            api_key_env: None,
+            api_key_file: None,
+            api_key: None,
+            default_model: None,
+            display_name: Some("exo (distributed)".to_string()),
+            help_url: Some("https://github.com/exo-explore/exo".to_string()),
+        },
+    );
+
+    // GitHub Copilot (device flow auth - uses OpenAI-compatible API)
+    providers.insert(
+        "github-copilot".to_string(),
+        ProviderConfig {
+            api: "openai-compatible".to_string(),
+            base_url: Some("https://api.githubcopilot.com".to_string()),
+            api_key_env: Some("GITHUB_COPILOT_TOKEN".to_string()),
+            api_key_file: None,
+            api_key: None,
+            default_model: Some("gpt-4o".to_string()),
+            display_name: Some("GitHub Copilot".to_string()),
+            help_url: Some("https://github.com/features/copilot".to_string()),
+        },
+    );
+
+    // Copilot proxy (for Copilot extensions)
+    providers.insert(
+        "copilot-proxy".to_string(),
+        ProviderConfig {
+            api: "openai-compatible".to_string(),
+            base_url: Some("https://api.githubcopilot.com".to_string()),
+            api_key_env: Some("GITHUB_COPILOT_TOKEN".to_string()),
+            api_key_file: None,
+            api_key: None,
+            default_model: Some("gpt-4o".to_string()),
+            display_name: Some("Copilot Proxy".to_string()),
+            help_url: None,
+        },
+    );
+
+    // Custom provider (user-defined)
+    providers.insert(
+        "custom".to_string(),
+        ProviderConfig {
+            api: "openai-compatible".to_string(),
+            base_url: None, // Must be configured by user
+            api_key_env: Some("CUSTOM_API_KEY".to_string()),
+            api_key_file: None,
+            api_key: None,
+            default_model: None,
+            display_name: Some("Custom Provider".to_string()),
+            help_url: None,
+        },
+    );
+
     providers
 }
 
