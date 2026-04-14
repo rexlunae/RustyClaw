@@ -8,7 +8,7 @@ use genai::chat::{ChatMessage, ChatRequest, ChatResponse};
 use genai::resolver::AuthData;
 use genai::{Client, ClientBuilder, ModelIden, ServiceTarget};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tracing::debug;
 
@@ -172,28 +172,50 @@ impl ProviderRegistry {
     /// - "provider/model" -> provider, model
     /// - "alias" -> resolved from model_aliases
     /// - "bare-model" -> auto-detect via genai
+    ///
+    /// Alias chains are followed iteratively; a cycle is detected via a visited
+    /// set and reported as an error naming the aliases involved.
     pub fn resolve(&self, model_ref: &str) -> Result<ResolvedModel> {
-        // Check aliases first
-        if let Some(resolved) = self.config.model_aliases.get(model_ref) {
-            return self.resolve(resolved);
-        }
+        let mut current = model_ref;
+        let mut visited: HashSet<&str> = HashSet::new();
 
-        // Check for provider/model format
-        if let Some((provider_id, model_name)) = model_ref.split_once('/') {
-            if let Some(config) = self.config.providers.get(provider_id) {
-                return Ok(ResolvedModel {
-                    provider_id: provider_id.to_string(),
-                    model_name: model_name.to_string(),
-                    config: config.clone(),
-                });
+        loop {
+            // Detect alias cycles before following the next alias.
+            if !visited.insert(current) {
+                anyhow::bail!(
+                    "Circular alias detected while resolving '{}': cycle involves [{}]",
+                    model_ref,
+                    visited
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
             }
-        }
 
-        // Fall back to genai auto-detection
-        anyhow::bail!(
-            "Cannot resolve model '{}'. Use 'provider/model' format or define an alias.",
-            model_ref
-        );
+            // Follow alias if one exists.
+            if let Some(next) = self.config.model_aliases.get(current) {
+                current = next.as_str();
+                continue;
+            }
+
+            // Check for provider/model format.
+            if let Some((provider_id, model_name)) = current.split_once('/') {
+                if let Some(config) = self.config.providers.get(provider_id) {
+                    return Ok(ResolvedModel {
+                        provider_id: provider_id.to_string(),
+                        model_name: model_name.to_string(),
+                        config: config.clone(),
+                    });
+                }
+            }
+
+            // No alias and not a provider/model reference.
+            anyhow::bail!(
+                "Cannot resolve model '{}'. Use 'provider/model' format or define an alias.",
+                current
+            );
+        }
     }
 
     /// Get the genai client for direct use.
