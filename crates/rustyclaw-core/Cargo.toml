@@ -94,7 +94,7 @@ schemars = { workspace = true, optional = true }
 
 # Steel Memory - semantic vector search memory palace
 # Using git until 0.1.1 is published (rusqlite 0.37 for diesel compatibility)
-steel-memory = { git = "https://github.com/rexlunae/steel-memory", optional = true }
+steel-memory = { git = "https://github.com/rexlunae/steel-memory", branch = "main", optional = true }
 
 # SSH transport (optional)
 russh = { version = "0.52", features = ["async-trait"], optional = true }
