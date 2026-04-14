@@ -373,15 +373,14 @@ impl SteelMemory {
         let join_result = tokio::task::spawn_blocking(move || {
             let kg = KnowledgeGraph::new(&kg_path)
                 .map_err(|e| format!("Failed to open KG: {}", e))?;
-            kg.add_triple(&subject, &predicate, &object, confidence, None, None)
-                .map_err(|e| format!("Failed to add triple: {}", e))
+            let id = kg.add_triple(&subject, &predicate, &object, confidence, None, None)
+                .map_err(|e| format!("Failed to add triple: {}", e))?;
+            debug!(subject, predicate, object, "Added KG triple");
+            Ok(id)
         }).await;
 
         match join_result {
-            Ok(Ok(id)) => {
-                debug!(subject, predicate, object, "Added KG triple");
-                Ok(id)
-            }
+            Ok(Ok(id)) => Ok(id),
             Ok(Err(e)) => Err(e),
             Err(e) => Err(format!("KG task panicked: {}", e)),
         }
