@@ -274,12 +274,9 @@ impl ProviderRegistry {
     }
 
     /// Execute a chat request.
-    pub async fn chat(
-        &self,
-        model_ref: &str,
-        messages: Vec<ChatMessage>,
-    ) -> Result<ChatResponse> {
-        self.chat_request(model_ref, ChatRequest::new(messages)).await
+    pub async fn chat(&self, model_ref: &str, messages: Vec<ChatMessage>) -> Result<ChatResponse> {
+        self.chat_request(model_ref, ChatRequest::new(messages))
+            .await
     }
 
     /// Execute a native genai chat request.
@@ -625,9 +622,6 @@ mod tests {
 
         let anthropic = &providers["anthropic"];
         assert_eq!(anthropic.api, "anthropic");
-        assert_eq!(
-            anthropic.api_key_env,
-            Some("ANTHROPIC_API_KEY".to_string())
-        );
+        assert_eq!(anthropic.api_key_env, Some("ANTHROPIC_API_KEY".to_string()));
     }
 }
