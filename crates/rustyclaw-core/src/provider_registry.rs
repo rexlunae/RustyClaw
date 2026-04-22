@@ -4,13 +4,14 @@
 //! allowing new providers to be added via TOML config without code changes.
 
 use anyhow::{Context, Result};
+use genai::adapter::AdapterKind;
 use genai::chat::{ChatMessage, ChatRequest, ChatResponse, ChatStreamResponse};
 use genai::resolver::AuthData;
-use genai::{Client, ClientBuilder, ModelIden, ServiceTarget};
+use genai::{Client, ClientBuilder, ServiceTarget};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
-use tracing::debug;
+use tracing::{debug, warn};
 
 // ── Configuration Types ─────────────────────────────────────────────────────
 
@@ -134,31 +135,51 @@ impl ProviderRegistry {
     pub fn new(config: ProvidersConfig) -> Result<Self> {
         let config = Arc::new(config);
 
-        // Create resolver closures that capture the config
-        let auth_config = Arc::clone(&config);
+        // Create a resolver closure that captures the config.
         let target_config = Arc::clone(&config);
 
         let client = ClientBuilder::default()
-            .with_auth_resolver_fn(move |model: ModelIden| -> genai::resolver::Result<Option<AuthData>> {
-                let provider_id = model.adapter_kind.as_str();
-                if let Some(provider) = auth_config.providers.get(provider_id) {
-                    if let Some(api_key) = provider.resolve_api_key() {
-                        debug!(provider = %provider_id, "Resolved API key from config");
-                        return Ok(Some(AuthData::from_single(api_key)));
-                    }
-                }
-                // Return None to fall back to genai defaults
-                Ok(None)
-            })
             .with_service_target_resolver_fn(move |mut service_target: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
-                let provider_id = service_target.model.adapter_kind.as_str();
-                if let Some(provider) = target_config.providers.get(provider_id) {
-                    if let Some(ref base_url) = provider.base_url {
-                        debug!(provider = %provider_id, url = %base_url, "Using custom base URL");
-                        // Override the endpoint URL
-                        service_target.endpoint = genai::resolver::Endpoint::from_owned(base_url.clone());
+                // The model string is formatted as "{provider_id}::{model_name}" by
+                // resolve_full_model.  Extract the provider_id from the namespace portion
+                // (the part before "::") to look up the provider config.
+                let provider_id = match service_target.model.model_name.namespace() {
+                    Some(id) => id,
+                    None => return Ok(service_target),
+                };
+
+                let provider = match target_config.providers.get(provider_id) {
+                    Some(p) => p,
+                    None => return Ok(service_target),
+                };
+
+                // Map the config `api` string to the correct genai AdapterKind and
+                // replace the auto-detected (fallback) adapter kind.
+                match api_str_to_adapter_kind(&provider.api) {
+                    Some(adapter_kind) => {
+                        service_target.model.adapter_kind = adapter_kind;
+                    }
+                    None => {
+                        warn!(
+                            provider = %provider_id,
+                            api = %provider.api,
+                            "Unknown api value; falling back to genai auto-detection"
+                        );
                     }
                 }
+
+                // Override the endpoint if a base URL is configured.
+                if let Some(ref base_url) = provider.base_url {
+                    debug!(provider = %provider_id, url = %base_url, "Using custom base URL");
+                    service_target.endpoint = genai::resolver::Endpoint::from_owned(base_url.clone());
+                }
+
+                // Set auth from the provider config if an API key is available.
+                if let Some(api_key) = provider.resolve_api_key() {
+                    debug!(provider = %provider_id, "Resolved API key from config");
+                    service_target.auth = AuthData::from_single(api_key);
+                }
+
                 Ok(service_target)
             })
             .build();
@@ -167,10 +188,16 @@ impl ProviderRegistry {
     }
 
     /// Resolve a user-facing model reference into the fully-qualified genai
-    /// model identifier (`provider/model`) expected by the client.
-    fn resolve_full_model(&self, model_ref: &str) -> Result<String> {
+    /// model identifier (`provider_id::model`) expected by the resolver.
+    ///
+    /// The `::` namespace separator is the one recognised by genai 0.5.x.  It
+    /// lets the [`service_target_resolver`] recover the `provider_id` from the
+    /// namespace portion and look up the correct [`AdapterKind`], endpoint and
+    /// auth — even when multiple providers share the same `api` value (e.g.
+    /// all `openai-compatible` providers).
+    pub(crate) fn resolve_full_model(&self, model_ref: &str) -> Result<String> {
         let resolved = self.resolve(model_ref)?;
-        Ok(format!("{}/{}", resolved.provider_id, resolved.model_name))
+        Ok(format!("{}::{}", resolved.provider_id, resolved.model_name))
     }
 
     /// Resolve a model reference to provider + model.
@@ -323,6 +350,23 @@ impl ProviderRegistry {
             .exec_chat_stream(&full_model, request, None)
             .await
             .context("Chat stream request failed")
+    }
+}
+
+// ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Map a config `api` field value to the corresponding genai [`AdapterKind`].
+///
+/// Most values are handled by [`AdapterKind::from_lower_str`].  The one
+/// exception is `"openai-compatible"`, which maps to [`AdapterKind::OpenAI`]
+/// because the OpenAI adapter handles all OpenAI-compatible APIs.
+///
+/// Returns `None` for unrecognised api strings so callers can fall back to
+/// genai's built-in model-name-based auto-detection.
+fn api_str_to_adapter_kind(api: &str) -> Option<AdapterKind> {
+    match api {
+        "openai-compatible" => Some(AdapterKind::OpenAI),
+        other => AdapterKind::from_lower_str(other),
     }
 }
 
@@ -628,5 +672,173 @@ mod tests {
         let anthropic = &providers["anthropic"];
         assert_eq!(anthropic.api, "anthropic");
         assert_eq!(anthropic.api_key_env, Some("ANTHROPIC_API_KEY".to_string()));
+    }
+
+    // ── resolve_full_model tests ────────────────────────────────────────────
+
+    /// resolve_full_model must use "::" as the namespace separator so that
+    /// genai 0.5.x correctly strips the provider prefix when it builds the
+    /// actual API request (via ModelName::namespace_and_name).
+    ///
+    /// The old code used "/" which genai does NOT treat as a namespace
+    /// separator — the full string (e.g. "google/gemini-2.5-pro") would be
+    /// sent to the API as the model name, breaking every call.
+    #[test]
+    fn test_resolve_full_model_uses_double_colon_separator() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "google".to_string(),
+            ProviderConfig {
+                api: "gemini".to_string(),
+                base_url: Some("https://generativelanguage.googleapis.com/v1beta".to_string()),
+                api_key_env: Some("GEMINI_API_KEY".to_string()),
+                api_key_file: None,
+                api_key: None,
+                default_model: Some("gemini-2.5-pro".to_string()),
+                display_name: Some("Google (Gemini)".to_string()),
+                help_url: None,
+            },
+        );
+
+        let config = ProvidersConfig {
+            providers,
+            model_aliases: HashMap::new(),
+        };
+
+        let registry = ProviderRegistry::new(config).unwrap();
+        let result = registry.resolve_full_model("google/gemini-2.5-pro").unwrap();
+
+        // provider_id ("google") is used as the genai namespace, separated by "::"
+        assert_eq!(result, "google::gemini-2.5-pro");
+        // The old broken format must not be produced
+        assert_ne!(result, "google/gemini-2.5-pro");
+        // The api field alone as a "/" prefix was also wrong
+        assert_ne!(result, "gemini/gemini-2.5-pro");
+    }
+
+    /// For openai-compatible providers (e.g. openrouter) the provider_id is
+    /// used as the namespace, not the shared "openai-compatible" api value.
+    /// This uniquely identifies which provider was requested so the resolver
+    /// can pick the right endpoint and auth.
+    #[test]
+    fn test_resolve_full_model_openai_compatible() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "openrouter".to_string(),
+            ProviderConfig {
+                api: "openai-compatible".to_string(),
+                base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                api_key_env: Some("OPENROUTER_API_KEY".to_string()),
+                api_key_file: None,
+                api_key: None,
+                default_model: Some("anthropic/claude-sonnet-4-20250514".to_string()),
+                display_name: Some("OpenRouter".to_string()),
+                help_url: None,
+            },
+        );
+
+        let config = ProvidersConfig {
+            providers,
+            model_aliases: HashMap::new(),
+        };
+
+        let registry = ProviderRegistry::new(config).unwrap();
+        let result = registry
+            .resolve_full_model("openrouter/anthropic/claude-sonnet-4-20250514")
+            .unwrap();
+
+        assert_eq!(result, "openrouter::anthropic/claude-sonnet-4-20250514");
+    }
+
+    /// api_str_to_adapter_kind must map all built-in api values to the correct
+    /// genai AdapterKind, with "openai-compatible" mapping to AdapterKind::OpenAI.
+    #[test]
+    fn test_api_str_to_adapter_kind() {
+        use genai::adapter::AdapterKind;
+
+        assert_eq!(
+            api_str_to_adapter_kind("openai-compatible"),
+            Some(AdapterKind::OpenAI)
+        );
+        assert_eq!(
+            api_str_to_adapter_kind("gemini"),
+            Some(AdapterKind::Gemini)
+        );
+        assert_eq!(
+            api_str_to_adapter_kind("anthropic"),
+            Some(AdapterKind::Anthropic)
+        );
+        assert_eq!(api_str_to_adapter_kind("openai"), Some(AdapterKind::OpenAI));
+        assert_eq!(api_str_to_adapter_kind("groq"), Some(AdapterKind::Groq));
+        assert_eq!(api_str_to_adapter_kind("ollama"), Some(AdapterKind::Ollama));
+        assert_eq!(api_str_to_adapter_kind("deepseek"), Some(AdapterKind::DeepSeek));
+        assert_eq!(api_str_to_adapter_kind("xai"), Some(AdapterKind::Xai));
+        assert_eq!(api_str_to_adapter_kind("unknown-api"), None);
+    }
+
+    /// When two providers share the same `api` value (e.g. both are
+    /// "openai-compatible") the provider_id namespace in the model string
+    /// uniquely identifies each one, allowing the service_target_resolver to
+    /// pick the correct endpoint and auth for each.
+    #[test]
+    fn test_resolver_disambiguation_by_provider_id() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "openrouter".to_string(),
+            ProviderConfig {
+                api: "openai-compatible".to_string(),
+                base_url: Some("https://openrouter.ai/api/v1".to_string()),
+                api_key_env: Some("OPENROUTER_API_KEY".to_string()),
+                api_key_file: None,
+                api_key: None,
+                default_model: None,
+                display_name: None,
+                help_url: None,
+            },
+        );
+        providers.insert(
+            "lmstudio".to_string(),
+            ProviderConfig {
+                api: "openai-compatible".to_string(),
+                base_url: Some("http://localhost:1234/v1".to_string()),
+                api_key_env: None,
+                api_key_file: None,
+                api_key: None,
+                default_model: None,
+                display_name: None,
+                help_url: None,
+            },
+        );
+
+        let config = ProvidersConfig {
+            providers,
+            model_aliases: HashMap::new(),
+        };
+
+        let registry = ProviderRegistry::new(config).unwrap();
+
+        // Both use openai-compatible api but resolve to distinct namespaced strings.
+        let openrouter_model = registry.resolve_full_model("openrouter/llama3").unwrap();
+        let lmstudio_model = registry.resolve_full_model("lmstudio/llama3").unwrap();
+
+        assert_eq!(openrouter_model, "openrouter::llama3");
+        assert_eq!(lmstudio_model, "lmstudio::llama3");
+
+        // Verify the registry can distinguish the two providers by their
+        // provider_id (the namespace embedded in the model string).
+        let openrouter_cfg = registry.config.providers.get("openrouter").unwrap();
+        let lmstudio_cfg = registry.config.providers.get("lmstudio").unwrap();
+
+        assert_eq!(openrouter_cfg.api, "openai-compatible");
+        assert_eq!(lmstudio_cfg.api, "openai-compatible");
+        assert_ne!(openrouter_cfg.base_url, lmstudio_cfg.base_url);
+        assert_eq!(
+            openrouter_cfg.base_url.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+        assert_eq!(
+            lmstudio_cfg.base_url.as_deref(),
+            Some("http://localhost:1234/v1")
+        );
     }
 }
