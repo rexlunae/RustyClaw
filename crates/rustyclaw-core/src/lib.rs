@@ -1,8 +1,17 @@
-// ── RustyClaw Core Library ───────────────────────────────────────────────────
-//
-// This crate contains all shared logic used by any RustyClaw client:
-// configuration, gateway protocol, secrets management, tool dispatch,
-// skills, providers, commands, and shared display types.
+//! `rustyclaw-core` — shared configuration, gateway protocol, secrets management,
+//! tool dispatch, skills, providers, commands, and shared display types used by
+//! all RustyClaw clients.
+//!
+//! ## Crate layout
+//!
+//! - [`config`] — TOML-based configuration with OpenClaw compatibility
+//! - [`gateway`] — WebSocket gateway protocol and session management
+//! - [`tools`] — sandboxed tool dispatch (filesystem, web, shell, etc.)
+//! - [`secrets`] — encrypted vault and credential storage
+//! - [`providers`] — LLM provider abstraction (Anthropic, OpenAI, Ollama, …)
+//! - [`messengers`] — messenger trait and built-in adapters
+//! - [`skills`] — dynamic skill loading from the workspace directory
+//! - [`soul`] — agent personality definition (`SOUL.md`)
 
 pub mod args;
 pub mod canvas;
