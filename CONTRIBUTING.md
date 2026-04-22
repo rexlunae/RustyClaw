@@ -62,10 +62,15 @@ cargo test --no-run 2>&1 | grep -E "warning:" && echo "Fix test warnings before 
 
 ## Code Style
 
-- Follow Rust conventions (rustfmt enforced)
-- Use `///` doc comments for public items
-- Add tests for new functionality
-- Keep functions focused and small
+See **[`STYLE_GUIDE.md`](STYLE_GUIDE.md)** for the full project style guide, including
+naming conventions, error handling, documentation requirements, and the Clippy baseline.
+
+Key rules at a glance:
+- `cargo fmt` is authoritative — no manual deviations.
+- `cargo clippy --workspace --all-targets -- -D warnings` must pass.
+- Every public item needs a `///` doc comment.
+- Use `tracing::*` macros in library code — no bare `println!`.
+- No `unwrap()` in library code without a descriptive `expect("…")` message.
 
 ## Commit Messages
 

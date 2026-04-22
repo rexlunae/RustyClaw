@@ -1,3 +1,8 @@
+//! `rustyclaw` — main CLI entry point for RustyClaw.
+//!
+//! Provides the `rustyclaw` binary (interactive chat / one-shot commands) and
+//! the `rustyclaw-gateway` daemon binary.
+
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures_util::{SinkExt, StreamExt};

@@ -21,12 +21,12 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal"))
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
-# Treat all clippy lint groups as errors
+# Deny all clippy lint groups by default
 all = { level = "deny", priority = -1 }
-# Allow lints that are too pedantic or cause false positives for this codebase
-too_many_arguments = "allow"
-type_complexity = "allow"
-module_inception = "allow"
+# Lints intentionally silenced — see STYLE_GUIDE.md §17 for rationale
+too_many_arguments = "allow" # reason: complex async handlers naturally have many params; restructuring deferred
+type_complexity = "allow" # reason: complex generic types appear in gateway/messenger code
+module_inception = "allow" # reason: crate uses foo/foo.rs module patterns by convention
 
 # ── Workspace Features ──────────────────────────────────────────────────────
 # Features that control which components are built
