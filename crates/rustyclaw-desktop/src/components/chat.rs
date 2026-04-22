@@ -29,15 +29,15 @@ pub struct ChatProps {
 #[component]
 pub fn Chat(props: ChatProps) -> Element {
     let mut input_ref = use_signal(|| props.input.clone());
-    
+
     // Update local input when prop changes
     use_effect(move || {
         input_ref.set(props.input.clone());
     });
-    
+
     let on_submit = props.on_submit.clone();
     let is_processing = props.is_processing;
-    
+
     let handle_submit = move |_| {
         let text = input_ref.read().trim().to_string();
         if !text.is_empty() && !is_processing {
@@ -45,7 +45,7 @@ pub fn Chat(props: ChatProps) -> Element {
             input_ref.set(String::new());
         }
     };
-    
+
     let handle_keypress = move |evt: KeyboardEvent| {
         if evt.key() == Key::Enter && !evt.modifiers().shift() {
             let text = input_ref.read().trim().to_string();
@@ -55,15 +55,15 @@ pub fn Chat(props: ChatProps) -> Element {
             }
         }
     };
-    
+
     rsx! {
         div { class: "chat-container",
             style: "display: flex; flex-direction: column; height: 100%;",
-            
+
             // Message list
             div { class: "message-list",
                 style: "flex: 1; overflow-y: auto; padding: 1rem;",
-                
+
                 for msg in props.messages.iter() {
                     div { key: "{msg.id}",
                         MessageBubble {
@@ -71,7 +71,7 @@ pub fn Chat(props: ChatProps) -> Element {
                             content: msg.content.clone(),
                             is_streaming: msg.is_streaming,
                         }
-                        
+
                         // Tool calls for this message
                         for tool in msg.tool_calls.iter() {
                             ToolCallPanel {
@@ -85,7 +85,7 @@ pub fn Chat(props: ChatProps) -> Element {
                         }
                     }
                 }
-                
+
                 // Thinking indicator
                 if props.is_thinking {
                     div { class: "thinking-indicator",
@@ -97,11 +97,11 @@ pub fn Chat(props: ChatProps) -> Element {
                     }
                 }
             }
-            
+
             // Input area
             div { class: "input-area",
                 style: "padding: 1rem; border-top: 1px solid #dbdbdb;",
-                
+
                 Field { addons: true,
                     Control { expanded: true,
                         textarea {

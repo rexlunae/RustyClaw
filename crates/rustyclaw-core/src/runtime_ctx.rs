@@ -35,16 +35,13 @@ pub fn set_model_info(provider: &str, model: &str, base_url: &str) {
 
 /// Get current model information.
 pub fn get_model_info() -> Option<(String, String, String)> {
-    runtime_ctx()
-        .lock()
-        .ok()
-        .and_then(|ctx| {
-            Some((
-                ctx.provider.clone()?,
-                ctx.model.clone()?,
-                ctx.base_url.clone()?,
-            ))
-        })
+    runtime_ctx().lock().ok().and_then(|ctx| {
+        Some((
+            ctx.provider.clone()?,
+            ctx.model.clone()?,
+            ctx.base_url.clone()?,
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -53,7 +50,11 @@ mod tests {
 
     #[test]
     fn test_runtime_ctx() {
-        set_model_info("github-copilot", "claude-sonnet-4", "https://api.githubcopilot.com");
+        set_model_info(
+            "github-copilot",
+            "claude-sonnet-4",
+            "https://api.githubcopilot.com",
+        );
         let info = get_model_info();
         assert!(info.is_some());
         let (provider, model, base_url) = info.unwrap();

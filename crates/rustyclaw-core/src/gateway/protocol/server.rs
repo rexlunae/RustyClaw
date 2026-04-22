@@ -110,7 +110,11 @@ pub async fn send_status(
 }
 
 /// Build and send a vault_unlocked frame.
-pub async fn send_vault_unlocked(writer: &mut dyn TransportWriter, ok: bool, message: Option<&str>) -> Result<()> {
+pub async fn send_vault_unlocked(
+    writer: &mut dyn TransportWriter,
+    ok: bool,
+    message: Option<&str>,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::VaultUnlocked,
         payload: ServerPayload::VaultUnlocked {
@@ -135,7 +139,11 @@ pub async fn send_secrets_list_result(
 }
 
 /// Build and send a secrets_store_result frame.
-pub async fn send_secrets_store_result(writer: &mut dyn TransportWriter, ok: bool, message: &str) -> Result<()> {
+pub async fn send_secrets_store_result(
+    writer: &mut dyn TransportWriter,
+    ok: bool,
+    message: &str,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsStoreResult,
         payload: ServerPayload::SecretsStoreResult {
@@ -249,7 +257,10 @@ pub async fn send_secrets_delete_credential_result(
 }
 
 /// Build and send a secrets_has_totp_result frame.
-pub async fn send_secrets_has_totp_result(writer: &mut dyn TransportWriter, has_totp: bool) -> Result<()> {
+pub async fn send_secrets_has_totp_result(
+    writer: &mut dyn TransportWriter,
+    has_totp: bool,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::SecretsHasTotpResult,
         payload: ServerPayload::SecretsHasTotpResult { has_totp },
@@ -357,7 +368,12 @@ pub async fn send_stream_start(writer: &mut dyn TransportWriter) -> Result<()> {
 }
 
 /// Build and send a tool call frame.
-pub async fn send_tool_call(writer: &mut dyn TransportWriter, id: &str, name: &str, arguments: &str) -> Result<()> {
+pub async fn send_tool_call(
+    writer: &mut dyn TransportWriter,
+    id: &str,
+    name: &str,
+    arguments: &str,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ToolCall,
         payload: ServerPayload::ToolCall {
@@ -424,7 +440,10 @@ pub async fn send_user_prompt_request(
 }
 
 /// Build and send a tasks update frame.
-pub async fn send_tasks_update(writer: &mut dyn TransportWriter, tasks: Vec<TaskInfoDto>) -> Result<()> {
+pub async fn send_tasks_update(
+    writer: &mut dyn TransportWriter,
+    tasks: Vec<TaskInfoDto>,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::TasksUpdate,
         payload: ServerPayload::TasksUpdate { tasks },

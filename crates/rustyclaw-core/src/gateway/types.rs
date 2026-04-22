@@ -119,11 +119,13 @@ impl ModelContext {
                 .to_string()
         });
 
-        let api_key = providers::secret_key_for_provider(&provider)
-            .and_then(|key_name| {
-                secrets.get_secret(key_name, true).ok().flatten()
-                    .or_else(|| std::env::var(key_name).ok())
-            });
+        let api_key = providers::secret_key_for_provider(&provider).and_then(|key_name| {
+            secrets
+                .get_secret(key_name, true)
+                .ok()
+                .flatten()
+                .or_else(|| std::env::var(key_name).ok())
+        });
 
         if api_key.is_none() && providers::secret_key_for_provider(&provider).is_some() {
             warn!(

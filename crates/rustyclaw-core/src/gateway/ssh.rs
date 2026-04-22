@@ -63,7 +63,9 @@
 //! ```
 
 use super::protocol::{ClientFrame, ServerFrame, deserialize_frame, serialize_frame};
-use super::transport::{PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter};
+#[cfg(feature = "ssh")]
+use super::transport::TransportAcceptor;
+use super::transport::{PeerInfo, Transport, TransportReader, TransportType, TransportWriter};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::path::PathBuf;
@@ -86,11 +88,11 @@ use tracing::{debug, error, info, warn};
 use std::path::Path;
 
 #[cfg(feature = "ssh")]
+use russh::keys::PublicKey;
+#[cfg(feature = "ssh")]
 use russh::server::{Auth, Handler, Msg, Server, Session};
 #[cfg(feature = "ssh")]
 use russh::{Channel, ChannelId, CryptoVec};
-#[cfg(feature = "ssh")]
-use russh::keys::PublicKey;
 
 /// Maximum frame size (16 MB should be plenty).
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
@@ -115,7 +117,7 @@ impl Default for SshConfig {
         let config_dir = dirs::home_dir()
             .map(|h| h.join(".rustyclaw"))
             .unwrap_or_else(|| PathBuf::from("."));
-        
+
         Self {
             listen_addr: "0.0.0.0:2222".parse().unwrap(),
             host_key_path: config_dir.join("ssh_host_key"),
@@ -145,29 +147,33 @@ pub struct AuthorizedClient {
 #[cfg(feature = "ssh")]
 pub fn load_authorized_clients(path: &Path) -> Result<Vec<AuthorizedClient>> {
     use std::io::{BufRead, BufReader};
-    
+
     let file = std::fs::File::open(path)
         .with_context(|| format!("Failed to open authorized_clients: {}", path.display()))?;
-    
+
     let reader = BufReader::new(file);
     let mut clients = Vec::new();
-    
+
     for (line_num, line) in reader.lines().enumerate() {
         let line = line.with_context(|| format!("Failed to read line {}", line_num + 1))?;
         let line = line.trim();
-        
+
         // Skip empty lines and comments
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        
+
         // Parse the key using russh's internal ssh_key crate
         match russh::keys::PublicKey::from_openssh(line) {
             Ok(key) => {
                 // Extract comment from the key
                 let comment = {
                     let c = key.comment();
-                    if c.is_empty() { None } else { Some(c.to_string()) }
+                    if c.is_empty() {
+                        None
+                    } else {
+                        Some(c.to_string())
+                    }
                 };
                 clients.push(AuthorizedClient { key, comment });
             }
@@ -180,7 +186,7 @@ pub fn load_authorized_clients(path: &Path) -> Result<Vec<AuthorizedClient>> {
             }
         }
     }
-    
+
     Ok(clients)
 }
 
@@ -188,18 +194,18 @@ pub fn load_authorized_clients(path: &Path) -> Result<Vec<AuthorizedClient>> {
 #[cfg(feature = "ssh")]
 pub fn add_authorized_client(path: &Path, key: &PublicKey, comment: Option<&str>) -> Result<()> {
     use std::io::Write;
-    
+
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    
+
     let mut file = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(path)
         .with_context(|| format!("Failed to open authorized_clients: {}", path.display()))?;
-    
+
     // Use ssh_key's to_openssh method for proper formatting
     let key_line = if let Some(comment) = comment {
         key.to_openssh()
@@ -210,7 +216,7 @@ pub fn add_authorized_client(path: &Path, key: &PublicKey, comment: Option<&str>
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| format!("{:?}", key))
     };
-    
+
     writeln!(file, "{}", key_line)?;
     Ok(())
 }
@@ -229,7 +235,7 @@ pub fn key_fingerprint(key: &PublicKey) -> String {
 #[cfg(feature = "ssh")]
 mod server {
     use super::*;
-    
+
     /// SSH server that accepts connections and creates transports.
     pub struct SshServer {
         config: Arc<russh::server::Config>,
@@ -240,51 +246,59 @@ mod server {
         /// Receiver for accepted connections.
         connection_rx: Option<mpsc::Receiver<SshTransport>>,
     }
-    
+
     impl SshServer {
         /// Create a new SSH server.
         pub async fn new(ssh_config: SshConfig) -> Result<Self> {
             #[allow(unused_imports)]
             use std::io::Read;
-            
+
             // Load or generate host key
             let host_key: russh::keys::PrivateKey = if ssh_config.host_key_path.exists() {
                 // Read the key file
-                let key_data = std::fs::read_to_string(&ssh_config.host_key_path)
-                    .with_context(|| format!(
-                        "Failed to read host key: {}",
-                        ssh_config.host_key_path.display()
-                    ))?;
-                
+                let key_data =
+                    std::fs::read_to_string(&ssh_config.host_key_path).with_context(|| {
+                        format!(
+                            "Failed to read host key: {}",
+                            ssh_config.host_key_path.display()
+                        )
+                    })?;
+
                 // Parse as OpenSSH private key
-                russh::keys::PrivateKey::from_openssh(&key_data)
-                    .with_context(|| format!(
+                russh::keys::PrivateKey::from_openssh(&key_data).with_context(|| {
+                    format!(
                         "Failed to parse host key: {}",
                         ssh_config.host_key_path.display()
-                    ))?
+                    )
+                })?
             } else {
                 info!("Generating new SSH host key");
-                
+
                 // Generate a new Ed25519 key
                 let key = russh::keys::PrivateKey::random(
                     &mut rand_core::OsRng,
-                    russh::keys::Algorithm::Ed25519
-                ).context("Failed to generate host key")?;
-                
+                    russh::keys::Algorithm::Ed25519,
+                )
+                .context("Failed to generate host key")?;
+
                 // Ensure parent directory exists
                 if let Some(parent) = ssh_config.host_key_path.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                
+
                 // Save the key in OpenSSH format
-                let key_data = key.to_openssh(russh::keys::ssh_key::LineEnding::LF)
+                let key_data = key
+                    .to_openssh(russh::keys::ssh_key::LineEnding::LF)
                     .context("Failed to encode host key")?;
-                std::fs::write(&ssh_config.host_key_path, key_data.as_bytes())
-                    .with_context(|| format!(
-                        "Failed to save host key: {}",
-                        ssh_config.host_key_path.display()
-                    ))?;
-                
+                std::fs::write(&ssh_config.host_key_path, key_data.as_bytes()).with_context(
+                    || {
+                        format!(
+                            "Failed to save host key: {}",
+                            ssh_config.host_key_path.display()
+                        )
+                    },
+                )?;
+
                 // Set restrictive permissions
                 #[cfg(unix)]
                 {
@@ -294,16 +308,16 @@ mod server {
                         std::fs::Permissions::from_mode(0o600),
                     )?;
                 }
-                
+
                 key
             };
-            
+
             // Build russh server config
             let config = russh::server::Config {
                 keys: vec![host_key],
                 ..Default::default()
             };
-            
+
             // Load authorized clients
             let authorized_clients = if ssh_config.authorized_clients_path.exists() {
                 load_authorized_clients(&ssh_config.authorized_clients_path)?
@@ -314,9 +328,9 @@ mod server {
                 );
                 Vec::new()
             };
-            
+
             let (tx, rx) = mpsc::channel(16);
-            
+
             Ok(Self {
                 config: Arc::new(config),
                 ssh_config,
@@ -325,15 +339,15 @@ mod server {
                 connection_rx: Some(rx),
             })
         }
-        
+
         /// Start listening for SSH connections.
         pub async fn listen(&mut self, addr: SocketAddr) -> Result<()> {
             let config = self.config.clone();
             let authorized = self.authorized_clients.clone();
             let tx = self.connection_tx.clone();
-            
+
             info!(address = %addr, "SSH server listening");
-            
+
             // Spawn the server
             tokio::spawn(async move {
                 let mut handler = SshHandler {
@@ -341,35 +355,38 @@ mod server {
                     connection_tx: tx,
                     sessions: Arc::new(Mutex::new(HashMap::new())),
                 };
-                
+
                 // Use Server trait's run_on_address method
                 use russh::server::Server;
                 if let Err(e) = handler.run_on_address(config, addr).await {
                     error!(error = %e, "SSH server error");
                 }
             });
-            
+
             Ok(())
         }
     }
-    
+
     #[async_trait]
     impl TransportAcceptor for SshServer {
         async fn accept(&mut self) -> Result<Box<dyn Transport>> {
-            let rx = self.connection_rx.as_mut()
+            let rx = self
+                .connection_rx
+                .as_mut()
                 .context("SSH server not initialized")?;
-            
-            rx.recv().await
+
+            rx.recv()
+                .await
                 .context("SSH server closed")
                 .map(|t| Box::new(t) as Box<dyn Transport>)
         }
-        
+
         fn local_addr(&self) -> Result<SocketAddr> {
             // TODO: Track the bound address
             Ok("0.0.0.0:2222".parse()?)
         }
     }
-    
+
     /// Session state for a connected client.
     struct ClientSession {
         username: String,
@@ -377,14 +394,14 @@ mod server {
         peer_addr: Option<SocketAddr>,
         channel_data_tx: Option<mpsc::Sender<Vec<u8>>>,
     }
-    
+
     /// SSH connection handler.
     struct SshHandler {
         authorized_clients: Arc<Mutex<Vec<AuthorizedClient>>>,
         connection_tx: mpsc::Sender<SshTransport>,
         sessions: Arc<Mutex<HashMap<ChannelId, ClientSession>>>,
     }
-    
+
     impl Clone for SshHandler {
         fn clone(&self) -> Self {
             Self {
@@ -394,18 +411,18 @@ mod server {
             }
         }
     }
-    
+
     impl Server for SshHandler {
         type Handler = Self;
-        
+
         fn new_client(&mut self, _peer_addr: Option<SocketAddr>) -> Self::Handler {
             self.clone()
         }
     }
-    
+
     impl Handler for SshHandler {
         type Error = anyhow::Error;
-        
+
         async fn auth_publickey(
             &mut self,
             user: &str,
@@ -413,7 +430,7 @@ mod server {
         ) -> Result<Auth, Self::Error> {
             let fingerprint = key_fingerprint(public_key);
             debug!(user = user, fingerprint = %fingerprint, "Public key auth attempt");
-            
+
             let clients = self.authorized_clients.lock().await;
             for client in clients.iter() {
                 if &client.key == public_key {
@@ -426,31 +443,34 @@ mod server {
                     return Ok(Auth::Accept);
                 }
             }
-            
+
             warn!(user = user, fingerprint = %fingerprint, "Unknown SSH key");
             Ok(Auth::reject())
         }
-        
+
         async fn channel_open_session(
             &mut self,
             channel: Channel<Msg>,
             _session: &mut Session,
         ) -> Result<bool, Self::Error> {
             debug!(channel = ?channel.id(), "Session channel opened");
-            
+
             // Create channels for data transfer
             let (data_tx, data_rx) = mpsc::channel::<Vec<u8>>(64);
             let (_response_tx, _response_rx) = mpsc::channel::<Vec<u8>>(64);
-            
+
             // Store session info
             let mut sessions = self.sessions.lock().await;
-            sessions.insert(channel.id(), ClientSession {
-                username: "unknown".to_string(), // Set during auth
-                key_fingerprint: None,
-                peer_addr: None,
-                channel_data_tx: Some(data_tx),
-            });
-            
+            sessions.insert(
+                channel.id(),
+                ClientSession {
+                    username: "unknown".to_string(), // Set during auth
+                    key_fingerprint: None,
+                    peer_addr: None,
+                    channel_data_tx: Some(data_tx),
+                },
+            );
+
             // Create the transport
             let transport = SshTransport {
                 peer_info: PeerInfo {
@@ -463,16 +483,16 @@ mod server {
                 channel_handle: Arc::new(Mutex::new(Some(channel))),
                 recv_buffer: Mutex::new(Vec::new()),
             };
-            
+
             // Send to acceptor
             if self.connection_tx.send(transport).await.is_err() {
                 warn!("Failed to send transport to acceptor");
                 return Ok(false);
             }
-            
+
             Ok(true)
         }
-        
+
         async fn data(
             &mut self,
             channel: ChannelId,
@@ -487,7 +507,7 @@ mod server {
             }
             Ok(())
         }
-        
+
         async fn channel_eof(
             &mut self,
             channel: ChannelId,
@@ -499,7 +519,7 @@ mod server {
             Ok(())
         }
     }
-    
+
     /// SSH transport wrapping a russh channel.
     pub struct SshTransport {
         peer_info: PeerInfo,
@@ -507,26 +527,27 @@ mod server {
         channel_handle: Arc<Mutex<Option<Channel<Msg>>>>,
         recv_buffer: Mutex<Vec<u8>>,
     }
-    
+
     #[async_trait]
     impl Transport for SshTransport {
         fn peer_info(&self) -> &PeerInfo {
             &self.peer_info
         }
-        
+
         async fn recv(&mut self) -> Result<Option<ClientFrame>> {
             let mut buffer = self.recv_buffer.lock().await;
             let mut data_rx = self.data_rx.lock().await;
-            
+
             loop {
                 // Check if we have a complete frame in the buffer
                 if buffer.len() >= 4 {
-                    let len = u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
-                    
+                    let len =
+                        u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+
                     if len > MAX_FRAME_SIZE as usize {
                         anyhow::bail!("Frame too large: {} bytes", len);
                     }
-                    
+
                     if buffer.len() >= 4 + len {
                         let frame_data: Vec<u8> = buffer.drain(..4 + len).skip(4).collect();
                         return deserialize_frame(&frame_data)
@@ -534,7 +555,7 @@ mod server {
                             .map_err(|e| anyhow::anyhow!(e));
                     }
                 }
-                
+
                 // Need more data
                 match data_rx.recv().await {
                     Some(data) => buffer.extend(data),
@@ -542,25 +563,25 @@ mod server {
                 }
             }
         }
-        
+
         async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
             let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
             let len = data.len() as u32;
-            
+
             // Send length prefix + data
             let mut packet = Vec::with_capacity(4 + data.len());
             packet.extend_from_slice(&len.to_be_bytes());
             packet.extend_from_slice(&data);
-            
+
             // Write to channel
             let channel = self.channel_handle.lock().await;
             if let Some(ch) = channel.as_ref() {
                 ch.data(&packet[..]).await?;
             }
-            
+
             Ok(())
         }
-        
+
         async fn close(&mut self) -> Result<()> {
             let mut channel = self.channel_handle.lock().await;
             if let Some(ch) = channel.take() {
@@ -568,47 +589,53 @@ mod server {
             }
             Ok(())
         }
-        
+
         fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
             // For SSH, we can't easily split the channel, so we use Arc
             let peer_info = self.peer_info.clone();
             let shared = Arc::new(Mutex::new(*self));
             (
-                Box::new(SshReader { inner: shared.clone(), peer_info: peer_info.clone() }),
-                Box::new(SshWriter { inner: shared, _peer_info: peer_info }),
+                Box::new(SshReader {
+                    inner: shared.clone(),
+                    peer_info: peer_info.clone(),
+                }),
+                Box::new(SshWriter {
+                    inner: shared,
+                    _peer_info: peer_info,
+                }),
             )
         }
     }
-    
+
     struct SshReader {
         inner: Arc<Mutex<SshTransport>>,
         peer_info: PeerInfo,
     }
-    
+
     #[async_trait]
     impl TransportReader for SshReader {
         async fn recv(&mut self) -> Result<Option<ClientFrame>> {
             let mut transport = self.inner.lock().await;
             transport.recv().await
         }
-        
+
         fn peer_info(&self) -> &PeerInfo {
             &self.peer_info
         }
     }
-    
+
     struct SshWriter {
         inner: Arc<Mutex<SshTransport>>,
         _peer_info: PeerInfo,
     }
-    
+
     #[async_trait]
     impl TransportWriter for SshWriter {
         async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
             let mut transport = self.inner.lock().await;
             transport.send(frame).await
         }
-        
+
         async fn close(&mut self) -> Result<()> {
             let mut transport = self.inner.lock().await;
             transport.close().await
@@ -800,8 +827,18 @@ mod tests {
     #[test]
     fn test_ssh_config_default() {
         let config = SshConfig::default();
-        assert!(config.host_key_path.to_string_lossy().contains("ssh_host_key"));
-        assert!(config.authorized_clients_path.to_string_lossy().contains("authorized_clients"));
+        assert!(
+            config
+                .host_key_path
+                .to_string_lossy()
+                .contains("ssh_host_key")
+        );
+        assert!(
+            config
+                .authorized_clients_path
+                .to_string_lossy()
+                .contains("authorized_clients")
+        );
         assert!(!config.allow_password);
         assert!(config.require_pubkey);
     }

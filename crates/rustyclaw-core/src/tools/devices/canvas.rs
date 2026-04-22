@@ -176,13 +176,7 @@ async fn fetch_page_meta_async(url: &str) -> (String, String) {
         Err(_) => return ("(fetch failed)".into(), String::new()),
     };
 
-    let body = match client
-        .get(url)
-        .send()
-        .await
-        .and_then(|r| Ok(r))
-        .map(|r| r.text())
-    {
+    let body = match client.get(url).send().await.map(|r| r.text()) {
         Ok(fut) => fut.await.unwrap_or_default(),
         Err(_) => return ("(fetch failed)".into(), String::new()),
     };
@@ -460,7 +454,6 @@ fn strip_html_tags(html: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     #[test]
     fn test_extract_title() {

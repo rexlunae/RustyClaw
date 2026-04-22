@@ -13,7 +13,9 @@ use tokio::sync::RwLock;
 use tracing::{debug, info};
 
 /// Cost tier for a model — used to guide sub-agent model selection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum CostTier {
     /// Free models (local Ollama, free API tiers)
@@ -21,24 +23,27 @@ pub enum CostTier {
     /// Economy models (fast, cheap — good for simple tasks)
     Economy,
     /// Standard models (balanced cost/capability)
+    #[default]
     Standard,
     /// Premium models (highest capability, highest cost)
     Premium,
 }
 
-impl CostTier {
-    /// Parse from string.
-    pub fn from_str(s: &str) -> Option<Self> {
+impl std::str::FromStr for CostTier {
+    type Err = ();
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "free" => Some(Self::Free),
-            "economy" | "eco" | "cheap" => Some(Self::Economy),
-            "standard" | "std" | "balanced" => Some(Self::Standard),
-            "premium" | "pro" | "expensive" => Some(Self::Premium),
-            _ => None,
+            "free" => Ok(Self::Free),
+            "economy" | "eco" | "cheap" => Ok(Self::Economy),
+            "standard" | "std" | "balanced" => Ok(Self::Standard),
+            "premium" | "pro" | "expensive" => Ok(Self::Premium),
+            _ => Err(()),
         }
     }
+}
 
-    /// Display name.
+impl CostTier {
     pub fn display(&self) -> &'static str {
         match self {
             Self::Free => "Free",
@@ -56,12 +61,6 @@ impl CostTier {
             Self::Standard => "⚖️",
             Self::Premium => "💎",
         }
-    }
-}
-
-impl Default for CostTier {
-    fn default() -> Self {
-        Self::Standard
     }
 }
 
@@ -136,7 +135,7 @@ impl ModelEntry {
     pub fn new(id: impl Into<String>, provider: impl Into<String>, tier: CostTier) -> Self {
         let id = id.into();
         let provider = provider.into();
-        let name = id.split('/').last().unwrap_or(&id).to_string();
+        let name = id.split('/').next_back().unwrap_or(&id).to_string();
         let display_name = format_display_name(&name);
 
         Self {

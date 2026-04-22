@@ -269,7 +269,9 @@ where
                 Some(Ok(Message::Close(_))) => {
                     return Ok(None);
                 }
-                Some(Ok(Message::Ping(_) | Message::Pong(_) | Message::Text(_) | Message::Frame(_))) => {
+                Some(Ok(
+                    Message::Ping(_) | Message::Pong(_) | Message::Text(_) | Message::Frame(_),
+                )) => {
                     // Skip non-binary messages in reader (pings handled by writer task)
                 }
                 Some(Err(e)) => {

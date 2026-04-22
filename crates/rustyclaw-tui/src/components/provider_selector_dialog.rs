@@ -32,12 +32,16 @@ pub fn ProviderSelectorDialog(
                 theme::TEXT
             };
             // Show auth hint badge
-            let badge = props.auth_hints.get(i).map(|h| match h.as_str() {
-                "apikey" => " 🔑",
-                "deviceflow" => " 🔗",
-                "none" => " ✓",
-                _ => "",
-            }).unwrap_or("");
+            let badge = props
+                .auth_hints
+                .get(i)
+                .map(|h| match h.as_str() {
+                    "apikey" => " 🔑",
+                    "deviceflow" => " 🔗",
+                    "none" => " ✓",
+                    _ => "",
+                })
+                .unwrap_or("");
 
             element! {
                 Text(content: format!("{}{}{}", indicator, name, badge), color: color)

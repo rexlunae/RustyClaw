@@ -313,12 +313,11 @@ impl LeakDetector {
 
         // Scan each header value
         for (name, value) in headers {
-            self.scan_and_clean(value).map_err(|e| {
-                LeakDetectionError::SecretLeakBlocked {
+            self.scan_and_clean(value)
+                .map_err(|e| LeakDetectionError::SecretLeakBlocked {
                     pattern: format!("header:{}", name),
                     preview: e.to_string(),
-                }
-            })?;
+                })?;
         }
 
         // Scan body if present. Use lossy UTF-8 conversion so a leading
@@ -534,7 +533,12 @@ mod tests {
         let result = detector.scan(content);
         assert!(!result.is_clean());
         assert!(result.should_block);
-        assert!(result.matches.iter().any(|m| m.pattern_name == "openai_api_key"));
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.pattern_name == "openai_api_key")
+        );
     }
 
     #[test]
@@ -544,7 +548,12 @@ mod tests {
 
         let result = detector.scan(content);
         assert!(!result.is_clean());
-        assert!(result.matches.iter().any(|m| m.pattern_name == "github_token"));
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.pattern_name == "github_token")
+        );
     }
 
     #[test]
@@ -554,7 +563,12 @@ mod tests {
 
         let result = detector.scan(content);
         assert!(!result.is_clean());
-        assert!(result.matches.iter().any(|m| m.pattern_name == "aws_access_key"));
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.pattern_name == "aws_access_key")
+        );
     }
 
     #[test]
@@ -564,7 +578,12 @@ mod tests {
 
         let result = detector.scan(content);
         assert!(!result.is_clean());
-        assert!(result.matches.iter().any(|m| m.pattern_name == "pem_private_key"));
+        assert!(
+            result
+                .matches
+                .iter()
+                .any(|m| m.pattern_name == "pem_private_key")
+        );
     }
 
     #[test]

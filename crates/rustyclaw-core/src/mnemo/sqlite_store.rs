@@ -1,9 +1,11 @@
 //! SQLite-backed memory store implementation.
 
 use super::config::MnemoConfig;
-use super::schema::{CURRENT_VERSION, SCHEMA, VERSION_CHECK};
-use super::traits::{CompactionStats, MemoryEntry, MemoryHit, MemoryStore, SummaryKind, Summarizer};
 use super::estimate_tokens;
+use super::schema::{CURRENT_VERSION, SCHEMA, VERSION_CHECK};
+use super::traits::{
+    CompactionStats, MemoryEntry, MemoryHit, MemoryStore, Summarizer, SummaryKind,
+};
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use std::path::Path;
@@ -416,15 +418,13 @@ impl MemoryStore for SqliteMemoryStore {
 
     async fn message_count(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 
     async fn summary_count(&self) -> Result<usize> {
         let conn = self.conn.lock().unwrap();
-        let count: i64 =
-            conn.query_row("SELECT COUNT(*) FROM summaries", [], |row| row.get(0))?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM summaries", [], |row| row.get(0))?;
         Ok(count as usize)
     }
 

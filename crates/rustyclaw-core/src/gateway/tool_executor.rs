@@ -42,7 +42,11 @@ pub async fn execute_tool_by_type(
 /// Check if a short response suggests incomplete intent that should be continued.
 ///
 /// Returns true if the model appears to have stated intent without making a tool call.
-pub fn should_auto_continue(response_text: &str, consecutive_continues: usize, max_continues: usize) -> bool {
+pub fn should_auto_continue(
+    response_text: &str,
+    consecutive_continues: usize,
+    max_continues: usize,
+) -> bool {
     // Only consider continuation for short responses
     if response_text.len() >= 500 || consecutive_continues >= max_continues {
         return false;

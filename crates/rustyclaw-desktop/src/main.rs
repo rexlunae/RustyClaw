@@ -3,7 +3,7 @@
 //! A GUI alternative to the TUI client, built with Dioxus and dioxus-bulma.
 
 use dioxus::prelude::*;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod app;
 mod components;

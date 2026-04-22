@@ -386,10 +386,10 @@ mod tests {
         // This test verifies that spawned subagents show up when listing active sessions
         // which is what the gateway uses to populate the sidebar
         let mut manager = SessionManager::new();
-        
+
         // Spawn a subagent
         let key = manager.spawn_subagent("main", "Test task", Some("test".to_string()), None);
-        
+
         // Verify it appears in active-only list (what sidebar uses)
         let active = manager.list(Some(&[SessionKind::Subagent]), true, 10);
         assert_eq!(active.len(), 1, "Subagent should appear in active list");

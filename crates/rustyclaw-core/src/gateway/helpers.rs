@@ -11,34 +11,26 @@ use super::protocol::types::ChatMessage;
 /// Conservative defaults — these are *input* token limits.
 pub fn context_window_for_model(model: &str) -> usize {
     let m = model.to_lowercase();
-    let window = if m.contains("claude-opus") {
-        200_000
-    } else if m.contains("claude-sonnet") {
-        200_000
-    } else if m.contains("claude-haiku") {
-        200_000
-    } else if m.starts_with("gpt-4.1") {
-        1_000_000
-    } else if m.starts_with("o3") || m.starts_with("o4") {
-        200_000
-    } else if m.contains("gemini-2.5-pro") {
-        1_000_000
-    } else if m.contains("gemini-2.5-flash") {
-        1_000_000
-    } else if m.contains("gemini-2.0-flash") {
-        1_000_000
-    } else if m.contains("grok-3") {
-        131_072
-    } else if m.contains("llama") {
-        128_000
-    } else if m.contains("mistral") {
-        128_000
-    } else if m.contains("deepseek") {
-        128_000
-    } else {
-        // Fallback: 128k is a safe default for modern models
-        128_000
-    };
+    let window =
+        if m.contains("claude-opus") || m.contains("claude-sonnet") || m.contains("claude-haiku") {
+            200_000
+        } else if m.starts_with("gpt-4.1") {
+            1_000_000
+        } else if m.starts_with("o3") || m.starts_with("o4") {
+            200_000
+        } else if m.contains("gemini-2.5-pro")
+            || m.contains("gemini-2.5-flash")
+            || m.contains("gemini-2.0-flash")
+        {
+            1_000_000
+        } else if m.contains("grok-3") {
+            131_072
+        } else if m.contains("llama") || m.contains("mistral") || m.contains("deepseek") {
+            128_000
+        } else {
+            // Fallback: 128k is a safe default for modern models
+            128_000
+        };
     debug!(model, window, "Context window for model");
     window
 }

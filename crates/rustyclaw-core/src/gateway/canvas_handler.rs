@@ -93,7 +93,7 @@ pub async fn execute_canvas_tool(
                 let messages: Result<Vec<crate::canvas::A2UIMessage>, _> = jsonl
                     .lines()
                     .filter(|l| !l.trim().is_empty())
-                    .map(|l| serde_json::from_str(l))
+                    .map(serde_json::from_str)
                     .collect();
 
                 match messages {

@@ -342,23 +342,38 @@ pub fn run_onboard_wizard(
         // Check for auto-selection based on API key flags
         if args.openrouter_api_key.is_some() {
             // Auto-select OpenRouter
-            println!("  {}", t::icon_ok("Auto-selecting OpenRouter provider based on --openrouter-api-key flag"));
+            println!(
+                "  {}",
+                t::icon_ok("Auto-selecting OpenRouter provider based on --openrouter-api-key flag")
+            );
             PROVIDERS.iter().find(|p| p.id == "openrouter").unwrap()
         } else if args.anthropic_api_key.is_some() {
             // Auto-select Anthropic
-            println!("  {}", t::icon_ok("Auto-selecting Anthropic provider based on --anthropic-api-key flag"));
+            println!(
+                "  {}",
+                t::icon_ok("Auto-selecting Anthropic provider based on --anthropic-api-key flag")
+            );
             PROVIDERS.iter().find(|p| p.id == "anthropic").unwrap()
         } else if args.openai_api_key.is_some() {
             // Auto-select OpenAI
-            println!("  {}", t::icon_ok("Auto-selecting OpenAI provider based on --openai-api-key flag"));
+            println!(
+                "  {}",
+                t::icon_ok("Auto-selecting OpenAI provider based on --openai-api-key flag")
+            );
             PROVIDERS.iter().find(|p| p.id == "openai").unwrap()
         } else if args.gemini_api_key.is_some() {
             // Auto-select Google
-            println!("  {}", t::icon_ok("Auto-selecting Google provider based on --gemini-api-key flag"));
+            println!(
+                "  {}",
+                t::icon_ok("Auto-selecting Google provider based on --gemini-api-key flag")
+            );
             PROVIDERS.iter().find(|p| p.id == "google").unwrap()
         } else if args.xai_api_key.is_some() {
             // Auto-select xAI
-            println!("  {}", t::icon_ok("Auto-selecting xAI provider based on --xai-api-key flag"));
+            println!(
+                "  {}",
+                t::icon_ok("Auto-selecting xAI provider based on --xai-api-key flag")
+            );
             PROVIDERS.iter().find(|p| p.id == "xai").unwrap()
         } else {
             // No API key provided, show interactive selection
@@ -421,7 +436,7 @@ pub fn run_onboard_wizard(
                 } else {
                     None
                 };
-                
+
                 if let Some(key) = provided_key {
                     // Store the provided API key
                     secrets.store_secret(secret_key, key)?;
@@ -458,8 +473,10 @@ pub fn run_onboard_wizard(
                             println!("  {}", t::icon_ok("Keeping existing API key."));
                         }
                     } else {
-                        let key =
-                            prompt_secret(&mut reader, &format!("{} ", t::accent("Enter API key:")))?;
+                        let key = prompt_secret(
+                            &mut reader,
+                            &format!("{} ", t::accent("Enter API key:")),
+                        )?;
                         if key.trim().is_empty() {
                             println!(
                                 "  {}",
@@ -628,7 +645,10 @@ pub fn run_onboard_wizard(
         m.trim().to_string()
     } else if available_models.len() > 20 {
         // Large list — use fuzzy search for better UX
-        match fuzzy_select(&available_models, "Select a default model (type to filter):")? {
+        match fuzzy_select(
+            &available_models,
+            "Select a default model (type to filter):",
+        )? {
             Some(idx) => available_models[idx].clone(),
             None => {
                 println!("  {}", t::warn("Cancelled — no model selected."));
@@ -1482,8 +1502,7 @@ fn print_qr_code(data: &str) {
     let indent = "  ";
     for pair in (0..total_h).step_by(2) {
         print!("{}", indent);
-        for x in 0..total_w {
-            let top_dark = rows[pair][x];
+        for (x, &top_dark) in rows[pair].iter().enumerate() {
             let bot_dark = if pair + 1 < total_h {
                 rows[pair + 1][x]
             } else {
@@ -1930,8 +1949,8 @@ fn arrow_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<
         execute!(stdout, cursor::MoveUp(draw_height as u16))?;
 
         let end = (scroll_offset + max_visible).min(items.len());
-        for i in scroll_offset..end {
-            let label = items[i].as_ref();
+        for (i, item) in items.iter().enumerate().take(end).skip(scroll_offset) {
+            let label = item.as_ref();
             let line = if i == selected {
                 format!("  {} {}", t::accent("❯"), t::accent_bright(label),)
             } else {

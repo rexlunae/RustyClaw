@@ -439,9 +439,8 @@ impl App {
                                 Ok(_) => {
                                     let len = u32::from_be_bytes(len_buf) as usize;
                                     if len > 16 * 1024 * 1024 {
-                                        let _ = gw_tx_ssh.send(GwEvent::Error(
-                                            "SSH frame too large".into(),
-                                        ));
+                                        let _ = gw_tx_ssh
+                                            .send(GwEvent::Error("SSH frame too large".into()));
                                         break;
                                     }
                                     let mut frame_buf = vec![0u8; len];
@@ -465,7 +464,8 @@ impl App {
                                                     let _ = gw_tx_ssh.send(GwEvent::ModelReady(detail.clone()));
                                                 }
                                             } else {
-                                                let fa = gateway_client::server_frame_to_action(&frame);
+                                                let fa =
+                                                    gateway_client::server_frame_to_action(&frame);
                                                 if let Some(action) = fa.action {
                                                     let ev = action_to_gw_event(&action);
                                                     if let Some(ev) = ev {
@@ -483,8 +483,9 @@ impl App {
                                     }
                                 }
                                 Err(_) => {
-                                    let _ = gw_tx_ssh
-                                        .send(GwEvent::Disconnected("SSH connection closed".into()));
+                                    let _ = gw_tx_ssh.send(GwEvent::Disconnected(
+                                        "SSH connection closed".into(),
+                                    ));
                                     break;
                                 }
                             }
@@ -495,8 +496,8 @@ impl App {
                     }
                     Err(e) => {
                         drop(sink_tx);
-                        let _ = gw_tx_ssh
-                            .send(GwEvent::Error(format!("Failed to spawn ssh: {}", e)));
+                        let _ =
+                            gw_tx_ssh.send(GwEvent::Error(format!("Failed to spawn ssh: {}", e)));
                         let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
                     }
                 }
@@ -504,25 +505,25 @@ impl App {
         } else {
             // ── WebSocket transport ─────────────────────────────────────
 
-        let _reader_handle = tokio::spawn(async move {
-            use futures_util::StreamExt;
-            use tokio_tungstenite::connect_async;
+            let _reader_handle = tokio::spawn(async move {
+                use futures_util::StreamExt;
+                use tokio_tungstenite::connect_async;
 
-            match connect_async(&gateway_url_clone).await {
-                Ok((ws, _)) => {
-                    let (write, mut read) = StreamExt::split(ws);
-                    let _ = sink_tx.send(GatewaySink::WebSocket(write));
-                    // Don't report Connected yet — wait for auth flow.
-                    // The gateway will send AuthChallenge or Hello+Status frames.
+                match connect_async(&gateway_url_clone).await {
+                    Ok((ws, _)) => {
+                        let (write, mut read) = StreamExt::split(ws);
+                        let _ = sink_tx.send(GatewaySink::WebSocket(write));
+                        // Don't report Connected yet — wait for auth flow.
+                        // The gateway will send AuthChallenge or Hello+Status frames.
 
-                    while let Some(msg) = read.next().await {
-                        match msg {
-                            Ok(tokio_tungstenite::tungstenite::Message::Binary(data)) => {
-                                match deserialize_frame::<ServerFrame>(&data) {
-                                    Ok(frame) => {
-                                        // Check for ModelReady status before action conversion
-                                        // since it maps to a generic Success action otherwise.
-                                        let is_model_ready = matches!(
+                        while let Some(msg) = read.next().await {
+                            match msg {
+                                Ok(tokio_tungstenite::tungstenite::Message::Binary(data)) => {
+                                    match deserialize_frame::<ServerFrame>(&data) {
+                                        Ok(frame) => {
+                                            // Check for ModelReady status before action conversion
+                                            // since it maps to a generic Success action otherwise.
+                                            let is_model_ready = matches!(
                                             &frame.payload,
                                             rustyclaw_core::gateway::ServerPayload::Status {
                                                 status:
@@ -530,61 +531,58 @@ impl App {
                                                 ..
                                             }
                                         );
-                                        if is_model_ready {
-                                            if let rustyclaw_core::gateway::ServerPayload::Status { detail, .. } = &frame.payload {
+                                            if is_model_ready {
+                                                if let rustyclaw_core::gateway::ServerPayload::Status { detail, .. } = &frame.payload {
                                             let _ = gw_tx_conn.send(GwEvent::ModelReady(detail.clone()));
                                         }
-                                        } else {
-                                            let fa = gateway_client::server_frame_to_action(&frame);
-                                            if let Some(action) = fa.action {
-                                                let ev = action_to_gw_event(&action);
-                                                if let Some(ev) = ev {
-                                                    let _ = gw_tx_conn.send(ev);
+                                            } else {
+                                                let fa =
+                                                    gateway_client::server_frame_to_action(&frame);
+                                                if let Some(action) = fa.action {
+                                                    let ev = action_to_gw_event(&action);
+                                                    if let Some(ev) = ev {
+                                                        let _ = gw_tx_conn.send(ev);
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "[rustyclaw] Failed to deserialize server frame ({} bytes): {}",
-                                            data.len(),
-                                            e
-                                        );
-                                        let _ = gw_tx_conn.send(GwEvent::Error(format!(
+                                        Err(e) => {
+                                            eprintln!(
+                                                "[rustyclaw] Failed to deserialize server frame ({} bytes): {}",
+                                                data.len(),
+                                                e
+                                            );
+                                            let _ = gw_tx_conn.send(GwEvent::Error(format!(
                                             "Protocol error: failed to deserialize frame ({}). Gateway/TUI version mismatch?",
                                             e
                                         )));
+                                        }
                                     }
                                 }
+                                Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => {
+                                    let _ = gw_tx_conn.send(GwEvent::Disconnected("closed".into()));
+                                    break;
+                                }
+                                Err(e) => {
+                                    let _ = gw_tx_conn.send(GwEvent::Disconnected(e.to_string()));
+                                    break;
+                                }
+                                _ => {}
                             }
-                            Ok(tokio_tungstenite::tungstenite::Message::Close(_)) => {
-                                let _ = gw_tx_conn.send(GwEvent::Disconnected("closed".into()));
-                                break;
-                            }
-                            Err(e) => {
-                                let _ = gw_tx_conn.send(GwEvent::Disconnected(e.to_string()));
-                                break;
-                            }
-                            _ => {}
                         }
                     }
+                    Err(e) => {
+                        drop(sink_tx);
+                        let _ = gw_tx_conn
+                            .send(GwEvent::Error(format!("Gateway connection failed: {}", e)));
+                        let _ = gw_tx_conn.send(GwEvent::Disconnected(e.to_string()));
+                    }
                 }
-                Err(e) => {
-                    drop(sink_tx);
-                    let _ = gw_tx_conn
-                        .send(GwEvent::Error(format!("Gateway connection failed: {}", e)));
-                    let _ = gw_tx_conn.send(GwEvent::Disconnected(e.to_string()));
-                }
-            }
-        });
-
+            });
         } // end WebSocket branch
 
         // Try to get the write-half.
-        let mut gw_sink: Option<GatewaySink> = match sink_rx.await {
-            Ok(s) => Some(s),
-            Err(_) => None,
-        };
+        let mut gw_sink: Option<GatewaySink> = sink_rx.await.ok();
 
         // ── Spawn the iocraft render on a blocking thread ───────────────
         // Stash the channels in statics so the component can grab them on
@@ -916,23 +914,19 @@ impl App {
                                 .as_ref()
                                 .map(|m| m.provider.clone())
                                 .unwrap_or_default();
-                            let base_url = config
-                                .model
-                                .as_ref()
-                                .and_then(|m| m.base_url.clone());
+                            let base_url = config.model.as_ref().and_then(|m| m.base_url.clone());
                             // Read the API key: try the encrypted vault first
                             // (where onboarding stores it), then fall back to
                             // environment variables.
-                            let api_key = rustyclaw_core::providers::secret_key_for_provider(
-                                &provider_id,
-                            )
-                            .and_then(|key_name| {
-                                secrets_manager
-                                    .get_secret(key_name, true)
-                                    .ok()
-                                    .flatten()
-                                    .or_else(|| std::env::var(key_name).ok())
-                            });
+                            let api_key =
+                                rustyclaw_core::providers::secret_key_for_provider(&provider_id)
+                                    .and_then(|key_name| {
+                                        secrets_manager
+                                            .get_secret(key_name, true)
+                                            .ok()
+                                            .flatten()
+                                            .or_else(|| std::env::var(key_name).ok())
+                                    });
 
                             let gw_tx2 = gw_tx.clone();
                             tokio::spawn(async move {
@@ -945,7 +939,10 @@ impl App {
                                 {
                                     Ok(models) => {
                                         let count = models.len();
-                                        let display = rustyclaw_core::providers::display_name_for_provider(&provider_id);
+                                        let display =
+                                            rustyclaw_core::providers::display_name_for_provider(
+                                                &provider_id,
+                                            );
                                         let _ = gw_tx2.send(GwEvent::Info(format!(
                                             "{} models from {}:",
                                             count, display,
@@ -955,9 +952,7 @@ impl App {
                                         let lines: Vec<String> =
                                             models.iter().map(|m| m.display_line()).collect();
                                         for chunk in lines.chunks(20) {
-                                            let _ = gw_tx2.send(GwEvent::Info(
-                                                chunk.join("\n"),
-                                            ));
+                                            let _ = gw_tx2.send(GwEvent::Info(chunk.join("\n")));
                                         }
                                         let _ = gw_tx2.send(GwEvent::Info(
                                             "Tip: /model <id> to switch".to_string(),
@@ -982,9 +977,15 @@ impl App {
                             let hints: Vec<String> = rustyclaw_core::providers::PROVIDERS
                                 .iter()
                                 .map(|p| match p.auth_method {
-                                    rustyclaw_core::providers::AuthMethod::ApiKey => "apikey".to_string(),
-                                    rustyclaw_core::providers::AuthMethod::DeviceFlow => "deviceflow".to_string(),
-                                    rustyclaw_core::providers::AuthMethod::None => "none".to_string(),
+                                    rustyclaw_core::providers::AuthMethod::ApiKey => {
+                                        "apikey".to_string()
+                                    }
+                                    rustyclaw_core::providers::AuthMethod::DeviceFlow => {
+                                        "deviceflow".to_string()
+                                    }
+                                    rustyclaw_core::providers::AuthMethod::None => {
+                                        "none".to_string()
+                                    }
                                 })
                                 .collect();
                             let _ = gw_tx.send(GwEvent::ShowProviderSelector {
@@ -1182,11 +1183,15 @@ impl App {
                             rustyclaw_core::providers::AuthMethod::None => {
                                 // No auth needed — go straight to model fetch.
                                 // Update config first.
-                                let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                                let existing_model =
+                                    config.model.as_ref().and_then(|m| m.model.clone());
                                 config.model = Some(rustyclaw_core::config::ModelProvider {
                                     provider: provider_id.clone(),
                                     model: existing_model,
-                                    base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                    base_url: config
+                                        .model
+                                        .as_ref()
+                                        .and_then(|m| m.base_url.clone()),
                                 });
                                 let _ = config.save(None);
                                 // Reload gateway
@@ -1209,7 +1214,13 @@ impl App {
                                 let gw_tx2 = gw_tx.clone();
                                 let base = config.model.as_ref().and_then(|m| m.base_url.clone());
                                 tokio::spawn(async move {
-                                    match rustyclaw_core::providers::fetch_models(&pid, None, base.as_deref()).await {
+                                    match rustyclaw_core::providers::fetch_models(
+                                        &pid,
+                                        None,
+                                        base.as_deref(),
+                                    )
+                                    .await
+                                    {
                                         Ok(models) => {
                                             let _ = gw_tx2.send(GwEvent::ShowModelSelector {
                                                 provider: pid,
@@ -1218,7 +1229,10 @@ impl App {
                                             });
                                         }
                                         Err(e) => {
-                                            let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                            let _ = gw_tx2.send(GwEvent::Error(format!(
+                                                "Failed to fetch models: {}",
+                                                e
+                                            )));
                                         }
                                     }
                                 });
@@ -1234,11 +1248,15 @@ impl App {
                                 });
                                 if has_key.is_some() {
                                     // Key exists — set provider and fetch models
-                                    let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                                    let existing_model =
+                                        config.model.as_ref().and_then(|m| m.model.clone());
                                     config.model = Some(rustyclaw_core::config::ModelProvider {
                                         provider: provider_id.clone(),
                                         model: existing_model,
-                                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                        base_url: config
+                                            .model
+                                            .as_ref()
+                                            .and_then(|m| m.base_url.clone()),
                                     });
                                     let _ = config.save(None);
                                     if let Some(ref mut sink) = gw_sink {
@@ -1258,9 +1276,16 @@ impl App {
                                         provider_display: display.clone(),
                                     });
                                     let gw_tx2 = gw_tx.clone();
-                                    let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                                    let base =
+                                        config.model.as_ref().and_then(|m| m.base_url.clone());
                                     tokio::spawn(async move {
-                                        match rustyclaw_core::providers::fetch_models(&pid, key.as_deref(), base.as_deref()).await {
+                                        match rustyclaw_core::providers::fetch_models(
+                                            &pid,
+                                            key.as_deref(),
+                                            base.as_deref(),
+                                        )
+                                        .await
+                                        {
                                             Ok(models) => {
                                                 let _ = gw_tx2.send(GwEvent::ShowModelSelector {
                                                     provider: pid,
@@ -1269,7 +1294,10 @@ impl App {
                                                 });
                                             }
                                             Err(e) => {
-                                                let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                                let _ = gw_tx2.send(GwEvent::Error(format!(
+                                                    "Failed to fetch models: {}",
+                                                    e
+                                                )));
                                             }
                                         }
                                     });
@@ -1294,11 +1322,15 @@ impl App {
                                 });
                                 if has_token.is_some() {
                                     // Token exists — set provider and fetch models
-                                    let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+                                    let existing_model =
+                                        config.model.as_ref().and_then(|m| m.model.clone());
                                     config.model = Some(rustyclaw_core::config::ModelProvider {
                                         provider: provider_id.clone(),
                                         model: existing_model,
-                                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                        base_url: config
+                                            .model
+                                            .as_ref()
+                                            .and_then(|m| m.base_url.clone()),
                                     });
                                     let _ = config.save(None);
                                     if let Some(ref mut sink) = gw_sink {
@@ -1318,9 +1350,16 @@ impl App {
                                         provider_display: display.clone(),
                                     });
                                     let gw_tx2 = gw_tx.clone();
-                                    let base = config.model.as_ref().and_then(|m| m.base_url.clone());
+                                    let base =
+                                        config.model.as_ref().and_then(|m| m.base_url.clone());
                                     tokio::spawn(async move {
-                                        match rustyclaw_core::providers::fetch_models(&pid, token.as_deref(), base.as_deref()).await {
+                                        match rustyclaw_core::providers::fetch_models(
+                                            &pid,
+                                            token.as_deref(),
+                                            base.as_deref(),
+                                        )
+                                        .await
+                                        {
                                             Ok(models) => {
                                                 let _ = gw_tx2.send(GwEvent::ShowModelSelector {
                                                     provider: pid,
@@ -1329,7 +1368,10 @@ impl App {
                                                 });
                                             }
                                             Err(e) => {
-                                                let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                                let _ = gw_tx2.send(GwEvent::Error(format!(
+                                                    "Failed to fetch models: {}",
+                                                    e
+                                                )));
                                             }
                                         }
                                     });
@@ -1340,10 +1382,15 @@ impl App {
                                         let display = def.display.to_string();
                                         let gw_tx2 = gw_tx.clone();
                                         let _ = gw_tx.send(GwEvent::Info(format!(
-                                            "Starting device flow for {}…", display
+                                            "Starting device flow for {}…",
+                                            display
                                         )));
                                         tokio::spawn(async move {
-                                            match rustyclaw_core::providers::start_device_flow(df_config).await {
+                                            match rustyclaw_core::providers::start_device_flow(
+                                                df_config,
+                                            )
+                                            .await
+                                            {
                                                 Ok(auth_resp) => {
                                                     let _ = gw_tx2.send(GwEvent::DeviceFlowCode {
                                                         provider: pid.clone(),
@@ -1355,11 +1402,14 @@ impl App {
                                                         auth_resp.interval.max(5),
                                                     );
                                                     let deadline = tokio::time::Instant::now()
-                                                        + std::time::Duration::from_secs(auth_resp.expires_in);
+                                                        + std::time::Duration::from_secs(
+                                                            auth_resp.expires_in,
+                                                        );
                                                     loop {
                                                         tokio::time::sleep(interval).await;
                                                         if tokio::time::Instant::now() >= deadline {
-                                                            let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
+                                                            let _ = gw_tx2
+                                                                .send(GwEvent::DeviceFlowDone);
                                                             let _ = gw_tx2.send(GwEvent::Error(
                                                                 "Device flow timed out — please try again.".to_string(),
                                                             ));
@@ -1394,14 +1444,16 @@ impl App {
                                                 }
                                                 Err(e) => {
                                                     let _ = gw_tx2.send(GwEvent::Error(format!(
-                                                        "Failed to start device flow: {}", e
+                                                        "Failed to start device flow: {}",
+                                                        e
                                                     )));
                                                 }
                                             }
                                         });
                                     } else {
                                         let _ = gw_tx.send(GwEvent::Error(
-                                            "Device flow not configured for this provider.".to_string(),
+                                            "Device flow not configured for this provider."
+                                                .to_string(),
                                         ));
                                     }
                                 }
@@ -1411,18 +1463,22 @@ impl App {
                 }
                 Ok(UserInput::SubmitApiKey { provider, key }) => {
                     // Store the API key in the secrets vault
-                    let secret_key_name = rustyclaw_core::providers::secret_key_for_provider(&provider)
-                        .unwrap_or("API_KEY");
-                    let display = rustyclaw_core::providers::display_name_for_provider(&provider).to_string();
+                    let secret_key_name =
+                        rustyclaw_core::providers::secret_key_for_provider(&provider)
+                            .unwrap_or("API_KEY");
+                    let display =
+                        rustyclaw_core::providers::display_name_for_provider(&provider).to_string();
                     match secrets_manager.store_secret(secret_key_name, &key) {
                         Ok(()) => {
                             let _ = gw_tx.send(GwEvent::Success(format!(
-                                "✓ API key for {} stored securely.", display,
+                                "✓ API key for {} stored securely.",
+                                display,
                             )));
                         }
                         Err(e) => {
                             let _ = gw_tx.send(GwEvent::Warning(format!(
-                                "Failed to store API key: {}. Key is set for this session only.", e,
+                                "Failed to store API key: {}. Key is set for this session only.",
+                                e,
                             )));
                         }
                     }
@@ -1454,7 +1510,13 @@ impl App {
                     let api_key = Some(key);
                     let base = config.model.as_ref().and_then(|m| m.base_url.clone());
                     tokio::spawn(async move {
-                        match rustyclaw_core::providers::fetch_models(&pid, api_key.as_deref(), base.as_deref()).await {
+                        match rustyclaw_core::providers::fetch_models(
+                            &pid,
+                            api_key.as_deref(),
+                            base.as_deref(),
+                        )
+                        .await
+                        {
                             Ok(models) => {
                                 let _ = gw_tx2.send(GwEvent::ShowModelSelector {
                                     provider: pid,
@@ -1463,7 +1525,8 @@ impl App {
                                 });
                             }
                             Err(e) => {
-                                let _ = gw_tx2.send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                let _ = gw_tx2
+                                    .send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
                             }
                         }
                     });
@@ -1478,9 +1541,11 @@ impl App {
                     if let Err(e) = config.save(None) {
                         let _ = gw_tx.send(GwEvent::Error(format!("Failed to save config: {}", e)));
                     } else {
-                        let display = rustyclaw_core::providers::display_name_for_provider(&provider);
+                        let display =
+                            rustyclaw_core::providers::display_name_for_provider(&provider);
                         let _ = gw_tx.send(GwEvent::Info(format!(
-                            "Model set to {} / {}. Reloading gateway…", display, model,
+                            "Model set to {} / {}. Reloading gateway…",
+                            display, model,
                         )));
                         // Reload gateway so the new provider + model take effect
                         if let Some(ref mut sink) = gw_sink {
@@ -1498,7 +1563,11 @@ impl App {
                     // User cancelled — nothing to do
                 }
                 #[allow(unused_variables)]
-                Ok(UserInput::PairingConnect { host, port, public_key }) => {
+                Ok(UserInput::PairingConnect {
+                    host,
+                    port,
+                    public_key,
+                }) => {
                     // Initiate SSH connection for pairing
                     #[cfg(feature = "ssh")]
                     {
@@ -1506,7 +1575,8 @@ impl App {
                         tokio::spawn(async move {
                             match crate::pairing::connect_and_pair(&host, port, &public_key).await {
                                 Ok(gateway_name) => {
-                                    let _ = gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
+                                    let _ =
+                                        gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
                                 }
                                 Err(e) => {
                                     let _ = gw_tx_pair.send(GwEvent::PairingError(e.to_string()));
@@ -1516,7 +1586,8 @@ impl App {
                     }
                     #[cfg(not(feature = "ssh"))]
                     {
-                        let _ = gw_tx.send(GwEvent::PairingError("SSH feature not enabled".to_string()));
+                        let _ = gw_tx
+                            .send(GwEvent::PairingError("SSH feature not enabled".to_string()));
                     }
                 }
                 Ok(UserInput::Quit) => break,
@@ -1803,34 +1874,34 @@ mod tui_component {
 
         // ── Local UI state ──────────────────────────────────────────────
         let mut messages: State<Vec<DisplayMessage>> = hooks.use_state(Vec::new);
-        let mut input_value = hooks.use_state(|| String::new());
+        let mut input_value = hooks.use_state(String::new);
         let mut gw_status = hooks.use_state(|| rustyclaw_core::types::GatewayStatus::Connecting);
         let mut streaming = hooks.use_state(|| false);
         let mut stream_start: State<Option<Instant>> = hooks.use_state(|| None);
-        let mut elapsed = hooks.use_state(|| String::new());
+        let mut elapsed = hooks.use_state(String::new);
         let mut scroll_offset = hooks.use_state(|| 0i32);
         let mut spinner_tick = hooks.use_state(|| 0usize);
         let mut should_quit = hooks.use_state(|| false);
-        let mut streaming_buf = hooks.use_state(|| String::new());
+        let mut streaming_buf = hooks.use_state(String::new);
         let mut dynamic_model_label: State<Option<String>> = hooks.use_state(|| None);
         let mut dynamic_provider_id: State<Option<String>> = hooks.use_state(|| None);
 
         // ── Auth dialog state ───────────────────────────────────────────
         let mut show_auth_dialog = hooks.use_state(|| false);
-        let mut auth_code = hooks.use_state(|| String::new());
-        let mut auth_error = hooks.use_state(|| String::new());
+        let mut auth_code = hooks.use_state(String::new);
+        let mut auth_error = hooks.use_state(String::new);
 
         // ── Tool approval dialog state ──────────────────────────────────
         let mut show_tool_approval = hooks.use_state(|| false);
-        let mut tool_approval_id = hooks.use_state(|| String::new());
-        let mut tool_approval_name = hooks.use_state(|| String::new());
-        let mut tool_approval_args = hooks.use_state(|| String::new());
+        let mut tool_approval_id = hooks.use_state(String::new);
+        let mut tool_approval_name = hooks.use_state(String::new);
+        let mut tool_approval_args = hooks.use_state(String::new);
         let mut tool_approval_selected = hooks.use_state(|| true); // true = Allow
 
         // ── Vault unlock dialog state ───────────────────────────────────
         let mut show_vault_unlock = hooks.use_state(|| false);
-        let mut vault_password = hooks.use_state(|| String::new());
-        let mut vault_error = hooks.use_state(|| String::new());
+        let mut vault_password = hooks.use_state(String::new);
+        let mut vault_error = hooks.use_state(String::new);
 
         // ── Hatching dialog state ───────────────────────────────────────
         let mut show_hatching = hooks.use_state(|| props.needs_hatching);
@@ -1845,20 +1916,20 @@ mod tui_component {
             hooks.use_state(|| crate::components::pairing_dialog::PairingStep::ShowKey);
         let mut pairing_field: State<crate::components::pairing_dialog::PairingField> =
             hooks.use_state(|| crate::components::pairing_dialog::PairingField::Host);
-        let mut pairing_public_key = hooks.use_state(|| String::new());
-        let mut pairing_fingerprint = hooks.use_state(|| String::new());
-        let mut pairing_fingerprint_art = hooks.use_state(|| String::new());
-        let mut pairing_qr_ascii = hooks.use_state(|| String::new());
-        let mut pairing_host = hooks.use_state(|| String::new());
+        let pairing_public_key = hooks.use_state(String::new);
+        let pairing_fingerprint = hooks.use_state(String::new);
+        let pairing_fingerprint_art = hooks.use_state(String::new);
+        let pairing_qr_ascii = hooks.use_state(String::new);
+        let mut pairing_host = hooks.use_state(String::new);
         let mut pairing_port = hooks.use_state(|| "2222".to_string());
-        let mut pairing_error = hooks.use_state(|| String::new());
+        let mut pairing_error = hooks.use_state(String::new);
 
         // ── User prompt dialog state ────────────────────────────────────
         let mut show_user_prompt = hooks.use_state(|| false);
-        let mut user_prompt_id = hooks.use_state(|| String::new());
-        let mut user_prompt_title = hooks.use_state(|| String::new());
-        let mut user_prompt_desc = hooks.use_state(|| String::new());
-        let mut user_prompt_input = hooks.use_state(|| String::new());
+        let mut user_prompt_id = hooks.use_state(String::new);
+        let mut user_prompt_title = hooks.use_state(String::new);
+        let mut user_prompt_desc = hooks.use_state(String::new);
+        let mut user_prompt_input = hooks.use_state(String::new);
         let mut user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>> =
             hooks.use_state(|| None);
         let mut user_prompt_selected = hooks.use_state(|| 0usize);
@@ -1871,22 +1942,22 @@ mod tui_component {
         let mut provider_selector_cursor = hooks.use_state(|| 0usize);
 
         let mut show_api_key_dialog = hooks.use_state(|| false);
-        let mut api_key_provider = hooks.use_state(|| String::new());
-        let mut api_key_provider_display = hooks.use_state(|| String::new());
-        let mut api_key_input = hooks.use_state(|| String::new());
-        let mut api_key_help_url = hooks.use_state(|| String::new());
-        let mut api_key_help_text = hooks.use_state(|| String::new());
+        let mut api_key_provider = hooks.use_state(String::new);
+        let mut api_key_provider_display = hooks.use_state(String::new);
+        let mut api_key_input = hooks.use_state(String::new);
+        let mut api_key_help_url = hooks.use_state(String::new);
+        let mut api_key_help_text = hooks.use_state(String::new);
 
         let mut show_device_flow = hooks.use_state(|| false);
-        let mut device_flow_provider = hooks.use_state(|| String::new());
-        let mut device_flow_url = hooks.use_state(|| String::new());
-        let mut device_flow_code = hooks.use_state(|| String::new());
+        let mut device_flow_provider = hooks.use_state(String::new);
+        let mut device_flow_url = hooks.use_state(String::new);
+        let mut device_flow_code = hooks.use_state(String::new);
         let mut device_flow_tick = hooks.use_state(|| 0usize);
         let mut device_flow_browser_opened = hooks.use_state(|| false);
 
         let mut show_model_selector = hooks.use_state(|| false);
-        let mut model_selector_provider = hooks.use_state(|| String::new());
-        let mut model_selector_provider_display = hooks.use_state(|| String::new());
+        let mut model_selector_provider = hooks.use_state(String::new);
+        let mut model_selector_provider_display = hooks.use_state(String::new);
         let mut model_selector_models: State<Vec<String>> = hooks.use_state(Vec::new);
         let mut model_selector_cursor = hooks.use_state(|| 0usize);
         let mut model_selector_loading = hooks.use_state(|| false);
@@ -1910,8 +1981,8 @@ mod tui_component {
         let mut secrets_scroll_offset = hooks.use_state(|| 0usize);
         // Add-secret inline input: 0 = off, 1 = entering name, 2 = entering value
         let mut secrets_add_step = hooks.use_state(|| 0u8);
-        let mut secrets_add_name = hooks.use_state(|| String::new());
-        let mut secrets_add_value = hooks.use_state(|| String::new());
+        let mut secrets_add_name = hooks.use_state(String::new);
+        let mut secrets_add_value = hooks.use_state(String::new);
 
         let mut show_skills_dialog = hooks.use_state(|| false);
         let mut skills_dialog_data: State<Vec<crate::components::skills_dialog::SkillInfo>> =
@@ -2764,7 +2835,7 @@ mod tui_component {
                     // ── Pairing dialog ──────────────────────────────
                     if show_pairing.get() {
                         use crate::components::pairing_dialog::{PairingStep, PairingField};
-                        let step = pairing_step.read().clone();
+                        let step = *pairing_step.read();
                         match code {
                             KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
                                 should_quit.set(true);
@@ -2804,13 +2875,13 @@ mod tui_component {
                                         let host = pairing_host.read().clone();
                                         let port_str = pairing_port.read().clone();
                                         let public_key = pairing_public_key.read().clone();
-                                        
+
                                         if host.is_empty() {
                                             pairing_error.set("Host is required".to_string());
                                         } else {
                                             let port: u16 = port_str.parse().unwrap_or(2222);
                                             pairing_step.set(PairingStep::Connecting);
-                                            
+
                                             // Send connection request to async handler
                                             if let Ok(guard) = tx_for_keys.lock() {
                                                 if let Some(ref tx) = *guard {
@@ -2833,14 +2904,14 @@ mod tui_component {
                             }
                             KeyCode::Tab if step == PairingStep::EnterGateway => {
                                 // Toggle between host and port fields
-                                let field = pairing_field.read().clone();
+                                let field = *pairing_field.read();
                                 pairing_field.set(match field {
                                     PairingField::Host => PairingField::Port,
                                     PairingField::Port => PairingField::Host,
                                 });
                             }
                             KeyCode::Char(c) if step == PairingStep::EnterGateway => {
-                                let field = pairing_field.read().clone();
+                                let field = *pairing_field.read();
                                 match field {
                                     PairingField::Host => {
                                         let mut h = pairing_host.read().clone();
@@ -2858,7 +2929,7 @@ mod tui_component {
                                 pairing_error.set(String::new());
                             }
                             KeyCode::Backspace if step == PairingStep::EnterGateway => {
-                                let field = pairing_field.read().clone();
+                                let field = *pairing_field.read();
                                 match field {
                                     PairingField::Host => {
                                         let mut h = pairing_host.read().clone();
@@ -2937,30 +3008,18 @@ mod tui_component {
                             }
                             // Navigation for Select/MultiSelect
                             KeyCode::Up | KeyCode::Char('k') => {
-                                if let Some(ref pt) = prompt_type {
-                                    match pt {
-                                        rustyclaw_core::user_prompt_types::PromptType::Select { options: _, .. } |
-                                        rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options: _, .. } => {
-                                            let current = user_prompt_selected.get();
-                                            if current > 0 {
-                                                user_prompt_selected.set(current - 1);
-                                            }
-                                        }
-                                        _ => {}
+                                if let Some(rustyclaw_core::user_prompt_types::PromptType::Select { .. } | rustyclaw_core::user_prompt_types::PromptType::MultiSelect { .. }) = &prompt_type {
+                                    let current = user_prompt_selected.get();
+                                    if current > 0 {
+                                        user_prompt_selected.set(current - 1);
                                     }
                                 }
                             }
                             KeyCode::Down | KeyCode::Char('j') => {
-                                if let Some(ref pt) = prompt_type {
-                                    match pt {
-                                        rustyclaw_core::user_prompt_types::PromptType::Select { options, .. } |
-                                        rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. } => {
-                                            let current = user_prompt_selected.get();
-                                            if current + 1 < options.len() {
-                                                user_prompt_selected.set(current + 1);
-                                            }
-                                        }
-                                        _ => {}
+                                if let Some(rustyclaw_core::user_prompt_types::PromptType::Select { options, .. } | rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. }) = &prompt_type {
+                                    let current = user_prompt_selected.get();
+                                    if current + 1 < options.len() {
+                                        user_prompt_selected.set(current + 1);
                                     }
                                 }
                             }
@@ -3446,7 +3505,7 @@ mod tui_component {
                                             let fp = key_fingerprint(&kp);
                                             pairing_fingerprint_art.set(format_fingerprint_art(&fp));
                                             pairing_fingerprint.set(fp);
-                                            
+
                                             // Generate QR code for pairing
                                             let pairing_data = PairingData::client(&pk, None);
                                             match generate_pairing_qr_ascii(&pairing_data) {
@@ -3618,8 +3677,8 @@ mod tui_component {
                 model_selector_cursor: model_selector_cursor.get(),
                 model_selector_loading: model_selector_loading.get(),
                 show_pairing: show_pairing.get(),
-                pairing_step: pairing_step.read().clone(),
-                pairing_field: pairing_field.read().clone(),
+                pairing_step: *pairing_step.read(),
+                pairing_field: *pairing_field.read(),
                 pairing_public_key: pairing_public_key.read().clone(),
                 pairing_fingerprint: pairing_fingerprint.read().clone(),
                 pairing_fingerprint_art: pairing_fingerprint_art.read().clone(),

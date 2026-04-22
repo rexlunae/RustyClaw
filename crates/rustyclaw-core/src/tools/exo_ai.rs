@@ -571,7 +571,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 .and_then(|p| p.as_array())
                 .and_then(|arr| {
                     arr.iter()
-                        .find(|p| p.get("error").map_or(true, |e| e.is_null()))
+                        .find(|p| p.get("error").is_none_or(|e| e.is_null()))
                 })
                 .and_then(|p| p.get("instance"))
                 .ok_or(format!("No valid placement found for '{}'", model))?;

@@ -112,7 +112,7 @@ impl TaskIndicator {
         let progress_bar = task.status.progress().map(|p| format_progress_bar(p, 10));
 
         let eta = if let TaskStatus::Running { .. } | TaskStatus::Background { .. } = &task.status {
-            task.elapsed().map(|d| format_duration(d))
+            task.elapsed().map(format_duration)
         } else {
             None
         };

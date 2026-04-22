@@ -197,7 +197,7 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
                         None => Err("Missing webhookUrl for webhook channel".to_string()),
                     }
                 }
-                "auto" | _ => {
+                _ => {
                     if std::env::var("DISCORD_BOT_TOKEN").is_ok() {
                         send_discord_async(target, message).await
                     } else if std::env::var("TELEGRAM_BOT_TOKEN").is_ok() {
@@ -911,7 +911,7 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
                         None => Err("Missing webhookUrl for webhook channel".to_string()),
                     }
                 }
-                "auto" | _ => {
+                _ => {
                     if std::env::var("DISCORD_BOT_TOKEN").is_ok() {
                         send_discord_sync(target, message)
                     } else if std::env::var("TELEGRAM_BOT_TOKEN").is_ok() {

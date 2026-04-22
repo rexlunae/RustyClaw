@@ -30,40 +30,24 @@
 //! ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... phone@user
 //! ```
 
-mod client_keys;
 mod authorized;
-mod qr;
+mod client_keys;
 mod fingerprint;
+mod qr;
 
 pub use client_keys::{
-    ClientKeyPair,
-    generate_client_keypair,
-    load_client_keypair,
+    ClientKeyPair, default_client_key_path, generate_client_keypair, load_client_keypair,
     save_client_keypair,
-    default_client_key_path,
 };
 
 pub use authorized::{
-    AuthorizedClient,
-    AuthorizedClients,
-    load_authorized_clients,
-    add_authorized_client,
-    remove_authorized_client,
-    default_authorized_clients_path,
+    AuthorizedClient, AuthorizedClients, add_authorized_client, default_authorized_clients_path,
+    load_authorized_clients, remove_authorized_client,
 };
 
-pub use qr::{
-    generate_pairing_qr,
-    generate_pairing_qr_ascii,
-    parse_pairing_qr,
-    PairingData,
-};
+pub use qr::{PairingData, generate_pairing_qr, generate_pairing_qr_ascii, parse_pairing_qr};
 
-pub use fingerprint::{
-    key_fingerprint,
-    key_fingerprint_short,
-    format_fingerprint_art,
-};
+pub use fingerprint::{format_fingerprint_art, key_fingerprint, key_fingerprint_short};
 
 /// Default directory for RustyClaw configuration and keys.
 pub fn rustyclaw_dir() -> std::path::PathBuf {
@@ -76,13 +60,13 @@ pub fn rustyclaw_dir() -> std::path::PathBuf {
 pub fn ensure_rustyclaw_dir() -> std::io::Result<()> {
     let dir = rustyclaw_dir();
     std::fs::create_dir_all(&dir)?;
-    
+
     // Set directory permissions to 700 on Unix
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
     }
-    
+
     Ok(())
 }

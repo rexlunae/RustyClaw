@@ -31,7 +31,11 @@ pub fn handle_start(
         config.tls_key.as_deref(),
     ) {
         Ok(pid) => {
-            let scheme = if config.tls_cert.is_some() { "wss" } else { "ws" };
+            let scheme = if config.tls_cert.is_some() {
+                "wss"
+            } else {
+                "ws"
+            };
             t::spinner_ok(
                 &sp,
                 &format!(
@@ -40,14 +44,21 @@ pub fn handle_start(
                     t::info(&format!(
                         "{}://{}:{}",
                         scheme,
-                        if bind == "loopback" { "127.0.0.1" } else { bind },
+                        if bind == "loopback" {
+                            "127.0.0.1"
+                        } else {
+                            bind
+                        },
                         port
                     )),
                 ),
             );
             println!(
                 "  {}",
-                t::muted(&format!("Logs: {}", daemon::log_path(&config.settings_dir).display()))
+                t::muted(&format!(
+                    "Logs: {}",
+                    daemon::log_path(&config.settings_dir).display()
+                ))
             );
         }
         Err(e) => {
@@ -116,7 +127,11 @@ pub fn handle_restart(
         config.tls_key.as_deref(),
     ) {
         Ok(pid) => {
-            let scheme = if config.tls_cert.is_some() { "wss" } else { "ws" };
+            let scheme = if config.tls_cert.is_some() {
+                "wss"
+            } else {
+                "ws"
+            };
             t::spinner_ok(
                 &sp,
                 &format!(
@@ -125,7 +140,11 @@ pub fn handle_restart(
                     t::info(&format!(
                         "{}://{}:{}",
                         scheme,
-                        if bind == "loopback" { "127.0.0.1" } else { bind },
+                        if bind == "loopback" {
+                            "127.0.0.1"
+                        } else {
+                            bind
+                        },
                         port
                     )),
                 ),
@@ -140,7 +159,10 @@ pub fn handle_restart(
 
 /// Handle `gateway status` command.
 pub fn handle_status(config: &Config, json: bool) {
-    let url = config.gateway_url.as_deref().unwrap_or("ws://127.0.0.1:9001");
+    let url = config
+        .gateway_url
+        .as_deref()
+        .unwrap_or("ws://127.0.0.1:9001");
     let status = daemon::status(&config.settings_dir);
 
     if json {
@@ -160,7 +182,10 @@ pub fn handle_status(config: &Config, json: bool) {
             daemon::DaemonStatus::Running { pid } => {
                 println!(
                     "{}",
-                    t::label_value("Status     ", &t::success(&format!("running (PID {})", pid)))
+                    t::label_value(
+                        "Status     ",
+                        &t::success(&format!("running (PID {})", pid))
+                    )
                 );
             }
             daemon::DaemonStatus::Stale { pid } => {
@@ -178,12 +203,16 @@ pub fn handle_status(config: &Config, json: bool) {
         }
         let log = daemon::log_path(&config.settings_dir);
         if log.exists() {
-            println!("{}", t::label_value("Log        ", &log.display().to_string()));
+            println!(
+                "{}",
+                t::label_value("Log        ", &log.display().to_string())
+            );
         }
     }
 }
 
 /// Handle `gateway reload` command.
+#[allow(dead_code)]
 pub fn handle_reload_result(result: Result<(String, String), String>) {
     let sp = t::spinner("Reloading gateway configuration…");
 
@@ -191,7 +220,11 @@ pub fn handle_reload_result(result: Result<(String, String), String>) {
         Ok((provider, model)) => {
             t::spinner_ok(
                 &sp,
-                &format!("Gateway reloaded: {} / {}", t::info(&provider), t::info(&model)),
+                &format!(
+                    "Gateway reloaded: {} / {}",
+                    t::info(&provider),
+                    t::info(&model)
+                ),
             );
         }
         Err(e) => {
@@ -201,11 +234,7 @@ pub fn handle_reload_result(result: Result<(String, String), String>) {
 }
 
 /// Handle `gateway run` command (foreground mode).
-pub async fn handle_run(
-    config: Config,
-    host: &str,
-    port: u16,
-) -> Result<()> {
+pub async fn handle_run(config: Config, host: &str, port: u16) -> Result<()> {
     use rustyclaw_core::gateway::run_gateway;
 
     let listen = format!("{}:{}", host, port);

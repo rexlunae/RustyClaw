@@ -20,15 +20,15 @@ pub enum VolatilityTier {
     /// Changes in days to weeks — MUST verify before using
     /// Examples: LLM model IDs, API pricing, CVEs, SDK breaking changes
     Critical,
-    
+
     /// Changes in weeks to months — verify when writing config/deps
     /// Examples: package versions, framework APIs, Docker tags, cloud services
     High,
-    
+
     /// Changes in months to quarters — verify if uncertain
     /// Examples: browser APIs, crypto recommendations, compliance frameworks
     Medium,
-    
+
     /// Changes over years — trust training data
     /// Examples: language syntax, protocols, algorithms, design patterns
     Stable,
@@ -39,7 +39,7 @@ impl VolatilityTier {
     pub fn requires_verification(&self) -> bool {
         matches!(self, VolatilityTier::Critical | VolatilityTier::High)
     }
-    
+
     /// Human-readable recommendation for this tier
     pub fn recommendation(&self) -> &'static str {
         match self {
@@ -61,7 +61,7 @@ pub enum DataCategory {
     SecurityAdvisories,
     SdkBreakingChanges,
     DeprecatedFeatures,
-    
+
     // High tier
     PackageVersions,
     FrameworkApis,
@@ -71,13 +71,13 @@ pub enum DataCategory {
     CiCdSyntax,
     OAuthFlows,
     CliFlags,
-    
+
     // Medium tier
     BrowserApis,
     CryptoAlgorithms,
     ComplianceFrameworks,
     InfraBestPractices,
-    
+
     // Stable tier
     LanguageFundamentals,
     Protocols,
@@ -97,7 +97,7 @@ impl DataCategory {
             | DataCategory::SecurityAdvisories
             | DataCategory::SdkBreakingChanges
             | DataCategory::DeprecatedFeatures => VolatilityTier::Critical,
-            
+
             // High
             DataCategory::PackageVersions
             | DataCategory::FrameworkApis
@@ -107,13 +107,13 @@ impl DataCategory {
             | DataCategory::CiCdSyntax
             | DataCategory::OAuthFlows
             | DataCategory::CliFlags => VolatilityTier::High,
-            
+
             // Medium
             DataCategory::BrowserApis
             | DataCategory::CryptoAlgorithms
             | DataCategory::ComplianceFrameworks
             | DataCategory::InfraBestPractices => VolatilityTier::Medium,
-            
+
             // Stable
             DataCategory::LanguageFundamentals
             | DataCategory::Protocols
@@ -123,7 +123,7 @@ impl DataCategory {
             | DataCategory::GitOperations => VolatilityTier::Stable,
         }
     }
-    
+
     /// Description of what this category covers
     pub fn description(&self) -> &'static str {
         match self {
@@ -162,7 +162,7 @@ impl FreshnessProtocol {
     pub fn needs_verification(category: DataCategory) -> bool {
         category.tier().requires_verification()
     }
-    
+
     /// Get verification guidance for a category
     pub fn guidance(category: DataCategory) -> String {
         format!(
@@ -172,50 +172,59 @@ impl FreshnessProtocol {
             category.tier().recommendation()
         )
     }
-    
+
     /// Classify text to detect potential volatile data
     /// Returns categories that might need verification
     pub fn classify_text(text: &str) -> Vec<DataCategory> {
         let mut categories = Vec::new();
         let lower = text.to_lowercase();
-        
+
         // Model IDs
-        if lower.contains("gpt-4") || lower.contains("claude") || lower.contains("gemini")
+        if lower.contains("gpt-4")
+            || lower.contains("claude")
+            || lower.contains("gemini")
             || lower.contains("model") && (lower.contains("id") || lower.contains("name"))
         {
             categories.push(DataCategory::LlmModelIds);
         }
-        
+
         // Pricing
-        if lower.contains("price") || lower.contains("pricing") || lower.contains("cost")
-            || lower.contains("$/") || lower.contains("per token")
+        if lower.contains("price")
+            || lower.contains("pricing")
+            || lower.contains("cost")
+            || lower.contains("$/")
+            || lower.contains("per token")
         {
             categories.push(DataCategory::ApiPricing);
         }
-        
+
         // Security
-        if lower.contains("cve-") || lower.contains("vulnerability") || lower.contains("advisory")
-        {
+        if lower.contains("cve-") || lower.contains("vulnerability") || lower.contains("advisory") {
             categories.push(DataCategory::SecurityAdvisories);
         }
-        
+
         // Package versions
-        if lower.contains("version") || lower.contains("@") || lower.contains("^")
-            || lower.contains("~") || lower.contains("latest")
+        if lower.contains("version")
+            || lower.contains("@")
+            || lower.contains("^")
+            || lower.contains("~")
+            || lower.contains("latest")
         {
             categories.push(DataCategory::PackageVersions);
         }
-        
+
         // Docker
-        if lower.contains("docker") || lower.contains("from ") || lower.contains(":alpine")
+        if lower.contains("docker")
+            || lower.contains("from ")
+            || lower.contains(":alpine")
             || lower.contains(":slim")
         {
             categories.push(DataCategory::DockerBaseTags);
         }
-        
+
         categories
     }
-    
+
     /// Format a verification citation
     pub fn format_citation(what: &str, source: &str, date: &str) -> String {
         format!("✓ Verified: {} ({}, {})", what, source, date)
@@ -225,7 +234,7 @@ impl FreshnessProtocol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_volatility_tiers() {
         assert!(VolatilityTier::Critical.requires_verification());
@@ -233,7 +242,7 @@ mod tests {
         assert!(!VolatilityTier::Medium.requires_verification());
         assert!(!VolatilityTier::Stable.requires_verification());
     }
-    
+
     #[test]
     fn test_category_tiers() {
         assert_eq!(DataCategory::LlmModelIds.tier(), VolatilityTier::Critical);
@@ -241,15 +250,15 @@ mod tests {
         assert_eq!(DataCategory::BrowserApis.tier(), VolatilityTier::Medium);
         assert_eq!(DataCategory::Algorithms.tier(), VolatilityTier::Stable);
     }
-    
+
     #[test]
     fn test_text_classification() {
         let categories = FreshnessProtocol::classify_text("Use gpt-4o model");
         assert!(categories.contains(&DataCategory::LlmModelIds));
-        
+
         let categories = FreshnessProtocol::classify_text("FROM node:22-alpine");
         assert!(categories.contains(&DataCategory::DockerBaseTags));
-        
+
         let categories = FreshnessProtocol::classify_text("CVE-2026-1234 vulnerability");
         assert!(categories.contains(&DataCategory::SecurityAdvisories));
     }

@@ -101,10 +101,8 @@ impl WebhookQueue {
 
     /// Enqueue a wake event.
     pub fn enqueue_wake(&mut self, reason: Option<String>, session_id: Option<String>) {
-        self.pending.push(PendingWebhook::Wake {
-            reason,
-            session_id,
-        });
+        self.pending
+            .push(PendingWebhook::Wake { reason, session_id });
     }
 
     /// Enqueue an agent message.
@@ -395,14 +393,8 @@ mod tests {
         let queue = Arc::new(Mutex::new(WebhookQueue::new()));
 
         let body = r#"{"message": ""}"#;
-        let (status, _, _) = handle_webhook_request(
-            "/hooks/agent",
-            body,
-            Some("Bearer tok"),
-            &config,
-            queue,
-        )
-        .await;
+        let (status, _, _) =
+            handle_webhook_request("/hooks/agent", body, Some("Bearer tok"), &config, queue).await;
 
         assert!(status.contains("400"));
     }

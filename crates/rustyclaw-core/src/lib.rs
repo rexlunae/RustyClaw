@@ -17,8 +17,6 @@ pub mod mcp;
 pub mod memory;
 pub mod memory_consolidation;
 pub mod memory_flush;
-#[cfg(feature = "steel-memory")]
-pub mod steel_memory;
 pub mod messengers;
 pub mod mnemo;
 pub mod models;
@@ -26,8 +24,8 @@ pub mod observability;
 pub mod pairing;
 pub mod process_manager;
 pub mod protocols;
-pub mod providers;
 pub mod provider_registry;
+pub mod providers;
 pub mod retry;
 pub mod runtime;
 pub mod runtime_ctx;
@@ -37,6 +35,8 @@ pub mod security;
 pub mod sessions;
 pub mod skills;
 pub mod soul;
+#[cfg(feature = "steel-memory")]
+pub mod steel_memory;
 pub mod streaming;
 pub mod tasks;
 pub mod theme;

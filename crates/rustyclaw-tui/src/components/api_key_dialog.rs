@@ -20,7 +20,11 @@ pub fn ApiKeyDialog(props: &ApiKeyDialogProps) -> impl Into<AnyElement<'static>>
     let mask = if props.input_len == 0 {
         "·".repeat(20)
     } else {
-        format!("{}{}", "•".repeat(props.input_len), "·".repeat(20usize.saturating_sub(props.input_len)))
+        format!(
+            "{}{}",
+            "•".repeat(props.input_len),
+            "·".repeat(20usize.saturating_sub(props.input_len))
+        )
     };
 
     let has_help = !props.help_text.is_empty();

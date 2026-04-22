@@ -421,9 +421,7 @@ pub async fn fetch_models_detailed(
         // Google Gemini uses a different response shape
         "google" => fetch_google_models_detailed(base, api_key).await,
         // Local providers — no auth needed, OpenAI-compatible /v1/models
-        "ollama" | "lmstudio" | "exo" => {
-            fetch_openai_compatible_models_detailed(base, None).await
-        }
+        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None).await,
         // Everything else is OpenAI-compatible
         _ => fetch_openai_compatible_models_detailed(base, api_key).await,
     };
@@ -522,18 +520,24 @@ async fn fetch_openai_compatible_models_detailed(
                 .filter_map(|m| {
                     let id = m.get("id").and_then(|v| v.as_str())?.to_string();
                     let name = m.get("name").and_then(|v| v.as_str()).map(String::from);
-                    let context_length = m
-                        .get("context_length")
-                        .and_then(|v| v.as_u64());
+                    let context_length = m.get("context_length").and_then(|v| v.as_u64());
                     // OpenRouter-style pricing: { "prompt": "0.000015", "completion": "0.000075" }
-                    let pricing_prompt = m
-                        .get("pricing")
-                        .and_then(|p| p.get("prompt"))
-                        .and_then(|v| v.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| v.as_f64()));
+                    let pricing_prompt =
+                        m.get("pricing")
+                            .and_then(|p| p.get("prompt"))
+                            .and_then(|v| {
+                                v.as_str()
+                                    .and_then(|s| s.parse::<f64>().ok())
+                                    .or_else(|| v.as_f64())
+                            });
                     let pricing_completion = m
                         .get("pricing")
                         .and_then(|p| p.get("completion"))
-                        .and_then(|v| v.as_str().and_then(|s| s.parse::<f64>().ok()).or_else(|| v.as_f64()));
+                        .and_then(|v| {
+                            v.as_str()
+                                .and_then(|s| s.parse::<f64>().ok())
+                                .or_else(|| v.as_f64())
+                        });
                     Some(ModelInfo {
                         id,
                         name,
@@ -586,9 +590,7 @@ async fn fetch_google_models_detailed(
                         .and_then(|v| v.as_str())
                         .map(String::from);
                     // Google returns inputTokenLimit / outputTokenLimit
-                    let context_length = m
-                        .get("inputTokenLimit")
-                        .and_then(|v| v.as_u64());
+                    let context_length = m.get("inputTokenLimit").and_then(|v| v.as_u64());
                     Some(ModelInfo {
                         id,
                         name: display_name,
@@ -921,7 +923,11 @@ mod tests {
         let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
         let response: TokenResponse = raw.into();
         match response {
-            TokenResponse::Success { access_token, token_type, .. } => {
+            TokenResponse::Success {
+                access_token,
+                token_type,
+                ..
+            } => {
                 assert_eq!(access_token, "gho_xxx");
                 assert_eq!(token_type, "bearer"); // defaults to "bearer"
             }
@@ -933,7 +939,10 @@ mod tests {
         let raw: RawTokenResponse = serde_json::from_str(json).unwrap();
         let response: TokenResponse = raw.into();
         match response {
-            TokenResponse::Pending { error, error_description } => {
+            TokenResponse::Pending {
+                error,
+                error_description,
+            } => {
                 assert_eq!(error, "access_denied");
                 assert_eq!(error_description, Some("user denied".to_string()));
             }

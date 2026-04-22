@@ -160,8 +160,8 @@ fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     }
 
     // Fallback: basic file info
-    let metadata = std::fs::metadata(&path)
-        .map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    let metadata =
+        std::fs::metadata(&path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
 
     Ok(format!(
         "File: {}\nSize: {} bytes\nNote: Install poppler-utils for full PDF metadata (pdfinfo).",
@@ -217,8 +217,7 @@ fn truncate_output(text: &str, max_chars: usize) -> String {
         let truncated: String = text.chars().take(max_chars).collect();
         format!(
             "{}\n\n[Output truncated at {} characters. Use start_page/end_page to read specific pages.]",
-            truncated,
-            max_chars
+            truncated, max_chars
         )
     }
 }

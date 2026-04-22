@@ -20,9 +20,7 @@ pub struct ModelSelectorDialogProps {
 }
 
 #[component]
-pub fn ModelSelectorDialog(
-    props: &ModelSelectorDialogProps,
-) -> impl Into<AnyElement<'static>> {
+pub fn ModelSelectorDialog(props: &ModelSelectorDialogProps) -> impl Into<AnyElement<'static>> {
     let loading = props.loading;
 
     // Show at most 15 models around cursor to keep the dialog compact
@@ -34,24 +32,32 @@ pub fn ModelSelectorDialog(
         let half = max_visible / 2;
         let start = props.cursor.saturating_sub(half);
         let end = (start + max_visible).min(total);
-        let start = if end == total { total.saturating_sub(max_visible) } else { start };
+        let start = if end == total {
+            total.saturating_sub(max_visible)
+        } else {
+            start
+        };
         (start, end)
     };
 
     let items: Vec<AnyElement> = if loading {
         let spinner = SPINNER[props.spinner_tick % SPINNER.len()];
-        vec![element! {
-            Text(
-                content: format!("{} Fetching models…", spinner),
-                color: theme::MUTED,
-            )
-        }
-        .into_any()]
+        vec![
+            element! {
+                Text(
+                    content: format!("{} Fetching models…", spinner),
+                    color: theme::MUTED,
+                )
+            }
+            .into_any(),
+        ]
     } else if total == 0 {
-        vec![element! {
-            Text(content: "No models found.", color: theme::MUTED)
-        }
-        .into_any()]
+        vec![
+            element! {
+                Text(content: "No models found.", color: theme::MUTED)
+            }
+            .into_any(),
+        ]
     } else {
         props.models[start..end]
             .iter()

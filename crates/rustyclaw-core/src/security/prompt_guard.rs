@@ -32,13 +32,15 @@ pub enum GuardAction {
     Sanitize,
 }
 
-impl GuardAction {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl std::str::FromStr for GuardAction {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "block" => Self::Block,
             "sanitize" => Self::Sanitize,
             _ => Self::Warn,
-        }
+        })
     }
 }
 

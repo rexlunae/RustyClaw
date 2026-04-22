@@ -35,18 +35,19 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     // Use steel-memory semantic search via blocking runtime
     let workspace = workspace_dir.to_path_buf();
     let query_owned = query.to_string();
-    
+
     // Get current tokio runtime handle and block on async
-    let rt = tokio::runtime::Handle::try_current()
-        .map_err(|_| "No tokio runtime available")?;
-    
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| "No tokio runtime available")?;
+
     rt.block_on(async move {
         let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
-        
+
         // Index workspace (idempotent - will dedupe in future)
         let _ = index.index_workspace().await;
 
-        let results = index.search(&query_owned, max_results, Some(min_score)).await?;
+        let results = index
+            .search(&query_owned, max_results, Some(min_score))
+            .await?;
 
         if results.is_empty() {
             return Ok("No matching memories found.".to_string());
@@ -54,7 +55,10 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
 
         // Format results
         let mut output = String::new();
-        output.push_str(&format!("Memory search results for: {} (semantic)\n\n", query_owned));
+        output.push_str(&format!(
+            "Memory search results for: {} (semantic)\n\n",
+            query_owned
+        ));
 
         for (i, result) in results.iter().enumerate() {
             // Truncate snippet to ~700 chars
@@ -213,13 +217,14 @@ pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, Str
     let content_owned = content.to_string();
     let wing_owned = wing.to_string();
     let room_owned = room.to_string();
-    
-    let rt = tokio::runtime::Handle::try_current()
-        .map_err(|_| "No tokio runtime available")?;
-    
+
+    let rt = tokio::runtime::Handle::try_current().map_err(|_| "No tokio runtime available")?;
+
     rt.block_on(async move {
         let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
-        let id = index.add_memory(&content_owned, &wing_owned, &room_owned, None).await?;
+        let id = index
+            .add_memory(&content_owned, &wing_owned, &room_owned, None)
+            .await?;
         Ok(format!("Memory added with ID: {}", id))
     })
 }

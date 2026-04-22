@@ -24,24 +24,24 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
         MessageRole::Assistant => ("is-info", "fa-robot", "#209cee"),
         MessageRole::System => ("is-warning", "fa-cog", "#ffdd57"),
     };
-    
+
     let is_user = props.role == MessageRole::User;
     let align = if is_user { "flex-end" } else { "flex-start" };
-    
+
     rsx! {
-        div { 
+        div {
             class: "message-bubble",
             style: "display: flex; justify-content: {align}; margin-bottom: 0.75rem;",
-            
+
             div {
                 class: "box",
                 style: "max-width: 80%; background-color: {bg_color}; color: white; padding: 0.75rem 1rem;",
-                
+
                 // Header with icon
-                div { 
+                div {
                     class: "message-header",
                     style: "display: flex; align-items: center; margin-bottom: 0.25rem; opacity: 0.8; font-size: 0.85rem;",
-                    
+
                     span { class: "icon is-small",
                         i { class: "fas {icon_class}" }
                     }
@@ -53,16 +53,16 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                         }
                     }
                 }
-                
+
                 // Content
                 div { class: "message-content",
                     style: "white-space: pre-wrap; word-break: break-word;",
-                    
+
                     "{props.content}"
-                    
+
                     // Streaming cursor
                     if props.is_streaming {
-                        span { 
+                        span {
                             class: "streaming-cursor",
                             style: "animation: blink 1s infinite;",
                             "▊"

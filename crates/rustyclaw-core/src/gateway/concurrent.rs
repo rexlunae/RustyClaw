@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 pub enum ModelTaskMessage {
     /// A serialized frame to send to the client.
     Frame(Vec<u8>),
-    
+
     /// The model task completed successfully.
     /// The main loop should update thread state.
     Done {
@@ -30,7 +30,7 @@ pub enum ModelTaskMessage {
         /// Final assistant response text to add to thread history
         response: Option<String>,
     },
-    
+
     /// The model task failed with an error
     Error {
         thread_id: ThreadId,
@@ -50,7 +50,7 @@ pub fn channel() -> (ModelTaskTx, ModelTaskRx) {
 }
 
 /// A transport writer that sends frames through a channel.
-/// 
+///
 /// This implements `TransportWriter` so it can be used with `send_frame`
 /// and other functions that expect a writer, routing the frames back to
 /// the main connection handler for dispatch.
@@ -63,21 +63,27 @@ impl ChannelSink {
     pub fn new(tx: ModelTaskTx, thread_id: ThreadId) -> Self {
         Self { tx, thread_id }
     }
-    
+
     /// Signal that the task completed successfully.
     pub async fn done(&self, response: Option<String>) {
-        let _ = self.tx.send(ModelTaskMessage::Done {
-            thread_id: self.thread_id,
-            response,
-        }).await;
+        let _ = self
+            .tx
+            .send(ModelTaskMessage::Done {
+                thread_id: self.thread_id,
+                response,
+            })
+            .await;
     }
-    
+
     /// Signal that the task failed.
     pub async fn error(&self, message: String) {
-        let _ = self.tx.send(ModelTaskMessage::Error {
-            thread_id: self.thread_id,
-            message,
-        }).await;
+        let _ = self
+            .tx
+            .send(ModelTaskMessage::Error {
+                thread_id: self.thread_id,
+                message,
+            })
+            .await;
     }
 }
 
@@ -85,7 +91,8 @@ impl ChannelSink {
 impl TransportWriter for ChannelSink {
     async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
         let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
-        self.tx.send(ModelTaskMessage::Frame(data))
+        self.tx
+            .send(ModelTaskMessage::Frame(data))
             .await
             .map_err(|_| anyhow::anyhow!("channel closed"))
     }
@@ -106,7 +113,7 @@ impl ActiveTasks {
     pub fn new() -> Self {
         Self::default()
     }
-    
+
     /// Register a new task for a thread.
     /// If there's already a task for this thread, it will be aborted.
     pub fn register(&mut self, thread_id: ThreadId, handle: tokio::task::JoinHandle<()>) {
@@ -114,12 +121,12 @@ impl ActiveTasks {
             old_handle.abort();
         }
     }
-    
+
     /// Remove a task when it completes.
     pub fn remove(&mut self, thread_id: &ThreadId) {
         self.tasks.remove(thread_id);
     }
-    
+
     /// Cancel a task for a specific thread.
     pub fn cancel(&mut self, thread_id: &ThreadId) -> bool {
         if let Some(handle) = self.tasks.remove(thread_id) {
@@ -129,12 +136,12 @@ impl ActiveTasks {
             false
         }
     }
-    
+
     /// Check if a thread has an active task.
     pub fn is_running(&self, thread_id: &ThreadId) -> bool {
         self.tasks.contains_key(thread_id)
     }
-    
+
     /// Get IDs of all threads with active tasks.
     pub fn running_threads(&self) -> Vec<ThreadId> {
         self.tasks.keys().copied().collect()

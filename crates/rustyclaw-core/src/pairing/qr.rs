@@ -21,18 +21,18 @@ pub struct PairingData {
     /// Version number (currently 1).
     #[serde(rename = "v")]
     pub version: u8,
-    
+
     /// Type of pairing data.
     #[serde(rename = "type")]
     pub pairing_type: PairingType,
-    
+
     /// Public key in OpenSSH format.
     pub key: String,
-    
+
     /// Human-readable name (e.g., "laptop@user").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    
+
     /// Gateway host:port (only for gateway pairing data).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
@@ -59,7 +59,7 @@ impl PairingData {
             host: None,
         }
     }
-    
+
     /// Create gateway pairing data.
     pub fn gateway(public_key: &str, host: &str, name: Option<String>) -> Self {
         Self {
@@ -70,12 +70,12 @@ impl PairingData {
             host: Some(host.to_string()),
         }
     }
-    
+
     /// Encode to JSON.
     pub fn to_json(&self) -> Result<String> {
         serde_json::to_string(self).context("Failed to serialize pairing data")
     }
-    
+
     /// Decode from JSON.
     pub fn from_json(json: &str) -> Result<Self> {
         serde_json::from_str(json).context("Failed to parse pairing data")
@@ -87,30 +87,32 @@ impl PairingData {
 /// Returns the QR code as a PNG image in bytes.
 #[cfg(feature = "qr")]
 pub fn generate_pairing_qr(data: &PairingData) -> Result<Vec<u8>> {
+    use image::{ImageEncoder, Luma, codecs::png::PngEncoder};
     use qrcode::QrCode;
-    use image::{Luma, ImageEncoder, codecs::png::PngEncoder};
-    
+
     let json = data.to_json()?;
-    
-    let code = QrCode::new(json.as_bytes())
-        .context("Failed to generate QR code")?;
-    
+
+    let code = QrCode::new(json.as_bytes()).context("Failed to generate QR code")?;
+
     // Render to image
-    let image = code.render::<Luma<u8>>()
+    let image = code
+        .render::<Luma<u8>>()
         .min_dimensions(200, 200)
         .max_dimensions(400, 400)
         .build();
-    
+
     // Encode as PNG
     let mut png_data = Vec::new();
     let encoder = PngEncoder::new(&mut png_data);
-    encoder.write_image(
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        image::ExtendedColorType::L8,
-    ).context("Failed to encode QR code as PNG")?;
-    
+    encoder
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::L8,
+        )
+        .context("Failed to encode QR code as PNG")?;
+
     Ok(png_data)
 }
 
@@ -118,17 +120,16 @@ pub fn generate_pairing_qr(data: &PairingData) -> Result<Vec<u8>> {
 #[cfg(feature = "qr")]
 pub fn generate_pairing_qr_ascii(data: &PairingData) -> Result<String> {
     use qrcode::QrCode;
-    
+
     let json = data.to_json()?;
-    
-    let code = QrCode::new(json.as_bytes())
-        .context("Failed to generate QR code")?;
-    
+
+    let code = QrCode::new(json.as_bytes()).context("Failed to generate QR code")?;
+
     // Render to ASCII using Unicode block characters
     let mut output = String::new();
     let modules = code.to_colors();
     let width = code.width();
-    
+
     // Use half-block characters for denser output
     for y in (0..width).step_by(2) {
         for x in 0..width {
@@ -138,7 +139,7 @@ pub fn generate_pairing_qr_ascii(data: &PairingData) -> Result<String> {
             } else {
                 false
             };
-            
+
             let ch = match (top, bottom) {
                 (true, true) => '█',
                 (true, false) => '▀',
@@ -149,7 +150,7 @@ pub fn generate_pairing_qr_ascii(data: &PairingData) -> Result<String> {
         }
         output.push('\n');
     }
-    
+
     Ok(output)
 }
 
@@ -169,35 +170,35 @@ pub fn parse_pairing_qr(input: &str) -> Result<PairingData> {
     if let Ok(data) = PairingData::from_json(input) {
         return Ok(data);
     }
-    
+
     // Try to parse as an OpenSSH public key (raw key paste)
     if input.starts_with("ssh-") {
         return Ok(PairingData::client(input.trim(), None));
     }
-    
+
     anyhow::bail!("Could not parse pairing data")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_client_pairing_data() {
         let data = PairingData::client(
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5...",
             Some("test@laptop".to_string()),
         );
-        
+
         assert_eq!(data.version, 1);
         assert_eq!(data.pairing_type, PairingType::Client);
         assert!(data.host.is_none());
-        
+
         let json = data.to_json().unwrap();
         let parsed = PairingData::from_json(&json).unwrap();
         assert_eq!(parsed.key, data.key);
     }
-    
+
     #[test]
     fn test_gateway_pairing_data() {
         let data = PairingData::gateway(
@@ -205,16 +206,16 @@ mod tests {
             "gateway.example.com:2222",
             Some("my-gateway".to_string()),
         );
-        
+
         assert_eq!(data.pairing_type, PairingType::Gateway);
         assert_eq!(data.host, Some("gateway.example.com:2222".to_string()));
     }
-    
+
     #[test]
     fn test_parse_raw_key() {
         let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... user@host";
         let data = parse_pairing_qr(key).unwrap();
-        
+
         assert_eq!(data.pairing_type, PairingType::Client);
         assert_eq!(data.key, key);
     }

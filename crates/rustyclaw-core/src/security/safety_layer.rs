@@ -44,7 +44,7 @@ use super::leak_detector::LeakDetector;
 use super::prompt_guard::{GuardAction, GuardResult, PromptGuard};
 use super::ssrf::SsrfValidator;
 use super::validator::InputValidator;
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 use tracing::warn;
 
@@ -62,19 +62,22 @@ pub enum PolicyAction {
     Sanitize,
 }
 
-impl PolicyAction {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl std::str::FromStr for PolicyAction {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "ignore" => Self::Ignore,
             "warn" => Self::Warn,
             "block" => Self::Block,
             "sanitize" => Self::Sanitize,
             _ => Self::Warn,
-        }
+        })
     }
+}
 
-    /// Convert to GuardAction for compatibility
-    fn to_guard_action(&self) -> GuardAction {
+impl PolicyAction {
+    fn to_guard_action(self) -> GuardAction {
         match self {
             Self::Block => GuardAction::Block,
             Self::Sanitize => GuardAction::Sanitize,
@@ -251,8 +254,7 @@ pub struct SafetyLayer {
 impl SafetyLayer {
     /// Create a new safety layer with configuration
     pub fn new(config: SafetyConfig) -> Self {
-        let input_validator = InputValidator::new()
-            .with_max_length(config.max_input_length);
+        let input_validator = InputValidator::new().with_max_length(config.max_input_length);
 
         let prompt_guard = PromptGuard::with_config(
             config.prompt_injection_policy.to_guard_action(),
@@ -314,23 +316,21 @@ impl SafetyLayer {
 
         match self.ssrf_validator.validate_url(url) {
             Ok(()) => Ok(DefenseResult::safe(DefenseCategory::Ssrf)),
-            Err(reason) => {
-                match self.config.ssrf_policy {
-                    PolicyAction::Block => {
-                        bail!("SSRF protection blocked URL: {}", reason);
-                    }
-                    PolicyAction::Warn => {
-                        warn!(reason = %reason, "SSRF warning");
-                        Ok(DefenseResult::detected(
-                            DefenseCategory::Ssrf,
-                            PolicyAction::Warn,
-                            vec![reason.clone()],
-                            1.0,
-                        ))
-                    }
-                    _ => Ok(DefenseResult::safe(DefenseCategory::Ssrf)),
+            Err(reason) => match self.config.ssrf_policy {
+                PolicyAction::Block => {
+                    bail!("SSRF protection blocked URL: {}", reason);
                 }
-            }
+                PolicyAction::Warn => {
+                    warn!(reason = %reason, "SSRF warning");
+                    Ok(DefenseResult::detected(
+                        DefenseCategory::Ssrf,
+                        PolicyAction::Warn,
+                        vec![reason.clone()],
+                        1.0,
+                    ))
+                }
+                _ => Ok(DefenseResult::safe(DefenseCategory::Ssrf)),
+            },
         }
     }
 
@@ -353,23 +353,21 @@ impl SafetyLayer {
 
         match self.leak_detector.scan_http_request(url, headers, body) {
             Ok(()) => Ok(DefenseResult::safe(DefenseCategory::LeakDetection)),
-            Err(e) => {
-                match self.config.leak_detection_policy {
-                    PolicyAction::Block => {
-                        bail!("Credential leak detected in HTTP request: {}", e);
-                    }
-                    PolicyAction::Warn => {
-                        warn!(error = %e, "Potential credential leak in HTTP request");
-                        Ok(DefenseResult::detected(
-                            DefenseCategory::LeakDetection,
-                            PolicyAction::Warn,
-                            vec![e.to_string()],
-                            1.0,
-                        ))
-                    }
-                    _ => Ok(DefenseResult::safe(DefenseCategory::LeakDetection)),
+            Err(e) => match self.config.leak_detection_policy {
+                PolicyAction::Block => {
+                    bail!("Credential leak detected in HTTP request: {}", e);
                 }
-            }
+                PolicyAction::Warn => {
+                    warn!(error = %e, "Potential credential leak in HTTP request");
+                    Ok(DefenseResult::detected(
+                        DefenseCategory::LeakDetection,
+                        PolicyAction::Warn,
+                        vec![e.to_string()],
+                        1.0,
+                    ))
+                }
+                _ => Ok(DefenseResult::safe(DefenseCategory::LeakDetection)),
+            },
         }
     }
 
@@ -426,7 +424,11 @@ impl SafetyLayer {
 
         // Handle validation errors
         if !validation.is_valid {
-            let details: Vec<String> = validation.errors.iter().map(|e| e.message.clone()).collect();
+            let details: Vec<String> = validation
+                .errors
+                .iter()
+                .map(|e| e.message.clone())
+                .collect();
             match self.config.input_validation_policy {
                 PolicyAction::Block => {
                     bail!("Input validation failed: {}", details.join(", "));
@@ -469,7 +471,8 @@ impl SafetyLayer {
                         action,
                         patterns,
                         score,
-                    ).with_sanitized(sanitized))
+                    )
+                    .with_sanitized(sanitized))
                 } else {
                     if action == PolicyAction::Warn {
                         warn!(score = score, patterns = %patterns.join(", "), "Prompt injection detected");
@@ -486,7 +489,10 @@ impl SafetyLayer {
                 if self.config.prompt_injection_policy == PolicyAction::Block {
                     bail!("Prompt injection blocked: {}", reason);
                 } else {
-                    Ok(DefenseResult::blocked(DefenseCategory::PromptInjection, reason))
+                    Ok(DefenseResult::blocked(
+                        DefenseCategory::PromptInjection,
+                        reason,
+                    ))
                 }
             }
         }
@@ -500,24 +506,24 @@ impl SafetyLayer {
             return Ok(DefenseResult::safe(DefenseCategory::LeakDetection));
         }
 
-        let details: Vec<String> = leak_result.matches.iter().map(|m| {
-            format!("{} ({})", m.pattern_name, m.severity)
-        }).collect();
+        let details: Vec<String> = leak_result
+            .matches
+            .iter()
+            .map(|m| format!("{} ({})", m.pattern_name, m.severity))
+            .collect();
 
-        let max_score = leak_result.max_severity().map(|s| match s {
-            super::leak_detector::LeakSeverity::Low => 0.25,
-            super::leak_detector::LeakSeverity::Medium => 0.5,
-            super::leak_detector::LeakSeverity::High => 0.75,
-            super::leak_detector::LeakSeverity::Critical => 1.0,
-        }).unwrap_or(0.0);
+        let max_score = leak_result
+            .max_severity()
+            .map(|s| match s {
+                super::leak_detector::LeakSeverity::Low => 0.25,
+                super::leak_detector::LeakSeverity::Medium => 0.5,
+                super::leak_detector::LeakSeverity::High => 0.75,
+                super::leak_detector::LeakSeverity::Critical => 1.0,
+            })
+            .unwrap_or(0.0);
 
-        if leak_result.should_block {
-            match self.config.leak_detection_policy {
-                PolicyAction::Block => {
-                    bail!("Credential leak detected: {}", details.join(", "));
-                }
-                _ => {}
-            }
+        if leak_result.should_block && self.config.leak_detection_policy == PolicyAction::Block {
+            bail!("Credential leak detected: {}", details.join(", "));
         }
 
         let action = self.config.leak_detection_policy;
@@ -542,18 +548,18 @@ impl SafetyLayer {
                         action,
                         details,
                         max_score,
-                    ).with_sanitized(redacted))
+                    )
+                    .with_sanitized(redacted))
                 } else {
                     // Force redaction via scan_and_clean
                     match self.leak_detector.scan_and_clean(content) {
-                        Ok(cleaned) => {
-                            Ok(DefenseResult::detected(
-                                DefenseCategory::LeakDetection,
-                                action,
-                                details,
-                                max_score,
-                            ).with_sanitized(cleaned))
-                        }
+                        Ok(cleaned) => Ok(DefenseResult::detected(
+                            DefenseCategory::LeakDetection,
+                            action,
+                            details,
+                            max_score,
+                        )
+                        .with_sanitized(cleaned)),
                         Err(_) => {
                             // Blocked during sanitization
                             Ok(DefenseResult::blocked(
@@ -681,11 +687,23 @@ mod tests {
 
     #[test]
     fn test_policy_action_conversion() {
-        assert_eq!(PolicyAction::from_str("ignore"), PolicyAction::Ignore);
-        assert_eq!(PolicyAction::from_str("WARN"), PolicyAction::Warn);
-        assert_eq!(PolicyAction::from_str("Block"), PolicyAction::Block);
-        assert_eq!(PolicyAction::from_str("sanitize"), PolicyAction::Sanitize);
-        assert_eq!(PolicyAction::from_str("unknown"), PolicyAction::Warn);
+        assert_eq!(
+            "ignore".parse::<PolicyAction>().unwrap(),
+            PolicyAction::Ignore
+        );
+        assert_eq!("WARN".parse::<PolicyAction>().unwrap(), PolicyAction::Warn);
+        assert_eq!(
+            "Block".parse::<PolicyAction>().unwrap(),
+            PolicyAction::Block
+        );
+        assert_eq!(
+            "sanitize".parse::<PolicyAction>().unwrap(),
+            PolicyAction::Sanitize
+        );
+        assert_eq!(
+            "unknown".parse::<PolicyAction>().unwrap(),
+            PolicyAction::Warn
+        );
     }
 
     #[test]

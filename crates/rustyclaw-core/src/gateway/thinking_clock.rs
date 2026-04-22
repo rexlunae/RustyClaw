@@ -126,10 +126,7 @@ pub fn should_escalate(response: &str, triggers: &[String]) -> Option<String> {
             // characters preserves byte length for the trigger keywords
             // we care about: ESCALATE, ACTION_NEEDED, ALERT).
             let after = &response[pos + trigger.len()..];
-            let reason = after
-                .trim_start_matches(':')
-                .trim_start_matches(' ')
-                .trim();
+            let reason = after.trim_start_matches(':').trim_start_matches(' ').trim();
             let reason = if reason.is_empty() {
                 response.to_string()
             } else {
@@ -245,10 +242,7 @@ pub async fn run_thinking_clock_loop(
     let mut clock = ThinkingClock::new(config);
     let interval = clock.interval();
 
-    info!(
-        interval_secs = interval.as_secs(),
-        "Thinking clock started"
-    );
+    info!(interval_secs = interval.as_secs(), "Thinking clock started");
 
     loop {
         tokio::select! {
