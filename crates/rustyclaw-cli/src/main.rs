@@ -14,7 +14,7 @@ use rustyclaw_core::skills::SkillManager;
 #[cfg(feature = "tui")]
 use rustyclaw_tui::app::App;
 #[cfg(feature = "tui")]
-use rustyclaw_tui::onboard::{run_onboard_wizard, OnboardArgs as TuiOnboardArgs};
+use rustyclaw_tui::onboard::{OnboardArgs as TuiOnboardArgs, run_onboard_wizard};
 use std::path::PathBuf;
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
@@ -865,59 +865,57 @@ async fn main() -> Result<()> {
         }
 
         // ── Gateway sub-commands ────────────────────────────────
-        Commands::Gateway(sub) => {
-            match sub {
-                GatewayCommands::Start => {
-                    let vault_password = extract_vault_password(&config);
-                    let (port, bind) = commands::parse_gateway_defaults(&config);
-                    commands::handle_start(&config, vault_password.as_deref(), port, bind)?;
-                }
-                GatewayCommands::Stop => {
-                    commands::handle_stop(&config)?;
-                }
-                GatewayCommands::Restart => {
-                    let vault_password = extract_vault_password(&config);
-                    let (port, bind) = commands::parse_gateway_defaults(&config);
-                    commands::handle_restart(&config, vault_password.as_deref(), port, bind)?;
-                }
-                GatewayCommands::Status { json } => {
-                    commands::handle_status(&config, json);
-                }
-                GatewayCommands::Reload => {
-                    use rustyclaw_core::theme as t;
+        Commands::Gateway(sub) => match sub {
+            GatewayCommands::Start => {
+                let vault_password = extract_vault_password(&config);
+                let (port, bind) = commands::parse_gateway_defaults(&config);
+                commands::handle_start(&config, vault_password.as_deref(), port, bind)?;
+            }
+            GatewayCommands::Stop => {
+                commands::handle_stop(&config)?;
+            }
+            GatewayCommands::Restart => {
+                let vault_password = extract_vault_password(&config);
+                let (port, bind) = commands::parse_gateway_defaults(&config);
+                commands::handle_restart(&config, vault_password.as_deref(), port, bind)?;
+            }
+            GatewayCommands::Status { json } => {
+                commands::handle_status(&config, json);
+            }
+            GatewayCommands::Reload => {
+                use rustyclaw_core::theme as t;
 
-                    let url = config
-                        .gateway_url
-                        .as_deref()
-                        .unwrap_or("ws://127.0.0.1:9001");
-                    let sp = t::spinner("Reloading gateway configuration\u{2026}");
+                let url = config
+                    .gateway_url
+                    .as_deref()
+                    .unwrap_or("ws://127.0.0.1:9001");
+                let sp = t::spinner("Reloading gateway configuration\u{2026}");
 
-                    match send_gateway_reload(url, config.totp_enabled).await {
-                        Ok((provider, model)) => {
-                            t::spinner_ok(
-                                &sp,
-                                &format!(
-                                    "Gateway reloaded: {} / {}",
-                                    t::info(&provider),
-                                    t::info(&model),
-                                ),
-                            );
-                        }
-                        Err(e) => {
-                            t::spinner_fail(&sp, &format!("Reload failed: {}", e));
-                        }
+                match send_gateway_reload(url, config.totp_enabled).await {
+                    Ok((provider, model)) => {
+                        t::spinner_ok(
+                            &sp,
+                            &format!(
+                                "Gateway reloaded: {} / {}",
+                                t::info(&provider),
+                                t::info(&model),
+                            ),
+                        );
+                    }
+                    Err(e) => {
+                        t::spinner_fail(&sp, &format!("Reload failed: {}", e));
                     }
                 }
-                GatewayCommands::Run(args) => {
-                    let host = match args.bind {
-                        GatewayBind::Loopback => "127.0.0.1",
-                        GatewayBind::Lan => "0.0.0.0",
-                        _ => "127.0.0.1",
-                    };
-                    commands::handle_run(config, host, args.port).await?;
-                }
             }
-        }
+            GatewayCommands::Run(args) => {
+                let host = match args.bind {
+                    GatewayBind::Loopback => "127.0.0.1",
+                    GatewayBind::Lan => "0.0.0.0",
+                    _ => "127.0.0.1",
+                };
+                commands::handle_run(config, host, args.port).await?;
+            }
+        },
 
         // ── Skills sub-commands ─────────────────────────────────
         Commands::Skills(sub) => {
@@ -2731,11 +2729,11 @@ async fn send_command_via_gateway(gateway_url: &str, command: &str) -> Result<St
 
 /// Handle the `ask` command — headless model interaction.
 async fn handle_ask(config: &Config, args: AskArgs) -> Result<()> {
+    use rustyclaw_core::gateway::protocol::types::ChatMessage;
     use rustyclaw_core::gateway::protocol::{
         ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerFrameType, ServerPayload,
         deserialize_frame, serialize_frame,
     };
-    use rustyclaw_core::gateway::protocol::types::ChatMessage;
     use std::io::{self, Read};
 
     // Gather the prompt

@@ -36,14 +36,15 @@ pub enum LogFormat {
     Json,
 }
 
-impl LogFormat {
-    /// Parse from string (case-insensitive)
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
+impl std::str::FromStr for LogFormat {
+    type Err = std::convert::Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(match s.to_lowercase().as_str() {
             "json" => Self::Json,
             "compact" => Self::Compact,
-            "pretty" | _ => Self::Pretty,
-        }
+            _ => Self::Pretty,
+        })
     }
 }
 
@@ -85,7 +86,7 @@ impl LogConfig {
             .unwrap_or_else(|_| "rustyclaw=info,warn".to_string());
 
         let format = std::env::var("RUSTYCLAW_LOG_FORMAT")
-            .map(|s| LogFormat::from_str(&s))
+            .map(|s| s.parse::<LogFormat>().unwrap_or_default())
             .unwrap_or_default();
 
         Self {
@@ -195,11 +196,11 @@ mod tests {
 
     #[test]
     fn test_log_format_parsing() {
-        assert_eq!(LogFormat::from_str("json"), LogFormat::Json);
-        assert_eq!(LogFormat::from_str("JSON"), LogFormat::Json);
-        assert_eq!(LogFormat::from_str("compact"), LogFormat::Compact);
-        assert_eq!(LogFormat::from_str("pretty"), LogFormat::Pretty);
-        assert_eq!(LogFormat::from_str("unknown"), LogFormat::Pretty);
+        assert_eq!("json".parse::<LogFormat>().unwrap(), LogFormat::Json);
+        assert_eq!("JSON".parse::<LogFormat>().unwrap(), LogFormat::Json);
+        assert_eq!("compact".parse::<LogFormat>().unwrap(), LogFormat::Compact);
+        assert_eq!("pretty".parse::<LogFormat>().unwrap(), LogFormat::Pretty);
+        assert_eq!("unknown".parse::<LogFormat>().unwrap(), LogFormat::Pretty);
     }
 
     #[test]

@@ -13,17 +13,17 @@
 //! - Sidebar visibility
 //! - Event emission on state changes
 
-mod model;
-mod manager;
 mod events;
+mod manager;
+mod model;
 pub mod subtask;
 
-pub use model::*;
-pub use manager::*;
 pub use events::*;
+pub use manager::*;
+pub use model::*;
 pub use subtask::{
-    SubtaskHandle, SubtaskRegistry, SubtaskResult, SpawnOptions,
-    spawn_subagent, spawn_task, spawn_background,
+    SpawnOptions, SubtaskHandle, SubtaskRegistry, SubtaskResult, spawn_background, spawn_subagent,
+    spawn_task,
 };
 
 // Backwards compatibility: TaskId is now ThreadId

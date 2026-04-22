@@ -66,7 +66,6 @@ impl Observer for CompositeObserver {
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use std::time::Duration;
 
     #[derive(Default)]
     struct CountingObserver {

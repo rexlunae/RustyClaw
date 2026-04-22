@@ -19,6 +19,7 @@ mod memory_tools;
 pub mod npm;
 pub mod ollama;
 mod patch;
+mod pdf;
 mod runtime;
 mod secrets_tools;
 mod sessions_tools;
@@ -27,7 +28,6 @@ mod sysadmin;
 mod system_tools;
 pub mod uv;
 mod web;
-mod pdf;
 // UV tool
 use uv::exec_uv_manage;
 
@@ -58,9 +58,9 @@ use runtime::{exec_execute_command, exec_process};
 use web::{exec_web_fetch, exec_web_search};
 
 // Memory operations
-use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
 #[cfg(feature = "steel-memory")]
 use memory_tools::exec_add_memory;
+use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
 
 // Cron operations
 use cron_tool::exec_cron;
@@ -145,10 +145,11 @@ use std::path::Path;
 // ── Tool permissions ────────────────────────────────────────────────────────
 
 /// Permission level for a tool, controlling whether the agent can invoke it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolPermission {
     /// Tool is always allowed — no confirmation needed.
+    #[default]
     Allow,
     /// Tool is always denied — the model receives an error.
     Deny,
@@ -156,12 +157,6 @@ pub enum ToolPermission {
     Ask,
     /// Tool is only allowed when invoked by a named skill.
     SkillOnly(Vec<String>),
-}
-
-impl Default for ToolPermission {
-    fn default() -> Self {
-        Self::Allow
-    }
 }
 
 impl std::fmt::Display for ToolPermission {
@@ -953,7 +948,7 @@ fn exec_thread_describe(args: &Value, _workspace_dir: &Path) -> Result<String, S
         "action": "set_description",
         "description": description,
     });
-    
+
     Ok(format!("{}{}", THREAD_UPDATE_MARKER, update))
 }
 

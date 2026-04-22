@@ -9,14 +9,13 @@ use tokio::sync::Mutex;
 use tracing::{debug, info};
 
 use steel_memory_lib::{
-    compress_to_aaak,
+    KnowledgeGraph, PalaceGraph, RoomNode, Triple, VectorStorage, compress_to_aaak,
     fastembed::{EmbeddingModel, InitOptions, TextEmbedding},
-    KnowledgeGraph, PalaceGraph, RoomNode, Triple, VectorStorage,
     types::{Drawer, SearchResult as SteelSearchResult},
 };
 
 /// Main interface to steel-memory for RustyClaw.
-/// 
+///
 /// Provides:
 /// - Semantic vector search over memories
 /// - Knowledge graph (temporal RDF triples)
@@ -120,34 +119,43 @@ fn load_embedding_model() -> Result<TextEmbedding, String> {
         .map_err(|e| format!("Failed to load embedding model: {}", e))
 }
 
-fn do_embed(embedding: Arc<Mutex<Option<TextEmbedding>>>, text: String) -> Result<Vec<f32>, String> {
+fn do_embed(
+    embedding: Arc<Mutex<Option<TextEmbedding>>>,
+    text: String,
+) -> Result<Vec<f32>, String> {
     let mut guard = embedding.blocking_lock();
-    let model = guard.as_mut().ok_or_else(|| "Embedding model not initialized".to_string())?;
+    let model = guard
+        .as_mut()
+        .ok_or_else(|| "Embedding model not initialized".to_string())?;
     let mut embeddings = model
         .embed(vec![text.as_str()], None)
         .map_err(|e| format!("Embedding failed: {}", e))?;
     Ok(embeddings.remove(0))
 }
 
-fn do_search(db_path: PathBuf, query_vec: Vec<f32>, limit: usize) -> Result<Vec<SteelSearchResult>, String> {
-    let storage = VectorStorage::new(&db_path)
-        .map_err(|e| format!("Failed to open storage: {}", e))?;
+fn do_search(
+    db_path: PathBuf,
+    query_vec: Vec<f32>,
+    limit: usize,
+) -> Result<Vec<SteelSearchResult>, String> {
+    let storage =
+        VectorStorage::new(&db_path).map_err(|e| format!("Failed to open storage: {}", e))?;
     storage
         .search(&query_vec, limit, None, None)
         .map_err(|e| format!("Search failed: {}", e))
 }
 
 fn do_add_drawer(db_path: PathBuf, drawer: Drawer, vec: Vec<f32>) -> Result<(), String> {
-    let storage = VectorStorage::new(&db_path)
-        .map_err(|e| format!("Failed to open storage: {}", e))?;
+    let storage =
+        VectorStorage::new(&db_path).map_err(|e| format!("Failed to open storage: {}", e))?;
     storage
         .add_drawer(&drawer, &vec)
         .map_err(|e| format!("Failed to add drawer: {}", e))
 }
 
 fn do_get_all(db_path: PathBuf) -> Result<Vec<Drawer>, String> {
-    let storage = VectorStorage::new(&db_path)
-        .map_err(|e| format!("Failed to open storage: {}", e))?;
+    let storage =
+        VectorStorage::new(&db_path).map_err(|e| format!("Failed to open storage: {}", e))?;
     storage
         .get_all(None, None, usize::MAX)
         .map_err(|e| format!("Failed to get all: {}", e))
@@ -197,11 +205,12 @@ impl SteelMemory {
 
     async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
         self.ensure_embedding().await?;
-        
+
         let embedding = self.embedding.clone();
         let text_owned = text.to_string();
-        
-        let join_result = tokio::task::spawn_blocking(move || do_embed(embedding, text_owned)).await;
+
+        let join_result =
+            tokio::task::spawn_blocking(move || do_embed(embedding, text_owned)).await;
         match join_result {
             Ok(Ok(v)) => Ok(v),
             Ok(Err(e)) => Err(e),
@@ -227,7 +236,8 @@ impl SteelMemory {
         let min_score = min_score.unwrap_or(0.3);
         let limit = max_results * 2;
 
-        let join_result = tokio::task::spawn_blocking(move || do_search(db_path, query_vec, limit)).await;
+        let join_result =
+            tokio::task::spawn_blocking(move || do_search(db_path, query_vec, limit)).await;
         let results: Vec<SteelSearchResult> = match join_result {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => return Err(e),
@@ -252,7 +262,7 @@ impl SteelMemory {
     ) -> Result<String, String> {
         let vec = self.embed(content).await?;
         let id = uuid::Uuid::new_v4().to_string();
-        
+
         let drawer = Drawer {
             id: id.clone(),
             content: content.to_string(),
@@ -272,9 +282,10 @@ impl SteelMemory {
         };
 
         let db_path = self.db_path.clone();
-        let join_result = tokio::task::spawn_blocking(move || do_add_drawer(db_path, drawer, vec)).await;
+        let join_result =
+            tokio::task::spawn_blocking(move || do_add_drawer(db_path, drawer, vec)).await;
         match join_result {
-            Ok(Ok(())) => {},
+            Ok(Ok(())) => {}
             Ok(Err(e)) => return Err(e),
             Err(e) => return Err(format!("Add task panicked: {}", e)),
         }
@@ -303,7 +314,9 @@ impl SteelMemory {
 
         let memory_md = self.palace_path.join("MEMORY.md");
         if memory_md.exists() {
-            count += self.index_file(&memory_md, "MEMORY.md", "memory", "long-term").await?;
+            count += self
+                .index_file(&memory_md, "MEMORY.md", "memory", "long-term")
+                .await?;
         }
 
         let memory_dir = self.palace_path.join("memory");
@@ -316,14 +329,19 @@ impl SteelMemory {
                 if path.extension().is_some_and(|e| e == "md") {
                     let name = path.file_name().unwrap().to_string_lossy();
                     let relative = format!("memory/{}", name);
-                    
+
                     // Date files (YYYY-MM-DD.md) get their own room
-                    let room = if name.len() == 13 && name.chars().take(10).all(|c| c.is_ascii_digit() || c == '-') {
+                    let room = if name.len() == 13
+                        && name
+                            .chars()
+                            .take(10)
+                            .all(|c| c.is_ascii_digit() || c == '-')
+                    {
                         name.trim_end_matches(".md").to_string()
                     } else {
                         "notes".to_string()
                     };
-                    
+
                     count += self.index_file(&path, &relative, "memory", &room).await?;
                 }
             }
@@ -333,7 +351,13 @@ impl SteelMemory {
         Ok(count)
     }
 
-    async fn index_file(&self, path: &Path, relative_path: &str, wing: &str, room: &str) -> Result<usize, String> {
+    async fn index_file(
+        &self,
+        path: &Path,
+        relative_path: &str,
+        wing: &str,
+        room: &str,
+    ) -> Result<usize, String> {
         let content = std::fs::read_to_string(path)
             .map_err(|e| format!("Failed to read {}: {}", relative_path, e))?;
 
@@ -344,7 +368,8 @@ impl SteelMemory {
             if chunk.trim().is_empty() {
                 continue;
             }
-            self.add_memory(&chunk, wing, room, Some(relative_path)).await?;
+            self.add_memory(&chunk, wing, room, Some(relative_path))
+                .await?;
             count += 1;
         }
 
@@ -371,13 +396,15 @@ impl SteelMemory {
         let confidence = confidence.unwrap_or(1.0);
 
         let join_result = tokio::task::spawn_blocking(move || {
-            let kg = KnowledgeGraph::new(&kg_path)
-                .map_err(|e| format!("Failed to open KG: {}", e))?;
-            let id = kg.add_triple(&subject, &predicate, &object, confidence, None, None)
+            let kg =
+                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
+            let id = kg
+                .add_triple(&subject, &predicate, &object, confidence, None, None)
                 .map_err(|e| format!("Failed to add triple: {}", e))?;
             debug!(subject, predicate, object, "Added KG triple");
             Ok(id)
-        }).await;
+        })
+        .await;
 
         match join_result {
             Ok(Ok(id)) => Ok(id),
@@ -399,11 +426,12 @@ impl SteelMemory {
         let object = object.to_string();
 
         let join_result = tokio::task::spawn_blocking(move || {
-            let kg = KnowledgeGraph::new(&kg_path)
-                .map_err(|e| format!("Failed to open KG: {}", e))?;
+            let kg =
+                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
             kg.invalidate_triple(&subject, &predicate, &object)
                 .map_err(|e| format!("Failed to invalidate triple: {}", e))
-        }).await;
+        })
+        .await;
 
         match join_result {
             Ok(Ok(n)) => Ok(n),
@@ -424,11 +452,12 @@ impl SteelMemory {
         let direction = direction.unwrap_or("both").to_string();
 
         let join_result = tokio::task::spawn_blocking(move || {
-            let kg = KnowledgeGraph::new(&kg_path)
-                .map_err(|e| format!("Failed to open KG: {}", e))?;
+            let kg =
+                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
             kg.query_entity(&entity, &direction)
                 .map_err(|e| format!("Failed to query KG: {}", e))
-        }).await;
+        })
+        .await;
 
         match join_result {
             Ok(Ok(triples)) => Ok(triples.into_iter().map(KgTriple::from).collect()),
@@ -448,11 +477,12 @@ impl SteelMemory {
         let limit = limit.unwrap_or(50);
 
         let join_result = tokio::task::spawn_blocking(move || {
-            let kg = KnowledgeGraph::new(&kg_path)
-                .map_err(|e| format!("Failed to open KG: {}", e))?;
+            let kg =
+                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
             kg.timeline(&entity, limit)
                 .map_err(|e| format!("Failed to get timeline: {}", e))
-        }).await;
+        })
+        .await;
 
         match join_result {
             Ok(Ok(triples)) => Ok(triples.into_iter().map(KgTriple::from).collect()),
@@ -466,11 +496,12 @@ impl SteelMemory {
         let kg_path = self.kg_path.clone();
 
         let join_result = tokio::task::spawn_blocking(move || {
-            let kg = KnowledgeGraph::new(&kg_path)
-                .map_err(|e| format!("Failed to open KG: {}", e))?;
+            let kg =
+                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
             kg.stats()
                 .map_err(|e| format!("Failed to get KG stats: {}", e))
-        }).await;
+        })
+        .await;
 
         match join_result {
             Ok(Ok(stats)) => Ok(stats),
@@ -485,8 +516,12 @@ impl SteelMemory {
 
     /// Build the palace graph (all rooms with drawer counts).
     pub async fn palace_graph(&self) -> Result<Vec<PalaceRoom>, String> {
-        let pg = PalaceGraph { db_path: self.db_path.clone() };
-        let nodes = pg.build_graph().await
+        let pg = PalaceGraph {
+            db_path: self.db_path.clone(),
+        };
+        let nodes = pg
+            .build_graph()
+            .await
             .map_err(|e| format!("Failed to build palace graph: {}", e))?;
         Ok(nodes.into_iter().map(PalaceRoom::from).collect())
     }
@@ -497,8 +532,12 @@ impl SteelMemory {
         start_room: &str,
         max_hops: Option<usize>,
     ) -> Result<Vec<PalaceRoom>, String> {
-        let pg = PalaceGraph { db_path: self.db_path.clone() };
-        let nodes = pg.traverse_graph(start_room, max_hops.unwrap_or(2)).await
+        let pg = PalaceGraph {
+            db_path: self.db_path.clone(),
+        };
+        let nodes = pg
+            .traverse_graph(start_room, max_hops.unwrap_or(2))
+            .await
             .map_err(|e| format!("Failed to traverse palace: {}", e))?;
         Ok(nodes.into_iter().map(PalaceRoom::from).collect())
     }
@@ -509,16 +548,23 @@ impl SteelMemory {
         wing_a: Option<&str>,
         wing_b: Option<&str>,
     ) -> Result<Vec<PalaceRoom>, String> {
-        let pg = PalaceGraph { db_path: self.db_path.clone() };
-        let nodes = pg.find_tunnels(wing_a, wing_b).await
+        let pg = PalaceGraph {
+            db_path: self.db_path.clone(),
+        };
+        let nodes = pg
+            .find_tunnels(wing_a, wing_b)
+            .await
             .map_err(|e| format!("Failed to find tunnels: {}", e))?;
         Ok(nodes.into_iter().map(PalaceRoom::from).collect())
     }
 
     /// Get palace graph statistics.
     pub async fn palace_stats(&self) -> Result<serde_json::Value, String> {
-        let pg = PalaceGraph { db_path: self.db_path.clone() };
-        pg.stats().await
+        let pg = PalaceGraph {
+            db_path: self.db_path.clone(),
+        };
+        pg.stats()
+            .await
             .map_err(|e| format!("Failed to get palace stats: {}", e))
     }
 
@@ -556,9 +602,11 @@ impl SteelMemory {
         let join_result = tokio::task::spawn_blocking(move || {
             let storage = VectorStorage::new(&db_path)
                 .map_err(|e| format!("Failed to open storage: {}", e))?;
-            storage.get_all(wing_filter.as_deref(), None, 100)
+            storage
+                .get_all(wing_filter.as_deref(), None, 100)
                 .map_err(|e| format!("Failed to get drawers: {}", e))
-        }).await;
+        })
+        .await;
 
         let drawers: Vec<Drawer> = match join_result {
             Ok(Ok(d)) => d,
@@ -566,9 +614,7 @@ impl SteelMemory {
             Err(e) => return Err(format!("Wake up task panicked: {}", e)),
         };
 
-        let aaak_lines: Vec<String> = drawers.iter()
-            .map(|d| compress_to_aaak(d))
-            .collect();
+        let aaak_lines: Vec<String> = drawers.iter().map(|d| compress_to_aaak(d)).collect();
 
         Ok(aaak_lines.join("\n---\n"))
     }
@@ -578,11 +624,7 @@ impl SteelMemory {
     // =========================================================================
 
     /// Write a diary entry.
-    pub async fn diary_write(
-        &self,
-        agent: &str,
-        content: &str,
-    ) -> Result<String, String> {
+    pub async fn diary_write(&self, agent: &str, content: &str) -> Result<String, String> {
         // Store diary entries as memories in the "diary" wing
         let room = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let prefixed = format!("[{}] {}", agent, content);
@@ -602,9 +644,11 @@ impl SteelMemory {
         let join_result = tokio::task::spawn_blocking(move || {
             let storage = VectorStorage::new(&db_path)
                 .map_err(|e| format!("Failed to open storage: {}", e))?;
-            storage.get_all(Some("diary"), None, limit * 2)
+            storage
+                .get_all(Some("diary"), None, limit * 2)
                 .map_err(|e| format!("Failed to read diary: {}", e))
-        }).await;
+        })
+        .await;
 
         let drawers: Vec<Drawer> = match join_result {
             Ok(Ok(d)) => d,
@@ -619,7 +663,11 @@ impl SteelMemory {
             .map(|d| DiaryEntry {
                 id: d.id,
                 agent: agent.to_string(),
-                content: d.content.trim_start_matches(&agent_prefix).trim().to_string(),
+                content: d
+                    .content
+                    .trim_start_matches(&agent_prefix)
+                    .trim()
+                    .to_string(),
                 timestamp: d.filed_at,
             })
             .collect();
@@ -660,17 +708,33 @@ fn chunk_markdown(content: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
+    use tempfile::TempDir;
 
     #[tokio::test]
     async fn test_basic_search() {
         let dir = TempDir::new().unwrap();
         let mem = SteelMemory::new(dir.path()).unwrap();
 
-        mem.add_memory("I love programming in Rust", "preferences", "languages", None).await.unwrap();
-        mem.add_memory("Python is great for data science", "preferences", "languages", None).await.unwrap();
-        mem.add_memory("The sky is blue today", "observations", "weather", None).await.unwrap();
+        mem.add_memory(
+            "I love programming in Rust",
+            "preferences",
+            "languages",
+            None,
+        )
+        .await
+        .unwrap();
+        mem.add_memory(
+            "Python is great for data science",
+            "preferences",
+            "languages",
+            None,
+        )
+        .await
+        .unwrap();
+        mem.add_memory("The sky is blue today", "observations", "weather", None)
+            .await
+            .unwrap();
 
         let results = mem.search("Rust programming", 5, None).await.unwrap();
         assert!(!results.is_empty());
@@ -680,16 +744,20 @@ mod tests {
     #[tokio::test]
     async fn test_index_workspace() {
         let dir = TempDir::new().unwrap();
-        
+
         fs::write(dir.path().join("MEMORY.md"), "# Memory\n\nI like cats.").unwrap();
         fs::create_dir(dir.path().join("memory")).unwrap();
-        fs::write(dir.path().join("memory/2026-04-13.md"), "# Today\n\nWent for a walk.").unwrap();
+        fs::write(
+            dir.path().join("memory/2026-04-13.md"),
+            "# Today\n\nWent for a walk.",
+        )
+        .unwrap();
 
         let mem = SteelMemory::new(dir.path()).unwrap();
         let count = mem.index_workspace().await.unwrap();
-        
+
         assert!(count >= 2);
-        
+
         let results = mem.search("cats", 5, None).await.unwrap();
         assert!(!results.is_empty());
     }
@@ -700,9 +768,15 @@ mod tests {
         let mem = SteelMemory::new(dir.path()).unwrap();
 
         // Add some triples
-        mem.kg_add("Erica", "knows", "Rust", Some(0.9)).await.unwrap();
-        mem.kg_add("Erica", "lives_in", "Colorado", None).await.unwrap();
-        mem.kg_add("Rust", "is_a", "programming_language", None).await.unwrap();
+        mem.kg_add("Erica", "knows", "Rust", Some(0.9))
+            .await
+            .unwrap();
+        mem.kg_add("Erica", "lives_in", "Colorado", None)
+            .await
+            .unwrap();
+        mem.kg_add("Rust", "is_a", "programming_language", None)
+            .await
+            .unwrap();
 
         // Query outgoing
         let triples = mem.kg_query("Erica", Some("outgoing")).await.unwrap();
@@ -714,7 +788,10 @@ mod tests {
         assert_eq!(triples[0].subject, "erica");
 
         // Invalidate
-        let count = mem.kg_invalidate("Erica", "lives_in", "Colorado").await.unwrap();
+        let count = mem
+            .kg_invalidate("Erica", "lives_in", "Colorado")
+            .await
+            .unwrap();
         assert_eq!(count, 1);
 
         // Should now only have 1 valid triple for Erica
@@ -732,9 +809,15 @@ mod tests {
         let mem = SteelMemory::new(dir.path()).unwrap();
 
         // Add memories to different wings/rooms
-        mem.add_memory("Test 1", "wing_a", "room_1", None).await.unwrap();
-        mem.add_memory("Test 2", "wing_a", "room_2", None).await.unwrap();
-        mem.add_memory("Test 3", "wing_b", "room_1", None).await.unwrap(); // Tunnel: room_1 in both wings
+        mem.add_memory("Test 1", "wing_a", "room_1", None)
+            .await
+            .unwrap();
+        mem.add_memory("Test 2", "wing_a", "room_2", None)
+            .await
+            .unwrap();
+        mem.add_memory("Test 3", "wing_b", "room_1", None)
+            .await
+            .unwrap(); // Tunnel: room_1 in both wings
 
         // Build graph
         let rooms = mem.palace_graph().await.unwrap();
@@ -758,7 +841,7 @@ mod tests {
         let aaak = mem.compress_aaak(
             "I decided to switch from Python to Rust for performance",
             "decisions",
-            "languages"
+            "languages",
         );
 
         // AAAK format should contain wing|room|date|file on first line
@@ -773,8 +856,12 @@ mod tests {
         let mem = SteelMemory::new(dir.path()).unwrap();
 
         // Write entries
-        mem.diary_write("luthen", "Started working on RustyClaw").await.unwrap();
-        mem.diary_write("luthen", "Made good progress today").await.unwrap();
+        mem.diary_write("luthen", "Started working on RustyClaw")
+            .await
+            .unwrap();
+        mem.diary_write("luthen", "Made good progress today")
+            .await
+            .unwrap();
         mem.diary_write("erskin", "Fixed a bug").await.unwrap();
 
         // Read Luthen's diary

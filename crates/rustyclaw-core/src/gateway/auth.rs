@@ -138,9 +138,7 @@ pub async fn resolve_bearer_token(
 /// Reads frames from the transport until we get a frame with
 /// `ClientFrameType::AuthResponse`, or the connection drops.
 #[instrument(skip(reader))]
-pub async fn wait_for_auth_response(
-    reader: &mut dyn TransportReader,
-) -> Result<String> {
+pub async fn wait_for_auth_response(reader: &mut dyn TransportReader) -> Result<String> {
     debug!("Waiting for auth_response frame");
     loop {
         match reader.recv().await {

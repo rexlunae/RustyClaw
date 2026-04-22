@@ -873,13 +873,12 @@ fn run_with_macos_sandbox(
 /// - Tighter mount controls
 #[cfg(target_os = "linux")]
 fn wrap_with_combined_bwrap(command: &str, policy: &SandboxPolicy) -> (String, Vec<String>) {
-    let mut args = Vec::new();
-
-    // More aggressive namespace isolation
-    args.push("--unshare-all".to_string());
-    args.push("--share-net".to_string()); // Keep network for web_fetch
-    args.push("--die-with-parent".to_string());
-    args.push("--new-session".to_string()); // Extra isolation: new session ID
+    let mut args = vec![
+        "--unshare-all".to_string(),
+        "--share-net".to_string(), // Keep network for web_fetch
+        "--die-with-parent".to_string(),
+        "--new-session".to_string(), // Extra isolation: new session ID
+    ];
 
     // Helper to check if a path should be completely blocked
     let is_blocked = |path: &Path| -> bool {
@@ -1335,8 +1334,8 @@ mod tests {
             run_with_path_validation("echo hello > /tmp/test_workspace2/file.txt", &policy);
         // Note: This will likely fail with "command failed" but NOT "Access denied"
         // because the shell redirection happens before echo runs
-        if result.is_err() {
-            assert!(!result.unwrap_err().contains("Access denied"));
+        if let Err(e) = result {
+            assert!(!e.contains("Access denied"));
         }
     }
 }

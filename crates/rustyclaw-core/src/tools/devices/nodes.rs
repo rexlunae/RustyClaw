@@ -30,19 +30,19 @@ enum ParsedNode {
 }
 
 fn parse_node(node: &str) -> ParsedNode {
-    if node.starts_with("adb:") {
+    if let Some(device) = node.strip_prefix("adb:") {
         return ParsedNode::Adb {
-            device: node[4..].to_string(),
+            device: device.to_string(),
         };
     }
     if let Some(rest) = node.strip_prefix("ssh:") {
         return parse_ssh_target(rest);
     }
-    if node.starts_with("vnc:") {
-        return parse_vnc_target(&node[4..]);
+    if let Some(rest) = node.strip_prefix("vnc:") {
+        return parse_vnc_target(rest);
     }
-    if node.starts_with("rdp:") {
-        return parse_rdp_target(&node[4..]);
+    if let Some(rest) = node.strip_prefix("rdp:") {
+        return parse_rdp_target(rest);
     }
     if node.contains('@') {
         return parse_ssh_target(node);
@@ -736,9 +736,9 @@ pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String>
         "approve" | "reject" => {
             Ok("Direct connection nodes don't require pairing approval.".to_string())
         }
-        _ => Err(format!(
-            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support."
-        )),
+        _ => Err(
+            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support.".to_string()
+        ),
     }
 }
 

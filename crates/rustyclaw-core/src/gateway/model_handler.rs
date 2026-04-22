@@ -40,7 +40,7 @@ async fn exec_model_list(
     let tier_filter = args
         .get("tier")
         .and_then(|v| v.as_str())
-        .and_then(CostTier::from_str);
+        .and_then(|s| s.parse::<CostTier>().ok());
     let enabled_only = args
         .get("enabledOnly")
         .and_then(|v| v.as_bool())

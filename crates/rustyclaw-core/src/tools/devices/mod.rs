@@ -131,14 +131,14 @@ pub(crate) enum NodeType {
 /// Parse node identifier to determine type.
 #[allow(dead_code)]
 pub(crate) fn parse_node_type(node: &str) -> (NodeType, String) {
-    if node.starts_with("adb:") {
-        (NodeType::Adb, node[4..].to_string())
-    } else if node.starts_with("vnc:") {
-        (NodeType::Vnc, node[4..].to_string())
-    } else if node.starts_with("rdp:") {
-        (NodeType::Rdp, node[4..].to_string())
-    } else if node.starts_with("ssh:") {
-        (NodeType::Ssh, node[4..].to_string())
+    if let Some(rest) = node.strip_prefix("adb:") {
+        (NodeType::Adb, rest.to_string())
+    } else if let Some(rest) = node.strip_prefix("vnc:") {
+        (NodeType::Vnc, rest.to_string())
+    } else if let Some(rest) = node.strip_prefix("rdp:") {
+        (NodeType::Rdp, rest.to_string())
+    } else if let Some(rest) = node.strip_prefix("ssh:") {
+        (NodeType::Ssh, rest.to_string())
     } else if node.contains('@') {
         // Default SSH for user@host
         (NodeType::Ssh, node.to_string())

@@ -881,7 +881,7 @@ mod frame_size_tests {
             message_count: 0,
             has_summary: false,
         };
-        
+
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadsUpdate,
             payload: ServerPayload::ThreadsUpdate {
@@ -889,27 +889,32 @@ mod frame_size_tests {
                 foreground_id: Some(1),
             },
         };
-        
+
         let bytes = serialize_frame(&frame).unwrap();
         println!("ThreadsUpdate with 1 thread: {} bytes", bytes.len());
         println!("Bytes: {:?}", bytes);
-        
+
         // With bincode standard config (varint encoding), small values are compact.
         // 16 bytes is correct for this minimal frame.
         // Key test: can we deserialize it without error?
-        let decoded: ServerFrame = deserialize_frame(&bytes).expect("Round-trip deserialization failed");
-        
+        let decoded: ServerFrame =
+            deserialize_frame(&bytes).expect("Round-trip deserialization failed");
+
         // Verify we got the right frame type
         assert!(matches!(decoded.frame_type, ServerFrameType::ThreadsUpdate));
-        if let ServerPayload::ThreadsUpdate { threads, foreground_id } = decoded.payload {
+        if let ServerPayload::ThreadsUpdate {
+            threads,
+            foreground_id,
+        } = decoded.payload
+        {
             assert_eq!(threads.len(), 1);
             assert_eq!(threads[0].id, 1);
             assert_eq!(threads[0].label, "Main");
             assert_eq!(threads[0].description, None);
             assert_eq!(threads[0].status, None);
-            assert_eq!(threads[0].is_foreground, true);
+            assert!(threads[0].is_foreground);
             assert_eq!(threads[0].message_count, 0);
-            assert_eq!(threads[0].has_summary, false);
+            assert!(!threads[0].has_summary);
             assert_eq!(foreground_id, Some(1));
         } else {
             panic!("Wrong payload type");

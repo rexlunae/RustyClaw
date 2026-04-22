@@ -8,4 +8,4 @@ pub mod freshness;
 pub mod receipt;
 
 pub use freshness::{FreshnessProtocol, VolatilityTier};
-pub use receipt::{TaskReceipt, ReceiptStore};
+pub use receipt::{ReceiptStore, TaskReceipt};

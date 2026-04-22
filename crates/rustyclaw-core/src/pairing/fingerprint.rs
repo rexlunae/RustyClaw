@@ -7,7 +7,8 @@ use super::client_keys::ClientKeyPair;
 /// Returns a string like "SHA256:AbCdEf...".
 #[cfg(feature = "ssh")]
 pub fn key_fingerprint(keypair: &ClientKeyPair) -> String {
-    keypair.public_key
+    keypair
+        .public_key
         .fingerprint(russh::keys::HashAlg::Sha256)
         .to_string()
 }
@@ -35,29 +36,28 @@ pub fn key_fingerprint_short(keypair: &ClientKeyPair) -> String {
 #[cfg(feature = "ssh")]
 pub fn calculate_fingerprint_from_openssh(public_key_openssh: &str) -> String {
     use base64::Engine;
-    use sha2::{Sha256, Digest};
-    
+    use sha2::{Digest, Sha256};
+
     // Parse the key to get the base64 data
     let parts: Vec<&str> = public_key_openssh.split_whitespace().collect();
     if parts.len() < 2 {
         return "SHA256:invalid".to_string();
     }
-    
+
     // Decode the base64 key data
     let key_data = match base64::engine::general_purpose::STANDARD.decode(parts[1]) {
         Ok(data) => data,
         Err(_) => return "SHA256:invalid".to_string(),
     };
-    
+
     // Calculate SHA256 hash
     let mut hasher = Sha256::new();
     hasher.update(&key_data);
     let hash = hasher.finalize();
-    
+
     // Encode as base64 (without padding, to match ssh-keygen format)
-    let fingerprint = base64::engine::general_purpose::STANDARD_NO_PAD
-        .encode(&hash);
-    
+    let fingerprint = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&hash);
+
     format!("SHA256:{}", fingerprint)
 }
 
@@ -75,43 +75,54 @@ pub fn calculate_fingerprint_from_openssh(_public_key_openssh: &str) -> String {
 #[cfg(feature = "ssh")]
 pub fn format_fingerprint_art(fingerprint: &str) -> String {
     use base64::Engine;
-    
+
     // Extract the hash part (after "SHA256:")
-    let hash = fingerprint.strip_prefix("SHA256:")
-        .unwrap_or(fingerprint);
-    
+    let hash = fingerprint.strip_prefix("SHA256:").unwrap_or(fingerprint);
+
     // Decode the base64 to get raw bytes
     let bytes = match base64::engine::general_purpose::STANDARD_NO_PAD.decode(hash) {
         Ok(b) => b,
         Err(_) => return format!("[{}]", fingerprint),
     };
-    
+
     // Generate the randomart image (17x9 field)
     // This is the "drunken bishop" algorithm
     const FIELD_WIDTH: usize = 17;
     const FIELD_HEIGHT: usize = 9;
     let mut field = [[0u8; FIELD_WIDTH]; FIELD_HEIGHT];
-    
+
     // Bishop starts in the center
     let mut x: i32 = (FIELD_WIDTH / 2) as i32;
     let mut y: i32 = (FIELD_HEIGHT / 2) as i32;
-    
+
     // Walk the field based on hash bits
     for byte in &bytes {
         for i in 0..4 {
             let step = (byte >> (i * 2)) & 0x03;
             match step {
-                0 => { x -= 1; y -= 1; }  // upper left
-                1 => { x += 1; y -= 1; }  // upper right
-                2 => { x -= 1; y += 1; }  // lower left
-                3 => { x += 1; y += 1; }  // lower right
+                0 => {
+                    x -= 1;
+                    y -= 1;
+                } // upper left
+                1 => {
+                    x += 1;
+                    y -= 1;
+                } // upper right
+                2 => {
+                    x -= 1;
+                    y += 1;
+                } // lower left
+                3 => {
+                    x += 1;
+                    y += 1;
+                } // lower right
                 _ => unreachable!(),
             }
-            
+
             // Clamp to field boundaries
             x = x.clamp(0, (FIELD_WIDTH - 1) as i32);
             y = y.clamp(0, (FIELD_HEIGHT - 1) as i32);
-            
+
             // Increment the cell visit count
             let cell = &mut field[y as usize][x as usize];
             if *cell < 14 {
@@ -119,19 +130,19 @@ pub fn format_fingerprint_art(fingerprint: &str) -> String {
             }
         }
     }
-    
+
     // Mark start and end positions
-    field[FIELD_HEIGHT / 2][FIELD_WIDTH / 2] = 15;  // 'S' for start
-    field[y as usize][x as usize] = 16;              // 'E' for end
-    
+    field[FIELD_HEIGHT / 2][FIELD_WIDTH / 2] = 15; // 'S' for start
+    field[y as usize][x as usize] = 16; // 'E' for end
+
     // Convert to characters
     const CHARS: &[char] = &[
-        ' ', '.', 'o', '+', '=', '*', 'B', 'O', 'X', '@', '%', '&', '#', '/', '^', 'S', 'E'
+        ' ', '.', 'o', '+', '=', '*', 'B', 'O', 'X', '@', '%', '&', '#', '/', '^', 'S', 'E',
     ];
-    
+
     let mut output = String::new();
     output.push_str("+---[ED25519 256]----+\n");
-    
+
     for row in &field {
         output.push('|');
         for &cell in row {
@@ -140,9 +151,9 @@ pub fn format_fingerprint_art(fingerprint: &str) -> String {
         }
         output.push_str("|\n");
     }
-    
+
     output.push_str("+----[SHA256]--------+");
-    
+
     output
 }
 
@@ -151,31 +162,33 @@ pub fn format_fingerprint_art(fingerprint: &str) -> String {
 pub fn format_fingerprint_art(_fingerprint: &str) -> String {
     "+---[ED25519 256]----+\n\
      |  (ssh disabled)   |\n\
-     +----[SHA256]--------+".to_string()
+     +----[SHA256]--------+"
+        .to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_fingerprint_from_openssh() {
         // This is a test key (not real)
-        let key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtJvJZDLNbPkTYf4ZbXaBeCq3I9sEG9qS9XvGBFMT4C test";
+        let key =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtJvJZDLNbPkTYf4ZbXaBeCq3I9sEG9qS9XvGBFMT4C test";
         let fp = calculate_fingerprint_from_openssh(key);
-        
+
         assert!(fp.starts_with("SHA256:"));
         assert!(fp.len() > 10);
     }
-    
+
     #[test]
     fn test_fingerprint_art() {
         let fingerprint = "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/";
         let art = format_fingerprint_art(fingerprint);
-        
+
         assert!(art.contains("+---[ED25519"));
         assert!(art.contains("+----[SHA256]"));
         #[cfg(feature = "ssh")]
-        assert!(art.lines().count() == 11);  // 9 rows + 2 borders
+        assert!(art.lines().count() == 11); // 9 rows + 2 borders
     }
 }

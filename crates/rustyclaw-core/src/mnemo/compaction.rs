@@ -15,7 +15,7 @@ pub async fn run_compaction(
 ) -> Result<()> {
     loop {
         tokio::time::sleep(interval).await;
-        
+
         match store.compact(summarizer.as_ref()).await {
             Ok(stats) => {
                 if stats.summaries_created > 0 {

@@ -91,9 +91,7 @@ async fn create_messenger(config: &MessengerConfig) -> Result<Box<dyn Messenger>
     let mut messenger: Box<dyn Messenger> = match config.messenger_type.as_str() {
         // matrix-cli type removed - use "matrix" type instead (chat-system 0.1.3)
         "matrix-cli" => {
-            anyhow::bail!(
-                "matrix-cli messenger type is deprecated. Use 'matrix' type instead."
-            );
+            anyhow::bail!("matrix-cli messenger type is deprecated. Use 'matrix' type instead.");
         }
         "irc" => build_irc_messenger(config, name)?,
         "slack" => build_slack_messenger(config, name)?,
@@ -342,13 +340,7 @@ fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<
         .context("Matrix requires 'user_id'")?;
 
     let mut messenger = if let Some(access_token) = config.access_token.clone() {
-        MatrixMessenger::with_access_token(
-            name.clone(),
-            homeserver,
-            user_id,
-            access_token,
-            None,
-        )
+        MatrixMessenger::with_access_token(name.clone(), homeserver, user_id, access_token, None)
     } else {
         MatrixMessenger::new(
             name.clone(),
@@ -657,7 +649,7 @@ async fn process_incoming_message(
         &msg,
         task_mgr,
         model_registry,
-        &skill_mgr,
+        skill_mgr,
         &conv_key,
     )
     .await;

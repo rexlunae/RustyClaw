@@ -77,10 +77,8 @@ impl SecretsManager {
         let keys: Vec<String> = old_vault.keys().map(|s| s.to_string()).collect();
         let mut entries: Vec<(String, String)> = Vec::new();
         for key in &keys {
-            match old_vault.get(key) {
-                Ok(value) => entries.push((key.clone(), value)),
-                // Skip entries we can't decrypt (shouldn't happen, but be safe).
-                Err(_) => {}
+            if let Ok(value) = old_vault.get(key) {
+                entries.push((key.clone(), value))
             }
         }
 

@@ -27,9 +27,9 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let mut name = use_signal(String::new);
     let mut personality = use_signal(String::new);
     let mut step = use_signal(|| 1);
-    
+
     let on_complete = props.on_complete.clone();
-    
+
     let handle_next = move |_| {
         let current_step = *step.read();
         if current_step == 1 && !name.read().trim().is_empty() {
@@ -45,30 +45,30 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
             });
         }
     };
-    
+
     let handle_back = move |_| {
         let current_step = *step.read();
         if current_step > 1 {
             step.set(current_step - 1);
         }
     };
-    
+
     if !props.visible {
         return rsx! {};
     }
-    
+
     let current_step = *step.read();
     let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
-    
+
     rsx! {
         div { class: "modal is-active",
             div { class: "modal-background",
                 onclick: move |_| props.on_cancel.call(()),
             }
-            
+
             div { class: "modal-card",
                 style: "max-width: 500px;",
-                
+
                 header { class: "modal-card-head",
                     p { class: "modal-card-title",
                         span { class: "icon",
@@ -77,23 +77,23 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                         " Hatching"
                     }
                 }
-                
+
                 section { class: "modal-card-body",
                     // Progress indicator
                     div { class: "steps",
                         style: "display: flex; justify-content: center; margin-bottom: 1.5rem;",
-                        
-                        span { 
+
+                        span {
                             class: if current_step >= 1 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
                             "1"
                         }
                         span { style: "width: 50px; height: 2px; background: #dbdbdb; align-self: center;" }
-                        span { 
+                        span {
                             class: if current_step >= 2 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
                             "2"
                         }
                     }
-                    
+
                     match current_step {
                         1 => rsx! {
                             div { class: "content",
@@ -101,7 +101,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                 p { class: "has-text-grey",
                                     "This will be used to identify your agent."
                                 }
-                                
+
                                 Field {
                                     Control { class: "has-icons-left",
                                         input {
@@ -130,7 +130,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                 p { class: "has-text-grey",
                                     "Describe your agent's personality or leave blank for default."
                                 }
-                                
+
                                 Field {
                                     Control {
                                         textarea {
@@ -147,15 +147,15 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                         _ => rsx! {}
                     }
                 }
-                
+
                 footer { class: "modal-card-foot",
                     style: "justify-content: space-between;",
-                    
+
                     if current_step > 1 {
                         Button {
                             color: BulmaColor::Light,
                             onclick: handle_back,
-                            
+
                             span { class: "icon",
                                 i { class: "fas fa-arrow-left" }
                             }
@@ -168,12 +168,12 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                             "Cancel"
                         }
                     }
-                    
+
                     Button {
                         color: BulmaColor::Primary,
                         disabled: is_next_disabled,
                         onclick: handle_next,
-                        
+
                         if current_step == 2 {
                             span { class: "icon",
                                 i { class: "fas fa-check" }

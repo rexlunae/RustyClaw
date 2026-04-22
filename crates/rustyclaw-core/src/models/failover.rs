@@ -82,8 +82,7 @@ impl HealthTracker {
             self.circuit_open_since.store(now, Ordering::Relaxed);
             warn!(
                 consecutive_failures = failures,
-                "Circuit breaker opened after {} consecutive failures",
-                failures
+                "Circuit breaker opened after {} consecutive failures", failures
             );
         }
     }
@@ -134,21 +133,16 @@ pub struct HealthStats {
 }
 
 /// Failover strategy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum FailoverStrategy {
     /// Try profiles in order, skip to next on failure.
+    #[default]
     Sequential,
     /// Round-robin across healthy profiles.
     RoundRobin,
     /// Random selection from healthy profiles.
     Random,
-}
-
-impl Default for FailoverStrategy {
-    fn default() -> Self {
-        Self::Sequential
-    }
 }
 
 /// Failover configuration for a provider.
@@ -224,12 +218,10 @@ impl FailoverManager {
         // Create health trackers for each profile
         for profile in &config.profiles {
             let key = format!("{}/{}", provider, profile.name);
-            self.health
-                .insert(key, HealthTracker::new(circuit_secs));
+            self.health.insert(key, HealthTracker::new(circuit_secs));
         }
 
-        self.rr_index
-            .insert(provider.clone(), AtomicUsize::new(0));
+        self.rr_index.insert(provider.clone(), AtomicUsize::new(0));
         self.configs.insert(provider, config);
 
         info!("Failover config registered");
@@ -396,10 +388,7 @@ mod tests {
         mgr.register(
             "openai".to_string(),
             FailoverConfig {
-                profiles: vec![
-                    make_profile("a", "openai"),
-                    make_profile("b", "openai"),
-                ],
+                profiles: vec![make_profile("a", "openai"), make_profile("b", "openai")],
                 strategy: FailoverStrategy::RoundRobin,
                 ..Default::default()
             },

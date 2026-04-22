@@ -278,7 +278,12 @@ mod tests {
         let validator = InputValidator::new();
         let result = validator.validate("");
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::Empty));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ValidationErrorCode::Empty)
+        );
     }
 
     #[test]
@@ -286,7 +291,12 @@ mod tests {
         let validator = InputValidator::new().with_max_length(10);
         let result = validator.validate("This is way too long for the limit");
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::TooLong));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ValidationErrorCode::TooLong)
+        );
     }
 
     #[test]
@@ -294,17 +304,20 @@ mod tests {
         let validator = InputValidator::new().forbid_pattern("forbidden");
         let result = validator.validate("This contains FORBIDDEN content");
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::ForbiddenContent));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ValidationErrorCode::ForbiddenContent)
+        );
     }
 
     #[test]
     fn test_excessive_repetition_warning() {
         let validator = InputValidator::new();
         // String needs to be >= 50 chars for repetition check
-        let result = validator.validate(&format!(
-            "Start of message{}End of message",
-            "a".repeat(30)
-        ));
+        let result =
+            validator.validate(&format!("Start of message{}End of message", "a".repeat(30)));
         assert!(result.is_valid); // Still valid, just a warning
         assert!(!result.warnings.is_empty());
     }
@@ -314,7 +327,12 @@ mod tests {
         let validator = InputValidator::new();
         let result = validator.validate("Hello\x00World");
         assert!(!result.is_valid);
-        assert!(result.errors.iter().any(|e| e.code == ValidationErrorCode::InvalidEncoding));
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|e| e.code == ValidationErrorCode::InvalidEncoding)
+        );
     }
 
     #[test]

@@ -34,7 +34,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
     let mut host = use_signal(|| props.gateway_host.clone());
     let mut port_str = use_signal(|| props.gateway_port.to_string());
     let mut copied = use_signal(|| false);
-    
+
     // Reset copied state after 2 seconds
     use_effect(move || {
         if *copied.read() {
@@ -44,11 +44,11 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
             });
         }
     });
-    
+
     if !props.visible {
         return rsx! {};
     }
-    
+
     let public_key = props.public_key.clone();
     let handle_copy = move |_| {
         if let Some(key) = &public_key {
@@ -58,16 +58,16 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
             copied.set(true);
         }
     };
-    
+
     rsx! {
         div { class: "modal is-active",
             div { class: "modal-background",
                 onclick: move |_| props.on_cancel.call(()),
             }
-            
+
             div { class: "modal-card",
                 style: "max-width: 550px;",
-                
+
                 header { class: "modal-card-head",
                     p { class: "modal-card-title",
                         span { class: "icon",
@@ -75,39 +75,39 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                         }
                         " Pair with Gateway"
                     }
-                    button { 
+                    button {
                         class: "delete",
                         onclick: move |_| props.on_cancel.call(()),
                     }
                 }
-                
+
                 section { class: "modal-card-body",
                     // Public key display
                     div { class: "box",
                         style: "background: #f5f5f5;",
-                        
+
                         p { class: "has-text-weight-semibold",
                             span { class: "icon is-small",
                                 i { class: "fas fa-key" }
                             }
                             " Your Public Key"
                         }
-                        
+
                         if let Some(key) = &props.public_key {
                             div { style: "margin-top: 0.5rem;",
-                                pre { 
+                                pre {
                                     style: "background: white; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; overflow-x: auto;",
                                     "{key}"
                                 }
-                                
+
                                 div { class: "buttons is-right",
                                     style: "margin-top: 0.5rem;",
-                                    
+
                                     Button {
                                         size: BulmaSize::Small,
                                         color: if *copied.read() { BulmaColor::Success } else { BulmaColor::Light },
                                         onclick: handle_copy,
-                                        
+
                                         span { class: "icon is-small",
                                             i { class: if *copied.read() { "fas fa-check" } else { "fas fa-copy" } }
                                         }
@@ -122,7 +122,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                     size: BulmaSize::Small,
                                     color: BulmaColor::Primary,
                                     onclick: move |_| props.on_generate_key.call(()),
-                                    
+
                                     span { class: "icon is-small",
                                         i { class: "fas fa-plus" }
                                     }
@@ -131,24 +131,24 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                             }
                         }
                     }
-                    
+
                     // QR code
                     if let Some(qr_url) = &props.qr_code_data_url {
                         div { class: "has-text-centered",
                             style: "margin: 1rem 0;",
-                            
+
                             p { class: "has-text-grey is-size-7",
                                 "─── OR scan QR code ───"
                             }
-                            
-                            img { 
+
+                            img {
                                 src: "{qr_url}",
                                 alt: "Pairing QR Code",
                                 style: "max-width: 200px; margin: 1rem auto;",
                             }
                         }
                     }
-                    
+
                     // Gateway connection settings
                     div { class: "box",
                         p { class: "has-text-weight-semibold",
@@ -157,10 +157,10 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                             }
                             " Gateway"
                         }
-                        
+
                         div { class: "columns",
                             style: "margin-top: 0.5rem;",
-                            
+
                             div { class: "column is-8",
                                 Field {
                                     FieldLabel { "Host" }
@@ -182,7 +182,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                     }
                                 }
                             }
-                            
+
                             div { class: "column is-4",
                                 Field {
                                     FieldLabel { "Port" }
@@ -206,20 +206,20 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                         }
                     }
                 }
-                
+
                 footer { class: "modal-card-foot",
                     style: "justify-content: flex-end;",
-                    
+
                     Button {
                         color: BulmaColor::Light,
                         onclick: move |_| props.on_cancel.call(()),
                         "Cancel"
                     }
-                    
+
                     Button {
                         color: BulmaColor::Primary,
                         onclick: move |_| props.on_connect.call(()),
-                        
+
                         span { class: "icon",
                             i { class: "fas fa-plug" }
                         }
@@ -233,22 +233,24 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
 
 /// Generate a QR code as a base64 data URL.
 pub fn generate_qr_code(data: &str) -> Option<String> {
-    use qrcode::QrCode;
     use image::Luma;
-    
+    use qrcode::QrCode;
+
     let code = QrCode::new(data.as_bytes()).ok()?;
     let image = code.render::<Luma<u8>>().build();
-    
+
     let mut png_data = Vec::new();
     let encoder = image::codecs::png::PngEncoder::new(&mut png_data);
     use image::ImageEncoder;
-    encoder.write_image(
-        image.as_raw(),
-        image.width(),
-        image.height(),
-        image::ExtendedColorType::L8,
-    ).ok()?;
-    
+    encoder
+        .write_image(
+            image.as_raw(),
+            image.width(),
+            image.height(),
+            image::ExtendedColorType::L8,
+        )
+        .ok()?;
+
     use base64::Engine;
     let b64 = base64::engine::general_purpose::STANDARD.encode(&png_data);
     Some(format!("data:image/png;base64,{}", b64))

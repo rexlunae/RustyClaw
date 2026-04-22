@@ -38,14 +38,14 @@ pub fn Sidebar(props: SidebarProps) -> Element {
         ConnectionStatus::Authenticating => "has-text-info",
         ConnectionStatus::Error(_) => "has-text-danger",
     };
-    
+
     let connection_icon = match &props.connection {
         ConnectionStatus::Disconnected => "fa-plug",
         ConnectionStatus::Connecting | ConnectionStatus::Authenticating => "fa-spinner fa-spin",
         ConnectionStatus::Connected | ConnectionStatus::Authenticated => "fa-check-circle",
         ConnectionStatus::Error(_) => "fa-exclamation-circle",
     };
-    
+
     let connection_text = match &props.connection {
         ConnectionStatus::Disconnected => "Disconnected".to_string(),
         ConnectionStatus::Connecting => "Connecting...".to_string(),
@@ -54,22 +54,22 @@ pub fn Sidebar(props: SidebarProps) -> Element {
         ConnectionStatus::Authenticated => "Ready".to_string(),
         ConnectionStatus::Error(e) => format!("Error: {}", e),
     };
-    
+
     rsx! {
-        aside { 
+        aside {
             class: "menu sidebar",
             style: "width: 250px; padding: 1rem; background: #f5f5f5; border-right: 1px solid #dbdbdb; height: 100%; display: flex; flex-direction: column;",
-            
+
             // Agent header
             div { class: "sidebar-header",
                 style: "margin-bottom: 1rem;",
-                
+
                 p { class: "menu-label",
                     span { class: "icon-text",
                         span { class: "icon",
                             i { class: "fas fa-robot" }
                         }
-                        span { 
+                        span {
                             if let Some(name) = &props.agent_name {
                                 "{name}"
                             } else {
@@ -78,7 +78,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                         }
                     }
                 }
-                
+
                 // Connection status
                 p { class: "is-size-7 {connection_color}",
                     span { class: "icon is-small",
@@ -86,7 +86,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     }
                     " {connection_text}"
                 }
-                
+
                 // Model info
                 if let Some(model) = &props.model {
                     p { class: "is-size-7 has-text-grey",
@@ -97,34 +97,34 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     }
                 }
             }
-            
+
             // Threads/Sessions
             p { class: "menu-label", "Sessions" }
-            
+
             Button {
                 color: BulmaColor::Primary,
                 size: BulmaSize::Small,
                 fullwidth: true,
                 onclick: move |_| props.on_new_thread.call(()),
-                
+
                 span { class: "icon is-small",
                     i { class: "fas fa-plus" }
                 }
                 span { "New Session" }
             }
-            
+
             ul { class: "menu-list",
                 style: "flex: 1; overflow-y: auto; margin-top: 0.5rem;",
-                
+
                 for thread in props.threads.iter() {
                     li { key: "{thread.id}",
-                        a { 
+                        a {
                             class: if props.foreground_id == Some(thread.id) { "is-active" } else { "" },
                             onclick: {
                                 let thread_id = thread.id;
                                 move |_| props.on_switch_thread.call(thread_id)
                             },
-                            
+
                             span { class: "icon is-small",
                                 i { class: "fas fa-comments" }
                             }
@@ -143,17 +143,17 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     }
                 }
             }
-            
+
             // Footer with settings
             div { class: "sidebar-footer",
                 style: "margin-top: auto; padding-top: 1rem; border-top: 1px solid #dbdbdb;",
-                
+
                 Button {
                     color: BulmaColor::Light,
                     size: BulmaSize::Small,
                     fullwidth: true,
                     onclick: move |_| props.on_settings.call(()),
-                    
+
                     span { class: "icon is-small",
                         i { class: "fas fa-cog" }
                     }

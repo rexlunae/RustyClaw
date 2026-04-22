@@ -584,10 +584,7 @@ mod tests {
         {
             let mgr_guard = mgr.read().await;
             let thread = mgr_guard.get(thread_id).unwrap();
-            assert_eq!(
-                thread.description.as_deref(),
-                Some("Phase 2: Processing")
-            );
+            assert_eq!(thread.description.as_deref(), Some("Phase 2: Processing"));
         }
 
         let _ = handle.join().await;
@@ -600,9 +597,7 @@ mod tests {
         let handle = spawn_subagent(
             mgr.clone(),
             SpawnOptions::new("Failing Task"),
-            |_token, _mgr| async move {
-                Err::<String, _>("something went wrong".to_string())
-            },
+            |_token, _mgr| async move { Err::<String, _>("something went wrong".to_string()) },
         )
         .await;
 

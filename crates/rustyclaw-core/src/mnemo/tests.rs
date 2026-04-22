@@ -1,13 +1,8 @@
 #[cfg(test)]
 mod tests {
     use crate::mnemo::{
-        config::SummarizationConfig, 
-        generate_context_md,
-        DeterministicSummarizer, 
-        MemoryEntry, 
-        MemoryStore,
-        MnemoConfig, 
-        SqliteMemoryStore,
+        DeterministicSummarizer, MemoryEntry, MemoryStore, MnemoConfig, SqliteMemoryStore,
+        config::SummarizationConfig, generate_context_md,
     };
     use tempfile::TempDir;
 

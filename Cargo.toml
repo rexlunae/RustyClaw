@@ -18,6 +18,15 @@ rust-version = "1.86"
 
 [workspace.lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal"))'] }
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+# Treat all clippy lint groups as errors
+all = { level = "deny", priority = -1 }
+# Allow lints that are too pedantic or cause false positives for this codebase
+too_many_arguments = "allow"
+type_complexity = "allow"
+module_inception = "allow"
 
 # ── Workspace Features ──────────────────────────────────────────────────────
 # Features that control which components are built

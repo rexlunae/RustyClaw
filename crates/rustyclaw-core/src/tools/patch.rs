@@ -127,8 +127,8 @@ pub fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
             continue;
         }
 
-        if line.starts_with("+++ ") {
-            let path = line[4..].trim();
+        if let Some(stripped) = line.strip_prefix("+++ ") {
+            let path = stripped.trim();
             // Strip a/ or b/ prefix if present
             let path = path.strip_prefix("b/").unwrap_or(path);
             let path = path.strip_prefix("a/").unwrap_or(path);

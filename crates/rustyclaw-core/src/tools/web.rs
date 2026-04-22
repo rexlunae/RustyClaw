@@ -194,8 +194,7 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> Resul
         .get("count")
         .and_then(|v| v.as_u64())
         .unwrap_or(5)
-        .min(10)
-        .max(1) as usize;
+        .clamp(1, 10) as usize;
 
     let country = args.get("country").and_then(|v| v.as_str()).unwrap_or("US");
 
@@ -497,8 +496,7 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> Result<String, S
         .get("count")
         .and_then(|v| v.as_u64())
         .unwrap_or(5)
-        .min(10)
-        .max(1) as usize;
+        .clamp(1, 10) as usize;
 
     let country = args.get("country").and_then(|v| v.as_str()).unwrap_or("US");
 

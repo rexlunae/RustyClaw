@@ -1332,9 +1332,10 @@ impl SkillManager {
                     self.registry_url,
                 )),
             },
-            None => Ok(format!(
+            None => Ok(
                 "Not authenticated. Run `/clawhub auth login` or set clawhub_token in config."
-            )),
+                    .to_string(),
+            ),
         }
     }
 

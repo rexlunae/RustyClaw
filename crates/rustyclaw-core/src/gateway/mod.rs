@@ -22,8 +22,6 @@ pub mod concurrent;
 pub mod csrf;
 pub mod health;
 mod helpers;
-pub mod webhooks;
-pub mod thinking_clock;
 pub mod mcp_handler;
 mod messenger_handler;
 pub mod model_handler;
@@ -32,9 +30,11 @@ mod providers;
 mod secrets_handler;
 mod skills_handler;
 pub mod task_handler;
+pub mod thinking_clock;
 mod tool_executor;
 pub mod transport;
 mod types;
+pub mod webhooks;
 
 #[cfg(feature = "ssh")]
 pub mod ssh;
@@ -360,7 +360,8 @@ pub async fn run_gateway(
         None
     };
     // Wrap in shared type so it can be updated when models change
-    let shared_copilot_session: SharedCopilotSession = Arc::new(RwLock::new(copilot_session.clone()));
+    let shared_copilot_session: SharedCopilotSession =
+        Arc::new(RwLock::new(copilot_session.clone()));
 
     let model_ctx = model_ctx.map(Arc::new);
 
@@ -400,7 +401,10 @@ pub async fn run_gateway(
                 eprintln!("DEBUG: Spawning messenger loop task...");
                 tokio::spawn(async move {
                     eprintln!("DEBUG: Messenger loop task started");
-                    eprintln!("DEBUG: messenger_ctx.is_some() = {}", messenger_ctx.is_some());
+                    eprintln!(
+                        "DEBUG: messenger_ctx.is_some() = {}",
+                        messenger_ctx.is_some()
+                    );
                     if let Err(e) = messenger_handler::run_messenger_loop(
                         messenger_config,
                         mgr_clone,
@@ -434,19 +438,24 @@ pub async fn run_gateway(
     // ── Start SSH server if configured ──────────────────────────────
     #[cfg(feature = "ssh")]
     let mut ssh_server: Option<SshServer> = if let Some(ref ssh_listen) = options.ssh_listen {
-        let ssh_addr: SocketAddr = ssh_listen.parse()
+        let ssh_addr: SocketAddr = ssh_listen
+            .parse()
             .with_context(|| format!("Invalid SSH listen address: {}", ssh_listen))?;
-        
+
         let ssh_config = SshConfig {
             listen_addr: ssh_addr,
-            host_key_path: options.ssh_host_key.clone()
+            host_key_path: options
+                .ssh_host_key
+                .clone()
                 .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
-            authorized_clients_path: options.ssh_authorized_clients.clone()
+            authorized_clients_path: options
+                .ssh_authorized_clients
+                .clone()
                 .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
             allow_password: false,
             require_pubkey: true,
         };
-        
+
         match SshServer::new(ssh_config.clone()).await {
             Ok(mut server) => {
                 if let Err(e) = server.listen(ssh_addr).await {
@@ -465,7 +474,7 @@ pub async fn run_gateway(
     } else {
         None
     };
-    
+
     #[cfg(not(feature = "ssh"))]
     let _ssh_server: Option<()> = None;
     let _ = &options.ssh_listen; // Suppress unused warning
@@ -497,16 +506,21 @@ pub async fn run_gateway(
         });
 
         if let Some(ssh_listen) = ssh_addr {
-            let bind_addr: std::net::SocketAddr = ssh_listen.parse()
+            let bind_addr: std::net::SocketAddr = ssh_listen
+                .parse()
                 .unwrap_or_else(|_| "0.0.0.0:2222".parse().unwrap());
             let ssh_cfg = {
                 let host_key = options.ssh_host_key.clone().unwrap_or_else(|| {
-                    config.ssh.as_ref()
+                    config
+                        .ssh
+                        .as_ref()
                         .map(|s| s.host_key_path(&config.settings_dir))
                         .unwrap_or_else(|| config.settings_dir.join("ssh_host_key"))
                 });
                 let authorized = options.ssh_authorized_clients.clone().unwrap_or_else(|| {
-                    config.ssh.as_ref()
+                    config
+                        .ssh
+                        .as_ref()
                         .map(|s| s.authorized_keys_path(&config.settings_dir))
                         .unwrap_or_else(|| config.settings_dir.join("authorized_clients"))
                 });
@@ -521,7 +535,6 @@ pub async fn run_gateway(
 
             match ssh::SshServer::new(ssh_cfg).await {
                 Ok(mut ssh_server) => {
-
                     if let Err(e) = ssh_server.listen(bind_addr).await {
                         error!(error = %e, "Failed to start SSH server");
                     } else {
@@ -657,7 +670,7 @@ pub async fn run_gateway(
                             fingerprint = ?peer_info.key_fingerprint,
                             "SSH connection accepted"
                         );
-                        
+
                         let shared_cfg = shared_config.clone();
                         let shared_ctx = shared_model_ctx.clone();
                         let session_clone = copilot_session.clone();
@@ -666,7 +679,7 @@ pub async fn run_gateway(
                         let task_mgr_clone = task_mgr.clone();
                         let observer_clone = observer.clone();
                         let child_cancel = cancel.child_token();
-                        
+
                         tokio::spawn(async move {
                             if let Err(err) = handle_transport_connection(
                                 transport,
@@ -713,16 +726,16 @@ async fn handle_transport_connection(
 ) -> Result<()> {
     let peer_info = transport.peer_info().clone();
     let (mut reader, mut writer) = transport.into_split();
-    
+
     // Snapshot config and model context for this connection
     let config = shared_config.read().await.clone();
     let model_ctx = shared_model_ctx.read().await.clone();
-    
+
     // Thread manager for multi-task conversations
     let threads_path = config.sessions_dir().join("threads.json");
     let thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
     let _thread_events_rx = thread_mgr.subscribe();
-    
+
     // SSH connections are pre-authenticated via public key
     // No TOTP challenge needed
     info!(
@@ -730,13 +743,13 @@ async fn handle_transport_connection(
         user = ?peer_info.username,
         "Transport connection authenticated"
     );
-    
+
     // Check vault status
     let vault_is_locked = {
         let v = vault.lock().await;
         v.is_locked()
     };
-    
+
     // Send hello frame
     let hello_frame = ServerFrame {
         frame_type: ServerFrameType::Hello,
@@ -749,7 +762,7 @@ async fn handle_transport_connection(
         },
     };
     writer.send(&hello_frame).await?;
-    
+
     if vault_is_locked {
         let status_frame = ServerFrame {
             frame_type: ServerFrameType::Status,
@@ -760,87 +773,103 @@ async fn handle_transport_connection(
         };
         writer.send(&status_frame).await?;
     }
-    
+
     // Report model status
     let http = reqwest::Client::new();
     if let Some(ref ctx) = model_ctx {
         let display = crate_providers::display_name_for_provider(&ctx.provider);
-        
+
         // Model configured status
         let detail = format!("{} / {}", display, ctx.model);
-        writer.send(&ServerFrame {
-            frame_type: ServerFrameType::Status,
-            payload: ServerPayload::Status {
-                status: StatusType::ModelConfigured,
-                detail,
-            },
-        }).await?;
-        
-        // Credentials status
-        if ctx.api_key.is_some() {
-            writer.send(&ServerFrame {
+        writer
+            .send(&ServerFrame {
                 frame_type: ServerFrameType::Status,
                 payload: ServerPayload::Status {
-                    status: StatusType::CredentialsLoaded,
-                    detail: format!("{} API key loaded", display),
+                    status: StatusType::ModelConfigured,
+                    detail,
                 },
-            }).await?;
+            })
+            .await?;
+
+        // Credentials status
+        if ctx.api_key.is_some() {
+            writer
+                .send(&ServerFrame {
+                    frame_type: ServerFrameType::Status,
+                    payload: ServerPayload::Status {
+                        status: StatusType::CredentialsLoaded,
+                        detail: format!("{} API key loaded", display),
+                    },
+                })
+                .await?;
         }
-        
+
         // Probe connection
         let probe_ctx = ctx.clone();
-        writer.send(&ServerFrame {
-            frame_type: ServerFrameType::Status,
-            payload: ServerPayload::Status {
-                status: StatusType::ModelConnecting,
-                detail: format!("Probing {} …", ctx.base_url),
-            },
-        }).await?;
-        
-        match providers::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref()).await {
+        writer
+            .send(&ServerFrame {
+                frame_type: ServerFrameType::Status,
+                payload: ServerPayload::Status {
+                    status: StatusType::ModelConnecting,
+                    detail: format!("Probing {} …", ctx.base_url),
+                },
+            })
+            .await?;
+
+        match providers::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref())
+            .await
+        {
             ProbeResult::Ready | ProbeResult::Connected { .. } => {
-                writer.send(&ServerFrame {
-                    frame_type: ServerFrameType::Status,
-                    payload: ServerPayload::Status {
-                        status: StatusType::ModelReady,
-                        detail: format!("{} / {} ready", display, ctx.model),
-                    },
-                }).await?;
+                writer
+                    .send(&ServerFrame {
+                        frame_type: ServerFrameType::Status,
+                        payload: ServerPayload::Status {
+                            status: StatusType::ModelReady,
+                            detail: format!("{} / {} ready", display, ctx.model),
+                        },
+                    })
+                    .await?;
             }
             ProbeResult::AuthError { detail } => {
-                writer.send(&ServerFrame {
-                    frame_type: ServerFrameType::Status,
-                    payload: ServerPayload::Status {
-                        status: StatusType::ModelError,
-                        detail: format!("{} auth failed: {}", display, detail),
-                    },
-                }).await?;
+                writer
+                    .send(&ServerFrame {
+                        frame_type: ServerFrameType::Status,
+                        payload: ServerPayload::Status {
+                            status: StatusType::ModelError,
+                            detail: format!("{} auth failed: {}", display, detail),
+                        },
+                    })
+                    .await?;
             }
             ProbeResult::Unreachable { detail } => {
-                writer.send(&ServerFrame {
-                    frame_type: ServerFrameType::Status,
-                    payload: ServerPayload::Status {
-                        status: StatusType::ModelError,
-                        detail: format!("{} probe failed: {}", display, detail),
-                    },
-                }).await?;
+                writer
+                    .send(&ServerFrame {
+                        frame_type: ServerFrameType::Status,
+                        payload: ServerPayload::Status {
+                            status: StatusType::ModelError,
+                            detail: format!("{} probe failed: {}", display, detail),
+                        },
+                    })
+                    .await?;
             }
         }
     } else {
-        writer.send(&ServerFrame {
-            frame_type: ServerFrameType::Status,
-            payload: ServerPayload::Status {
-                status: StatusType::NoModel,
-                detail: "No model configured — clients must send full credentials".to_string(),
-            },
-        }).await?;
+        writer
+            .send(&ServerFrame {
+                frame_type: ServerFrameType::Status,
+                payload: ServerPayload::Status {
+                    status: StatusType::NoModel,
+                    detail: "No model configured — clients must send full credentials".to_string(),
+                },
+            })
+            .await?;
     }
-    
+
     // TODO: Main message loop
     // For now, just log that we connected and return
     // The full message loop will be ported in a follow-up PR
     info!(transport = %peer_info.transport_type, "Transport connection ready");
-    
+
     // Keep connection open until cancelled or client disconnects
     loop {
         tokio::select! {
@@ -854,7 +883,7 @@ async fn handle_transport_connection(
                         // For now, just log received frames
                         // TODO: Route to message handlers (chat, control, etc.)
                         debug!(?client_frame, "Received frame from transport");
-                        
+
                         // TODO: Handle incoming frames properly
                         // For now, just log receipt - no acknowledgment needed
                     }
@@ -870,7 +899,7 @@ async fn handle_transport_connection(
             }
         }
     }
-    
+
     writer.close().await?;
     Ok(())
 }
@@ -887,7 +916,7 @@ async fn send_threads_update(
     task_mgr: &SharedTaskManager,
     session_key: Option<&str>,
 ) -> Result<()> {
-    use crate::sessions::{session_manager, SessionKind, SessionStatus};
+    use crate::sessions::{SessionKind, SessionStatus, session_manager};
 
     let thread_list = thread_mgr.list_info();
     let foreground_id = thread_mgr.foreground().map(|t| t.task_id().0);
@@ -919,7 +948,11 @@ async fn send_threads_update(
         // Skip terminal tasks older than 5 minutes
         if task.status.is_terminal() {
             if let Some(finished) = task.finished_at {
-                if finished.elapsed().map(|d| d.as_secs() > 300).unwrap_or(false) {
+                if finished
+                    .elapsed()
+                    .map(|d| d.as_secs() > 300)
+                    .unwrap_or(false)
+                {
                     continue;
                 }
             }
@@ -974,7 +1007,10 @@ async fn send_threads_update(
             };
             threads.push(protocol::ThreadInfoDto {
                 id,
-                label: session.label.clone().unwrap_or_else(|| "Sub-agent".to_string()),
+                label: session
+                    .label
+                    .clone()
+                    .unwrap_or_else(|| "Sub-agent".to_string()),
                 description: session.task.clone(),
                 status: Some(status_str.to_string()),
                 kind_icon: Some("🤖".to_string()),
@@ -1116,8 +1152,13 @@ async fn handle_connection(
                             return Ok(());
                         } else if attempts >= MAX_TOTP_ATTEMPTS {
                             let msg = "Invalid code. Maximum attempts exceeded.";
-                            protocol::server::send_auth_result(&mut *writer, false, Some(msg), None)
-                                .await?;
+                            protocol::server::send_auth_result(
+                                &mut *writer,
+                                false,
+                                Some(msg),
+                                None,
+                            )
+                            .await?;
                             writer.close().await?;
                             return Ok(());
                         } else {
@@ -2369,7 +2410,7 @@ async fn dispatch_text_message(
                 duration: request_duration,
                 success,
                 error_message: error_msg,
-                input_tokens: None,  // TODO: extract from response if available
+                input_tokens: None, // TODO: extract from response if available
                 output_tokens: None,
             });
         }
@@ -2443,7 +2484,8 @@ async fn dispatch_text_message(
                 // Record assistant response in thread history
                 if !model_resp.text.is_empty() {
                     if let Some(thread) = thread_mgr.foreground_mut() {
-                        thread.add_message(crate::threads::MessageRole::Assistant, &model_resp.text);
+                        thread
+                            .add_message(crate::threads::MessageRole::Assistant, &model_resp.text);
                     }
                 }
                 providers::send_response_done(writer).await?;
@@ -2668,7 +2710,7 @@ pub async fn run_stdio_gateway(
     let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
 
     // Create model registry
-    let model_registry = crate::models::create_model_registry();
+    let _model_registry = crate::models::create_model_registry();
 
     // Register the credentials directory for sandbox enforcement
     tools::set_credentials_dir(config.credentials_dir());

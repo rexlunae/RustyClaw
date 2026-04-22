@@ -361,10 +361,8 @@ impl ThreadManager {
 
             if Some(*id) == foreground {
                 foreground_score = score;
-            } else if score > 0 {
-                if best_match.is_none() || score > best_match.unwrap().1 {
-                    best_match = Some((*id, score));
-                }
+            } else if score > 0 && (best_match.is_none() || score > best_match.unwrap().1) {
+                best_match = Some((*id, score));
             }
         }
 
@@ -485,7 +483,7 @@ mod tests {
         assert!(mgr.foreground().is_some());
         assert_eq!(mgr.foreground().unwrap().label, "Task 1");
 
-        let id2 = mgr.create_thread("Task 2");
+        let _id2 = mgr.create_thread("Task 2");
         assert_eq!(mgr.foreground().unwrap().label, "Task 2");
         assert!(!mgr.get(id1).unwrap().is_foreground);
 

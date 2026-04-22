@@ -218,10 +218,7 @@ async fn main() -> Result<()> {
     if let Some(ref ssh_addr) = args.ssh_listen {
         println!(
             "{}",
-            t::icon_ok(&format!(
-                "SSH server listening on {}",
-                t::info(ssh_addr)
-            ))
+            t::icon_ok(&format!("SSH server listening on {}", t::info(ssh_addr)))
         );
     }
 
@@ -465,7 +462,11 @@ async fn run_ssh_stdio_mode(config: Config, _args: RunArgs) -> Result<()> {
                 std::env::remove_var("RUSTYCLAW_MODEL_API_KEY");
             }
 
-            let api_key = if key.is_empty() { None } else { Some(key.clone()) };
+            let api_key = if key.is_empty() {
+                None
+            } else {
+                Some(key.clone())
+            };
             ModelContext::from_config(&config, api_key).ok()
         } else {
             let mut v = shared_vault.lock().await;
@@ -503,9 +504,7 @@ async fn run_ssh_stdio_mode(config: Config, _args: RunArgs) -> Result<()> {
 /// Handle pairing subcommands.
 async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
     use rustyclaw_core::pairing::{
-        default_authorized_clients_path,
-        load_authorized_clients,
-        add_authorized_client,
+        add_authorized_client, default_authorized_clients_path, load_authorized_clients,
         remove_authorized_client,
     };
 
@@ -519,7 +518,10 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                 println!("{}", t::muted("No authorized clients"));
                 println!();
                 println!("Add a client with:");
-                println!("  {} pair add <PUBLIC_KEY> --name <NAME>", t::info("rustyclaw-gateway"));
+                println!(
+                    "  {} pair add <PUBLIC_KEY> --name <NAME>",
+                    t::info("rustyclaw-gateway")
+                );
                 return Ok(());
             }
 
@@ -537,11 +539,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
             }
 
             println!();
-            println!(
-                "{} {}",
-                t::muted("File:"),
-                auth_path.display()
-            );
+            println!("{} {}", t::muted("File:"), auth_path.display());
         }
 
         PairCommands::Add { key, name } => {
@@ -552,11 +550,7 @@ async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                         t::icon_ok(""),
                         t::info(client.comment.as_deref().unwrap_or("(unnamed)"))
                     );
-                    println!(
-                        "  {} {}",
-                        t::muted("Fingerprint:"),
-                        client.fingerprint
-                    );
+                    println!("  {} {}", t::muted("Fingerprint:"), client.fingerprint);
                 }
                 Err(e) => {
                     eprintln!("{} Failed to add client: {}", t::icon_fail(""), e);

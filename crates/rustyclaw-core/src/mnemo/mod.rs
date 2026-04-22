@@ -17,15 +17,15 @@ mod config;
 mod schema;
 mod sqlite_store;
 mod summarizer;
-mod traits;
 #[cfg(test)]
 mod tests;
+mod traits;
 
 pub use compaction::run_compaction;
 pub use config::{MnemoConfig, SummarizationConfig};
 pub use sqlite_store::SqliteMemoryStore;
 pub use summarizer::{DeterministicSummarizer, LlmSummarizer};
-pub use traits::{CompactionStats, MemoryEntry, MemoryHit, MemoryStore, SummaryKind, Summarizer};
+pub use traits::{CompactionStats, MemoryEntry, MemoryHit, MemoryStore, Summarizer, SummaryKind};
 
 use anyhow::Result;
 use std::path::Path;
@@ -39,10 +39,11 @@ pub async fn create_memory_store(
     config: &MnemoConfig,
     settings_dir: &Path,
 ) -> Result<SharedMemoryStore> {
-    let db_path = config.db_path.clone().unwrap_or_else(|| {
-        settings_dir.join("mnemo.sqlite3")
-    });
-    
+    let db_path = config
+        .db_path
+        .clone()
+        .unwrap_or_else(|| settings_dir.join("mnemo.sqlite3"));
+
     let store = SqliteMemoryStore::open(&db_path, config.clone()).await?;
     Ok(Arc::new(store))
 }
@@ -83,7 +84,7 @@ pub fn generate_context_md(entries: &[MemoryEntry]) -> String {
     let mut lines = Vec::new();
     lines.push("# MNEMO CONTEXT".to_string());
     lines.push(String::new());
-    
+
     for entry in entries {
         if entry.depth == 0 {
             lines.push(format!("## {} (msg #{})", entry.role, entry.id));
@@ -93,6 +94,6 @@ pub fn generate_context_md(entries: &[MemoryEntry]) -> String {
         lines.push(entry.content.clone());
         lines.push(String::new());
     }
-    
+
     lines.join("\n")
 }

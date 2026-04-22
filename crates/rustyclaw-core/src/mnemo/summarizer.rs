@@ -1,6 +1,6 @@
 //! Summarization backends for memory compaction.
 
-use super::traits::{MemoryEntry, SummaryKind, Summarizer};
+use super::traits::{MemoryEntry, Summarizer, SummaryKind};
 use anyhow::Result;
 use async_trait::async_trait;
 
