@@ -1000,7 +1000,7 @@ impl App {
                                         ));
                                     }
                                     Err(e) => {
-                                        let _ = gw_tx2.send(GwEvent::Error(e));
+                                        let _ = gw_tx2.send(GwEvent::Error(format!("{:#}", e)));
                                     }
                                 }
                             });
