@@ -4,6 +4,19 @@
 //! base URLs, and available models.  Used by both the onboarding wizard and
 //! the TUI `/provider` + `/model` commands.
 
+/// Wrap any `std::error::Error + Send + Sync + 'static` into an
+/// `anyhow_tracing::Error`.  Spelled out as a free function rather
+/// than relying on a blanket impl because anyhow_tracing only provides
+/// `From<anyhow::Error>`, not the wider blanket `From<E: StdError>`,
+/// so each call site would otherwise need
+/// `anyhow_tracing::Error::from(anyhow::Error::from(e))`.
+pub(crate) fn wrap_err<E>(e: E) -> anyhow_tracing::Error
+where
+    E: std::error::Error + Send + Sync + 'static,
+{
+    anyhow_tracing::Error::from(anyhow::Error::from(e))
+}
+
 use anyhow_tracing::{Context, Result, anyhow, bail};
 
 use crate::error_details::RequestDetails;
@@ -571,8 +584,7 @@ async fn fetch_openai_compatible_models_detailed(
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("GET {} failed to send", url));
+            let err = wrap_err(e).context(format!("GET {} failed to send", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -596,8 +608,7 @@ async fn fetch_openai_compatible_models_detailed(
     let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("GET {}: failed to read response body", url));
+            let err = wrap_err(e).context(format!("GET {}: failed to read response body", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -606,8 +617,7 @@ async fn fetch_openai_compatible_models_detailed(
     let body: serde_json::Value = match serde_json::from_str(&body_text) {
         Ok(v) => v,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("GET {}: failed to parse JSON response", url));
+            let err = wrap_err(e).context(format!("GET {}: failed to parse JSON response", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -716,8 +726,7 @@ async fn send_copilot_models_request(
     let resp = match req.send().await {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("{}: failed to send request", context()));
+            let err = wrap_err(e).context(format!("{}: failed to send request", context()));
             return Err(details.emit_warning(err));
         }
     };
@@ -741,8 +750,7 @@ async fn send_copilot_models_request(
     let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("{}: failed to read response body", context()));
+            let err = wrap_err(e).context(format!("{}: failed to read response body", context()));
             return Err(details.emit_warning(err));
         }
     };
@@ -751,8 +759,7 @@ async fn send_copilot_models_request(
     let body: serde_json::Value = match serde_json::from_str(&body_text) {
         Ok(v) => v,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("{}: failed to parse JSON response", context()));
+            let err = wrap_err(e).context(format!("{}: failed to parse JSON response", context()));
             return Err(details.emit_warning(err));
         }
     };
@@ -844,8 +851,7 @@ async fn fetch_google_models_detailed(
     let resp = match client.get(&real_url).send().await {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("GET {} failed to send", public_url));
+            let err = wrap_err(e).context(format!("GET {} failed to send", public_url));
             return Err(details.emit_warning(err));
         }
     };
@@ -869,8 +875,8 @@ async fn fetch_google_models_detailed(
     let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("GET {}: failed to read response body", public_url));
+            let err =
+                wrap_err(e).context(format!("GET {}: failed to read response body", public_url));
             return Err(details.emit_warning(err));
         }
     };
@@ -879,8 +885,8 @@ async fn fetch_google_models_detailed(
     let body: serde_json::Value = match serde_json::from_str(&body_text) {
         Ok(v) => v,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("GET {}: failed to parse JSON response", public_url));
+            let err =
+                wrap_err(e).context(format!("GET {}: failed to parse JSON response", public_url));
             return Err(details.emit_warning(err));
         }
     };
@@ -1013,8 +1019,8 @@ pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthRe
     {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("POST {} failed to send device-code request", url));
+            let err =
+                wrap_err(e).context(format!("POST {} failed to send device-code request", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -1038,8 +1044,7 @@ pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthRe
     let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("POST {}: failed to read response body", url));
+            let err = wrap_err(e).context(format!("POST {}: failed to read response body", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -1048,7 +1053,7 @@ pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthRe
     match serde_json::from_str::<DeviceAuthResponse>(&body_text) {
         Ok(auth_response) => Ok(auth_response),
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e)).context(format!(
+            let err = wrap_err(e).context(format!(
                 "POST {}: failed to parse device-authorization response",
                 url
             ));
@@ -1093,8 +1098,8 @@ pub async fn poll_device_token(
     {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("POST {} failed to send token-poll request", url));
+            let err =
+                wrap_err(e).context(format!("POST {} failed to send token-poll request", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -1106,8 +1111,7 @@ pub async fn poll_device_token(
     let body = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("POST {}: failed to read response body", url));
+            let err = wrap_err(e).context(format!("POST {}: failed to read response body", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -1121,8 +1125,7 @@ pub async fn poll_device_token(
     let raw: RawTokenResponse = match serde_json::from_str(&body) {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("POST {}: failed to parse token response", url));
+            let err = wrap_err(e).context(format!("POST {}: failed to parse token response", url));
             return Err(details.emit_warning(err));
         }
     };
@@ -1215,8 +1218,7 @@ pub async fn exchange_copilot_session(
     {
         Ok(r) => r,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("{}: failed to send request", context()));
+            let err = wrap_err(e).context(format!("{}: failed to send request", context()));
             return Err(details.emit_warning(err));
         }
     };
@@ -1240,8 +1242,7 @@ pub async fn exchange_copilot_session(
     let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("{}: failed to read response body", context()));
+            let err = wrap_err(e).context(format!("{}: failed to read response body", context()));
             return Err(details.emit_warning(err));
         }
     };
@@ -1262,8 +1263,8 @@ pub async fn exchange_copilot_session(
             Ok(session)
         }
         Err(e) => {
-            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
-                .context(format!("{}: failed to parse session response", context()));
+            let err =
+                wrap_err(e).context(format!("{}: failed to parse session response", context()));
             Err(details.emit_warning(err))
         }
     }
