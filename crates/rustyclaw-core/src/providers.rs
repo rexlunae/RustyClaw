@@ -420,6 +420,8 @@ pub async fn fetch_models_detailed(
     let result = match provider_id {
         // Google Gemini uses a different response shape
         "google" => fetch_google_models_detailed(base, api_key).await,
+        // GitHub Copilot exposes a Copilot-specific model list API.
+        "github-copilot" => fetch_github_copilot_models_detailed(base, api_key).await,
         // Local providers — no auth needed, OpenAI-compatible /v1/models
         "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None).await,
         // Everything else is OpenAI-compatible
@@ -468,11 +470,13 @@ const NON_CHAT_PATTERNS: &[&str] = &[
 fn is_chat_model(entry: &serde_json::Value) -> bool {
     // GitHub Copilot and some providers expose capabilities metadata.
     if let Some(caps) = entry.get("capabilities") {
-        return caps
-            .get("chat")
-            .or_else(|| caps.get("type").filter(|v| v.as_str() == Some("chat")))
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+        if caps.get("chat").and_then(|v| v.as_bool()).unwrap_or(false) {
+            return true;
+        }
+        if caps.get("type").and_then(|v| v.as_str()) == Some("chat") {
+            return true;
+        }
+        return false;
     }
 
     // Some endpoints use object type "model" vs "embedding" etc.
@@ -488,29 +492,7 @@ fn is_chat_model(entry: &serde_json::Value) -> bool {
     !NON_CHAT_PATTERNS.iter().any(|pat| lower.contains(pat))
 }
 
-/// Fetch from an OpenAI-compatible `/models` endpoint with full metadata.
-///
-/// Works for OpenAI, xAI, OpenRouter, Ollama, GitHub Copilot, and
-/// custom providers.  Only models that appear to support chat
-/// completions are returned (see [`is_chat_model`]).
-async fn fetch_openai_compatible_models_detailed(
-    base_url: &str,
-    api_key: Option<&str>,
-) -> Result<Vec<ModelInfo>, reqwest::Error> {
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-
-    let mut req = client.get(&url);
-    if let Some(key) = api_key {
-        req = req.bearer_auth(key);
-    }
-
-    let resp = req.send().await?.error_for_status()?;
-    let body: serde_json::Value = resp.json().await?;
-
+fn parse_models_response(body: &serde_json::Value) -> Vec<ModelInfo> {
     let mut models: Vec<ModelInfo> = body
         .get("data")
         .and_then(|d| d.as_array())
@@ -551,7 +533,84 @@ async fn fetch_openai_compatible_models_detailed(
         .unwrap_or_default();
 
     models.sort_by(|a, b| a.id.cmp(&b.id));
-    Ok(models)
+    models
+}
+
+/// Fetch from an OpenAI-compatible `/models` endpoint with full metadata.
+///
+/// Works for OpenAI, xAI, OpenRouter, Ollama, GitHub Copilot, and
+/// custom providers.  Only models that appear to support chat
+/// completions are returned (see [`is_chat_model`]).
+async fn fetch_openai_compatible_models_detailed(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, reqwest::Error> {
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+
+    let mut req = client.get(&url);
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key);
+    }
+
+    let resp = req.send().await?.error_for_status()?;
+    let body: serde_json::Value = resp.json().await?;
+
+    Ok(parse_models_response(&body))
+}
+
+/// Fetch from GitHub Copilot's model list API.
+async fn fetch_github_copilot_models_detailed(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>, reqwest::Error> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let url = format!("{}/models", base_url.trim_end_matches('/'));
+
+    let Some(key) = api_key else {
+        return Ok(Vec::new());
+    };
+
+    match send_copilot_models_request(&client, &url, key).await {
+        Ok(models) => Ok(models),
+        Err(first_err)
+            if first_err.status().is_some_and(|status| {
+                status == reqwest::StatusCode::UNAUTHORIZED
+                    || status == reqwest::StatusCode::FORBIDDEN
+            }) =>
+        {
+            let session = exchange_copilot_session(&client, key)
+                .await
+                .map_err(|_| first_err)?;
+            send_copilot_models_request(&client, &url, &session.token).await
+        }
+        Err(err) => Err(err),
+    }
+}
+
+async fn send_copilot_models_request(
+    client: &reqwest::Client,
+    url: &str,
+    bearer_token: &str,
+) -> Result<Vec<ModelInfo>, reqwest::Error> {
+    let resp = client
+        .get(url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "RustyClaw")
+        .header("Editor-Version", "vscode/1.107.0")
+        .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
+        .header("Copilot-Integration-Id", "vscode-chat")
+        .bearer_auth(bearer_token)
+        .send()
+        .await?
+        .error_for_status()?;
+    let body: serde_json::Value = resp.json().await?;
+    Ok(parse_models_response(&body))
 }
 
 /// Fetch from the Google Gemini `/models` endpoint with metadata.
@@ -1008,6 +1067,44 @@ mod tests {
         assert!(!needs_copilot_session("google"));
         assert!(!needs_copilot_session("ollama"));
         assert!(!needs_copilot_session("custom"));
+    }
+
+    #[test]
+    fn test_copilot_capabilities_type_chat_is_chat_model() {
+        let entry = serde_json::json!({
+            "id": "claude-sonnet-4.5",
+            "object": "model",
+            "capabilities": {
+                "type": "chat"
+            }
+        });
+
+        assert!(is_chat_model(&entry));
+    }
+
+    #[test]
+    fn test_parse_copilot_models_response_filters_non_chat_models() {
+        let body = serde_json::json!({
+            "data": [
+                {
+                    "id": "gpt-5.2",
+                    "object": "model",
+                    "name": "GPT 5.2",
+                    "capabilities": { "type": "chat" }
+                },
+                {
+                    "id": "text-embedding-3-large",
+                    "object": "model",
+                    "capabilities": { "chat": false }
+                }
+            ]
+        });
+
+        let models = parse_models_response(&body);
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "gpt-5.2");
+        assert_eq!(models[0].name.as_deref(), Some("GPT 5.2"));
     }
 
     #[test]
