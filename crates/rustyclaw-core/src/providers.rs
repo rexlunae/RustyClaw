@@ -581,6 +581,14 @@ async fn fetch_openai_compatible_models_detailed(
 /// [`CopilotSession::get_token`]), and only fall back to using the
 /// supplied token directly if the exchange fails — that way callers
 /// that pass a pre-exchanged session token still work.
+///
+/// The exchange response also carries a **plan-specific** API base
+/// URL (e.g. `https://api.individual.githubcopilot.com`) in
+/// `endpoints.api`.  The generic `api.githubcopilot.com/models` host
+/// returns an empty `data` array for users routed to a dedicated
+/// plan host, so we prefer the discovered base when available and
+/// only fall back to the configured `base_url` when no endpoint is
+/// provided.
 async fn fetch_github_copilot_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
@@ -588,21 +596,29 @@ async fn fetch_github_copilot_models_detailed(
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let url = format!("{}/models", base_url.trim_end_matches('/'));
+    let fallback_url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let Some(key) = api_key else {
         return Ok(Vec::new());
     };
 
     match exchange_copilot_session(&client, key).await {
-        Ok(session) => send_copilot_models_request(&client, &url, &session.token).await,
+        Ok(session) => {
+            let url = session
+                .endpoints
+                .as_ref()
+                .and_then(|e| e.api.as_deref())
+                .map(|api| format!("{}/models", api.trim_end_matches('/')))
+                .unwrap_or_else(|| fallback_url.clone());
+            send_copilot_models_request(&client, &url, &session.token).await
+        }
         // Exchange failed — the stored secret may already be a session
         // token, or the OAuth token may be invalid.  Try the supplied
         // token directly as a last resort so imported session tokens
         // still work; if that also fails, the resulting reqwest::Error
         // is propagated to the caller (`fetch_models_detailed`), which
         // formats it into a user-facing message.
-        Err(_) => send_copilot_models_request(&client, &url, key).await,
+        Err(_) => send_copilot_models_request(&client, &fallback_url, key).await,
     }
 }
 
@@ -838,10 +854,30 @@ pub async fn poll_device_token(
 ///
 /// The `token` field is a short-lived session token (valid ~30 min).
 /// `expires_at` is a Unix timestamp indicating when it expires.
+///
+/// `endpoints.api` carries the **plan-specific** API base URL
+/// (e.g. `https://api.individual.githubcopilot.com`,
+/// `https://api.business.githubcopilot.com`).  When present it must
+/// be used in preference to the generic `https://api.githubcopilot.com`
+/// host: the generic host's `/models` listing returns an empty `data`
+/// array for users whose Copilot plan is served from a dedicated host,
+/// which would otherwise surface as a misleading "empty model list".
 #[derive(Debug, Deserialize)]
 pub struct CopilotSessionResponse {
     pub token: String,
     pub expires_at: i64,
+    #[serde(default)]
+    pub endpoints: Option<CopilotSessionEndpoints>,
+}
+
+/// Plan-specific API endpoints returned by the Copilot token exchange.
+#[derive(Debug, Deserialize)]
+pub struct CopilotSessionEndpoints {
+    /// Base URL for the Copilot API (e.g.
+    /// `https://api.individual.githubcopilot.com`).  Trailing slashes
+    /// should be stripped before composing request URLs.
+    #[serde(default)]
+    pub api: Option<String>,
 }
 
 /// Exchange a GitHub OAuth token for a short-lived Copilot API session token.
@@ -1126,5 +1162,24 @@ mod tests {
         let resp: CopilotSessionResponse = serde_json::from_str(json).unwrap();
         assert!(resp.token.starts_with("tid="));
         assert_eq!(resp.expires_at, 1750000000);
+        assert!(resp.endpoints.is_none());
+    }
+
+    #[test]
+    fn test_copilot_session_response_parses_plan_endpoints() {
+        let json = r#"{
+            "token": "tid=abc123;exp=9999999999",
+            "expires_at": 1750000000,
+            "endpoints": {
+                "api": "https://api.individual.githubcopilot.com",
+                "telemetry": "https://copilot-telemetry.githubusercontent.com/telemetry"
+            }
+        }"#;
+        let resp: CopilotSessionResponse = serde_json::from_str(json).unwrap();
+        let endpoints = resp.endpoints.expect("endpoints should be parsed");
+        assert_eq!(
+            endpoints.api.as_deref(),
+            Some("https://api.individual.githubcopilot.com"),
+        );
     }
 }
