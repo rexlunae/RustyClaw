@@ -8,6 +8,7 @@ use iocraft::prelude::*;
 use crate::components::api_key_dialog::ApiKeyDialog;
 use crate::components::auth_dialog::AuthDialog;
 use crate::components::command_menu::CommandMenu;
+use crate::components::details_dialog::DetailsDialog;
 use crate::components::device_flow_dialog::DeviceFlowDialog;
 use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
@@ -108,6 +109,13 @@ pub struct RootProps {
     pub skills_selected: Option<usize>,
     pub skills_scroll_offset: usize,
 
+    // details dialog overlay (extended structured details for the
+    // most recent warning/error toast)
+    pub show_details_dialog: bool,
+    pub details_dialog_text: String,
+    pub details_dialog_is_error: bool,
+    pub details_dialog_scroll: usize,
+
     // tool permissions dialog overlay
     pub show_tool_perms_dialog: bool,
     pub tool_perms_data: Vec<ToolPermInfo>,
@@ -182,6 +190,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let skills_scroll = props.skills_scroll_offset;
     #[allow(unused_variables)]
     let show_skills = props.show_skills_dialog;
+    let show_details = props.show_details_dialog;
+    let details_text = std::mem::take(&mut props.details_dialog_text);
+    let details_is_error = props.details_dialog_is_error;
+    let details_scroll = props.details_dialog_scroll;
     let tool_perms_data = std::mem::take(&mut props.tool_perms_data);
     let tool_perms_selected = props.tool_perms_selected;
     let tool_perms_scroll = props.tool_perms_scroll_offset;
@@ -420,6 +432,27 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             skills: skills_data,
                             selected: skills_selected,
                             scroll_offset: skills_scroll,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Details dialog overlay (extended error/warning) ─────────
+            #(if show_details {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        DetailsDialog(
+                            details: details_text,
+                            is_error: details_is_error,
+                            scroll_offset: details_scroll,
                         )
                     }
                 }.into_any()

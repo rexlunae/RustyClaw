@@ -152,9 +152,7 @@ impl RequestDetails {
         let already_has_auth = out
             .iter()
             .any(|(name, _)| name.eq_ignore_ascii_case("authorization"));
-        if !already_has_auth
-            && let Some(tok) = self.bearer_token.as_deref()
-        {
+        if !already_has_auth && let Some(tok) = self.bearer_token.as_deref() {
             out.push((
                 "Authorization".to_string(),
                 format!("Bearer {}", redact_secret(tok)),
@@ -319,7 +317,12 @@ pub fn render_extended<E: ErrorLike + ?Sized>(err: &E) -> String {
             .unwrap_or(0)
             .min(24);
         for (key, value) in &fields {
-            s.push_str(&format!("  {:<width$} = {}\n", key, value, width = key_width));
+            s.push_str(&format!(
+                "  {:<width$} = {}\n",
+                key,
+                value,
+                width = key_width
+            ));
         }
     }
 
