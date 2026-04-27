@@ -2483,9 +2483,43 @@ mod tui_component {
                                         show_model_selector.set(true);
                                     }
                                     GwEvent::ModelCompletionsLoaded { provider, models } => {
-                                        model_completion_provider.set(Some(provider));
-                                        model_completion_models.set(models);
+                                        model_completion_provider.set(Some(provider.clone()));
+                                        model_completion_models.set(models.clone());
                                         model_completion_loading.set(None);
+
+                                        // If the user is currently typing /model… for this
+                                        // provider, rebuild the autocomplete dropdown so the
+                                        // freshly-fetched models appear without waiting for
+                                        // another keystroke.  The on_change handler that
+                                        // normally populates `command_completions` only fires
+                                        // when the input value changes, so without this the
+                                        // dropdown is stuck on the static list that was in
+                                        // effect when the fetch was first triggered.
+                                        let current_input = input_value.read().clone();
+                                        if let Some(partial) = current_input.strip_prefix('/') {
+                                            if partial.starts_with("model") {
+                                                let mut names = rustyclaw_core::commands::command_names_for_provider(&provider);
+                                                let mut seen: std::collections::HashSet<String> =
+                                                    names.iter().cloned().collect();
+                                                for model in &models {
+                                                    let entry = format!("model {}", model);
+                                                    if seen.insert(entry.clone()) {
+                                                        names.push(entry);
+                                                    }
+                                                }
+                                                let filtered: Vec<String> = names
+                                                    .into_iter()
+                                                    .filter(|c: &String| c.starts_with(partial))
+                                                    .collect();
+                                                if filtered.is_empty() {
+                                                    command_completions.set(Vec::new());
+                                                    command_selected.set(None);
+                                                } else {
+                                                    command_completions.set(filtered);
+                                                    command_selected.set(None);
+                                                }
+                                            }
+                                        }
                                     }
                                     GwEvent::PairingSuccess { gateway_name } => {
                                         // Pairing succeeded — update dialog state
