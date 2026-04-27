@@ -20,7 +20,23 @@ pub fn CommandMenu(props: &CommandMenuProps) -> impl Into<AnyElement<'static>> {
         return element! { View() }.into_any();
     }
 
-    let max_rows = props.completions.len().min(12) as u32;
+    let max_visible = 12usize;
+    let total = props.completions.len();
+    let selected = props.selected.unwrap_or(0).min(total.saturating_sub(1));
+    let start = if total <= max_visible {
+        0
+    } else {
+        let half = max_visible / 2;
+        let start = selected.saturating_sub(half);
+        let end = (start + max_visible).min(total);
+        if end == total {
+            total.saturating_sub(max_visible)
+        } else {
+            start
+        }
+    };
+    let end = (start + max_visible).min(total);
+    let max_rows = (end - start) as u32;
 
     element! {
         View(
@@ -31,7 +47,8 @@ pub fn CommandMenu(props: &CommandMenuProps) -> impl Into<AnyElement<'static>> {
             border_color: theme::ACCENT,
             background_color: theme::BG_SURFACE,
         ) {
-            #(props.completions.iter().enumerate().take(max_rows as usize).map(|(i, cmd)| {
+            #(props.completions[start..end].iter().enumerate().map(|(offset, cmd)| {
+                let i = start + offset;
                 let is_selected = props.selected == Some(i);
                 let bg = if is_selected { theme::ACCENT_DIM } else { theme::BG_SURFACE };
                 let fg = if is_selected { theme::ACCENT_BRIGHT } else { theme::TEXT };
