@@ -417,15 +417,21 @@ pub async fn fetch_models_detailed(
         return Ok(static_models);
     }
 
-    let result = match provider_id {
+    let result: Result<Vec<ModelInfo>, String> = match provider_id {
         // Google Gemini uses a different response shape
-        "google" => fetch_google_models_detailed(base, api_key).await,
+        "google" => fetch_google_models_detailed(base, api_key)
+            .await
+            .map_err(|e| e.to_string()),
         // GitHub Copilot exposes a Copilot-specific model list API.
         "github-copilot" => fetch_github_copilot_models_detailed(base, api_key).await,
         // Local providers — no auth needed, OpenAI-compatible /v1/models
-        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None).await,
+        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None)
+            .await
+            .map_err(|e| e.to_string()),
         // Everything else is OpenAI-compatible
-        _ => fetch_openai_compatible_models_detailed(base, api_key).await,
+        _ => fetch_openai_compatible_models_detailed(base, api_key)
+            .await
+            .map_err(|e| e.to_string()),
     };
 
     match result {
@@ -592,10 +598,11 @@ async fn fetch_openai_compatible_models_detailed(
 async fn fetch_github_copilot_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<ModelInfo>, reqwest::Error> {
+) -> Result<Vec<ModelInfo>, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+        .build()
+        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
     let fallback_url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let Some(key) = api_key else {
@@ -612,13 +619,26 @@ async fn fetch_github_copilot_models_detailed(
                 .unwrap_or_else(|| fallback_url.clone());
             send_copilot_models_request(&client, &url, &session.token).await
         }
-        // Exchange failed — the stored secret may already be a session
-        // token, or the OAuth token may be invalid.  Try the supplied
-        // token directly as a last resort so imported session tokens
-        // still work; if that also fails, the resulting reqwest::Error
-        // is propagated to the caller (`fetch_models_detailed`), which
-        // formats it into a user-facing message.
-        Err(_) => send_copilot_models_request(&client, &fallback_url, key).await,
+        // Exchange failed.  The stored secret may already be a session
+        // token (e.g. imported manually), so try hitting `/models` with
+        // the supplied token directly as a fallback.  Whatever happens,
+        // never silently drop the exchange error: surface it to the
+        // user — combined with any fallback failure — so they can see
+        // the real cause instead of a misleading "empty model list"
+        // warning from the outer caller.
+        Err(exchange_err) => match send_copilot_models_request(&client, &fallback_url, key).await {
+            Ok(models) if !models.is_empty() => Ok(models),
+            Ok(_) => Err(format!(
+                "Copilot session-token exchange failed and the fallback /models request \
+                 returned no models. Underlying exchange error: {}",
+                exchange_err,
+            )),
+            Err(fallback_err) => Err(format!(
+                "Copilot session-token exchange failed: {}\n\
+                 Fallback /models request also failed: {}",
+                exchange_err, fallback_err,
+            )),
+        },
     }
 }
 
@@ -626,20 +646,104 @@ async fn send_copilot_models_request(
     client: &reqwest::Client,
     url: &str,
     bearer_token: &str,
-) -> Result<Vec<ModelInfo>, reqwest::Error> {
-    let resp = client
-        .get(url)
-        .header("Accept", COPILOT_API_ACCEPT)
-        .header("User-Agent", COPILOT_API_USER_AGENT)
-        .header("Editor-Version", COPILOT_EDITOR_VERSION)
-        .header("Editor-Plugin-Version", COPILOT_EDITOR_PLUGIN_VERSION)
-        .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
-        .bearer_auth(bearer_token)
-        .send()
-        .await?
-        .error_for_status()?;
-    let body: serde_json::Value = resp.json().await?;
+) -> Result<Vec<ModelInfo>, String> {
+    let headers = [
+        ("Accept", COPILOT_API_ACCEPT),
+        ("User-Agent", COPILOT_API_USER_AGENT),
+        ("Editor-Version", COPILOT_EDITOR_VERSION),
+        ("Editor-Plugin-Version", COPILOT_EDITOR_PLUGIN_VERSION),
+        ("Copilot-Integration-Id", COPILOT_INTEGRATION_ID),
+    ];
+
+    let mut req = client.get(url).bearer_auth(bearer_token);
+    for (name, value) in headers {
+        req = req.header(name, value);
+    }
+
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            return Err(format!(
+                "{}: {}",
+                format_request_context("GET", url, &headers, Some(bearer_token)),
+                e,
+            ));
+        }
+    };
+
+    let status = resp.status();
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        return Err(format!(
+            "{} returned HTTP {} — body: {}",
+            format_request_context("GET", url, &headers, Some(bearer_token)),
+            status,
+            truncate_for_error(&body),
+        ));
+    }
+
+    let body: serde_json::Value = resp.json().await.map_err(|e| {
+        format!(
+            "{}: failed to parse JSON response: {}",
+            format_request_context("GET", url, &headers, Some(bearer_token)),
+            e,
+        )
+    })?;
     Ok(parse_models_response(&body))
+}
+
+/// Render an HTTP request's calling-side context (method, URL, headers)
+/// for inclusion in user-facing error messages.  Any `Authorization`
+/// header — and any header value that matches the supplied bearer
+/// token — is redacted so secrets never leak into logs.
+fn format_request_context(
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    bearer_token: Option<&str>,
+) -> String {
+    let mut rendered: Vec<String> = headers
+        .iter()
+        .map(|(name, value)| format!("{}: {}", name, redact_header(name, value, bearer_token)))
+        .collect();
+    if let Some(tok) = bearer_token {
+        rendered.push(format!("Authorization: Bearer {}", redact_secret(tok)));
+    }
+    format!("{} {} (headers: [{}])", method, url, rendered.join(", "),)
+}
+
+fn redact_header(name: &str, value: &str, bearer_token: Option<&str>) -> String {
+    if name.eq_ignore_ascii_case("authorization") {
+        return redact_secret(value);
+    }
+    if let Some(tok) = bearer_token
+        && !tok.is_empty()
+        && value.contains(tok)
+    {
+        return redact_secret(value);
+    }
+    value.to_string()
+}
+
+fn redact_secret(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+    format!("<redacted len={}>", trimmed.len())
+}
+
+fn truncate_for_error(body: &str) -> String {
+    const MAX: usize = 512;
+    if body.len() <= MAX {
+        body.to_string()
+    } else {
+        let mut end = MAX;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}… (truncated, {} bytes total)", &body[..end], body.len())
+    }
 }
 
 /// Fetch from the Google Gemini `/models` endpoint with metadata.
@@ -890,26 +994,36 @@ pub async fn exchange_copilot_session(
     http: &reqwest::Client,
     oauth_token: &str,
 ) -> Result<CopilotSessionResponse, String> {
+    let url = "https://api.github.com/copilot_internal/v2/token";
+    let auth_value = format!("token {}", oauth_token);
+    let headers: [(&str, &str); 2] = [
+        ("Authorization", auth_value.as_str()),
+        ("User-Agent", GITHUB_USER_AGENT),
+    ];
+    let context = || format_request_context("GET", url, &headers, Some(oauth_token));
+
     let resp = http
-        .get("https://api.github.com/copilot_internal/v2/token")
-        .header("Authorization", format!("token {}", oauth_token))
+        .get(url)
+        .header("Authorization", &auth_value)
         .header("User-Agent", GITHUB_USER_AGENT)
         .send()
         .await
-        .map_err(|e| format!("Failed to exchange Copilot token: {}", e))?;
+        .map_err(|e| format!("{}: failed to send request: {}", context(), e))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
         return Err(format!(
-            "Copilot token exchange returned {} — {}",
-            status, body,
+            "{} returned HTTP {} — body: {}",
+            context(),
+            status,
+            truncate_for_error(&body),
         ));
     }
 
     resp.json::<CopilotSessionResponse>()
         .await
-        .map_err(|e| format!("Failed to parse Copilot session response: {}", e))
+        .map_err(|e| format!("{}: failed to parse session response: {}", context(), e))
 }
 
 /// Whether the given provider requires Copilot session-token exchange.
@@ -1181,5 +1295,69 @@ mod tests {
             endpoints.api.as_deref(),
             Some("https://api.individual.githubcopilot.com"),
         );
+    }
+
+    #[test]
+    fn test_redact_secret_hides_token_value() {
+        let r = redact_secret("tid=abc123;exp=9999999999");
+        assert!(r.starts_with("<redacted"), "got {}", r);
+        assert!(!r.contains("abc123"), "got {}", r);
+        assert!(r.contains("len="));
+        assert_eq!(redact_secret(""), "<empty>");
+    }
+
+    #[test]
+    fn test_redact_header_redacts_authorization_case_insensitive() {
+        let bearer = Some("super-secret-token");
+        assert!(!redact_header("Authorization", "Bearer foo", bearer).contains("foo"));
+        assert!(!redact_header("authorization", "token foo", bearer).contains("foo"));
+    }
+
+    #[test]
+    fn test_redact_header_redacts_value_containing_bearer() {
+        let bearer = Some("super-secret-token");
+        let redacted = redact_header("X-Custom", "prefix:super-secret-token:suffix", bearer);
+        assert!(!redacted.contains("super-secret-token"), "got {}", redacted);
+    }
+
+    #[test]
+    fn test_redact_header_passes_through_non_secret() {
+        assert_eq!(
+            redact_header("User-Agent", "RustyClaw", Some("tok")),
+            "RustyClaw",
+        );
+    }
+
+    #[test]
+    fn test_format_request_context_includes_method_url_and_redacts_auth() {
+        let headers = [
+            ("Accept", "application/vnd.github+json"),
+            ("User-Agent", "RustyClaw"),
+        ];
+        let ctx = format_request_context(
+            "GET",
+            "https://api.example.com/models",
+            &headers,
+            Some("super-secret-token"),
+        );
+        assert!(ctx.starts_with("GET https://api.example.com/models"));
+        assert!(ctx.contains("Accept: application/vnd.github+json"));
+        assert!(ctx.contains("User-Agent: RustyClaw"));
+        assert!(ctx.contains("Authorization: Bearer <redacted"));
+        assert!(!ctx.contains("super-secret-token"));
+    }
+
+    #[test]
+    fn test_truncate_for_error_truncates_long_bodies() {
+        let body = "x".repeat(2000);
+        let truncated = truncate_for_error(&body);
+        assert!(truncated.len() < body.len());
+        assert!(truncated.contains("truncated"));
+        assert!(truncated.contains("2000 bytes"));
+    }
+
+    #[test]
+    fn test_truncate_for_error_passes_through_short_bodies() {
+        assert_eq!(truncate_for_error("hello"), "hello");
     }
 }
