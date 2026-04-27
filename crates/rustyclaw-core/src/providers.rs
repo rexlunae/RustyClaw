@@ -600,7 +600,8 @@ async fn fetch_github_copilot_models_detailed(
         // token, or the OAuth token may be invalid.  Try the supplied
         // token directly as a last resort so imported session tokens
         // still work; if that also fails, the resulting reqwest::Error
-        // is propagated by the outer match in `fetch_models_detailed`.
+        // is propagated to the caller (`fetch_models_detailed`), which
+        // formats it into a user-facing message.
         Err(_) => send_copilot_models_request(&client, &url, key).await,
     }
 }
