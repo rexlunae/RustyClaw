@@ -4,6 +4,8 @@
 //! base URLs, and available models.  Used by both the onboarding wizard and
 //! the TUI `/provider` + `/model` commands.
 
+use anyhow::{Context, Result, anyhow, bail};
+
 /// Authentication method for a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthMethod {
@@ -371,7 +373,7 @@ pub async fn fetch_models(
     provider_id: &str,
     api_key: Option<&str>,
     base_url_override: Option<&str>,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>> {
     // Delegate to the detailed version and strip down to IDs.
     fetch_models_detailed(provider_id, api_key, base_url_override)
         .await
@@ -386,19 +388,17 @@ pub async fn fetch_models_detailed(
     provider_id: &str,
     api_key: Option<&str>,
     base_url_override: Option<&str>,
-) -> Result<Vec<ModelInfo>, String> {
-    let def = match provider_by_id(provider_id) {
-        Some(d) => d,
-        None => return Err(format!("Unknown provider: {}", provider_id)),
-    };
+) -> Result<Vec<ModelInfo>> {
+    let def =
+        provider_by_id(provider_id).ok_or_else(|| anyhow!("Unknown provider: {}", provider_id))?;
 
     let base = base_url_override.or(def.base_url).unwrap_or("");
 
     if base.is_empty() {
-        return Err(format!(
+        bail!(
             "No base URL configured for {}. Set one in config.toml or use /provider.",
             def.display,
-        ));
+        );
     }
 
     // Anthropic has no public models endpoint — return the static list.
@@ -417,33 +417,24 @@ pub async fn fetch_models_detailed(
         return Ok(static_models);
     }
 
-    let result: Result<Vec<ModelInfo>, String> = match provider_id {
+    let result: Result<Vec<ModelInfo>> = match provider_id {
         // Google Gemini uses a different response shape
-        "google" => fetch_google_models_detailed(base, api_key)
-            .await
-            .map_err(|e| e.to_string()),
+        "google" => fetch_google_models_detailed(base, api_key).await,
         // GitHub Copilot exposes a Copilot-specific model list API.
         "github-copilot" => fetch_github_copilot_models_detailed(base, api_key).await,
         // Local providers — no auth needed, OpenAI-compatible /v1/models
-        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None)
-            .await
-            .map_err(|e| e.to_string()),
+        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None).await,
         // Everything else is OpenAI-compatible
-        _ => fetch_openai_compatible_models_detailed(base, api_key)
-            .await
-            .map_err(|e| e.to_string()),
+        _ => fetch_openai_compatible_models_detailed(base, api_key).await,
     };
 
     match result {
-        Ok(models) if models.is_empty() => Err(format!(
+        Ok(models) if models.is_empty() => Err(anyhow!(
             "The {} API returned an empty model list.",
-            def.display,
+            def.display
         )),
         Ok(models) => Ok(models),
-        Err(e) => Err(format!(
-            "Failed to fetch models from {}: {}",
-            def.display, e
-        )),
+        Err(e) => Err(e.context(format!("Failed to fetch models from {}", def.display))),
     }
 }
 
@@ -557,20 +548,29 @@ fn parse_models_response(body: &serde_json::Value) -> Vec<ModelInfo> {
 async fn fetch_openai_compatible_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<ModelInfo>, reqwest::Error> {
+) -> Result<Vec<ModelInfo>> {
     let url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+        .build()
+        .context("failed to build HTTP client")?;
 
     let mut req = client.get(&url);
     if let Some(key) = api_key {
         req = req.bearer_auth(key);
     }
 
-    let resp = req.send().await?.error_for_status()?;
-    let body: serde_json::Value = resp.json().await?;
+    let resp = req
+        .send()
+        .await
+        .with_context(|| format!("GET {} failed to send", url))?
+        .error_for_status()
+        .with_context(|| format!("GET {} returned an HTTP error", url))?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .with_context(|| format!("GET {}: failed to parse JSON response", url))?;
 
     Ok(parse_models_response(&body))
 }
@@ -598,11 +598,11 @@ async fn fetch_openai_compatible_models_detailed(
 async fn fetch_github_copilot_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<ModelInfo>, String> {
+) -> Result<Vec<ModelInfo>> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to build HTTP client: {}", e))?;
+        .context("failed to build HTTP client")?;
     let fallback_url = format!("{}/models", base_url.trim_end_matches('/'));
 
     let Some(key) = api_key else {
@@ -628,16 +628,14 @@ async fn fetch_github_copilot_models_detailed(
         // warning from the outer caller.
         Err(exchange_err) => match send_copilot_models_request(&client, &fallback_url, key).await {
             Ok(models) if !models.is_empty() => Ok(models),
-            Ok(_) => Err(format!(
+            Ok(_) => Err(exchange_err.context(
                 "Copilot session-token exchange failed and the fallback /models request \
-                 returned no models. Underlying exchange error: {}",
-                exchange_err,
+                 returned no models",
             )),
-            Err(fallback_err) => Err(format!(
-                "Copilot session-token exchange failed: {}\n\
-                 Fallback /models request also failed: {}",
-                exchange_err, fallback_err,
-            )),
+            Err(fallback_err) => Err(exchange_err.context(format!(
+                "Copilot session-token exchange failed; fallback /models request also failed: {:#}",
+                fallback_err,
+            ))),
         },
     }
 }
@@ -646,7 +644,7 @@ async fn send_copilot_models_request(
     client: &reqwest::Client,
     url: &str,
     bearer_token: &str,
-) -> Result<Vec<ModelInfo>, String> {
+) -> Result<Vec<ModelInfo>> {
     let headers = [
         ("Accept", COPILOT_API_ACCEPT),
         ("User-Agent", COPILOT_API_USER_AGENT),
@@ -660,35 +658,28 @@ async fn send_copilot_models_request(
         req = req.header(name, value);
     }
 
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => {
-            return Err(format!(
-                "{}: {}",
-                format_request_context("GET", url, &headers, Some(bearer_token)),
-                e,
-            ));
-        }
-    };
+    let context = || format_request_context("GET", url, &headers, Some(bearer_token));
+
+    let resp = req
+        .send()
+        .await
+        .with_context(|| format!("{}: failed to send request", context()))?;
 
     let status = resp.status();
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!(
+        bail!(
             "{} returned HTTP {} — body: {}",
-            format_request_context("GET", url, &headers, Some(bearer_token)),
+            context(),
             status,
             truncate_for_error(&body),
-        ));
+        );
     }
 
-    let body: serde_json::Value = resp.json().await.map_err(|e| {
-        format!(
-            "{}: failed to parse JSON response: {}",
-            format_request_context("GET", url, &headers, Some(bearer_token)),
-            e,
-        )
-    })?;
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .with_context(|| format!("{}: failed to parse JSON response", context()))?;
     Ok(parse_models_response(&body))
 }
 
@@ -750,7 +741,7 @@ fn truncate_for_error(body: &str) -> String {
 async fn fetch_google_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
-) -> Result<Vec<ModelInfo>, reqwest::Error> {
+) -> Result<Vec<ModelInfo>> {
     let key = match api_key {
         Some(k) => k,
         // No key — return empty so the outer match produces a clear error
@@ -761,10 +752,32 @@ async fn fetch_google_models_detailed(
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
-        .build()?;
+        .build()
+        .context("failed to build HTTP client")?;
 
-    let resp = client.get(&url).send().await?.error_for_status()?;
-    let body: serde_json::Value = resp.json().await?;
+    let resp = client
+        .get(&url)
+        .send()
+        .await
+        .with_context(|| {
+            format!(
+                "GET {}/models failed to send",
+                base_url.trim_end_matches('/')
+            )
+        })?
+        .error_for_status()
+        .with_context(|| {
+            format!(
+                "GET {}/models returned an HTTP error",
+                base_url.trim_end_matches('/')
+            )
+        })?;
+    let body: serde_json::Value = resp.json().await.with_context(|| {
+        format!(
+            "GET {}/models: failed to parse JSON response",
+            base_url.trim_end_matches('/'),
+        )
+    })?;
 
     let models = body
         .get("models")
@@ -993,7 +1006,7 @@ pub struct CopilotSessionEndpoints {
 pub async fn exchange_copilot_session(
     http: &reqwest::Client,
     oauth_token: &str,
-) -> Result<CopilotSessionResponse, String> {
+) -> Result<CopilotSessionResponse> {
     let url = "https://api.github.com/copilot_internal/v2/token";
     let auth_value = format!("token {}", oauth_token);
     let headers: [(&str, &str); 2] = [
@@ -1008,22 +1021,22 @@ pub async fn exchange_copilot_session(
         .header("User-Agent", GITHUB_USER_AGENT)
         .send()
         .await
-        .map_err(|e| format!("{}: failed to send request: {}", context(), e))?;
+        .with_context(|| format!("{}: failed to send request", context()))?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        return Err(format!(
+        bail!(
             "{} returned HTTP {} — body: {}",
             context(),
             status,
             truncate_for_error(&body),
-        ));
+        );
     }
 
     resp.json::<CopilotSessionResponse>()
         .await
-        .map_err(|e| format!("{}: failed to parse session response: {}", context(), e))
+        .with_context(|| format!("{}: failed to parse session response", context()))
 }
 
 /// Whether the given provider requires Copilot session-token exchange.

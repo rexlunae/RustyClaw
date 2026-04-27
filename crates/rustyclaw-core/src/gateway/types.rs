@@ -248,9 +248,7 @@ impl CopilotSession {
         };
 
         // Exchange the OAuth token for a fresh session token.
-        let session = providers::exchange_copilot_session(http, oauth_token)
-            .await
-            .map_err(|e| anyhow::anyhow!(e))?;
+        let session = providers::exchange_copilot_session(http, oauth_token).await?;
 
         let token = session.token.clone();
         *guard = Some(CopilotSessionEntry {
