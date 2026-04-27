@@ -135,10 +135,13 @@ pub fn apply_copilot_headers(
     // GitHub Copilot requires recognized IDE headers.
     // Using VS Code / Copilot Chat identifiers that the API accepts.
     builder
-        .header("User-Agent", "GitHubCopilotChat/0.35.0")
-        .header("Editor-Version", "vscode/1.107.0")
-        .header("Editor-Plugin-Version", "copilot-chat/0.35.0")
-        .header("Copilot-Integration-Id", "vscode-chat")
+        .header("User-Agent", providers::COPILOT_API_USER_AGENT)
+        .header("Editor-Version", providers::COPILOT_EDITOR_VERSION)
+        .header(
+            "Editor-Plugin-Version",
+            providers::COPILOT_EDITOR_PLUGIN_VERSION,
+        )
+        .header("Copilot-Integration-Id", providers::COPILOT_INTEGRATION_ID)
         .header("Openai-Intent", "conversation-edits")
         .header("X-Initiator", x_initiator)
 }

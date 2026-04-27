@@ -131,6 +131,11 @@ pub(crate) enum GwEvent {
         provider_display: String,
         models: Vec<String>,
     },
+    /// Live model IDs loaded for slash-command autocomplete.
+    ModelCompletionsLoaded {
+        provider: String,
+        models: Vec<String>,
+    },
     /// Model fetch is in progress (show loading spinner)
     FetchModelsLoading {
         provider: String,
@@ -213,6 +218,10 @@ pub(crate) enum UserInput {
     SelectModel {
         provider: String,
         model: String,
+    },
+    /// Load live model IDs for slash-command autocomplete.
+    FetchModelCompletions {
+        provider: String,
     },
     /// Cancel the current provider-flow dialog
     CancelProviderFlow,
@@ -687,6 +696,38 @@ impl App {
                     // Feed the completed assistant response into the conversation
                     // so subsequent Chat frames include the full history.
                     conversation.push(ChatMessage::text("assistant", &text));
+                }
+                Ok(UserInput::FetchModelCompletions { provider }) => {
+                    let base_url = config.model.as_ref().and_then(|m| m.base_url.clone());
+                    let api_key = rustyclaw_core::providers::secret_key_for_provider(&provider)
+                        .and_then(|key_name| {
+                            secrets_manager
+                                .get_secret(key_name, true)
+                                .ok()
+                                .flatten()
+                                .or_else(|| std::env::var(key_name).ok())
+                        });
+                    let gw_tx2 = gw_tx.clone();
+                    tokio::spawn(async move {
+                        match rustyclaw_core::providers::fetch_models(
+                            &provider,
+                            api_key.as_deref(),
+                            base_url.as_deref(),
+                        )
+                        .await
+                        {
+                            Ok(models) => {
+                                let _ = gw_tx2
+                                    .send(GwEvent::ModelCompletionsLoaded { provider, models });
+                            }
+                            Err(e) => {
+                                let _ = gw_tx2.send(GwEvent::Warning(format!(
+                                    "Failed to load model completions: {}",
+                                    e,
+                                )));
+                            }
+                        }
+                    });
                 }
                 Ok(UserInput::Command(cmd)) => {
                     let mut ctx = CommandContext {
@@ -1970,6 +2011,9 @@ mod tui_component {
         // ── Command menu (slash-command completions) ────────────────────
         let mut command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
         let mut command_selected: State<Option<usize>> = hooks.use_state(|| None);
+        let mut model_completion_provider: State<Option<String>> = hooks.use_state(|| None);
+        let mut model_completion_models: State<Vec<String>> = hooks.use_state(Vec::new);
+        let mut model_completion_loading: State<Option<String>> = hooks.use_state(|| None);
 
         // ── Info dialog state (secrets / skills / tool permissions) ──────
         let mut show_secrets_dialog = hooks.use_state(|| false);
@@ -2428,12 +2472,20 @@ mod tui_component {
                                         show_model_selector.set(true);
                                     }
                                     GwEvent::ShowModelSelector { provider, provider_display, models } => {
+                                        model_completion_provider.set(Some(provider.clone()));
+                                        model_completion_models.set(models.clone());
+                                        model_completion_loading.set(None);
                                         model_selector_provider.set(provider);
                                         model_selector_provider_display.set(provider_display);
                                         model_selector_models.set(models);
                                         model_selector_cursor.set(0);
                                         model_selector_loading.set(false);
                                         show_model_selector.set(true);
+                                    }
+                                    GwEvent::ModelCompletionsLoaded { provider, models } => {
+                                        model_completion_provider.set(Some(provider));
+                                        model_completion_models.set(models);
+                                        model_completion_loading.set(None);
                                     }
                                     GwEvent::PairingSuccess { gateway_name } => {
                                         // Pairing succeeded — update dialog state
@@ -3557,6 +3609,7 @@ mod tui_component {
         let prop_model_label = props.model_label.clone();
         let prop_provider_id = props.provider_id.clone();
         let prop_hint = props.hint.clone();
+        let tx_for_model_completions = Arc::clone(&user_tx);
 
         element! {
             Root(
@@ -3592,7 +3645,36 @@ mod tui_component {
                     if let Some(partial) = new_val.strip_prefix('/') {
                         let current_pid = dynamic_provider_id.read().clone()
                             .unwrap_or_else(|| prop_provider_id.clone());
-                        let names = rustyclaw_core::commands::command_names_for_provider(&current_pid);
+                        if partial.starts_with("model") {
+                            let loaded = model_completion_provider
+                                .read()
+                                .as_deref()
+                                == Some(current_pid.as_str());
+                            let loading = model_completion_loading
+                                .read()
+                                .as_deref()
+                                == Some(current_pid.as_str());
+                            if !loaded && !loading {
+                                model_completion_loading.set(Some(current_pid.clone()));
+                                if let Ok(guard) = tx_for_model_completions.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::FetchModelCompletions {
+                                            provider: current_pid.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut names = rustyclaw_core::commands::command_names_for_provider(&current_pid);
+                        if model_completion_provider.read().as_deref() == Some(current_pid.as_str()) {
+                            for model in model_completion_models.read().iter() {
+                                let entry = format!("model {}", model);
+                                if !names.iter().any(|existing| existing == &entry) {
+                                    names.push(entry);
+                                }
+                            }
+                        }
                         let filtered: Vec<String> = names
                             .into_iter()
                             .filter(|c: &String| c.starts_with(partial))

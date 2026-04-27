@@ -462,11 +462,12 @@ const NON_CHAT_PATTERNS: &[&str] = &[
     "canary", // internal/experimental
 ];
 
-const COPILOT_API_ACCEPT: &str = "application/vnd.github+json";
-const COPILOT_USER_AGENT: &str = "RustyClaw";
-const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
-const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
-const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+pub(crate) const COPILOT_API_ACCEPT: &str = "application/vnd.github+json";
+pub(crate) const COPILOT_API_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
+pub(crate) const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
+pub(crate) const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
+pub(crate) const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+const GITHUB_USER_AGENT: &str = "RustyClaw";
 
 /// Check whether a model entry looks like it supports chat completions.
 ///
@@ -607,7 +608,7 @@ async fn send_copilot_models_request(
     let resp = client
         .get(url)
         .header("Accept", COPILOT_API_ACCEPT)
-        .header("User-Agent", COPILOT_USER_AGENT)
+        .header("User-Agent", COPILOT_API_USER_AGENT)
         .header("Editor-Version", COPILOT_EDITOR_VERSION)
         .header("Editor-Plugin-Version", COPILOT_EDITOR_PLUGIN_VERSION)
         .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
@@ -850,7 +851,7 @@ pub async fn exchange_copilot_session(
     let resp = http
         .get("https://api.github.com/copilot_internal/v2/token")
         .header("Authorization", format!("token {}", oauth_token))
-        .header("User-Agent", COPILOT_USER_AGENT)
+        .header("User-Agent", GITHUB_USER_AGENT)
         .send()
         .await
         .map_err(|e| format!("Failed to exchange Copilot token: {}", e))?;
