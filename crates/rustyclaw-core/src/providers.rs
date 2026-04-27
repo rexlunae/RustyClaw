@@ -570,6 +570,17 @@ async fn fetch_openai_compatible_models_detailed(
 }
 
 /// Fetch from GitHub Copilot's model list API.
+///
+/// `api.githubcopilot.com/models` requires a short-lived **session
+/// token** obtained from `api.github.com/copilot_internal/v2/token`.
+/// Calling it with a long-lived OAuth token does not consistently
+/// fail with `401`: it can return `200` with an empty `data` array,
+/// which would otherwise surface as a misleading "empty model list"
+/// warning.  We therefore always exchange the OAuth token for a
+/// session token first (matching the behaviour of
+/// [`CopilotSession::get_token`]), and only fall back to using the
+/// supplied token directly if the exchange fails — that way callers
+/// that pass a pre-exchanged session token still work.
 async fn fetch_github_copilot_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
@@ -583,20 +594,14 @@ async fn fetch_github_copilot_models_detailed(
         return Ok(Vec::new());
     };
 
-    match send_copilot_models_request(&client, &url, key).await {
-        Ok(models) => Ok(models),
-        Err(first_err)
-            if first_err.status().is_some_and(|status| {
-                status == reqwest::StatusCode::UNAUTHORIZED
-                    || status == reqwest::StatusCode::FORBIDDEN
-            }) =>
-        {
-            let session = exchange_copilot_session(&client, key)
-                .await
-                .map_err(|_| first_err)?;
-            send_copilot_models_request(&client, &url, &session.token).await
-        }
-        Err(err) => Err(err),
+    match exchange_copilot_session(&client, key).await {
+        Ok(session) => send_copilot_models_request(&client, &url, &session.token).await,
+        // Exchange failed — the stored secret may already be a session
+        // token, or the OAuth token may be invalid.  Try the supplied
+        // token directly as a last resort so imported session tokens
+        // still work; if that also fails, the resulting reqwest::Error
+        // is propagated by the outer match in `fetch_models_detailed`.
+        Err(_) => send_copilot_models_request(&client, &url, key).await,
     }
 }
 
