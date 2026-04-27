@@ -4,7 +4,9 @@
 //! base URLs, and available models.  Used by both the onboarding wizard and
 //! the TUI `/provider` + `/model` commands.
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow_tracing::{Context, Result, anyhow, bail};
+
+use crate::error_details::RequestDetails;
 
 /// Authentication method for a provider.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,8 +399,7 @@ pub async fn fetch_models_detailed(
     if base.is_empty() {
         bail!(
             "No base URL configured for {}. Set one in config.toml or use /provider.",
-            def.display,
-        );
+            def.display);
     }
 
     // Anthropic has no public models endpoint — return the static list.
@@ -551,26 +552,64 @@ async fn fetch_openai_compatible_models_detailed(
 ) -> Result<Vec<ModelInfo>> {
     let url = format!("{}/models", base_url.trim_end_matches('/'));
 
+    let mut details = RequestDetails::new("openai.models", "GET", url.clone())
+        .with_request_headers([("Accept", "application/json")])
+        .with_bearer(api_key);
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .context("failed to build HTTP client")?;
+        .with_context(|| format!("failed to build HTTP client for GET {}", url))
+        .map_err(|e| details.clone().emit_warning(e))?;
 
     let mut req = client.get(&url);
     if let Some(key) = api_key {
         req = req.bearer_auth(key);
     }
 
-    let resp = req
-        .send()
-        .await
-        .with_context(|| format!("GET {} failed to send", url))?
-        .error_for_status()
-        .with_context(|| format!("GET {} returned an HTTP error", url))?;
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .with_context(|| format!("GET {}: failed to parse JSON response", url))?;
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("GET {} failed to send", url));
+            return Err(details.emit_warning(err));
+        }
+    };
+
+    let status = resp.status();
+    let response_headers = resp.headers().clone();
+    details = details.with_response(status.as_u16(), &response_headers);
+
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        details = details.with_body(&body);
+        let err = anyhow!(
+            "GET {} returned HTTP {} — body: {}",
+            url,
+            status,
+            truncate_for_error(&body)
+        );
+        return Err(details.emit_warning(err));
+    }
+
+    let body_text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("GET {}: failed to read response body", url));
+            return Err(details.emit_warning(err));
+        }
+    };
+    details = details.with_body(&body_text);
+
+    let body: serde_json::Value = match serde_json::from_str(&body_text) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("GET {}: failed to parse JSON response", url));
+            return Err(details.emit_warning(err));
+        }
+    };
 
     Ok(parse_models_response(&body))
 }
@@ -611,13 +650,17 @@ async fn fetch_github_copilot_models_detailed(
 
     match exchange_copilot_session(&client, key).await {
         Ok(session) => {
-            let url = session
+            let endpoints_api = session
                 .endpoints
                 .as_ref()
                 .and_then(|e| e.api.as_deref())
-                .map(|api| format!("{}/models", api.trim_end_matches('/')))
+                .map(|s| s.trim_end_matches('/').to_string());
+            let url = endpoints_api
+                .as_deref()
+                .map(|api| format!("{}/models", api))
                 .unwrap_or_else(|| fallback_url.clone());
-            send_copilot_models_request(&client, &url, &session.token).await
+            send_copilot_models_request(&client, &url, &session.token, endpoints_api.as_deref())
+                .await
         }
         // Exchange failed.  The stored secret may already be a session
         // token (e.g. imported manually), so try hitting `/models` with
@@ -626,7 +669,14 @@ async fn fetch_github_copilot_models_detailed(
         // user — combined with any fallback failure — so they can see
         // the real cause instead of a misleading "empty model list"
         // warning from the outer caller.
-        Err(exchange_err) => match send_copilot_models_request(&client, &fallback_url, key).await {
+        Err(exchange_err) => match send_copilot_models_request(
+            &client,
+            &fallback_url,
+            key,
+            None,
+        )
+        .await
+        {
             Ok(models) if !models.is_empty() => Ok(models),
             Ok(_) => Err(exchange_err.context(
                 "Copilot session-token exchange failed and the fallback /models request \
@@ -644,14 +694,21 @@ async fn send_copilot_models_request(
     client: &reqwest::Client,
     url: &str,
     bearer_token: &str,
+    endpoints_api: Option<&str>,
 ) -> Result<Vec<ModelInfo>> {
-    let headers = [
+    let headers: [(&str, &str); 5] = [
         ("Accept", COPILOT_API_ACCEPT),
         ("User-Agent", COPILOT_API_USER_AGENT),
         ("Editor-Version", COPILOT_EDITOR_VERSION),
         ("Editor-Plugin-Version", COPILOT_EDITOR_PLUGIN_VERSION),
         ("Copilot-Integration-Id", COPILOT_INTEGRATION_ID),
     ];
+
+    let mut details = RequestDetails::new("copilot.models_request", "GET", url.to_string())
+        .with_provider("github-copilot")
+        .with_request_headers(headers.iter().map(|(k, v)| (*k, *v)))
+        .with_bearer(Some(bearer_token))
+        .with_endpoints_api(endpoints_api);
 
     let mut req = client.get(url).bearer_auth(bearer_token);
     for (name, value) in headers {
@@ -660,26 +717,49 @@ async fn send_copilot_models_request(
 
     let context = || format_request_context("GET", url, &headers, Some(bearer_token));
 
-    let resp = req
-        .send()
-        .await
-        .with_context(|| format!("{}: failed to send request", context()))?;
+    let resp = match req.send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("{}: failed to send request", context()));
+            return Err(details.emit_warning(err));
+        }
+    };
 
     let status = resp.status();
+    let response_headers = resp.headers().clone();
+    details = details.with_response(status.as_u16(), &response_headers);
+
     if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        bail!(
+        details = details.with_body(&body);
+        let err = anyhow!(
             "{} returned HTTP {} — body: {}",
             context(),
             status,
-            truncate_for_error(&body),
+            truncate_for_error(&body)
         );
+        return Err(details.emit_warning(err));
     }
 
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .with_context(|| format!("{}: failed to parse JSON response", context()))?;
+    let body_text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("{}: failed to read response body", context()));
+            return Err(details.emit_warning(err));
+        }
+    };
+    details = details.with_body(&body_text);
+
+    let body: serde_json::Value = match serde_json::from_str(&body_text) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("{}: failed to parse JSON response", context()));
+            return Err(details.emit_warning(err));
+        }
+    };
     Ok(parse_models_response(&body))
 }
 
@@ -687,7 +767,7 @@ async fn send_copilot_models_request(
 /// for inclusion in user-facing error messages.  Any `Authorization`
 /// header — and any header value that matches the supplied bearer
 /// token — is redacted so secrets never leak into logs.
-fn format_request_context(
+pub(crate) fn format_request_context(
     method: &str,
     url: &str,
     headers: &[(&str, &str)],
@@ -703,7 +783,7 @@ fn format_request_context(
     format!("{} {} (headers: [{}])", method, url, rendered.join(", "),)
 }
 
-fn redact_header(name: &str, value: &str, bearer_token: Option<&str>) -> String {
+pub(crate) fn redact_header(name: &str, value: &str, bearer_token: Option<&str>) -> String {
     if name.eq_ignore_ascii_case("authorization") {
         return redact_secret(value);
     }
@@ -716,7 +796,7 @@ fn redact_header(name: &str, value: &str, bearer_token: Option<&str>) -> String 
     value.to_string()
 }
 
-fn redact_secret(value: &str) -> String {
+pub(crate) fn redact_secret(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return "<empty>".to_string();
@@ -724,7 +804,7 @@ fn redact_secret(value: &str) -> String {
     format!("<redacted len={}>", trimmed.len())
 }
 
-fn truncate_for_error(body: &str) -> String {
+pub(crate) fn truncate_for_error(body: &str) -> String {
     const MAX: usize = 512;
     if body.len() <= MAX {
         body.to_string()
@@ -748,36 +828,66 @@ async fn fetch_google_models_detailed(
         None => return Ok(Vec::new()),
     };
 
-    let url = format!("{}/models?key={}", base_url.trim_end_matches('/'), key);
+    // The Gemini API uses `?key=…` rather than a bearer header, but we
+    // still want the structured details to capture the URL with the
+    // key redacted, plus response status/headers and any error body.
+    let public_url = format!("{}/models?key=<redacted>", base_url.trim_end_matches('/'));
+    let real_url = format!("{}/models?key={}", base_url.trim_end_matches('/'), key);
+
+    let mut details = RequestDetails::new("google.models", "GET", public_url.clone())
+        .with_provider("google")
+        .with_request_headers([("Accept", "application/json")])
+        .with_bearer(Some(key));
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .context("failed to build HTTP client")?;
+        .with_context(|| format!("failed to build HTTP client for GET {}", public_url))
+        .map_err(|e| details.clone().emit_warning(e))?;
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .with_context(|| {
-            format!(
-                "GET {}/models failed to send",
-                base_url.trim_end_matches('/')
-            )
-        })?
-        .error_for_status()
-        .with_context(|| {
-            format!(
-                "GET {}/models returned an HTTP error",
-                base_url.trim_end_matches('/')
-            )
-        })?;
-    let body: serde_json::Value = resp.json().await.with_context(|| {
-        format!(
-            "GET {}/models: failed to parse JSON response",
-            base_url.trim_end_matches('/'),
-        )
-    })?;
+    let resp = match client.get(&real_url).send().await {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("GET {} failed to send", public_url));
+            return Err(details.emit_warning(err));
+        }
+    };
+
+    let status = resp.status();
+    let response_headers = resp.headers().clone();
+    details = details.with_response(status.as_u16(), &response_headers);
+
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        details = details.with_body(&body);
+        let err = anyhow!(
+            "GET {} returned HTTP {} — body: {}",
+            public_url,
+            status,
+            truncate_for_error(&body)
+        );
+        return Err(details.emit_warning(err));
+    }
+
+    let body_text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("GET {}: failed to read response body", public_url));
+            return Err(details.emit_warning(err));
+        }
+    };
+    details = details.with_body(&body_text);
+
+    let body: serde_json::Value = match serde_json::from_str(&body_text) {
+        Ok(v) => v,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("GET {}: failed to parse JSON response", public_url));
+            return Err(details.emit_warning(err));
+        }
+    };
 
     let models = body
         .get("models")
@@ -879,33 +989,76 @@ impl From<RawTokenResponse> for TokenResponse {
 }
 
 /// Initiate OAuth device flow and return device code and verification URL.
-pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthResponse, String> {
+pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthResponse> {
+    let url = config.device_auth_url.to_string();
+    let mut details = RequestDetails::new("device_flow.start", "POST", url.clone())
+        .with_request_headers([
+            ("Accept", "application/json"),
+            ("Content-Type", "application/x-www-form-urlencoded"),
+        ]);
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .with_context(|| format!("failed to build HTTP client for POST {}", url))
+        .map_err(|e| details.clone().emit_warning(e))?;
 
     let params = [
         ("client_id", config.client_id),
         ("scope", config.scope.unwrap_or("")),
     ];
 
-    let resp = client
+    let resp = match client
         .post(config.device_auth_url)
         .header("Accept", "application/json")
         .form(&params)
         .send()
         .await
-        .map_err(|e| format!("Failed to request device code: {}", e))?
-        .error_for_status()
-        .map_err(|e| format!("Device authorization failed: {}", e))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("POST {} failed to send device-code request", url));
+            return Err(details.emit_warning(err));
+        }
+    };
 
-    let auth_response: DeviceAuthResponse = resp
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse device authorization response: {}", e))?;
+    let status = resp.status();
+    let response_headers = resp.headers().clone();
+    details = details.with_response(status.as_u16(), &response_headers);
 
-    Ok(auth_response)
+    if !status.is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        details = details.with_body(&body);
+        let err = anyhow!(
+            "POST {} returned HTTP {} — body: {}",
+            url,
+            status,
+            truncate_for_error(&body)
+        );
+        return Err(details.emit_warning(err));
+    }
+
+    let body_text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("POST {}: failed to read response body", url));
+            return Err(details.emit_warning(err));
+        }
+    };
+    details = details.with_body(&body_text);
+
+    match serde_json::from_str::<DeviceAuthResponse>(&body_text) {
+        Ok(auth_response) => Ok(auth_response),
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e)).context(format!(
+                "POST {}: failed to parse device-authorization response",
+                url
+            ));
+            Err(details.emit_warning(err))
+        }
+    }
 }
 
 /// Poll the token endpoint to complete device flow authentication.
@@ -915,11 +1068,19 @@ pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthRe
 pub async fn poll_device_token(
     config: &DeviceFlowConfig,
     device_code: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Option<String>> {
+    let url = config.token_url.to_string();
+    let mut details = RequestDetails::new("device_flow.poll", "POST", url.clone())
+        .with_request_headers([
+            ("Accept", "application/json"),
+            ("Content-Type", "application/x-www-form-urlencoded"),
+        ]);
+
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .with_context(|| format!("failed to build HTTP client for POST {}", url))
+        .map_err(|e| details.clone().emit_warning(e))?;
 
     let params = [
         ("client_id", config.client_id),
@@ -927,26 +1088,48 @@ pub async fn poll_device_token(
         ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
     ];
 
-    let resp = client
+    let resp = match client
         .post(config.token_url)
         .header("Accept", "application/json")
         .form(&params)
         .send()
         .await
-        .map_err(|e| format!("Failed to poll token endpoint: {}", e))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("POST {} failed to send token-poll request", url));
+            return Err(details.emit_warning(err));
+        }
+    };
 
-    let body = resp
-        .text()
-        .await
-        .map_err(|e| format!("Failed to read response: {}", e))?;
+    let status = resp.status();
+    let response_headers = resp.headers().clone();
+    details = details.with_response(status.as_u16(), &response_headers);
+
+    let body = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("POST {}: failed to read response body", url));
+            return Err(details.emit_warning(err));
+        }
+    };
+    details = details.clone().with_body(&body);
 
     tracing::debug!("Device flow token poll response: {}", body);
 
     // Parse as a flat struct first, then interpret.  This avoids the
     // fragility of serde(untagged) which silently fails when the
     // response shape is slightly unexpected.
-    let raw: RawTokenResponse = serde_json::from_str(&body)
-        .map_err(|e| format!("Failed to parse token response ({}): body={}", e, body))?;
+    let raw: RawTokenResponse = match serde_json::from_str(&body) {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("POST {}: failed to parse token response", url));
+            return Err(details.emit_warning(err));
+        }
+    };
     let token_response: TokenResponse = raw.into();
 
     match token_response {
@@ -954,12 +1137,19 @@ pub async fn poll_device_token(
             tracing::info!("Device flow authentication succeeded");
             Ok(Some(access_token))
         }
-        TokenResponse::Pending { error, .. } => {
+        TokenResponse::Pending {
+            error,
+            error_description,
+        } => {
             if error == "authorization_pending" || error == "slow_down" {
                 tracing::trace!("Device flow still pending: {}", error);
                 Ok(None) // Still waiting for user authorization
             } else {
-                Err(format!("Authentication failed: {}", error))
+                let err = match error_description {
+                    Some(desc) => anyhow!("Authentication failed: {} ({})", error, desc),
+                    None => anyhow!("Authentication failed: {}", error),
+                };
+                Err(details.emit_warning(err))
             }
         }
     }
@@ -1015,28 +1205,72 @@ pub async fn exchange_copilot_session(
     ];
     let context = || format_request_context("GET", url, &headers, Some(oauth_token));
 
-    let resp = http
+    let mut details = RequestDetails::new("copilot.session_exchange", "GET", url.to_string())
+        .with_provider("github-copilot")
+        .with_request_headers(headers.iter().map(|(k, v)| (*k, *v)))
+        .with_bearer(Some(oauth_token));
+
+    let resp = match http
         .get(url)
         .header("Authorization", &auth_value)
         .header("User-Agent", GITHUB_USER_AGENT)
         .send()
         .await
-        .with_context(|| format!("{}: failed to send request", context()))?;
+    {
+        Ok(r) => r,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("{}: failed to send request", context()));
+            return Err(details.emit_warning(err));
+        }
+    };
 
-    if !resp.status().is_success() {
-        let status = resp.status();
+    let status = resp.status();
+    let response_headers = resp.headers().clone();
+    details = details.with_response(status.as_u16(), &response_headers);
+
+    if !status.is_success() {
         let body = resp.text().await.unwrap_or_default();
-        bail!(
+        details = details.with_body(&body);
+        let err = anyhow!(
             "{} returned HTTP {} — body: {}",
             context(),
             status,
-            truncate_for_error(&body),
+            truncate_for_error(&body)
         );
+        return Err(details.emit_warning(err));
     }
 
-    resp.json::<CopilotSessionResponse>()
-        .await
-        .with_context(|| format!("{}: failed to parse session response", context()))
+    let body_text = match resp.text().await {
+        Ok(t) => t,
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("{}: failed to read response body", context()));
+            return Err(details.emit_warning(err));
+        }
+    };
+    details = details.clone().with_body(&body_text);
+
+    match serde_json::from_str::<CopilotSessionResponse>(&body_text) {
+        Ok(session) => {
+            // Surface the discovered plan-specific endpoint so the caller's
+            // logs and future error messages can show which host was used.
+            if let Some(api) = session.endpoints.as_ref().and_then(|e| e.api.as_deref()) {
+                tracing::debug!(
+                    target: "rustyclaw::providers",
+                    step = "copilot.session_exchange",
+                    endpoints_api = api,
+                    "Copilot session token issued"
+                );
+            }
+            Ok(session)
+        }
+        Err(e) => {
+            let err = anyhow_tracing::Error::from(anyhow::Error::from(e))
+                .context(format!("{}: failed to parse session response", context()));
+            Err(details.emit_warning(err))
+        }
+    }
 }
 
 /// Whether the given provider requires Copilot session-token exchange.

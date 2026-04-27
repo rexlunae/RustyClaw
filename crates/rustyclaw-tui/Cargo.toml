@@ -24,6 +24,7 @@ crossterm.workspace = true
 
 # Also needed directly by TUI code
 anyhow.workspace = true
+anyhow-tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
