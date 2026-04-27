@@ -36,7 +36,11 @@ pub fn DetailsDialog(props: &DetailsDialogProps) -> impl Into<AnyElement<'static
 
     let lines: Vec<String> = props.details.lines().map(|s| s.to_string()).collect();
     let total = lines.len();
-    let visible: Vec<String> = lines.iter().skip(props.scroll_offset).cloned().collect();
+    let visible: Vec<String> = if total == 0 {
+        vec!["(no extended details)".to_string()]
+    } else {
+        lines.iter().skip(props.scroll_offset).cloned().collect()
+    };
 
     element! {
         View(
@@ -77,11 +81,15 @@ pub fn DetailsDialog(props: &DetailsDialogProps) -> impl Into<AnyElement<'static
                 // Scroll position + hint
                 View(flex_direction: FlexDirection::Row) {
                     Text(
-                        content: format!(
-                            "line {}/{}  ",
-                            (props.scroll_offset + 1).min(total.max(1)),
-                            total.max(1),
-                        ),
+                        content: if total == 0 {
+                            "no content".to_string()
+                        } else {
+                            format!(
+                                "line {}/{}  ",
+                                (props.scroll_offset + 1).min(total),
+                                total,
+                            )
+                        },
                         color: theme::MUTED,
                     )
                     Text(content: "PgUp/PgDn ", color: theme::ACCENT_BRIGHT)
