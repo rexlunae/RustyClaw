@@ -7,6 +7,12 @@ use rustyclaw_core::types::MessageRole;
 pub struct DisplayMessage {
     pub role: MessageRole,
     pub content: String,
+    /// Extended structured details (URL, redacted headers, status,
+    /// body excerpt, full cause chain).  Populated by warning/error
+    /// messages that originated from `anyhow_tracing::Error` carrying
+    /// `RequestDetails`.  When `Some(_)`, the TUI's details-dialog
+    /// keybind will surface this in a scrollable popup.
+    pub details: Option<String>,
 }
 
 impl DisplayMessage {
@@ -14,6 +20,20 @@ impl DisplayMessage {
         Self {
             role,
             content: content.into(),
+            details: None,
+        }
+    }
+
+    /// Create a message with extended details for the TUI's details dialog.
+    pub fn with_details(
+        role: MessageRole,
+        content: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
+        Self {
+            role,
+            content: content.into(),
+            details: Some(details.into()),
         }
     }
 

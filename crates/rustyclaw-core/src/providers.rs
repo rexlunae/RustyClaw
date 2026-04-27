@@ -399,7 +399,8 @@ pub async fn fetch_models_detailed(
     if base.is_empty() {
         bail!(
             "No base URL configured for {}. Set one in config.toml or use /provider.",
-            def.display);
+            def.display
+        );
     }
 
     // Anthropic has no public models endpoint — return the static list.
@@ -669,13 +670,8 @@ async fn fetch_github_copilot_models_detailed(
         // user — combined with any fallback failure — so they can see
         // the real cause instead of a misleading "empty model list"
         // warning from the outer caller.
-        Err(exchange_err) => match send_copilot_models_request(
-            &client,
-            &fallback_url,
-            key,
-            None,
-        )
-        .await
+        Err(exchange_err) => match send_copilot_models_request(&client, &fallback_url, key, None)
+            .await
         {
             Ok(models) if !models.is_empty() => Ok(models),
             Ok(_) => Err(exchange_err.context(
@@ -1515,6 +1511,76 @@ mod tests {
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "gpt-5.2");
         assert_eq!(models[0].name.as_deref(), Some("GPT 5.2"));
+    }
+
+    /// Sanity check: a realistic Copilot `/models` response (mixed
+    /// chat + embedding entries, both with and without
+    /// `capabilities.type == "chat"`) should not get filtered down
+    /// to zero by [`parse_models_response`].
+    ///
+    /// This guards against regressions where we tighten the filter
+    /// such that real Copilot Pro / Business model shapes get
+    /// dropped, leaving the user staring at "empty model list".
+    #[test]
+    fn test_parse_copilot_models_response_realistic_pro_and_business_shapes() {
+        let body = serde_json::json!({
+            "data": [
+                // Pro plan: chat model, capabilities.type = "chat"
+                {
+                    "id": "gpt-4.1",
+                    "object": "model",
+                    "model_picker_enabled": true,
+                    "name": "GPT-4.1",
+                    "vendor": "Azure OpenAI",
+                    "capabilities": {
+                        "family": "gpt-4.1",
+                        "type": "chat",
+                        "supports": { "tool_calls": true, "streaming": true }
+                    }
+                },
+                // Business plan: chat model, identical structurally
+                {
+                    "id": "claude-sonnet-4",
+                    "object": "model",
+                    "model_picker_enabled": true,
+                    "name": "Claude Sonnet 4",
+                    "vendor": "Anthropic",
+                    "capabilities": {
+                        "family": "claude-sonnet-4",
+                        "type": "chat",
+                        "supports": { "tool_calls": true, "streaming": true }
+                    }
+                },
+                // Embedding model — should be filtered out
+                {
+                    "id": "text-embedding-3-small",
+                    "object": "model",
+                    "name": "Embedding v3 small",
+                    "capabilities": { "type": "embeddings" }
+                },
+                // Chat-capable model with no `capabilities.type` but
+                // present in id (defensive): should still appear,
+                // since the filter is a heuristic.
+                {
+                    "id": "gpt-5",
+                    "object": "model",
+                    "name": "GPT 5"
+                }
+            ]
+        });
+        let models = parse_models_response(&body);
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert!(ids.contains(&"gpt-4.1"), "ids = {:?}", ids);
+        assert!(ids.contains(&"claude-sonnet-4"), "ids = {:?}", ids);
+        assert!(
+            !ids.contains(&"text-embedding-3-small"),
+            "embedding leaked: ids = {:?}",
+            ids
+        );
+        assert!(
+            !models.is_empty(),
+            "Copilot response with chat-capable models should not be filtered to empty"
+        );
     }
 
     #[test]

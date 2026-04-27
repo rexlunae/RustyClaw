@@ -11,6 +11,10 @@ pub struct MessageBubbleProps {
     pub content: String,
     /// Custom name to display for assistant messages (falls back to "Assistant").
     pub assistant_name: Option<String>,
+    /// True when this message has extended structured details that
+    /// can be opened with Ctrl-D.  When set, a small hint is shown
+    /// after the content.
+    pub has_details: bool,
 }
 
 #[component]
@@ -60,6 +64,16 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
         ) {
             Text(content: format!("{} {}", icon, label), color: border, weight: Weight::Bold)
             Text(content: display, color: fg, wrap: TextWrap::Wrap)
+            #(if props.has_details {
+                element! {
+                    Text(
+                        content: "↵ press Ctrl-D for details".to_string(),
+                        color: theme::TEXT_DIM,
+                    )
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
         }
     }
 }

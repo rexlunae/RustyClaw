@@ -1,6 +1,7 @@
 pub mod api_key_dialog;
 pub mod auth_dialog;
 pub mod command_menu;
+pub mod details_dialog;
 pub mod device_flow_dialog;
 pub mod dialogs;
 pub mod hatching_dialog;

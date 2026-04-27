@@ -43,8 +43,20 @@ pub(crate) enum GwEvent {
     },
     Info(String),
     Success(String),
-    Warning(String),
-    Error(String),
+    /// A non-fatal warning.  `details` carries the multi-line extended
+    /// representation (URL, status, redacted headers, body excerpt,
+    /// full error chain) for the TUI's "details" dialog when the
+    /// underlying error has structured fields attached.
+    Warning {
+        summary: String,
+        details: Option<String>,
+    },
+    /// An error.  Same shape as [`Warning`], including optional
+    /// extended details.
+    Error {
+        summary: String,
+        details: Option<String>,
+    },
     StreamStart,
     Chunk(String),
     ResponseDone,
@@ -147,6 +159,42 @@ pub(crate) enum GwEvent {
     },
     /// SSH pairing connection failed
     PairingError(String),
+}
+
+impl GwEvent {
+    /// Warning event with no extended details.
+    pub fn warning(summary: impl Into<String>) -> Self {
+        GwEvent::Warning {
+            summary: summary.into(),
+            details: None,
+        }
+    }
+    /// Warning event from an `anyhow_tracing::Error`.  The error's
+    /// `Display` form becomes the toast summary (rendered with `{:#}`
+    /// to include the cause chain), and the structured fields are
+    /// rendered into a multi-line "details" string for the
+    /// details-dialog keybind.
+    #[allow(dead_code)]
+    pub fn warning_from_err(err: &anyhow_tracing::Error) -> Self {
+        GwEvent::Warning {
+            summary: format!("{:#}", err),
+            details: Some(rustyclaw_core::error_details::render_extended(err)),
+        }
+    }
+    /// Error event with no extended details.
+    pub fn error(summary: impl Into<String>) -> Self {
+        GwEvent::Error {
+            summary: summary.into(),
+            details: None,
+        }
+    }
+    /// Error event from an `anyhow_tracing::Error`.  See [`Self::warning_from_err`].
+    pub fn error_from_err(err: &anyhow_tracing::Error) -> Self {
+        GwEvent::Error {
+            summary: format!("{:#}", err),
+            details: Some(rustyclaw_core::error_details::render_extended(err)),
+        }
+    }
 }
 
 /// Messages from the iocraft render component back to tokio.
@@ -397,7 +445,7 @@ impl App {
                 let parsed = match url::Url::parse(&gateway_url_clone) {
                     Ok(u) => u,
                     Err(e) => {
-                        let _ = gw_tx_ssh.send(GwEvent::Error(format!("Invalid SSH URL: {}", e)));
+                        let _ = gw_tx_ssh.send(GwEvent::error(format!("Invalid SSH URL: {}", e)));
                         let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
                         return;
                     }
@@ -448,8 +496,8 @@ impl App {
                                 Ok(_) => {
                                     let len = u32::from_be_bytes(len_buf) as usize;
                                     if len > 16 * 1024 * 1024 {
-                                        let _ = gw_tx_ssh
-                                            .send(GwEvent::Error("SSH frame too large".into()));
+                                        let _ =
+                                            gw_tx_ssh.send(GwEvent::error("SSH frame too large"));
                                         break;
                                     }
                                     let mut frame_buf = vec![0u8; len];
@@ -484,7 +532,7 @@ impl App {
                                             }
                                         }
                                         Err(e) => {
-                                            let _ = gw_tx_ssh.send(GwEvent::Error(format!(
+                                            let _ = gw_tx_ssh.send(GwEvent::error(format!(
                                                 "Protocol error: {}",
                                                 e
                                             )));
@@ -506,7 +554,7 @@ impl App {
                     Err(e) => {
                         drop(sink_tx);
                         let _ =
-                            gw_tx_ssh.send(GwEvent::Error(format!("Failed to spawn ssh: {}", e)));
+                            gw_tx_ssh.send(GwEvent::error(format!("Failed to spawn ssh: {}", e)));
                         let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
                     }
                 }
@@ -561,7 +609,7 @@ impl App {
                                                 data.len(),
                                                 e
                                             );
-                                            let _ = gw_tx_conn.send(GwEvent::Error(format!(
+                                            let _ = gw_tx_conn.send(GwEvent::error(format!(
                                             "Protocol error: failed to deserialize frame ({}). Gateway/TUI version mismatch?",
                                             e
                                         )));
@@ -583,7 +631,7 @@ impl App {
                     Err(e) => {
                         drop(sink_tx);
                         let _ = gw_tx_conn
-                            .send(GwEvent::Error(format!("Gateway connection failed: {}", e)));
+                            .send(GwEvent::error(format!("Gateway connection failed: {}", e)));
                         let _ = gw_tx_conn.send(GwEvent::Disconnected(e.to_string()));
                     }
                 }
@@ -721,10 +769,12 @@ impl App {
                                     .send(GwEvent::ModelCompletionsLoaded { provider, models });
                             }
                             Err(e) => {
-                                let _ = gw_tx2.send(GwEvent::Warning(format!(
-                                    "Failed to load model completions: {}",
-                                    e,
-                                )));
+                                let _ = gw_tx2.send(GwEvent::Warning {
+                                    summary: format!("Failed to load model completions: {:#}", e),
+                                    details: Some(rustyclaw_core::error_details::render_extended(
+                                        &e,
+                                    )),
+                                });
                             }
                         }
                     });
@@ -886,7 +936,7 @@ impl App {
                             // new model takes effect immediately (no restart needed).
                             if let Err(e) = config.save(None) {
                                 let _ = gw_tx
-                                    .send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                                    .send(GwEvent::error(format!("Failed to save config: {}", e)));
                             } else {
                                 let _ = gw_tx.send(GwEvent::Info(format!(
                                     "Model set to {}. Reloading gateway…",
@@ -917,7 +967,7 @@ impl App {
                             // Save config and tell the gateway to reload
                             if let Err(e) = config.save(None) {
                                 let _ = gw_tx
-                                    .send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                                    .send(GwEvent::error(format!("Failed to save config: {}", e)));
                             } else {
                                 let _ = gw_tx.send(GwEvent::Info(format!(
                                     "Provider set to {}. Reloading gateway…",
@@ -1000,7 +1050,7 @@ impl App {
                                         ));
                                     }
                                     Err(e) => {
-                                        let _ = gw_tx2.send(GwEvent::Error(format!("{:#}", e)));
+                                        let _ = gw_tx2.send(GwEvent::error_from_err(&e));
                                     }
                                 }
                             });
@@ -1270,10 +1320,14 @@ impl App {
                                             });
                                         }
                                         Err(e) => {
-                                            let _ = gw_tx2.send(GwEvent::Error(format!(
-                                                "Failed to fetch models: {}",
-                                                e
-                                            )));
+                                            let _ = gw_tx2.send(GwEvent::Error {
+                                                summary: format!("Failed to fetch models: {:#}", e),
+                                                details: Some(
+                                                    rustyclaw_core::error_details::render_extended(
+                                                        &e,
+                                                    ),
+                                                ),
+                                            });
                                         }
                                     }
                                 });
@@ -1335,10 +1389,10 @@ impl App {
                                                 });
                                             }
                                             Err(e) => {
-                                                let _ = gw_tx2.send(GwEvent::Error(format!(
-                                                    "Failed to fetch models: {}",
-                                                    e
-                                                )));
+                                                let _ = gw_tx2.send(GwEvent::Error {
+                                                summary: format!("Failed to fetch models: {:#}", e),
+                                                details: Some(rustyclaw_core::error_details::render_extended(&e)),
+                                            });
                                             }
                                         }
                                     });
@@ -1409,10 +1463,10 @@ impl App {
                                                 });
                                             }
                                             Err(e) => {
-                                                let _ = gw_tx2.send(GwEvent::Error(format!(
-                                                    "Failed to fetch models: {}",
-                                                    e
-                                                )));
+                                                let _ = gw_tx2.send(GwEvent::Error {
+                                                summary: format!("Failed to fetch models: {:#}", e),
+                                                details: Some(rustyclaw_core::error_details::render_extended(&e)),
+                                            });
                                             }
                                         }
                                     });
@@ -1451,7 +1505,7 @@ impl App {
                                                         if tokio::time::Instant::now() >= deadline {
                                                             let _ = gw_tx2
                                                                 .send(GwEvent::DeviceFlowDone);
-                                                            let _ = gw_tx2.send(GwEvent::Error(
+                                                            let _ = gw_tx2.send(GwEvent::error(
                                                                 "Device flow timed out — please try again.".to_string(),
                                                             ));
                                                             break;
@@ -1475,24 +1529,25 @@ impl App {
                                                             }
                                                             Err(e) => {
                                                                 let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
-                                                                let _ = gw_tx2.send(GwEvent::Error(format!(
-                                                                    "Device flow failed: {}", e
-                                                                )));
+                                                                let _ = gw_tx2.send(GwEvent::Error {
+                                                                    summary: format!("Device flow failed: {:#}", e),
+                                                                    details: Some(rustyclaw_core::error_details::render_extended(&e)),
+                                                                });
                                                                 break;
                                                             }
                                                         }
                                                     }
                                                 }
                                                 Err(e) => {
-                                                    let _ = gw_tx2.send(GwEvent::Error(format!(
-                                                        "Failed to start device flow: {}",
-                                                        e
-                                                    )));
+                                                    let _ = gw_tx2.send(GwEvent::Error {
+                                                summary: format!("Failed to start device flow: {:#}", e),
+                                                details: Some(rustyclaw_core::error_details::render_extended(&e)),
+                                            });
                                                 }
                                             }
                                         });
                                     } else {
-                                        let _ = gw_tx.send(GwEvent::Error(
+                                        let _ = gw_tx.send(GwEvent::error(
                                             "Device flow not configured for this provider."
                                                 .to_string(),
                                         ));
@@ -1517,7 +1572,7 @@ impl App {
                             )));
                         }
                         Err(e) => {
-                            let _ = gw_tx.send(GwEvent::Warning(format!(
+                            let _ = gw_tx.send(GwEvent::warning(format!(
                                 "Failed to store API key: {}. Key is set for this session only.",
                                 e,
                             )));
@@ -1566,8 +1621,12 @@ impl App {
                                 });
                             }
                             Err(e) => {
-                                let _ = gw_tx2
-                                    .send(GwEvent::Error(format!("Failed to fetch models: {}", e)));
+                                let _ = gw_tx2.send(GwEvent::Error {
+                                    summary: format!("Failed to fetch models: {:#}", e),
+                                    details: Some(rustyclaw_core::error_details::render_extended(
+                                        &e,
+                                    )),
+                                });
                             }
                         }
                     });
@@ -1580,7 +1639,7 @@ impl App {
                         base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
                     });
                     if let Err(e) = config.save(None) {
-                        let _ = gw_tx.send(GwEvent::Error(format!("Failed to save config: {}", e)));
+                        let _ = gw_tx.send(GwEvent::error(format!("Failed to save config: {}", e)));
                     } else {
                         let display =
                             rustyclaw_core::providers::display_name_for_provider(&provider);
@@ -1721,8 +1780,8 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         // ── Generic messages ────────────────────────────────────────────
         Action::Info(s) => Some(GwEvent::Info(s.clone())),
         Action::Success(s) => Some(GwEvent::Success(s.clone())),
-        Action::Warning(s) => Some(GwEvent::Warning(s.clone())),
-        Action::Error(s) => Some(GwEvent::Error(s.clone())),
+        Action::Warning(s) => Some(GwEvent::warning(s.clone())),
+        Action::Error(s) => Some(GwEvent::error(s.clone())),
 
         // ── Secrets results — show as info/success/error messages ───────
         Action::SecretsListResult { entries } => {
@@ -1746,7 +1805,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             if *ok {
                 Some(GwEvent::RefreshSecrets)
             } else {
-                Some(GwEvent::Error(format!(
+                Some(GwEvent::error(format!(
                     "Failed to store secret: {}",
                     message
                 )))
@@ -1773,7 +1832,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
                     field_strs.join("\n")
                 )))
             } else {
-                Some(GwEvent::Error(
+                Some(GwEvent::error(
                     message
                         .clone()
                         .unwrap_or_else(|| format!("Failed to peek {}", name)),
@@ -1784,7 +1843,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             if *ok {
                 Some(GwEvent::RefreshSecrets)
             } else {
-                Some(GwEvent::Error(
+                Some(GwEvent::error(
                     message
                         .clone()
                         .unwrap_or_else(|| "Failed to update policy".into()),
@@ -1803,7 +1862,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
                     cred_name, action_word
                 )))
             } else {
-                Some(GwEvent::Error(format!(
+                Some(GwEvent::error(format!(
                     "Failed to {} credential {}",
                     action_word, cred_name
                 )))
@@ -1813,7 +1872,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             if *ok {
                 Some(GwEvent::RefreshSecrets)
             } else {
-                Some(GwEvent::Error(format!(
+                Some(GwEvent::error(format!(
                     "Failed to delete credential {}",
                     cred_name
                 )))
@@ -1833,7 +1892,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
                         .unwrap_or_default()
                 )))
             } else {
-                Some(GwEvent::Error(
+                Some(GwEvent::error(
                     message
                         .clone()
                         .unwrap_or_else(|| "TOTP setup failed".into()),
@@ -1844,21 +1903,21 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             if *ok {
                 Some(GwEvent::Success("TOTP verified".into()))
             } else {
-                Some(GwEvent::Error("TOTP verification failed".into()))
+                Some(GwEvent::error("TOTP verification failed"))
             }
         }
         Action::SecretsRemoveTotpResult { ok } => {
             if *ok {
                 Some(GwEvent::Success("TOTP removed".into()))
             } else {
-                Some(GwEvent::Error("TOTP removal failed".into()))
+                Some(GwEvent::error("TOTP removal failed"))
             }
         }
 
         // ── Actions that are UI-only (no gateway frame) — show if relevant ──
         Action::ToolCommandDone { message, is_error } => {
             if *is_error {
-                Some(GwEvent::Error(message.clone()))
+                Some(GwEvent::error(message.clone()))
             } else {
                 Some(GwEvent::Success(message.clone()))
             }
@@ -1873,7 +1932,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         // ── Catch-all: NEVER silently drop ──────────────────────────────
         // Any action not explicitly handled above is shown as a warning
         // so the user always knows something happened.
-        other => Some(GwEvent::Warning(format!("Unhandled event: {}", other))),
+        other => Some(GwEvent::warning(format!("Unhandled event: {}", other))),
     }
 }
 
@@ -2060,6 +2119,15 @@ mod tui_component {
             hooks.use_state(Vec::new);
         let mut skills_selected: State<Option<usize>> = hooks.use_state(|| Some(0));
 
+        // Details dialog overlay — shows extended `RequestDetails`
+        // (URL, status, redacted headers, body excerpt, full cause
+        // chain) attached to the most recent warning/error toast.
+        // Opened with Ctrl-D when the latest message has details.
+        let mut show_details_dialog = hooks.use_state(|| false);
+        let mut details_dialog_text = hooks.use_state(String::new);
+        let mut details_dialog_is_error = hooks.use_state(|| false);
+        let mut details_dialog_scroll = hooks.use_state(|| 0usize);
+
         let mut show_tool_perms_dialog = hooks.use_state(|| false);
         let mut tool_perms_dialog_data: State<
             Vec<crate::components::tool_perms_dialog::ToolPermInfo>,
@@ -2130,17 +2198,25 @@ mod tui_component {
                                         m.push(DisplayMessage::success(s));
                                         messages.set(m);
                                     }
-                                    GwEvent::Warning(s) => {
+                                    GwEvent::Warning { summary, details } => {
                                         // If auth dialog is open, treat warnings as auth retries
                                         if show_auth_dialog.get() {
-                                            auth_error.set(s.clone());
+                                            auth_error.set(summary.clone());
                                             auth_code.set(String::new());
                                         }
                                         let mut m = messages.read().clone();
-                                        m.push(DisplayMessage::warning(s));
+                                        let msg = match details {
+                                            Some(d) => DisplayMessage::with_details(
+                                                rustyclaw_core::types::MessageRole::Warning,
+                                                summary,
+                                                d,
+                                            ),
+                                            None => DisplayMessage::warning(summary),
+                                        };
+                                        m.push(msg);
                                         messages.set(m);
                                     }
-                                    GwEvent::Error(s) => {
+                                    GwEvent::Error { summary, details } => {
                                         // Auth errors close the dialog
                                         if show_auth_dialog.get() {
                                             show_auth_dialog.set(false);
@@ -2156,7 +2232,15 @@ mod tui_component {
                                         streaming_buf.set(String::new());
 
                                         let mut m = messages.read().clone();
-                                        m.push(DisplayMessage::error(s));
+                                        let msg = match details {
+                                            Some(d) => DisplayMessage::with_details(
+                                                rustyclaw_core::types::MessageRole::Error,
+                                                summary,
+                                                d,
+                                            ),
+                                            None => DisplayMessage::error(summary),
+                                        };
+                                        m.push(msg);
                                         messages.set(m);
                                     }
                                     GwEvent::StreamStart => {
@@ -3216,6 +3300,27 @@ mod tui_component {
                     }
 
                     // ── Normal mode keyboard ────────────────────────
+                    // Details dialog: Esc to close, PgUp/PgDn to scroll
+                    if show_details_dialog.get() {
+                        match code {
+                            KeyCode::Esc => {
+                                show_details_dialog.set(false);
+                                details_dialog_scroll.set(0);
+                            }
+                            KeyCode::PageDown | KeyCode::Down => {
+                                let total = details_dialog_text.read().lines().count();
+                                let next = (details_dialog_scroll.get() + 5).min(total.saturating_sub(1));
+                                details_dialog_scroll.set(next);
+                            }
+                            KeyCode::PageUp | KeyCode::Up => {
+                                let cur = details_dialog_scroll.get();
+                                details_dialog_scroll.set(cur.saturating_sub(5));
+                            }
+                            _ => {}
+                        }
+                        return;
+                    }
+
                     // Info dialogs: Esc to close, Up/Down to navigate, Enter to act
                     if show_skills_dialog.get() {
                         const VISIBLE_ROWS: usize = 20;
@@ -3590,6 +3695,32 @@ mod tui_component {
                         KeyCode::Down => {
                             scroll_offset.set((scroll_offset.get() - 1).max(0));
                         }
+                        // Ctrl+D opens the details dialog for the most recent
+                        // warning/error message that carries extended
+                        // structured details (URL, status, redacted headers,
+                        // body excerpt, full cause chain).  Only fires when
+                        // there's actually something to show.
+                        KeyCode::Char('d') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            let msgs = messages.read();
+                            // Walk backwards to find the most recent
+                            // warning/error with details attached.
+                            let entry = msgs.iter().rev().find(|m| {
+                                matches!(
+                                    m.role,
+                                    rustyclaw_core::types::MessageRole::Warning
+                                        | rustyclaw_core::types::MessageRole::Error
+                                ) && m.details.is_some()
+                            });
+                            if let Some(msg) = entry {
+                                details_dialog_text.set(msg.details.clone().unwrap_or_default());
+                                details_dialog_is_error.set(matches!(
+                                    msg.role,
+                                    rustyclaw_core::types::MessageRole::Error
+                                ));
+                                details_dialog_scroll.set(0);
+                                show_details_dialog.set(true);
+                            }
+                        }
                         // Ctrl+Shift+P opens pairing dialog
                         KeyCode::Char('P') if modifiers.contains(KeyModifiers::CONTROL) => {
                             if !show_pairing.get() {
@@ -3779,6 +3910,10 @@ mod tui_component {
                 skills_data: skills_dialog_data.read().clone(),
                 skills_selected: skills_selected.get(),
                 skills_scroll_offset: skills_scroll_offset.get(),
+                show_details_dialog: show_details_dialog.get(),
+                details_dialog_text: details_dialog_text.read().clone(),
+                details_dialog_is_error: details_dialog_is_error.get(),
+                details_dialog_scroll: details_dialog_scroll.get(),
                 show_tool_perms_dialog: show_tool_perms_dialog.get(),
                 tool_perms_data: tool_perms_dialog_data.read().clone(),
                 tool_perms_selected: tool_perms_selected.get(),

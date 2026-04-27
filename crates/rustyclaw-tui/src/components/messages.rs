@@ -34,6 +34,24 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
     let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
     let assistant_name = props.assistant_name.clone();
 
+    // Find the index of the most recent warning/error that carries
+    // extended details, so we can show the "Ctrl-D for details" hint
+    // only on that bubble (older ones have already scrolled out of
+    // focus and would just be visual noise).
+    let latest_details_idx: Option<usize> = props
+        .messages
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, m)| {
+            matches!(
+                m.role,
+                rustyclaw_core::types::MessageRole::Warning
+                    | rustyclaw_core::types::MessageRole::Error
+            ) && m.details.is_some()
+        })
+        .map(|(i, _)| i);
+
     element! {
         View(
             flex_direction: FlexDirection::Column,
@@ -49,12 +67,14 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
             ) {
                 #(props.messages.iter().enumerate().map(|(i, msg)| {
                     let name = assistant_name.clone();
+                    let has_details = latest_details_idx == Some(i);
                     element! {
                         MessageBubble(
                             key: i as u64,
                             role: msg.role,
                             content: msg.content.clone(),
                             assistant_name: name,
+                            has_details: has_details,
                         )
                     }
                 }))
