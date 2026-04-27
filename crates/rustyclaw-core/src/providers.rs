@@ -538,9 +538,9 @@ fn parse_models_response(body: &serde_json::Value) -> Vec<ModelInfo> {
 
 /// Fetch from an OpenAI-compatible `/models` endpoint with full metadata.
 ///
-/// Works for OpenAI, xAI, OpenRouter, Ollama, GitHub Copilot, and
-/// custom providers.  Only models that appear to support chat
-/// completions are returned (see [`is_chat_model`]).
+/// Works for OpenAI, xAI, OpenRouter, Ollama, and custom providers.  Only
+/// models that appear to support chat completions are returned (see
+/// [`is_chat_model`]).
 async fn fetch_openai_compatible_models_detailed(
     base_url: &str,
     api_key: Option<&str>,
