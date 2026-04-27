@@ -3666,11 +3666,15 @@ mod tui_component {
                             }
                         }
 
-                        let mut names = rustyclaw_core::commands::command_names_for_provider(&current_pid);
-                        if model_completion_provider.read().as_deref() == Some(current_pid.as_str()) {
+                        let mut names =
+                            rustyclaw_core::commands::command_names_for_provider(&current_pid);
+                        if model_completion_provider.read().as_deref() == Some(current_pid.as_str())
+                        {
+                            let mut seen: std::collections::HashSet<String> =
+                                names.iter().cloned().collect();
                             for model in model_completion_models.read().iter() {
                                 let entry = format!("model {}", model);
-                                if !names.iter().any(|existing| existing == &entry) {
+                                if seen.insert(entry.clone()) {
                                     names.push(entry);
                                 }
                             }
