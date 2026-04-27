@@ -1908,6 +1908,33 @@ mod tui_component {
     pub(super) static CHANNEL_TX: StdMutex<Option<sync_mpsc::Sender<UserInput>>> =
         StdMutex::new(None);
 
+    /// Build the slash-command autocomplete list for a `/{partial}` input.
+    ///
+    /// Merges the static command names for `provider` with any live-fetched
+    /// model IDs (deduplicating in case the live list overlaps the static
+    /// fallback), then filters by the user's partial.  When `live_models` is
+    /// `None`, only the static list is used.
+    fn build_slash_completions(
+        provider: &str,
+        live_models: Option<&[String]>,
+        partial: &str,
+    ) -> Vec<String> {
+        let mut names = rustyclaw_core::commands::command_names_for_provider(provider);
+        if let Some(live) = live_models {
+            let mut seen: std::collections::HashSet<String> = names.iter().cloned().collect();
+            for model in live {
+                let entry = format!("model {}", model);
+                if seen.insert(entry.clone()) {
+                    names.push(entry);
+                }
+            }
+        }
+        names
+            .into_iter()
+            .filter(|c| c.starts_with(partial))
+            .collect()
+    }
+
     #[component]
     pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
         let (width, height) = hooks.use_terminal_size();
@@ -2498,19 +2525,11 @@ mod tui_component {
                                         let current_input = input_value.read().clone();
                                         if let Some(partial) = current_input.strip_prefix('/') {
                                             if partial.starts_with("model") {
-                                                let mut names = rustyclaw_core::commands::command_names_for_provider(&provider);
-                                                let mut seen: std::collections::HashSet<String> =
-                                                    names.iter().cloned().collect();
-                                                for model in &models {
-                                                    let entry = format!("model {}", model);
-                                                    if seen.insert(entry.clone()) {
-                                                        names.push(entry);
-                                                    }
-                                                }
-                                                let filtered: Vec<String> = names
-                                                    .into_iter()
-                                                    .filter(|c: &String| c.starts_with(partial))
-                                                    .collect();
+                                                let filtered = build_slash_completions(
+                                                    &provider,
+                                                    Some(&models),
+                                                    partial,
+                                                );
                                                 if filtered.is_empty() {
                                                     command_completions.set(Vec::new());
                                                     command_selected.set(None);
@@ -3700,23 +3719,14 @@ mod tui_component {
                             }
                         }
 
-                        let mut names =
-                            rustyclaw_core::commands::command_names_for_provider(&current_pid);
-                        if model_completion_provider.read().as_deref() == Some(current_pid.as_str())
-                        {
-                            let mut seen: std::collections::HashSet<String> =
-                                names.iter().cloned().collect();
-                            for model in model_completion_models.read().iter() {
-                                let entry = format!("model {}", model);
-                                if seen.insert(entry.clone()) {
-                                    names.push(entry);
-                                }
-                            }
-                        }
-                        let filtered: Vec<String> = names
-                            .into_iter()
-                            .filter(|c: &String| c.starts_with(partial))
-                            .collect();
+                        let live_models = model_completion_models.read().clone();
+                        let live_provider_matches =
+                            model_completion_provider.read().as_deref() == Some(current_pid.as_str());
+                        let filtered = build_slash_completions(
+                            &current_pid,
+                            if live_provider_matches { Some(live_models.as_slice()) } else { None },
+                            partial,
+                        );
                         if filtered.is_empty() {
                             command_completions.set(Vec::new());
                             command_selected.set(None);
