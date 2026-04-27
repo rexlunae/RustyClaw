@@ -20,6 +20,7 @@ pub mod config;
 pub mod cron;
 pub mod daemon;
 pub mod error;
+pub mod error_details;
 pub mod gateway;
 pub mod logging;
 pub mod mcp;
