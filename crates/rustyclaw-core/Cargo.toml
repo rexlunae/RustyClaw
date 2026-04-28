@@ -94,8 +94,8 @@ rmcp = { workspace = true, optional = true }
 schemars = { workspace = true, optional = true }
 
 # Steel Memory - semantic vector search memory palace
-# Using git until 0.1.1 is published (rusqlite 0.37 for diesel compatibility)
-steel-memory = { git = "https://github.com/rexlunae/steel-memory", branch = "main", optional = true }
+# Keep git for local/dev; include version so publish can strip git and use crates.io.
+steel-memory = { version = "0.1.2", optional = true }
 
 # SSH transport (optional)
 russh = { version = "0.52", features = ["async-trait"], optional = true }
