@@ -9,6 +9,7 @@ use super::types::{
     ProviderRequest, ToolCallResult,
 };
 use super::{ServerFrame, ServerFrameType, ServerPayload};
+use crate::error_details::{ErrorLike, RequestDetails};
 use crate::providers;
 use crate::tools;
 
@@ -470,6 +471,13 @@ pub async fn compact_conversation(
 ///
 /// Returns a [`ProbeResult`] that lets the caller distinguish between
 /// "fully ready", "connected with a warning", and "hard failure".
+///
+/// On any failure path a structured `tracing::warn!` is emitted via
+/// [`crate::error_details::RequestDetails`] so that JSON log output
+/// carries the request method, URL, status, redacted request/response
+/// headers, and body excerpt as named fields — rather than a single
+/// pre-formatted string.  The wire-protocol [`ProbeResult`] strings
+/// remain unchanged for compatibility with TUI/CLI clients.
 pub async fn validate_model_connection(
     http: &reqwest::Client,
     ctx: &ModelContext,
@@ -486,14 +494,33 @@ pub async fn validate_model_connection(
     {
         Ok(k) => k,
         Err(err) => {
+            // The inner error from `resolve_bearer_token` (in particular
+            // the Copilot session-exchange path via
+            // `providers::exchange_copilot_session`) already carries a
+            // populated `RequestDetails` with method/url/status/headers/
+            // body when applicable.  Emit a warn with that structured
+            // context preserved, plus the provider id, rather than
+            // overwriting the URL field with a synthetic placeholder.
+            let wrapped = anyhow_tracing::Error::from(err)
+                .context("Token exchange failed")
+                .with_field("provider", &ctx.provider);
+            tracing::warn!(
+                target: "rustyclaw::providers",
+                provider = %ctx.provider,
+                error = %wrapped,
+                "Token exchange failed during model probe",
+            );
             return ProbeResult::AuthError {
-                detail: format!("Token exchange failed: {}", err),
+                detail: format_probe_error(&wrapped),
             };
         }
     };
 
-    let result: Result<reqwest::Response> = if ctx.provider == "anthropic" {
-        // Anthropic has no /models list endpoint — use a minimal chat.
+    // Per-branch probe: build the request, capture the structured
+    // request snapshot (method/url/headers/bearer) before issuing it,
+    // and run it.  Each branch returns the response (or send error)
+    // along with the snapshot it built.
+    let (mut details, result) = if ctx.provider == "anthropic" {
         let base = ctx.base_url.trim_end_matches('/');
         let url = if base.ends_with("/v1") {
             format!("{}/messages", base)
@@ -505,12 +532,21 @@ pub async fn validate_model_connection(
             "max_tokens": 1,
             "messages": [{"role": "user", "content": "Hi"}],
         });
+        let api_key = ctx.api_key.as_deref().unwrap_or("");
+        let details = RequestDetails::new("probe.anthropic", "POST", url.clone())
+            .with_provider(&ctx.provider)
+            .with_request_headers([
+                ("x-api-key", "<redacted>"),
+                ("anthropic-version", "2023-06-01"),
+                ("content-type", "application/json"),
+            ])
+            .with_bearer(Some(api_key));
         let builder = http
             .post(&url)
-            .header("x-api-key", ctx.api_key.as_deref().unwrap_or(""))
+            .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .json(&body);
-        send_with_retry(builder).await
+        (details, send_with_retry(builder).await)
     } else if ctx.provider == "google" {
         // Google: check the model metadata endpoint (no chat needed).
         let key = ctx.api_key.as_deref().unwrap_or("");
@@ -520,16 +556,30 @@ pub async fn validate_model_connection(
             ctx.model,
             key,
         );
-        send_with_retry(http.get(&url)).await
+        let public_url = format!(
+            "{}/models/{}?key=<redacted>",
+            ctx.base_url.trim_end_matches('/'),
+            ctx.model,
+        );
+        let details = RequestDetails::new("probe.google", "GET", public_url)
+            .with_provider(&ctx.provider)
+            .with_bearer(Some(key));
+        (details, send_with_retry(http.get(&url)).await)
     } else {
         // OpenAI-compatible: GET /models — lightweight auth check.
         let url = format!("{}/models", ctx.base_url.trim_end_matches('/'));
+        let mut details = RequestDetails::new("probe.openai_compatible", "GET", url.clone())
+            .with_provider(&ctx.provider)
+            .with_bearer(effective_key.as_deref());
+        if effective_key.is_some() {
+            details = details.with_request_headers([("Authorization", "Bearer <redacted>")]);
+        }
         let mut builder = http.get(&url);
         if let Some(ref key) = effective_key {
             builder = builder.bearer_auth(key);
         }
         builder = apply_copilot_headers(builder, &ctx.provider, &[]);
-        send_with_retry(builder).await
+        (details, send_with_retry(builder).await)
     };
 
     match result {
@@ -537,9 +587,29 @@ pub async fn validate_model_connection(
         Ok(resp) => {
             let status = resp.status();
             let code = status.as_u16();
+            let response_headers = resp.headers().clone();
             let body = resp.text().await.unwrap_or_default();
 
-            // Try to extract a human-readable error message from JSON.
+            details = details
+                .with_response(code, &response_headers)
+                .with_body(&body);
+
+            // Build a structured anyhow_tracing error capturing the HTTP
+            // response so the trace below carries method/url/status/
+            // headers/body as named fields rather than a single
+            // pre-rendered string.
+            let truncated = providers::truncate_for_error(&body);
+            let err = anyhow_tracing::anyhow!(
+                "{} {} returned HTTP {} — body: {}",
+                details.method,
+                details.url,
+                status,
+                truncated
+            );
+
+            // Try to extract a human-readable error message from JSON for
+            // the wire-protocol summary.  The full body is preserved on
+            // the structured field above.
             let detail = serde_json::from_str::<serde_json::Value>(&body)
                 .ok()
                 .and_then(|v| {
@@ -550,23 +620,65 @@ pub async fn validate_model_connection(
                 .unwrap_or(body);
 
             match code {
-                401 | 403 => ProbeResult::AuthError {
-                    detail: format!("{} — {}", status, detail),
-                },
+                401 | 403 => {
+                    let _ = details.emit_warning(err);
+                    ProbeResult::AuthError {
+                        detail: format!("{} — {}", status, detail),
+                    }
+                }
                 // 400, 404, 422 etc — the server answered, auth is fine,
                 // but something about the request/model wasn't accepted.
                 // Chat may still work with the full request format.
-                400..=499 => ProbeResult::Connected {
-                    warning: format!("{} — {}", status, detail),
-                },
-                _ => ProbeResult::Unreachable {
-                    detail: format!("{} — {}", status, detail),
-                },
+                400..=499 => {
+                    let _ = details.emit_warning(err);
+                    ProbeResult::Connected {
+                        warning: format!("{} — {}", status, detail),
+                    }
+                }
+                _ => {
+                    let _ = details.emit_warning(err);
+                    ProbeResult::Unreachable {
+                        detail: format!("{} — {}", status, detail),
+                    }
+                }
             }
         }
-        Err(err) => ProbeResult::Unreachable {
-            detail: err.to_string(),
-        },
+        Err(err) => {
+            let wrapped = anyhow_tracing::Error::from(err)
+                .context(format!("{} {} failed", details.method, details.url));
+            let wrapped = details.emit_warning(wrapped);
+            ProbeResult::Unreachable {
+                detail: format_probe_error(&wrapped),
+            }
+        }
+    }
+}
+
+/// Render an `anyhow_tracing::Error` as a single-line wire-protocol
+/// detail string.  The full structured fields are emitted via
+/// `tracing::warn!` separately by [`RequestDetails::emit_warning`]; this
+/// helper produces a concise human-readable summary suitable for a
+/// status frame's `detail` field.
+fn format_probe_error(err: &anyhow_tracing::Error) -> String {
+    // Filter out empty causes so a stray `.context("")` or empty top-level
+    // message doesn't produce something like ": some cause".
+    let chain: Vec<String> = err
+        .cause_chain()
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    if chain.is_empty() {
+        // Last-resort fallback: use the full Display, which includes the
+        // anyhow-tracing field list.  Better than returning an empty
+        // string to the wire protocol.
+        let s = err.to_string();
+        if s.trim().is_empty() {
+            "unknown error".to_string()
+        } else {
+            s
+        }
+    } else {
+        chain.join(": ")
     }
 }
 
