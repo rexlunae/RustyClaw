@@ -167,6 +167,21 @@ impl RequestDetails {
         self.redacted_headers(&self.response_headers)
     }
 
+    /// Render the body excerpt with the bearer/API-key substring
+    /// redacted, if a bearer was registered via [`with_bearer`].  This
+    /// guards against the case where a server echoes the request URL
+    /// (which may contain the key, e.g. Gemini's `?key=…`) back in its
+    /// error body.
+    fn rendered_body(&self) -> Option<String> {
+        let body = self.body_excerpt.as_deref()?;
+        match self.bearer_token.as_deref() {
+            Some(tok) if !tok.is_empty() && body.contains(tok) => {
+                Some(body.replace(tok, &redact_secret(tok)))
+            }
+            _ => Some(body.to_string()),
+        }
+    }
+
     /// Attach the structured fields on this snapshot to an
     /// [`anyhow_tracing::Error`].  The fields appended are: `step`,
     /// `provider`, `method`, `url`, `status`, `request_headers`,
@@ -189,7 +204,7 @@ impl RequestDetails {
         if !resp_headers.is_empty() {
             err = err.with_field("response_headers", render_headers(&resp_headers));
         }
-        if let Some(body) = &self.body_excerpt {
+        if let Some(body) = self.rendered_body() {
             err = err.with_field("body", body);
         }
         if let Some(api) = &self.endpoints_api {
@@ -222,7 +237,7 @@ impl RequestDetails {
         let status = self.status.map(|s| s.to_string()).unwrap_or_default();
         let provider = self.provider.as_deref().unwrap_or("");
         let endpoints_api = self.endpoints_api.as_deref().unwrap_or("");
-        let body = self.body_excerpt.as_deref().unwrap_or("");
+        let body = self.rendered_body().unwrap_or_default();
         match level {
             tracing::Level::ERROR => tracing::error!(
                 target: "rustyclaw::providers",
@@ -458,5 +473,29 @@ mod tests {
         assert!(rendered.contains("Caused by:"));
         assert!(rendered.contains("middle layer"));
         assert!(rendered.contains("inner failure"));
+    }
+
+    /// Defence-in-depth: if a server echoes the bearer/API key back in
+    /// its error body (Gemini puts the key in the URL query string, and
+    /// some servers reflect the offending URL into the response body),
+    /// `with_body` + `with_bearer` must redact it before it lands in
+    /// either the TUI details dialog or the structured tracing line.
+    #[test]
+    fn attach_to_redacts_bearer_substring_in_body() {
+        let err = anyhow_tracing::Error::msg("models fetch failed");
+        let details = RequestDetails::new("google.models", "GET", "https://example.com/models")
+            .with_provider("google")
+            .with_bearer(Some("AIza-super-secret-key"))
+            .with_body(
+                r#"{"error": "bad key", "url": "https://example.com/models?key=AIza-super-secret-key"}"#,
+            );
+        let err = details.attach_to(err);
+        let rendered = render_extended(&err);
+        assert!(
+            !rendered.contains("AIza-super-secret-key"),
+            "bearer leaked into rendered body: {}",
+            rendered
+        );
+        assert!(rendered.contains("<redacted"));
     }
 }

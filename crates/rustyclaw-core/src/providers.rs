@@ -851,7 +851,13 @@ async fn fetch_google_models_detailed(
     let resp = match client.get(&real_url).send().await {
         Ok(r) => r,
         Err(e) => {
-            let err = wrap_err(e).context(format!("GET {} failed to send", public_url));
+            // Strip the URL from the reqwest error before it enters the
+            // cause chain — otherwise its Display would leak the API key
+            // (which lives in the query string for Gemini) into both
+            // `tracing::warn!(error = %err)` output and the TUI details
+            // dialog. We re-attach the redacted `public_url` via context.
+            let err = wrap_err(e.without_url())
+                .context(format!("GET {} failed to send", public_url));
             return Err(details.emit_warning(err));
         }
     };
@@ -875,8 +881,10 @@ async fn fetch_google_models_detailed(
     let body_text = match resp.text().await {
         Ok(t) => t,
         Err(e) => {
-            let err =
-                wrap_err(e).context(format!("GET {}: failed to read response body", public_url));
+            // See note above re: stripping URL from reqwest errors on the
+            // Gemini path — the request URL contains the API key.
+            let err = wrap_err(e.without_url())
+                .context(format!("GET {}: failed to read response body", public_url));
             return Err(details.emit_warning(err));
         }
     };
