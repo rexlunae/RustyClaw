@@ -747,12 +747,12 @@ async fn process_incoming_message(
             let (output, is_error) = if tools::is_secrets_tool(&tc.name) {
                 match secrets_handler::execute_secrets_tool(&tc.name, &tc.arguments, vault).await {
                     Ok(text) => (text, false),
-                    Err(err) => (err, true),
+                    Err(err) => (err.to_string(), true),
                 }
             } else if tools::is_skill_tool(&tc.name) {
                 match skills_handler::execute_skill_tool(&tc.name, &tc.arguments, skill_mgr).await {
                     Ok(text) => (text, false),
-                    Err(err) => (err, true),
+                    Err(err) => (err.to_string(), true),
                 }
             } else if super::mcp_handler::is_mcp_tool(&tc.name) {
                 #[cfg(feature = "mcp")]
@@ -795,7 +795,7 @@ async fn process_incoming_message(
                 .await
                 {
                     Ok(text) => (text, false),
-                    Err(err) => (err, true),
+                    Err(err) => (err.to_string(), true),
                 }
             } else if super::command_wrapper::should_wrap_in_task(&tc.name) {
                 // Wrap execute_command in a Task
@@ -839,7 +839,7 @@ async fn process_incoming_message(
                 .await
                 {
                     Ok(text) => (text, false),
-                    Err(err) => (err, true),
+                    Err(err) => (err.to_string(), true),
                 }
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await {
@@ -1155,7 +1155,7 @@ If a credential exists, use `secrets_get` to retrieve it — don't ask the user 
 
 **Authenticated API workflow:**
 1. `secrets_list()` → discover available credentials
-2. `secrets_get(name=\"...\")` → retrieve the value  
+2. `secrets_get(name=\"...\")` → retrieve the value
 3. `web_fetch(url=\"...\", authorization=\"token <value>\")` → make the API call
 
 **Common authorization formats:**

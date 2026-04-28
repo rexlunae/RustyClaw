@@ -24,12 +24,12 @@ pub async fn execute_tool_by_type(
     if tools::is_secrets_tool(name) {
         match secrets_handler::execute_secrets_tool(name, arguments, vault).await {
             Ok(text) => (text, false),
-            Err(err) => (err, true),
+            Err(err) => (err.to_string(), true),
         }
     } else if tools::is_skill_tool(name) {
         match skills_handler::execute_skill_tool(name, arguments, skill_mgr).await {
             Ok(text) => (text, false),
-            Err(err) => (err, true),
+            Err(err) => (err.to_string(), true),
         }
     } else {
         match tools::execute_tool(name, arguments, workspace_dir).await {
