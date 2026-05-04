@@ -13,7 +13,7 @@ const GOLDEN_DIR: &str = "tests/golden";
 fn get_help(args: &[&str]) -> String {
     // Try the built binary first
     let binary_path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/debug/rustyclaw");
-    
+
     let mut all_args: Vec<&str> = args.to_vec();
     all_args.push("--help");
 
@@ -37,7 +37,7 @@ fn get_help(args: &[&str]) -> String {
 /// Compare output against golden file, updating if UPDATE_GOLDEN=1
 fn check_golden(name: &str, actual: &str) {
     let golden_path = Path::new(GOLDEN_DIR).join(format!("{}.txt", name));
-    
+
     // If UPDATE_GOLDEN is set, write the new golden file
     if std::env::var("UPDATE_GOLDEN").is_ok() {
         fs::create_dir_all(GOLDEN_DIR).ok();
@@ -58,22 +58,22 @@ fn check_golden(name: &str, actual: &str) {
     }
 
     let expected = fs::read_to_string(&golden_path).expect("Failed to read golden file");
-    
+
     if actual != expected {
         // Show diff
         let actual_lines: Vec<&str> = actual.lines().collect();
         let expected_lines: Vec<&str> = expected.lines().collect();
-        
+
         let mut diff = String::new();
         diff.push_str(&format!("Golden file mismatch: {}\n", golden_path.display()));
         diff.push_str("Run with UPDATE_GOLDEN=1 to update.\n\n");
-        
+
         for (i, (a, e)) in actual_lines.iter().zip(expected_lines.iter()).enumerate() {
             if a != e {
                 diff.push_str(&format!("Line {}: \n  expected: {}\n  actual:   {}\n", i + 1, e, a));
             }
         }
-        
+
         if actual_lines.len() != expected_lines.len() {
             diff.push_str(&format!(
                 "\nLine count mismatch: expected {}, got {}\n",
@@ -81,7 +81,7 @@ fn check_golden(name: &str, actual: &str) {
                 actual_lines.len()
             ));
         }
-        
+
         panic!("{}", diff);
     }
 }
@@ -183,7 +183,7 @@ fn test_golden_skills_list_help() {
 #[test]
 fn test_golden_version() {
     let binary_path = concat!(env!("CARGO_MANIFEST_DIR"), "/target/debug/rustyclaw");
-    
+
     let output = if std::path::Path::new(binary_path).exists() {
         Command::new(binary_path)
             .args(["--version"])
@@ -197,7 +197,7 @@ fn test_golden_version() {
     };
 
     let version = String::from_utf8_lossy(&output.stdout).to_string();
-    
+
     // Version changes frequently, so just verify format
     assert!(
         version.contains("rustyclaw") || version.contains("RustyClaw"),

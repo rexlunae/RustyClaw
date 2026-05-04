@@ -3,6 +3,7 @@
 use std::sync::OnceLock;
 
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use url::Url;
 
 pub mod app;
 mod components;
@@ -12,7 +13,8 @@ mod state;
 static GATEWAY_URL: OnceLock<Option<String>> = OnceLock::new();
 
 pub fn run(gateway_url: Option<String>) {
-    let _ = GATEWAY_URL.set(gateway_url);
+    let normalized_gateway_url = normalize_gateway_url(gateway_url);
+    let _ = GATEWAY_URL.set(normalized_gateway_url);
 
     let _ = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
@@ -25,4 +27,37 @@ pub fn run(gateway_url: Option<String>) {
 
 pub(crate) fn configured_gateway_url() -> Option<String> {
     GATEWAY_URL.get().cloned().flatten()
+}
+
+fn normalize_gateway_url(gateway_url: Option<String>) -> Option<String> {
+    let url = gateway_url?;
+
+    let parsed = match Url::parse(&url) {
+        Ok(parsed) => parsed,
+        Err(_) => return Some(url),
+    };
+
+    if !matches!(parsed.scheme(), "ws" | "wss") {
+        return Some(url);
+    }
+
+    let host = parsed.host_str().unwrap_or("127.0.0.1");
+    let port = match parsed.port() {
+        Some(9001) | None => 2222,
+        Some(port) => port,
+    };
+
+    let normalized = if parsed.username().is_empty() {
+        format!("ssh://{}:{}", host, port)
+    } else {
+        format!("ssh://{}@{}:{}", parsed.username(), host, port)
+    };
+
+    tracing::warn!(
+        old_url = %url,
+        new_url = %normalized,
+        "Converting legacy WebSocket desktop gateway URL to SSH"
+    );
+
+    Some(normalized)
 }

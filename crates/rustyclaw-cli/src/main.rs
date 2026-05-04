@@ -863,7 +863,7 @@ async fn main() -> Result<()> {
                 let gateway_url = args
                     .url
                     .or_else(|| config.gateway_url.clone())
-                    .unwrap_or_else(|| "ws://127.0.0.1:9001".to_string());
+                    .unwrap_or_else(|| "ssh://127.0.0.1:2222".to_string());
                 desktop_app::run(Some(gateway_url));
             }
             #[cfg(not(feature = "desktop"))]
