@@ -9,7 +9,7 @@ use crate::components::{
     Chat, HatchingDialog, HatchingResult, PairingDialog, Sidebar, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
-use crate::state::{AppState, ChatMessage, ConnectionStatus, MessageRole, ThreadInfo};
+use crate::state::{AppState, ConnectionStatus, ThreadInfo};
 
 /// Main application component.
 #[component]
@@ -100,107 +100,93 @@ pub fn App() -> Element {
     };
 
     rsx! {
-        // Include Bulma CSS
-        link { rel: "stylesheet", href: "https://cdn.jsdelivr.net/npm/bulma@0.9.4/css/bulma.min.css" }
-        link { rel: "stylesheet", href: "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" }
+        // FontAwesome icons (Bulma CSS itself is loaded by `BulmaProvider`).
+        document::Link {
+            rel: "stylesheet",
+            href: "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css",
+        }
 
         // Custom styles
-        style { r#"
-            .app-container {{
-                display: flex;
-                height: 100vh;
-                overflow: hidden;
-            }}
-            .main-content {{
-                flex: 1;
-                display: flex;
-                flex-direction: column;
-                overflow: hidden;
-            }}
-            .streaming-cursor {{
-                animation: blink 1s infinite;
-            }}
-            @keyframes blink {{
-                0%, 50% {{ opacity: 1; }}
-                51%, 100% {{ opacity: 0; }}
-            }}
-        "# }
+        document::Style { {include_str!("app.css")} }
 
-        div { class: "app-container",
-            // Sidebar
-            Sidebar {
-                connection: state.read().connection.clone(),
-                agent_name: state.read().agent_name.clone(),
-                model: state.read().model.clone(),
-                provider: state.read().provider.clone(),
-                threads: state.read().threads.clone(),
-                foreground_id: state.read().foreground_thread_id,
-                on_new_thread: on_new_thread,
-                on_switch_thread: on_switch_thread,
-                on_settings: move |_| show_settings.set(true),
-            }
+        BulmaProvider {
+            theme: BulmaTheme::Light,
+            load_bulma_css: true,
 
-            // Main content
-            div { class: "main-content",
-                // Status bar
-                if let Some(msg) = &state.read().status_message {
-                    Notification {
-                        color: BulmaColor::Info,
-                        style: "margin: 0; border-radius: 0;",
+            div { class: "app-container",
+                // Sidebar
+                Sidebar {
+                    connection: state.read().connection.clone(),
+                    agent_name: state.read().agent_name.clone(),
+                    model: state.read().model.clone(),
+                    provider: state.read().provider.clone(),
+                    threads: state.read().threads.clone(),
+                    foreground_id: state.read().foreground_thread_id,
+                    on_new_thread: on_new_thread,
+                    on_switch_thread: on_switch_thread,
+                    on_settings: move |_| show_settings.set(true),
+                }
 
-                        button {
-                            class: "delete",
-                            onclick: move |_| state.write().status_message = None,
+                // Main content
+                div { class: "main-content",
+                    // Status bar
+                    if let Some(msg) = state.read().status_message.clone() {
+                        Notification {
+                            id: "rustyclaw-status",
+                            color: BulmaColor::Info,
+                            dismissible: true,
+                            onclose: move |_| state.write().status_message = None,
+                            style: "margin: 0; border-radius: 0;",
+                            "{msg}"
                         }
-                        "{msg}"
+                    }
+
+                    // Chat area
+                    Chat {
+                        messages: state.read().messages.iter().cloned().collect::<Vec<_>>(),
+                        input: state.read().input.clone(),
+                        is_processing: state.read().is_processing,
+                        is_thinking: state.read().is_thinking,
+                        on_submit: on_submit,
+                        on_input_change: move |value| state.write().input = value,
                     }
                 }
-
-                // Chat area
-                Chat {
-                    messages: state.read().messages.iter().cloned().collect::<Vec<_>>(),
-                    input: state.read().input.clone(),
-                    is_processing: state.read().is_processing,
-                    is_thinking: state.read().is_thinking,
-                    on_submit: on_submit,
-                    on_input_change: move |value| state.write().input = value,
-                }
             }
-        }
 
-        // Dialogs
-        HatchingDialog {
-            visible: *show_hatching.read(),
-            on_complete: move |result: HatchingResult| {
-                state.write().agent_name = Some(result.name);
-                show_hatching.set(false);
-            },
-            on_cancel: move |_| show_hatching.set(false),
-        }
+            // Dialogs
+            HatchingDialog {
+                visible: *show_hatching.read(),
+                on_complete: move |result: HatchingResult| {
+                    state.write().agent_name = Some(result.name);
+                    show_hatching.set(false);
+                },
+                on_cancel: move |_| show_hatching.set(false),
+            }
 
-        PairingDialog {
-            visible: *show_pairing.read(),
-            public_key: public_key.read().clone(),
-            qr_code_data_url: qr_code_url.read().clone(),
-            gateway_host: "127.0.0.1".to_string(),
-            gateway_port: 9001,
-            on_host_change: move |_| {},
-            on_port_change: move |_| {},
-            on_connect: move |_| {
-                show_pairing.set(false);
-                let url = state.read().gateway_url.clone();
-                spawn(async move {
-                    connect_to_gateway(&url, state, gateway).await;
-                });
-            },
-            on_generate_key: move |_| {
-                // Generate keypair (placeholder)
-                public_key.set(Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... desktop-client".to_string()));
-                if let Some(key) = &*public_key.read() {
-                    qr_code_url.set(generate_qr_code(key));
-                }
-            },
-            on_cancel: move |_| show_pairing.set(false),
+            PairingDialog {
+                visible: *show_pairing.read(),
+                public_key: public_key.read().clone(),
+                qr_code_data_url: qr_code_url.read().clone(),
+                gateway_host: "127.0.0.1".to_string(),
+                gateway_port: 9001,
+                on_host_change: move |_| {},
+                on_port_change: move |_| {},
+                on_connect: move |_| {
+                    show_pairing.set(false);
+                    let url = state.read().gateway_url.clone();
+                    spawn(async move {
+                        connect_to_gateway(&url, state, gateway).await;
+                    });
+                },
+                on_generate_key: move |_| {
+                    // Generate keypair (placeholder)
+                    public_key.set(Some("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... desktop-client".to_string()));
+                    if let Some(key) = &*public_key.read() {
+                        qr_code_url.set(generate_qr_code(key));
+                    }
+                },
+                on_cancel: move |_| show_pairing.set(false),
+            }
         }
     }
 }

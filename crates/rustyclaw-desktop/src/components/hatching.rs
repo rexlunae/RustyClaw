@@ -1,4 +1,7 @@
 //! Hatching dialog for first-run identity setup.
+//!
+//! Built from `dioxus-bulma`'s `Modal`/`ModalCard*` components instead of
+//! hand-rolled `<div class="modal">` markup.
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::*;
@@ -60,38 +63,44 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let current_step = *step.read();
     let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
 
-    rsx! {
-        div { class: "modal is-active",
-            div { class: "modal-background",
-                onclick: move |_| props.on_cancel.call(()),
-            }
+    let step_one_color = if current_step >= 1 {
+        BulmaColor::Primary
+    } else {
+        BulmaColor::Light
+    };
+    let step_two_color = if current_step >= 2 {
+        BulmaColor::Primary
+    } else {
+        BulmaColor::Light
+    };
 
-            div { class: "modal-card",
+    rsx! {
+        Modal {
+            id: "rustyclaw-hatching-dialog",
+            active: true,
+            onclose: move |_| props.on_cancel.call(()),
+
+            ModalCard {
                 style: "max-width: 500px;",
 
-                header { class: "modal-card-head",
+                ModalCardHead {
+                    onclose: move |_| props.on_cancel.call(()),
                     p { class: "modal-card-title",
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-egg" }
                         }
                         " Hatching"
                     }
                 }
 
-                section { class: "modal-card-body",
+                ModalCardBody {
                     // Progress indicator
                     div { class: "steps",
                         style: "display: flex; justify-content: center; margin-bottom: 1.5rem;",
 
-                        span {
-                            class: if current_step >= 1 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
-                            "1"
-                        }
+                        Tag { color: step_one_color, size: BulmaSize::Medium, "1" }
                         span { style: "width: 50px; height: 2px; background: #dbdbdb; align-self: center;" }
-                        span {
-                            class: if current_step >= 2 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
-                            "2"
-                        }
+                        Tag { color: step_two_color, size: BulmaSize::Medium, "2" }
                     }
 
                     match current_step {
@@ -103,8 +112,9 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                 }
 
                                 Field {
-                                    Control { class: "has-icons-left",
+                                    Control { has_icons_left: true,
                                         input {
+                                            id: "rustyclaw-hatching-name",
                                             class: "input is-medium",
                                             r#type: "text",
                                             placeholder: "Enter agent name",
@@ -117,7 +127,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                                 }
                                             },
                                         }
-                                        span { class: "icon is-left",
+                                        Icon { class: "is-left",
                                             i { class: "fas fa-robot" }
                                         }
                                     }
@@ -133,12 +143,12 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
 
                                 Field {
                                     Control {
-                                        textarea {
-                                            class: "textarea",
-                                            placeholder: "e.g., Friendly and helpful, with a dry sense of humor",
-                                            rows: 4,
-                                            value: "{personality}",
-                                            oninput: move |evt| personality.set(evt.value()),
+                                        Textarea {
+                                            id: "rustyclaw-hatching-personality",
+                                            placeholder: "e.g., Friendly and helpful, with a dry sense of humor".to_string(),
+                                            rows: 4u32,
+                                            value: personality.read().clone(),
+                                            oninput: move |evt: FormEvent| personality.set(evt.value()),
                                         }
                                     }
                                 }
@@ -148,7 +158,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                     }
                 }
 
-                footer { class: "modal-card-foot",
+                ModalCardFoot {
                     style: "justify-content: space-between;",
 
                     if current_step > 1 {
@@ -156,7 +166,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                             color: BulmaColor::Light,
                             onclick: handle_back,
 
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-arrow-left" }
                             }
                             span { "Back" }
@@ -170,18 +180,19 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                     }
 
                     Button {
+                        id: "rustyclaw-hatching-next",
                         color: BulmaColor::Primary,
                         disabled: is_next_disabled,
                         onclick: handle_next,
 
                         if current_step == 2 {
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-check" }
                             }
                             span { "Complete" }
                         } else {
                             span { "Next" }
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-arrow-right" }
                             }
                         }

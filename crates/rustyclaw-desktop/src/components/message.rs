@@ -1,6 +1,7 @@
 //! Message bubble component.
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::*;
 
 use crate::state::MessageRole;
 
@@ -19,10 +20,10 @@ pub struct MessageBubbleProps {
 /// A single message bubble in the chat.
 #[component]
 pub fn MessageBubble(props: MessageBubbleProps) -> Element {
-    let (bubble_class, icon_class, bg_color) = match props.role {
-        MessageRole::User => ("is-primary", "fa-user", "#3273dc"),
-        MessageRole::Assistant => ("is-info", "fa-robot", "#209cee"),
-        MessageRole::System => ("is-warning", "fa-cog", "#ffdd57"),
+    let (icon_class, bg_color) = match props.role {
+        MessageRole::User => ("fa-user", "#3273dc"),
+        MessageRole::Assistant => ("fa-robot", "#209cee"),
+        MessageRole::System => ("fa-cog", "#ffdd57"),
     };
 
     let is_user = props.role == MessageRole::User;
@@ -33,8 +34,7 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
             class: "message-bubble",
             style: "display: flex; justify-content: {align}; margin-bottom: 0.75rem;",
 
-            div {
-                class: "box",
+            BulmaBox {
                 style: "max-width: 80%; background-color: {bg_color}; color: white; padding: 0.75rem 1rem;",
 
                 // Header with icon
@@ -42,7 +42,7 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                     class: "message-header",
                     style: "display: flex; align-items: center; margin-bottom: 0.25rem; opacity: 0.8; font-size: 0.85rem;",
 
-                    span { class: "icon is-small",
+                    Icon { size: BulmaSize::Small,
                         i { class: "fas {icon_class}" }
                     }
                     span { style: "margin-left: 0.25rem;",

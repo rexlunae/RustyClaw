@@ -1,6 +1,10 @@
 //! Pairing dialog with QR code generation.
+//!
+//! Built from `dioxus-bulma`'s `Modal`/`ModalCard*` and `BulmaBox` components
+//! instead of hand-rolled Bulma markup.
 
 use dioxus::prelude::*;
+use dioxus_bulma::components::ColumnSize;
 use dioxus_bulma::prelude::*;
 
 /// Props for PairingDialog.
@@ -60,34 +64,31 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
     };
 
     rsx! {
-        div { class: "modal is-active",
-            div { class: "modal-background",
-                onclick: move |_| props.on_cancel.call(()),
-            }
+        Modal {
+            id: "rustyclaw-pairing-dialog",
+            active: true,
+            onclose: move |_| props.on_cancel.call(()),
 
-            div { class: "modal-card",
+            ModalCard {
                 style: "max-width: 550px;",
 
-                header { class: "modal-card-head",
+                ModalCardHead {
+                    onclose: move |_| props.on_cancel.call(()),
                     p { class: "modal-card-title",
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-link" }
                         }
                         " Pair with Gateway"
                     }
-                    button {
-                        class: "delete",
-                        onclick: move |_| props.on_cancel.call(()),
-                    }
                 }
 
-                section { class: "modal-card-body",
+                ModalCardBody {
                     // Public key display
-                    div { class: "box",
+                    BulmaBox {
                         style: "background: #f5f5f5;",
 
                         p { class: "has-text-weight-semibold",
-                            span { class: "icon is-small",
+                            Icon { size: BulmaSize::Small,
                                 i { class: "fas fa-key" }
                             }
                             " Your Public Key"
@@ -108,7 +109,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                         color: if *copied.read() { BulmaColor::Success } else { BulmaColor::Light },
                                         onclick: handle_copy,
 
-                                        span { class: "icon is-small",
+                                        Icon { size: BulmaSize::Small,
                                             i { class: if *copied.read() { "fas fa-check" } else { "fas fa-copy" } }
                                         }
                                         span { if *copied.read() { "Copied!" } else { "Copy" } }
@@ -119,11 +120,12 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                             div { style: "margin-top: 0.5rem;",
                                 p { class: "has-text-grey", "No keypair generated" }
                                 Button {
+                                    id: "rustyclaw-pairing-generate-key",
                                     size: BulmaSize::Small,
                                     color: BulmaColor::Primary,
                                     onclick: move |_| props.on_generate_key.call(()),
 
-                                    span { class: "icon is-small",
+                                    Icon { size: BulmaSize::Small,
                                         i { class: "fas fa-plus" }
                                     }
                                     span { "Generate Keypair" }
@@ -150,44 +152,47 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
 
                     // Gateway connection settings
-                    div { class: "box",
+                    BulmaBox {
                         p { class: "has-text-weight-semibold",
-                            span { class: "icon is-small",
+                            Icon { size: BulmaSize::Small,
                                 i { class: "fas fa-server" }
                             }
                             " Gateway"
                         }
 
-                        div { class: "columns",
+                        Columns {
                             style: "margin-top: 0.5rem;",
 
-                            div { class: "column is-8",
+                            Column { size: ColumnSize::Eight,
                                 Field {
                                     FieldLabel { "Host" }
-                                    Control { class: "has-icons-left",
-                                        input {
-                                            class: "input",
-                                            r#type: "text",
-                                            placeholder: "127.0.0.1",
-                                            value: "{host}",
-                                            oninput: move |evt| {
+                                    Control { has_icons_left: true,
+                                        Input {
+                                            id: "rustyclaw-pairing-host",
+                                            placeholder: "127.0.0.1".to_string(),
+                                            value: host.read().clone(),
+                                            oninput: move |evt: FormEvent| {
                                                 let value = evt.value();
                                                 host.set(value.clone());
                                                 props.on_host_change.call(value);
                                             },
                                         }
-                                        span { class: "icon is-left",
+                                        Icon { class: "is-left",
                                             i { class: "fas fa-network-wired" }
                                         }
                                     }
                                 }
                             }
 
-                            div { class: "column is-4",
+                            Column { size: ColumnSize::Four,
                                 Field {
                                     FieldLabel { "Port" }
                                     Control {
+                                        // `Input` is restricted to text-like
+                                        // types in dioxus-bulma; we keep a raw
+                                        // <input type="number"> here.
                                         input {
+                                            id: "rustyclaw-pairing-port",
                                             class: "input",
                                             r#type: "number",
                                             placeholder: "9001",
@@ -207,7 +212,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
                 }
 
-                footer { class: "modal-card-foot",
+                ModalCardFoot {
                     style: "justify-content: flex-end;",
 
                     Button {
@@ -217,10 +222,11 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
 
                     Button {
+                        id: "rustyclaw-pairing-connect",
                         color: BulmaColor::Primary,
                         onclick: move |_| props.on_connect.call(()),
 
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-plug" }
                         }
                         span { "Connect" }

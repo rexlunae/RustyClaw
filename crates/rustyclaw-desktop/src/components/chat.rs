@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::*;
 
-use crate::state::{ChatMessage, MessageRole};
+use crate::state::ChatMessage;
 
 use super::message::MessageBubble;
 use super::tool_call::ToolCallPanel;
@@ -90,7 +90,7 @@ pub fn Chat(props: ChatProps) -> Element {
                 if props.is_thinking {
                     div { class: "thinking-indicator",
                         style: "padding: 0.5rem; color: #666; font-style: italic;",
-                        span { class: "icon is-small",
+                        Icon { size: BulmaSize::Small,
                             i { class: "fas fa-brain" }
                         }
                         " Thinking..."
@@ -120,11 +120,12 @@ pub fn Chat(props: ChatProps) -> Element {
                     }
                     Control {
                         Button {
+                            id: "rustyclaw-chat-send",
                             color: BulmaColor::Primary,
                             loading: is_processing,
                             disabled: is_processing || input_ref.read().trim().is_empty(),
                             onclick: handle_submit,
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-paper-plane" }
                             }
                         }
