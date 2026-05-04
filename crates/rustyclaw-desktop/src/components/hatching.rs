@@ -61,35 +61,38 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
 
     rsx! {
-        div { class: "modal is-active",
-            div { class: "modal-background",
-                onclick: move |_| props.on_cancel.call(()),
-            }
+        Modal {
+            active: props.visible,
+            onclose: move |_| props.on_cancel.call(()),
 
-            div { class: "modal-card",
+            ModalCard {
                 style: "max-width: 500px;",
 
-                header { class: "modal-card-head",
+                ModalCardHead {
+                    onclose: move |_| props.on_cancel.call(()),
+
                     p { class: "modal-card-title",
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-egg" }
                         }
                         " Hatching"
                     }
                 }
 
-                section { class: "modal-card-body",
+                ModalCardBody {
                     // Progress indicator
                     div { class: "steps",
                         style: "display: flex; justify-content: center; margin-bottom: 1.5rem;",
 
-                        span {
-                            class: if current_step >= 1 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
+                        Tag {
+                            color: if current_step >= 1 { Some(BulmaColor::Primary) } else { Some(BulmaColor::Light) },
+                            size: BulmaSize::Medium,
                             "1"
                         }
                         span { style: "width: 50px; height: 2px; background: #dbdbdb; align-self: center;" }
-                        span {
-                            class: if current_step >= 2 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
+                        Tag {
+                            color: if current_step >= 2 { Some(BulmaColor::Primary) } else { Some(BulmaColor::Light) },
+                            size: BulmaSize::Medium,
                             "2"
                         }
                     }
@@ -117,7 +120,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                                 }
                                             },
                                         }
-                                        span { class: "icon is-left",
+                                        Icon { class: "is-left",
                                             i { class: "fas fa-robot" }
                                         }
                                     }
@@ -133,12 +136,11 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
 
                                 Field {
                                     Control {
-                                        textarea {
-                                            class: "textarea",
+                                        Textarea {
                                             placeholder: "e.g., Friendly and helpful, with a dry sense of humor",
                                             rows: 4,
-                                            value: "{personality}",
-                                            oninput: move |evt| personality.set(evt.value()),
+                                            value: personality.read().clone(),
+                                            oninput: move |evt: FormEvent| personality.set(evt.value()),
                                         }
                                     }
                                 }
@@ -148,7 +150,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                     }
                 }
 
-                footer { class: "modal-card-foot",
+                ModalCardFoot {
                     style: "justify-content: space-between;",
 
                     if current_step > 1 {
@@ -156,7 +158,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                             color: BulmaColor::Light,
                             onclick: handle_back,
 
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-arrow-left" }
                             }
                             span { "Back" }
@@ -175,13 +177,13 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                         onclick: handle_next,
 
                         if current_step == 2 {
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-check" }
                             }
                             span { "Complete" }
                         } else {
                             span { "Next" }
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-arrow-right" }
                             }
                         }

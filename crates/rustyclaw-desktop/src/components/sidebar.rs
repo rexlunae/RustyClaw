@@ -56,17 +56,17 @@ pub fn Sidebar(props: SidebarProps) -> Element {
     };
 
     rsx! {
-        aside {
-            class: "menu sidebar",
+        Menu {
+            class: "sidebar",
             style: "width: 250px; padding: 1rem; background: #f5f5f5; border-right: 1px solid #dbdbdb; height: 100%; display: flex; flex-direction: column;",
 
             // Agent header
             div { class: "sidebar-header",
                 style: "margin-bottom: 1rem;",
 
-                p { class: "menu-label",
+                MenuLabel {
                     span { class: "icon-text",
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-robot" }
                         }
                         span {
@@ -81,7 +81,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
 
                 // Connection status
                 p { class: "is-size-7 {connection_color}",
-                    span { class: "icon is-small",
+                    Icon { size: BulmaSize::Small,
                         i { class: "fas {connection_icon}" }
                     }
                     " {connection_text}"
@@ -90,7 +90,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 // Model info
                 if let Some(model) = &props.model {
                     p { class: "is-size-7 has-text-grey",
-                        span { class: "icon is-small",
+                        Icon { size: BulmaSize::Small,
                             i { class: "fas fa-brain" }
                         }
                         " {model}"
@@ -99,7 +99,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
             }
 
             // Threads/Sessions
-            p { class: "menu-label", "Sessions" }
+            MenuLabel { "Sessions" }
 
             Button {
                 color: BulmaColor::Primary,
@@ -107,38 +107,39 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 fullwidth: true,
                 onclick: move |_| props.on_new_thread.call(()),
 
-                span { class: "icon is-small",
+                Icon { size: BulmaSize::Small,
                     i { class: "fas fa-plus" }
                 }
                 span { "New Session" }
             }
 
-            ul { class: "menu-list",
+            MenuList {
                 style: "flex: 1; overflow-y: auto; margin-top: 0.5rem;",
 
                 for thread in props.threads.iter() {
-                    li { key: "{thread.id}",
-                        a {
-                            class: if props.foreground_id == Some(thread.id) { "is-active" } else { "" },
-                            onclick: {
-                                let thread_id = thread.id;
-                                move |_| props.on_switch_thread.call(thread_id)
-                            },
+                    MenuItem {
+                        key: "{thread.id}",
+                        active: props.foreground_id == Some(thread.id),
+                        onclick: {
+                            let thread_id = thread.id;
+                            move |_| props.on_switch_thread.call(thread_id)
+                        },
 
-                            span { class: "icon is-small",
-                                i { class: "fas fa-comments" }
+                        Icon { size: BulmaSize::Small,
+                            i { class: "fas fa-comments" }
+                        }
+                        span {
+                            if let Some(label) = &thread.label {
+                                "{label}"
+                            } else {
+                                "Session #{thread.id}"
                             }
-                            span {
-                                if let Some(label) = &thread.label {
-                                    "{label}"
-                                } else {
-                                    "Session #{thread.id}"
-                                }
-                            }
-                            span { class: "tag is-small is-rounded",
-                                style: "margin-left: auto;",
-                                "{thread.message_count}"
-                            }
+                        }
+                        Tag {
+                            size: BulmaSize::Small,
+                            rounded: true,
+                            style: "margin-left: auto;",
+                            "{thread.message_count}"
                         }
                     }
                 }
@@ -154,7 +155,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     fullwidth: true,
                     onclick: move |_| props.on_settings.call(()),
 
-                    span { class: "icon is-small",
+                    Icon { size: BulmaSize::Small,
                         i { class: "fas fa-cog" }
                     }
                     span { "Settings" }

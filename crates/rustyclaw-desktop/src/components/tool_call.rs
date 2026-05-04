@@ -27,14 +27,14 @@ pub struct ToolCallPanelProps {
 pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
     let mut is_collapsed = use_signal(|| props.collapsed);
 
-    let status_class = if props.result.is_some() {
+    let status_color = if props.result.is_some() {
         if props.is_error {
-            "is-danger"
+            BulmaColor::Danger
         } else {
-            "is-success"
+            BulmaColor::Success
         }
     } else {
-        "is-info"
+        BulmaColor::Info
     };
 
     let status_icon = if props.result.is_some() {
@@ -48,31 +48,32 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
     };
 
     rsx! {
-        div {
-            class: "tool-call-panel message {status_class}",
+        Message {
+            color: status_color,
+            class: "tool-call-panel",
             style: "margin: 0.5rem 0; font-size: 0.9rem;",
 
             // Header (clickable)
             div {
                 class: "message-header",
-                style: "cursor: pointer; padding: 0.5rem 0.75rem;",
+                style: "cursor: pointer;",
                 onclick: move |_| {
                     let val = *is_collapsed.read();
                     is_collapsed.set(!val);
                 },
 
-                span { class: "icon is-small",
+                Icon { size: BulmaSize::Small,
                     i { class: "fas fa-wrench" }
                 }
                 span { style: "margin-left: 0.25rem; font-weight: 600;",
                     "{props.name}"
                 }
 
-                span { style: "margin-left: auto;",
-                    span { class: "icon is-small",
+                span { style: "margin-left: auto; display: inline-flex; align-items: center; gap: 0.25rem;",
+                    Icon { size: BulmaSize::Small,
                         i { class: "fas {status_icon}" }
                     }
-                    span { class: "icon is-small",
+                    Icon { size: BulmaSize::Small,
                         i { class: if *is_collapsed.read() { "fas fa-chevron-down" } else { "fas fa-chevron-up" } }
                     }
                 }
@@ -80,9 +81,7 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
 
             // Body (collapsible)
             if !*is_collapsed.read() {
-                div { class: "message-body",
-                    style: "padding: 0.75rem;",
-
+                MessageBody {
                     // Arguments
                     div { class: "tool-arguments",
                         style: "margin-bottom: 0.5rem;",

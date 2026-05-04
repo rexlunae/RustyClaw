@@ -60,34 +60,31 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
     };
 
     rsx! {
-        div { class: "modal is-active",
-            div { class: "modal-background",
-                onclick: move |_| props.on_cancel.call(()),
-            }
+        Modal {
+            active: props.visible,
+            onclose: move |_| props.on_cancel.call(()),
 
-            div { class: "modal-card",
+            ModalCard {
                 style: "max-width: 550px;",
 
-                header { class: "modal-card-head",
+                ModalCardHead {
+                    onclose: move |_| props.on_cancel.call(()),
+
                     p { class: "modal-card-title",
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-link" }
                         }
                         " Pair with Gateway"
                     }
-                    button {
-                        class: "delete",
-                        onclick: move |_| props.on_cancel.call(()),
-                    }
                 }
 
-                section { class: "modal-card-body",
+                ModalCardBody {
                     // Public key display
-                    div { class: "box",
+                    BulmaBox {
                         style: "background: #f5f5f5;",
 
                         p { class: "has-text-weight-semibold",
-                            span { class: "icon is-small",
+                            Icon { size: BulmaSize::Small,
                                 i { class: "fas fa-key" }
                             }
                             " Your Public Key"
@@ -108,7 +105,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                         color: if *copied.read() { BulmaColor::Success } else { BulmaColor::Light },
                                         onclick: handle_copy,
 
-                                        span { class: "icon is-small",
+                                        Icon { size: BulmaSize::Small,
                                             i { class: if *copied.read() { "fas fa-check" } else { "fas fa-copy" } }
                                         }
                                         span { if *copied.read() { "Copied!" } else { "Copy" } }
@@ -123,7 +120,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                     color: BulmaColor::Primary,
                                     onclick: move |_| props.on_generate_key.call(()),
 
-                                    span { class: "icon is-small",
+                                    Icon { size: BulmaSize::Small,
                                         i { class: "fas fa-plus" }
                                     }
                                     span { "Generate Keypair" }
@@ -150,49 +147,47 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
 
                     // Gateway connection settings
-                    div { class: "box",
+                    BulmaBox {
                         p { class: "has-text-weight-semibold",
-                            span { class: "icon is-small",
+                            Icon { size: BulmaSize::Small,
                                 i { class: "fas fa-server" }
                             }
                             " Gateway"
                         }
 
-                        div { class: "columns",
+                        Columns {
                             style: "margin-top: 0.5rem;",
 
-                            div { class: "column is-8",
+                            Column { class: "is-8",
                                 Field {
                                     FieldLabel { "Host" }
                                     Control { class: "has-icons-left",
-                                        input {
-                                            class: "input",
-                                            r#type: "text",
+                                        Input {
+                                            input_type: InputType::Text,
                                             placeholder: "127.0.0.1",
-                                            value: "{host}",
-                                            oninput: move |evt| {
+                                            value: host.read().clone(),
+                                            oninput: move |evt: FormEvent| {
                                                 let value = evt.value();
                                                 host.set(value.clone());
                                                 props.on_host_change.call(value);
                                             },
                                         }
-                                        span { class: "icon is-left",
+                                        Icon { class: "is-left",
                                             i { class: "fas fa-network-wired" }
                                         }
                                     }
                                 }
                             }
 
-                            div { class: "column is-4",
+                            Column { class: "is-4",
                                 Field {
                                     FieldLabel { "Port" }
                                     Control {
-                                        input {
-                                            class: "input",
-                                            r#type: "number",
+                                        Input {
+                                            input_type: InputType::Text,
                                             placeholder: "9001",
-                                            value: "{port_str}",
-                                            oninput: move |evt| {
+                                            value: port_str.read().clone(),
+                                            oninput: move |evt: FormEvent| {
                                                 let value = evt.value();
                                                 port_str.set(value.clone());
                                                 if let Ok(port) = value.parse::<u16>() {
@@ -207,7 +202,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
                 }
 
-                footer { class: "modal-card-foot",
+                ModalCardFoot {
                     style: "justify-content: flex-end;",
 
                     Button {
@@ -220,7 +215,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                         color: BulmaColor::Primary,
                         onclick: move |_| props.on_connect.call(()),
 
-                        span { class: "icon",
+                        Icon {
                             i { class: "fas fa-plug" }
                         }
                         span { "Connect" }

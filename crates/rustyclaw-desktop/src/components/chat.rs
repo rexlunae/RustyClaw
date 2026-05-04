@@ -90,7 +90,7 @@ pub fn Chat(props: ChatProps) -> Element {
                 if props.is_thinking {
                     div { class: "thinking-indicator",
                         style: "padding: 0.5rem; color: #666; font-style: italic;",
-                        span { class: "icon is-small",
+                        Icon { size: BulmaSize::Small,
                             i { class: "fas fa-brain" }
                         }
                         " Thinking..."
@@ -124,7 +124,7 @@ pub fn Chat(props: ChatProps) -> Element {
                             loading: is_processing,
                             disabled: is_processing || input_ref.read().trim().is_empty(),
                             onclick: handle_submit,
-                            span { class: "icon",
+                            Icon {
                                 i { class: "fas fa-paper-plane" }
                             }
                         }
