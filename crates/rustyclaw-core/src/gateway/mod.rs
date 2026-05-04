@@ -1,16 +1,15 @@
-//! Gateway module — WebSocket server for agent communication.
+//! Gateway module — SSH server for agent communication.
 //!
-//! This module provides the gateway server that handles WebSocket connections
-//! from TUI clients, manages authentication, and dispatches chat requests to
+//! This module provides the gateway server that handles SSH connections
+//! from clients, manages authentication, and dispatches chat requests to
 //! model providers. It also polls configured messengers (Telegram, Discord, etc.)
 //! for incoming messages and routes them through the model.
 //!
 //! ## Transport Abstraction
 //!
-//! The gateway supports multiple transport protocols through the `Transport` trait:
+//! The gateway uses SSH-based transports through the `Transport` trait:
 //!
-//! - **WebSocket**: The default transport, using `tokio-tungstenite`.
-//! - **SSH**: Native SSH server using `russh` (requires `ssh` feature).
+//! - **SSH**: Native SSH server using `russh`.
 //! - **SSH Subsystem**: Stdio-based transport for OpenSSH subsystem mode.
 //!
 //! See the `transport` and `ssh` modules for details.
@@ -36,9 +35,6 @@ pub mod transport;
 mod types;
 pub mod webhooks;
 
-#[cfg(feature = "ssh")]
-pub mod ssh;
-#[cfg(not(feature = "ssh"))]
 pub mod ssh;
 
 // Re-export protocol types
@@ -59,19 +55,15 @@ pub use messenger_handler::{SharedMessengerManager, create_messenger_manager, ru
 // Re-export transport types
 pub use transport::{
     PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter,
-    WebSocketTransport,
 };
 
-// Re-export SSH types (when feature enabled)
-#[cfg(feature = "ssh")]
+// Re-export SSH types
 pub use ssh::{SshConfig, SshTransport};
 
 // Re-export stdio transport (always available)
 pub use ssh::StdioTransport;
 
-#[cfg(feature = "ssh")]
 use ssh::SshServer;
-#[cfg(feature = "ssh")]
 use std::net::SocketAddr;
 
 use crate::config::Config;
@@ -82,23 +74,15 @@ use crate::skills::SkillManager;
 use crate::tools;
 use anyhow::{Context, Result};
 use dirs;
+use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::io::{AsyncRead, AsyncWrite};
-use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 /// Shared flag for cancelling the tool loop from another task.
 pub type ToolCancelFlag = Arc<AtomicBool>;
-
-/// Trait alias for an async stream that can be either a plain TCP or TLS stream.
-trait AsyncStream: AsyncRead + AsyncWrite + Send + Sync + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Send + Sync + Unpin> AsyncStream for T {}
-
-/// A boxed stream that is either a plain TCP stream or a TLS-wrapped one.
-type MaybeTlsStream = Box<dyn AsyncStream>;
 
 /// Gateway-owned secrets vault, shared across connections.
 ///
@@ -318,40 +302,7 @@ pub async fn run_gateway(
         config.sandbox.deny_paths.clone(),
     );
 
-    let addr = helpers::resolve_listen_addr(&options.listen)?;
-    let listener = TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("Failed to bind gateway to {}", addr))?;
-
-    // ── Build TLS acceptor if cert/key are configured ───────────────
-    let tls_acceptor: Option<tokio_rustls::TlsAcceptor> =
-        match (&options.tls_cert, &options.tls_key) {
-            (Some(cert_path), Some(key_path)) => {
-                let cert_pem = std::fs::read(cert_path)
-                    .with_context(|| format!("Failed to read TLS cert: {}", cert_path.display()))?;
-                let key_pem = std::fs::read(key_path)
-                    .with_context(|| format!("Failed to read TLS key: {}", key_path.display()))?;
-
-                let certs: Vec<_> = rustls_pemfile::certs(&mut &cert_pem[..])
-                    .collect::<Result<Vec<_>, _>>()
-                    .context("Failed to parse TLS certificate PEM")?;
-                let key = rustls_pemfile::private_key(&mut &key_pem[..])
-                    .context("Failed to parse TLS private key PEM")?
-                    .context("No private key found in PEM file")?;
-
-                let tls_config = tokio_rustls::rustls::ServerConfig::builder()
-                    .with_no_client_auth()
-                    .with_single_cert(certs, key)
-                    .context("Invalid TLS certificate/key")?;
-
-                info!("TLS enabled (WSS)");
-                Some(tokio_rustls::TlsAcceptor::from(Arc::new(tls_config)))
-            }
-            (Some(_), None) | (None, Some(_)) => {
-                anyhow::bail!("Both tls_cert and tls_key must be specified for WSS support");
-            }
-            (None, None) => None,
-        };
+    // SSH-only transport: websocket listen/TLS options are ignored.
 
     // Initialize Copilot session if needed (uses the new helper function)
     let copilot_session: Option<Arc<CopilotSession>> = if let Some(ref ctx) = model_ctx {
@@ -435,233 +386,51 @@ pub async fn run_gateway(
         None
     };
 
-    // ── Start SSH server if configured ──────────────────────────────
-    #[cfg(feature = "ssh")]
-    let mut ssh_server: Option<SshServer> = if let Some(ref ssh_listen) = options.ssh_listen {
-        let ssh_addr: SocketAddr = ssh_listen
-            .parse()
-            .with_context(|| format!("Invalid SSH listen address: {}", ssh_listen))?;
-
-        let ssh_config = SshConfig {
-            listen_addr: ssh_addr,
-            host_key_path: options
-                .ssh_host_key
-                .clone()
-                .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
-            authorized_clients_path: options
-                .ssh_authorized_clients
-                .clone()
-                .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
-            allow_password: false,
-            require_pubkey: true,
-        };
-
-        match SshServer::new(ssh_config.clone()).await {
-            Ok(mut server) => {
-                if let Err(e) = server.listen(ssh_addr).await {
-                    error!(error = %e, "Failed to start SSH server");
-                    None
-                } else {
-                    info!(address = %ssh_addr, "SSH server listening");
-                    Some(server)
-                }
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to initialize SSH server");
+    // Determine SSH listen address from CLI option or config.
+    let ssh_listen = options.ssh_listen.clone().or_else(|| {
+        config.ssh.as_ref().and_then(|ssh_cfg| {
+            if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
+                Some(ssh_cfg.bind.clone())
+            } else {
                 None
             }
-        }
-    } else {
-        None
+        })
+    }).unwrap_or_else(|| "0.0.0.0:2222".to_string());
+
+    let bind_addr: SocketAddr = ssh_listen
+        .parse()
+        .with_context(|| format!("Invalid SSH listen address: {}", ssh_listen))?;
+
+    let ssh_cfg = SshConfig {
+        listen_addr: bind_addr,
+        host_key_path: options
+            .ssh_host_key
+            .clone()
+            .or_else(|| config.ssh.as_ref().map(|s| s.host_key_path(&config.settings_dir)))
+            .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
+        authorized_clients_path: options
+            .ssh_authorized_clients
+            .clone()
+            .or_else(|| config.ssh.as_ref().map(|s| s.authorized_keys_path(&config.settings_dir)))
+            .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
+        allow_password: false,
+        require_pubkey: true,
+        allow_unknown_keys_with_totp: config.totp_enabled,
     };
 
-    #[cfg(not(feature = "ssh"))]
-    let _ssh_server: Option<()> = None;
-    let _ = &options.ssh_listen; // Suppress unused warning
+    let mut ssh_server = SshServer::new(ssh_cfg).await?;
+    ssh_server.listen(bind_addr).await?;
 
-    info!(address = %addr, "Gateway listening");
+    info!(address = %bind_addr, "Gateway listening (SSH-only)");
     if messenger_mgr.is_some() {
         info!("Messenger polling enabled");
     }
-    #[cfg(feature = "ssh")]
-    if ssh_server.is_some() {
-        info!("SSH transport enabled");
-    }
-
-    // ── Start SSH server if configured ──────────────────────────────
-    //
-    // The SSH server runs in a background task and feeds accepted
-    // connections into `handle_connection`, just like WebSocket accepts.
-    #[cfg(feature = "ssh")]
-    {
-        // Determine SSH listen address from CLI option or config
-        let ssh_addr: Option<String> = options.ssh_listen.clone().or_else(|| {
-            config.ssh.as_ref().and_then(|ssh_cfg| {
-                if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
-                    Some(ssh_cfg.bind.clone())
-                } else {
-                    None
-                }
-            })
-        });
-
-        if let Some(ssh_listen) = ssh_addr {
-            let bind_addr: std::net::SocketAddr = ssh_listen
-                .parse()
-                .unwrap_or_else(|_| "0.0.0.0:2222".parse().unwrap());
-            let ssh_cfg = {
-                let host_key = options.ssh_host_key.clone().unwrap_or_else(|| {
-                    config
-                        .ssh
-                        .as_ref()
-                        .map(|s| s.host_key_path(&config.settings_dir))
-                        .unwrap_or_else(|| config.settings_dir.join("ssh_host_key"))
-                });
-                let authorized = options.ssh_authorized_clients.clone().unwrap_or_else(|| {
-                    config
-                        .ssh
-                        .as_ref()
-                        .map(|s| s.authorized_keys_path(&config.settings_dir))
-                        .unwrap_or_else(|| config.settings_dir.join("authorized_clients"))
-                });
-                ssh::SshConfig {
-                    listen_addr: bind_addr,
-                    host_key_path: host_key,
-                    authorized_clients_path: authorized,
-                    allow_password: false,
-                    require_pubkey: true,
-                }
-            };
-
-            match ssh::SshServer::new(ssh_cfg).await {
-                Ok(mut ssh_server) => {
-                    if let Err(e) = ssh_server.listen(bind_addr).await {
-                        error!(error = %e, "Failed to start SSH server");
-                    } else {
-                        info!(address = %bind_addr, "SSH server listening");
-
-                        // Spawn a task that accepts SSH connections and handles them
-                        let ssh_config = shared_config.clone();
-                        let ssh_model_ctx = shared_model_ctx.clone();
-                        let ssh_copilot = shared_copilot_session.clone();
-                        let ssh_vault = vault.clone();
-                        let ssh_skills = skill_mgr.clone();
-                        let ssh_tasks = task_mgr.clone();
-                        let ssh_observer = observer.clone();
-                        let ssh_limiter = rate_limiter.clone();
-                        let ssh_cancel = cancel.child_token();
-
-                        tokio::spawn(async move {
-                            loop {
-                                tokio::select! {
-                                    _ = ssh_cancel.cancelled() => break,
-                                    accepted = ssh_server.accept() => {
-                                        match accepted {
-                                            Ok(conn) => {
-                                                let cfg = ssh_config.clone();
-                                                let ctx = ssh_model_ctx.clone();
-                                                let ses = ssh_copilot.clone();
-                                                let v = ssh_vault.clone();
-                                                let sk = ssh_skills.clone();
-                                                let tm = ssh_tasks.clone();
-                                                let obs = ssh_observer.clone();
-                                                let lim = ssh_limiter.clone();
-                                                let cc = ssh_cancel.child_token();
-                                                tokio::spawn(async move {
-                                                    if let Err(err) = handle_connection(
-                                                        conn, cfg, ctx, ses, v, sk, tm, obs, lim, cc,
-                                                    ).await {
-                                                        debug!(error = %err, "SSH connection error");
-                                                    }
-                                                });
-                                            }
-                                            Err(e) => {
-                                                warn!(error = %e, "SSH accept error");
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        });
-                    }
-                }
-                Err(e) => {
-                    error!(error = %e, "Failed to initialize SSH server");
-                }
-            }
-        }
-    }
 
     loop {
-        // Create SSH accept future if server is available
-        #[cfg(feature = "ssh")]
-        let ssh_accept = async {
-            if let Some(ref mut server) = ssh_server {
-                server.accept().await
-            } else {
-                // Never resolves if no SSH server
-                std::future::pending().await
-            }
-        };
-        #[cfg(not(feature = "ssh"))]
-        let ssh_accept = std::future::pending::<Result<Box<dyn Transport>>>();
-
         tokio::select! {
-            _ = cancel.cancelled() => {
-                break;
-            }
-            // WebSocket connections (existing path)
-            accepted = listener.accept() => {
-                let (stream, peer) = accepted?;
-                let shared_cfg = shared_config.clone();
-                let shared_ctx = shared_model_ctx.clone();
-                let shared_session = shared_copilot_session.clone();
-                let vault_clone = vault.clone();
-                let skill_clone = skill_mgr.clone();
-                let task_mgr_clone = task_mgr.clone();
-                let observer_clone = observer.clone();
-                let limiter_clone = rate_limiter.clone();
-                let child_cancel = cancel.child_token();
-                let tls = tls_acceptor.clone();
-                tokio::spawn(async move {
-                    // Wrap in TLS if configured, otherwise use plain TCP.
-                    let boxed_stream: MaybeTlsStream = if let Some(acceptor) = tls {
-                        match acceptor.accept(stream).await {
-                            Ok(tls_stream) => Box::new(tls_stream),
-                            Err(err) => {
-                                warn!(peer = %peer, error = %err, "TLS handshake failed");
-                                return;
-                            }
-                        }
-                    } else {
-                        Box::new(stream)
-                    };
-
-                    // Perform WebSocket handshake, then wrap in transport.
-                    let ws_stream = match tokio_tungstenite::accept_async(boxed_stream).await {
-                        Ok(ws) => ws,
-                        Err(err) => {
-                            warn!(peer = %peer, error = %err, "WebSocket handshake failed");
-                            return;
-                        }
-                    };
-                    let conn: Box<dyn transport::Transport> = Box::new(
-                        transport::WebSocketTransport::new(ws_stream, Some(peer)),
-                    );
-
-                    if let Err(err) = handle_connection(
-                        conn, shared_cfg, shared_ctx,
-                        shared_session, vault_clone, skill_clone, task_mgr_clone,
-                        observer_clone, limiter_clone, child_cancel,
-                    ).await {
-                        debug!(peer = %peer, error = %err, "Connection error");
-                    }
-                });
-            }
-            // SSH connections (new path)
-            ssh_result = ssh_accept => {
-                match ssh_result {
+            _ = cancel.cancelled() => break,
+            accepted = ssh_server.accept() => {
+                match accepted {
                     Ok(transport) => {
                         let peer_info = transport.peer_info().clone();
                         info!(
@@ -673,11 +442,12 @@ pub async fn run_gateway(
 
                         let shared_cfg = shared_config.clone();
                         let shared_ctx = shared_model_ctx.clone();
-                        let session_clone = copilot_session.clone();
+                        let shared_session = shared_copilot_session.clone();
                         let vault_clone = vault.clone();
                         let skill_clone = skill_mgr.clone();
                         let task_mgr_clone = task_mgr.clone();
                         let observer_clone = observer.clone();
+                        let rate_limiter_clone = rate_limiter.clone();
                         let child_cancel = cancel.child_token();
 
                         tokio::spawn(async move {
@@ -685,20 +455,19 @@ pub async fn run_gateway(
                                 transport,
                                 shared_cfg,
                                 shared_ctx,
-                                session_clone,
+                                shared_session,
                                 vault_clone,
                                 skill_clone,
                                 task_mgr_clone,
                                 observer_clone,
+                                rate_limiter_clone,
                                 child_cancel,
                             ).await {
                                 debug!(error = %err, "SSH connection error");
                             }
                         });
                     }
-                    Err(e) => {
-                        warn!(error = %e, "SSH accept error");
-                    }
+                    Err(e) => warn!(error = %e, "SSH accept error"),
                 }
             }
         }
@@ -717,191 +486,27 @@ async fn handle_transport_connection(
     transport: Box<dyn Transport>,
     shared_config: SharedConfig,
     shared_model_ctx: SharedModelCtx,
-    copilot_session: Option<Arc<CopilotSession>>,
+    shared_copilot_session: SharedCopilotSession,
     vault: SharedVault,
-    _skill_mgr: SharedSkillManager,
-    _task_mgr: SharedTaskManager,
-    _observer: Option<SharedObserver>,
+    skill_mgr: SharedSkillManager,
+    task_mgr: SharedTaskManager,
+    observer: Option<SharedObserver>,
+    rate_limiter: auth::RateLimiter,
     cancel: CancellationToken,
 ) -> Result<()> {
-    let peer_info = transport.peer_info().clone();
-    let (mut reader, mut writer) = transport.into_split();
-
-    // Snapshot config and model context for this connection
-    let config = shared_config.read().await.clone();
-    let model_ctx = shared_model_ctx.read().await.clone();
-
-    // Thread manager for multi-task conversations
-    let threads_path = config.sessions_dir().join("threads.json");
-    let thread_mgr = crate::threads::ThreadManager::load_or_default(&threads_path);
-    let _thread_events_rx = thread_mgr.subscribe();
-
-    // SSH connections are pre-authenticated via public key
-    // No TOTP challenge needed
-    info!(
-        transport = %peer_info.transport_type,
-        user = ?peer_info.username,
-        "Transport connection authenticated"
-    );
-
-    // Check vault status
-    let vault_is_locked = {
-        let v = vault.lock().await;
-        v.is_locked()
-    };
-
-    // Send hello frame
-    let hello_frame = ServerFrame {
-        frame_type: ServerFrameType::Hello,
-        payload: ServerPayload::Hello {
-            agent: "rustyclaw".to_string(),
-            settings_dir: config.settings_dir.to_string_lossy().to_string(),
-            vault_locked: vault_is_locked,
-            provider: model_ctx.as_ref().map(|c| c.provider.clone()),
-            model: model_ctx.as_ref().map(|c| c.model.clone()),
-        },
-    };
-    writer.send(&hello_frame).await?;
-
-    if vault_is_locked {
-        let status_frame = ServerFrame {
-            frame_type: ServerFrameType::Status,
-            payload: ServerPayload::Status {
-                status: StatusType::VaultLocked,
-                detail: "Secrets vault is locked — provide password to unlock".to_string(),
-            },
-        };
-        writer.send(&status_frame).await?;
-    }
-
-    // Report model status
-    let http = reqwest::Client::new();
-    if let Some(ref ctx) = model_ctx {
-        let display = crate_providers::display_name_for_provider(&ctx.provider);
-
-        // Model configured status
-        let detail = format!("{} / {}", display, ctx.model);
-        writer
-            .send(&ServerFrame {
-                frame_type: ServerFrameType::Status,
-                payload: ServerPayload::Status {
-                    status: StatusType::ModelConfigured,
-                    detail,
-                },
-            })
-            .await?;
-
-        // Credentials status
-        if ctx.api_key.is_some() {
-            writer
-                .send(&ServerFrame {
-                    frame_type: ServerFrameType::Status,
-                    payload: ServerPayload::Status {
-                        status: StatusType::CredentialsLoaded,
-                        detail: format!("{} API key loaded", display),
-                    },
-                })
-                .await?;
-        }
-
-        // Probe connection
-        let probe_ctx = ctx.clone();
-        writer
-            .send(&ServerFrame {
-                frame_type: ServerFrameType::Status,
-                payload: ServerPayload::Status {
-                    status: StatusType::ModelConnecting,
-                    detail: format!("Probing {} …", ctx.base_url),
-                },
-            })
-            .await?;
-
-        match providers::validate_model_connection(&http, &probe_ctx, copilot_session.as_deref())
-            .await
-        {
-            ProbeResult::Ready | ProbeResult::Connected { .. } => {
-                writer
-                    .send(&ServerFrame {
-                        frame_type: ServerFrameType::Status,
-                        payload: ServerPayload::Status {
-                            status: StatusType::ModelReady,
-                            detail: format!("{} / {} ready", display, ctx.model),
-                        },
-                    })
-                    .await?;
-            }
-            ProbeResult::AuthError { detail } => {
-                writer
-                    .send(&ServerFrame {
-                        frame_type: ServerFrameType::Status,
-                        payload: ServerPayload::Status {
-                            status: StatusType::ModelError,
-                            detail: format!("{} auth failed: {}", display, detail),
-                        },
-                    })
-                    .await?;
-            }
-            ProbeResult::Unreachable { detail } => {
-                writer
-                    .send(&ServerFrame {
-                        frame_type: ServerFrameType::Status,
-                        payload: ServerPayload::Status {
-                            status: StatusType::ModelError,
-                            detail: format!("{} probe failed: {}", display, detail),
-                        },
-                    })
-                    .await?;
-            }
-        }
-    } else {
-        writer
-            .send(&ServerFrame {
-                frame_type: ServerFrameType::Status,
-                payload: ServerPayload::Status {
-                    status: StatusType::NoModel,
-                    detail: "No model configured — clients must send full credentials".to_string(),
-                },
-            })
-            .await?;
-    }
-
-    // TODO: Main message loop
-    // For now, just log that we connected and return
-    // The full message loop will be ported in a follow-up PR
-    info!(transport = %peer_info.transport_type, "Transport connection ready");
-
-    // Keep connection open until cancelled or client disconnects
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => {
-                info!("Transport connection cancelled");
-                break;
-            }
-            frame = reader.recv() => {
-                match frame {
-                    Ok(Some(client_frame)) => {
-                        // For now, just log received frames
-                        // TODO: Route to message handlers (chat, control, etc.)
-                        debug!(?client_frame, "Received frame from transport");
-
-                        // TODO: Handle incoming frames properly
-                        // For now, just log receipt - no acknowledgment needed
-                    }
-                    Ok(None) => {
-                        info!("Transport connection closed by client");
-                        break;
-                    }
-                    Err(e) => {
-                        warn!(error = %e, "Transport receive error");
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    writer.close().await?;
-    Ok(())
+    handle_connection(
+        transport,
+        shared_config,
+        shared_model_ctx,
+        shared_copilot_session,
+        vault,
+        skill_mgr,
+        task_mgr,
+        observer,
+        rate_limiter,
+        cancel,
+    )
+    .await
 }
 
 /// Send a threads update frame to the client.
@@ -1064,14 +669,9 @@ async fn handle_connection(
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
-    // If TOTP 2FA is enabled, we require the client to prove identity
-    // before granting access to the gateway's capabilities.
-    //
-    // SSH-authenticated connections (key already verified) bypass TOTP.
-    let skip_totp = peer_info.key_fingerprint.is_some()
-        || peer_info.transport_type != transport::TransportType::WebSocket;
-
-    if config.totp_enabled && !skip_totp {
+    // If TOTP 2FA is enabled, require it for every transport.
+    // SSH public-key auth is necessary but not sufficient.
+    if config.totp_enabled {
         // Rate limiting requires a peer IP.
         let rate_ip = match peer_ip {
             Some(ip) => ip,
@@ -2231,6 +1831,37 @@ async fn execute_user_prompt(
 ///
 /// The `tool_cancel` flag can be set by another task to interrupt the
 /// tool loop gracefully.
+async fn await_model_with_cancel<F>(
+    fut: F,
+    tool_cancel: &ToolCancelFlag,
+    timeout: std::time::Duration,
+) -> Result<Option<ModelResponse>>
+where
+    F: Future<Output = Result<ModelResponse>>,
+{
+    let deadline = tokio::time::Instant::now() + timeout;
+    tokio::pin!(fut);
+
+    loop {
+        if tool_cancel.load(Ordering::Relaxed) {
+            return Ok(None);
+        }
+
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            anyhow::bail!("Model request timed out after {}s", timeout.as_secs());
+        }
+
+        // Poll both the model future and a short timer so cancel requests are
+        // observed quickly even while waiting on provider/network latency.
+        let tick = std::time::Duration::from_millis(200).min((deadline - now).into());
+        tokio::select! {
+            res = &mut fut => return res.map(Some),
+            _ = tokio::time::sleep(tick) => {}
+        }
+    }
+}
+
 async fn dispatch_text_message(
     http: &reqwest::Client,
     req: &ChatRequest,
@@ -2388,13 +2019,30 @@ async fn dispatch_text_message(
             });
         }
 
+        let model_timeout = std::time::Duration::from_secs(180);
         let result = if resolved.provider == "anthropic" {
-            // Anthropic: use streaming mode with writer for real-time chunks
-            providers::call_anthropic_with_tools(http, &resolved, Some(writer)).await
+            // Anthropic: use streaming mode with writer for real-time chunks.
+            // Still enforce timeout/cancel around the provider future.
+            await_model_with_cancel(
+                providers::call_anthropic_with_tools(http, &resolved, Some(writer)),
+                tool_cancel,
+                model_timeout,
+            )
+            .await
         } else if resolved.provider == "google" {
-            providers::call_google_with_tools(http, &resolved).await
+            await_model_with_cancel(
+                providers::call_google_with_tools(http, &resolved),
+                tool_cancel,
+                model_timeout,
+            )
+            .await
         } else {
-            providers::call_openai_with_tools(http, &resolved).await
+            await_model_with_cancel(
+                providers::call_openai_with_tools(http, &resolved),
+                tool_cancel,
+                model_timeout,
+            )
+            .await
         };
 
         // Record LLM response event
@@ -2416,9 +2064,15 @@ async fn dispatch_text_message(
         }
 
         let model_resp = match result {
-            Ok(r) => r,
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                protocol::server::send_info(writer, "Run cancelled by user.").await?;
+                providers::send_response_done(writer).await?;
+                return Ok(());
+            }
             Err(err) => {
                 protocol::server::send_error(writer, &err.to_string()).await?;
+                providers::send_response_done(writer).await?;
                 return Ok(());
             }
         };
@@ -2698,7 +2352,7 @@ async fn dispatch_text_message(
 /// This is the entry point for `--ssh-stdio` mode: the gateway reads/writes
 /// frames on stdin/stdout (via [`StdioTransport`]) and handles a single
 /// client connection.  All the same auth, chat, and tool logic applies as
-/// with WebSocket connections — SSH-authenticated connections skip TOTP.
+/// with regular gateway connections.
 pub async fn run_stdio_gateway(
     config: Config,
     model_ctx: Option<ModelContext>,
@@ -2766,4 +2420,206 @@ pub async fn run_stdio_gateway(
         cancel,
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::collections::VecDeque;
+    use tempfile::tempdir;
+
+    struct MockTransport {
+        peer: PeerInfo,
+        incoming: Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
+        outgoing: Arc<Mutex<Vec<ServerFrame>>>,
+    }
+
+    struct MockReader {
+        peer: PeerInfo,
+        incoming: Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
+    }
+
+    struct MockWriter {
+        outgoing: Arc<Mutex<Vec<ServerFrame>>>,
+    }
+
+    impl MockTransport {
+        fn with_frames(peer: PeerInfo, frames: Vec<Option<ClientFrame>>) -> (Self, Arc<Mutex<Vec<ServerFrame>>>) {
+            let outgoing = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    peer,
+                    incoming: Arc::new(Mutex::new(VecDeque::from(frames))),
+                    outgoing: outgoing.clone(),
+                },
+                outgoing,
+            )
+        }
+    }
+
+    #[async_trait]
+    impl Transport for MockTransport {
+        fn peer_info(&self) -> &PeerInfo {
+            &self.peer
+        }
+
+        async fn recv(&mut self) -> Result<Option<ClientFrame>> {
+            Ok(self.incoming.lock().await.pop_front().unwrap_or(None))
+        }
+
+        async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+            self.outgoing.lock().await.push(frame.clone());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+
+        fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
+            (
+                Box::new(MockReader {
+                    peer: self.peer.clone(),
+                    incoming: self.incoming.clone(),
+                }),
+                Box::new(MockWriter {
+                    outgoing: self.outgoing.clone(),
+                }),
+            )
+        }
+    }
+
+    #[async_trait]
+    impl TransportReader for MockReader {
+        async fn recv(&mut self) -> Result<Option<ClientFrame>> {
+            Ok(self.incoming.lock().await.pop_front().unwrap_or(None))
+        }
+
+        fn peer_info(&self) -> &PeerInfo {
+            &self.peer
+        }
+    }
+
+    #[async_trait]
+    impl TransportWriter for MockWriter {
+        async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+            self.outgoing.lock().await.push(frame.clone());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn test_config_with_temp_state() -> Result<(tempfile::TempDir, Config)> {
+        let tmp = tempdir()?;
+        let mut cfg = Config::default();
+        cfg.settings_dir = tmp.path().join("state");
+
+        std::fs::create_dir_all(cfg.settings_dir.clone())?;
+        std::fs::create_dir_all(cfg.workspace_dir())?;
+        std::fs::create_dir_all(cfg.credentials_dir())?;
+        std::fs::create_dir_all(cfg.sessions_dir())?;
+        std::fs::create_dir_all(cfg.skills_dir())?;
+
+        Ok((tmp, cfg))
+    }
+
+    #[tokio::test]
+    async fn ssh_connection_requires_totp_when_enabled() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = true;
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+
+        // Disconnect immediately after first server write.
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager = Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames
+                .iter()
+                .any(|f| matches!(f.frame_type, ServerFrameType::AuthChallenge)),
+            "Expected TOTP auth challenge for SSH connection when totp_enabled=true"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn transport_connection_processes_chat_frames() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+
+        let chat = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", "Hello?")],
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager = Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames.iter().any(|f| matches!(f.frame_type, ServerFrameType::Hello)),
+            "Expected hello frame"
+        );
+        assert!(
+            frames.iter().any(|f| matches!(f.frame_type, ServerFrameType::Error)),
+            "Expected chat request to be processed and produce an error frame when model context is missing"
+        );
+
+        Ok(())
+    }
 }

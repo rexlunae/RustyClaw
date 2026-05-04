@@ -873,16 +873,24 @@ async fn main() -> Result<()> {
         Commands::Gateway(sub) => match sub {
             GatewayCommands::Start => {
                 let vault_password = extract_vault_password(&config);
-                let (port, bind) = commands::parse_gateway_defaults(&config);
-                commands::handle_start(&config, vault_password.as_deref(), port, bind)?;
+                let ssh_listen = config
+                    .ssh
+                    .as_ref()
+                    .map(|s| s.bind.clone())
+                    .unwrap_or_else(|| "0.0.0.0:2222".to_string());
+                commands::handle_start(&config, vault_password.as_deref(), &ssh_listen)?;
             }
             GatewayCommands::Stop => {
                 commands::handle_stop(&config)?;
             }
             GatewayCommands::Restart => {
                 let vault_password = extract_vault_password(&config);
-                let (port, bind) = commands::parse_gateway_defaults(&config);
-                commands::handle_restart(&config, vault_password.as_deref(), port, bind)?;
+                let ssh_listen = config
+                    .ssh
+                    .as_ref()
+                    .map(|s| s.bind.clone())
+                    .unwrap_or_else(|| "0.0.0.0:2222".to_string());
+                commands::handle_restart(&config, vault_password.as_deref(), &ssh_listen)?;
             }
             GatewayCommands::Status { json } => {
                 commands::handle_status(&config, json);

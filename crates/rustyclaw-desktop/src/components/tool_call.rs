@@ -1,7 +1,6 @@
 //! Tool call display panel.
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::*;
 
 /// Props for ToolCallPanel.
 #[derive(Props, Clone, PartialEq)]

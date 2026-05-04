@@ -25,7 +25,7 @@ pub fn App() -> Element {
 
     // Dialog visibility
     let mut show_pairing = use_signal(|| false);
-    let mut show_hatching = use_signal(|| false);
+    let mut show_hatching = use_signal(|| state.read().needs_hatching);
     let mut show_settings = use_signal(|| false);
 
     // QR code for pairing
@@ -47,6 +47,9 @@ pub fn App() -> Element {
             spawn(async move {
                 loop {
                     let client_guard = client.lock().await;
+                    if !client_guard.is_connected() {
+                        break;
+                    }
                     if let Some(event) = client_guard.recv().await {
                         drop(client_guard);
                         handle_gateway_event(event, state);
@@ -153,6 +156,9 @@ pub fn App() -> Element {
             HatchingDialog {
                 visible: *show_hatching.read(),
                 on_complete: move |result: HatchingResult| {
+                    if let Some(personality) = result.personality.clone() {
+                        state.write().status_message = Some(format!("Personality set: {}", personality));
+                    }
                     state.write().agent_name = Some(result.name);
                     show_hatching.set(false);
                 },
@@ -234,8 +240,12 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
         GatewayEvent::AuthSuccess => {
             state.write().connection = ConnectionStatus::Authenticated;
         }
-        GatewayEvent::AuthFailed { message, .. } => {
-            state.write().status_message = Some(format!("Auth failed: {}", message));
+        GatewayEvent::AuthFailed { message, retry } => {
+            state.write().status_message = Some(if retry {
+                format!("Auth failed (retry allowed): {}", message)
+            } else {
+                format!("Auth failed: {}", message)
+            });
         }
         GatewayEvent::VaultLocked => {
             state.write().vault_locked = true;
@@ -273,14 +283,26 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
         }
         GatewayEvent::ToolResult {
             id,
+            name,
             result,
             is_error,
-            ..
         } => {
+            if is_error {
+                state.write().status_message = Some(format!("Tool '{}' failed", name));
+            }
             state.write().set_tool_result(&id, result, is_error);
         }
-        GatewayEvent::ToolApprovalRequest { .. } => {
-            // TODO: Show approval dialog
+        GatewayEvent::ToolApprovalRequest {
+            id,
+            name,
+            arguments,
+        } => {
+            state.write().status_message = Some(format!(
+                "Tool approval requested: {} ({}) — {} chars",
+                name,
+                id,
+                arguments.len()
+            ));
         }
         GatewayEvent::ThreadsUpdate {
             threads,

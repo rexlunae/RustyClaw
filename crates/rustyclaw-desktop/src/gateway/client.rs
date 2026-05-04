@@ -133,16 +133,19 @@ impl GatewayClient {
     }
 
     /// Authenticate with TOTP code.
+    #[allow(dead_code)]
     pub async fn authenticate(&self, code: String) -> Result<()> {
         self.send(GatewayCommand::Auth { code }).await
     }
 
     /// Unlock the vault.
+    #[allow(dead_code)]
     pub async fn unlock_vault(&self, password: String) -> Result<()> {
         self.send(GatewayCommand::VaultUnlock { password }).await
     }
 
     /// Approve or deny a tool call.
+    #[allow(dead_code)]
     pub async fn respond_tool_approval(&self, id: String, approved: bool) -> Result<()> {
         self.send(GatewayCommand::ToolApprove { id, approved })
             .await

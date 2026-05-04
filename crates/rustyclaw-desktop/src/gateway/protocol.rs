@@ -100,6 +100,7 @@ pub struct ThreadInfoDto {
 
 /// Commands to send to the gateway.
 #[derive(Clone, Debug, Serialize)]
+#[allow(dead_code)]
 #[serde(tag = "type")]
 pub enum GatewayCommand {
     /// Send a chat message

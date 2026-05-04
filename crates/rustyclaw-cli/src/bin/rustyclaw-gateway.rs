@@ -206,21 +206,26 @@ async fn main() -> Result<()> {
     let tls_key = args.tls_key.or(config.tls_key.clone());
     let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
 
+    // Determine the actual SSH listen address (CLI arg > config > default)
+    let ssh_addr = args.ssh_listen.clone().or_else(|| {
+        config.ssh.as_ref().and_then(|s| {
+            if s.enabled && s.mode == "standalone" {
+                Some(s.bind.clone())
+            } else {
+                None
+            }
+        })
+    }).unwrap_or_else(|| "0.0.0.0:2222".to_string());
+
     println!(
         "{}",
         t::icon_ok(&format!(
-            "Gateway listening on {}",
-            t::info(&format!("{}://{}", scheme, listen))
+            "Gateway listening on SSH {}",
+            t::info(&ssh_addr)
         ))
     );
-
-    // Print SSH listen address if configured
-    if let Some(ref ssh_addr) = args.ssh_listen {
-        println!(
-            "{}",
-            t::icon_ok(&format!("SSH server listening on {}", t::info(ssh_addr)))
-        );
-    }
+    // Keep the ws:// listen var for run_gateway options but don't surface it.
+    let _ = scheme;
 
     // ── Open the secrets vault ───────────────────────────────────────────
     //

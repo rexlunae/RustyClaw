@@ -260,7 +260,6 @@ fn normalize_key(key: &str) -> String {
 }
 
 /// Calculate the SHA256 fingerprint of a public key.
-#[cfg(feature = "ssh")]
 fn calculate_fingerprint(public_key_openssh: &str) -> String {
     use base64::Engine;
     use sha2::{Digest, Sha256};
@@ -286,12 +285,6 @@ fn calculate_fingerprint(public_key_openssh: &str) -> String {
     let fingerprint = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&hash);
 
     format!("SHA256:{}", fingerprint)
-}
-
-/// Calculate fingerprint stub when ssh feature is disabled.
-#[cfg(not(feature = "ssh"))]
-fn calculate_fingerprint(_public_key_openssh: &str) -> String {
-    "SHA256:unavailable".to_string()
 }
 
 #[cfg(test)]

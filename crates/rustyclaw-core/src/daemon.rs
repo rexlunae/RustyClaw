@@ -94,12 +94,11 @@ pub fn status(settings_dir: &Path) -> DaemonStatus {
 /// Spawn the `rustyclaw-gateway` binary as a background process.
 ///
 /// The gateway binary is expected to be on `$PATH` or next to the current
-/// executable.  We pass `--port`, `--bind`, and any config/settings-dir
+/// executable.  We pass `--ssh-listen` and any config/settings-dir
 /// flags, then redirect stdout/stderr to the log file.
 pub fn start(
     settings_dir: &Path,
-    port: u16,
-    bind: &str,
+    ssh_listen: &str,
     extra_args: &[String],
     model_api_key: Option<&str>,
     vault_password: Option<&str>,
@@ -131,10 +130,8 @@ pub fn start(
 
     let mut cmd = Command::new(&gateway_bin);
     cmd.arg("run")
-        .arg("--port")
-        .arg(port.to_string())
-        .arg("--bind")
-        .arg(bind)
+        .arg("--ssh-listen")
+        .arg(ssh_listen)
         .arg("--settings-dir")
         .arg(settings_dir)
         .stdout(log_file)

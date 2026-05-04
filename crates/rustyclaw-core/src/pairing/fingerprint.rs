@@ -5,18 +5,11 @@ use super::client_keys::ClientKeyPair;
 /// Calculate the SHA256 fingerprint of a public key.
 ///
 /// Returns a string like "SHA256:AbCdEf...".
-#[cfg(feature = "ssh")]
 pub fn key_fingerprint(keypair: &ClientKeyPair) -> String {
     keypair
         .public_key
         .fingerprint(russh::keys::HashAlg::Sha256)
         .to_string()
-}
-
-#[cfg(not(feature = "ssh"))]
-pub fn key_fingerprint(_keypair: &ClientKeyPair) -> String {
-    // Fallback: calculate from OpenSSH string
-    calculate_fingerprint_from_openssh(&_keypair.public_key_openssh)
 }
 
 /// Get a short fingerprint (last 8 characters of the hash).
@@ -33,7 +26,7 @@ pub fn key_fingerprint_short(keypair: &ClientKeyPair) -> String {
 }
 
 /// Calculate fingerprint from an OpenSSH public key string.
-#[cfg(feature = "ssh")]
+#[allow(dead_code)]
 pub fn calculate_fingerprint_from_openssh(public_key_openssh: &str) -> String {
     use base64::Engine;
     use sha2::{Digest, Sha256};
@@ -61,18 +54,10 @@ pub fn calculate_fingerprint_from_openssh(public_key_openssh: &str) -> String {
     format!("SHA256:{}", fingerprint)
 }
 
-/// Calculate fingerprint from an OpenSSH public key string.
-/// Stub implementation when ssh feature is disabled.
-#[cfg(not(feature = "ssh"))]
-pub fn calculate_fingerprint_from_openssh(_public_key_openssh: &str) -> String {
-    "SHA256:unavailable".to_string()
-}
-
 /// Generate ASCII art representation of a key fingerprint.
 ///
 /// Similar to `ssh-keygen -lv`, this creates a visual hash that makes
 /// it easier to verify keys by eye.
-#[cfg(feature = "ssh")]
 pub fn format_fingerprint_art(fingerprint: &str) -> String {
     use base64::Engine;
 
@@ -157,15 +142,6 @@ pub fn format_fingerprint_art(fingerprint: &str) -> String {
     output
 }
 
-/// Stub implementation when ssh feature is disabled.
-#[cfg(not(feature = "ssh"))]
-pub fn format_fingerprint_art(_fingerprint: &str) -> String {
-    "+---[ED25519 256]----+\n\
-     |  (ssh disabled)   |\n\
-     +----[SHA256]--------+"
-        .to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,7 +164,6 @@ mod tests {
 
         assert!(art.contains("+---[ED25519"));
         assert!(art.contains("+----[SHA256]"));
-        #[cfg(feature = "ssh")]
         assert!(art.lines().count() == 11); // 9 rows + 2 borders
     }
 }

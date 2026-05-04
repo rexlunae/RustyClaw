@@ -1,7 +1,4 @@
-use anyhow::{Context, Result};
-use std::net::SocketAddr;
 use tracing::debug;
-use url::Url;
 
 use super::protocol::types::ChatMessage;
 
@@ -45,29 +42,4 @@ pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
         .sum();
     // ~3.5 chars/token for English; we round down to be conservative.
     total_chars / 3
-}
-
-// ── Address resolution ──────────────────────────────────────────────────────
-
-pub fn resolve_listen_addr(listen: &str) -> Result<SocketAddr> {
-    let trimmed = listen.trim();
-    if trimmed.starts_with("ws://") || trimmed.starts_with("wss://") {
-        let url = Url::parse(trimmed).context("Invalid WebSocket URL")?;
-        let host = url.host_str().context("WebSocket URL missing host")?;
-        let port = url
-            .port_or_known_default()
-            .context("WebSocket URL missing port")?;
-        let addr = format!("{}:{}", host, port);
-        let socket_addr: SocketAddr = addr
-            .parse()
-            .with_context(|| format!("Invalid listen address {}", addr))?;
-        debug!(%socket_addr, "Resolved WebSocket URL to address");
-        return Ok(socket_addr);
-    }
-
-    let socket_addr: SocketAddr = trimmed
-        .parse()
-        .with_context(|| format!("Invalid listen address {}", trimmed))?;
-    debug!(%socket_addr, "Resolved listen address");
-    Ok(socket_addr)
 }

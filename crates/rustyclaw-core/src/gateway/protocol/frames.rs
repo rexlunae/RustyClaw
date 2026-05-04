@@ -460,28 +460,6 @@ pub fn deserialize_frame<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result
     Ok(result)
 }
 
-/// Helper to send a ServerFrame as a binary WebSocket message.
-#[macro_export]
-macro_rules! send_binary_frame {
-    ($writer:expr, $frame:expr) => {{
-        let bytes = $crate::gateway::serialize_frame(&$frame)
-            .map_err(|e| anyhow::anyhow!("Failed to serialize frame: {}", e))?;
-        $writer
-            .send(tokio_tungstenite::tungstenite::Message::Binary(bytes))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to send frame: {}", e))
-    }};
-}
-
-/// Helper to parse a client frame from binary WebSocket message bytes.
-#[macro_export]
-macro_rules! parse_binary_client_frame {
-    ($bytes:expr) => {{
-        $crate::gateway::deserialize_frame::<$crate::gateway::ClientFrame>($bytes)
-            .map_err(|e| anyhow::anyhow!("Failed to parse client frame: {}", e))
-    }};
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

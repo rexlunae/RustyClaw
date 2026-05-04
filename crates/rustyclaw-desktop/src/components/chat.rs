@@ -3,7 +3,7 @@
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::*;
 
-use crate::state::{ChatMessage, MessageRole};
+use crate::state::ChatMessage;
 
 use super::message::MessageBubble;
 use super::tool_call::ToolCallPanel;

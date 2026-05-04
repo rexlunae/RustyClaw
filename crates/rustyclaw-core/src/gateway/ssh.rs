@@ -63,7 +63,6 @@
 //! ```
 
 use super::protocol::{ClientFrame, ServerFrame, deserialize_frame, serialize_frame};
-#[cfg(feature = "ssh")]
 use super::transport::TransportAcceptor;
 use super::transport::{PeerInfo, Transport, TransportReader, TransportType, TransportWriter};
 use anyhow::Result;
@@ -71,28 +70,18 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[cfg(feature = "ssh")]
 use anyhow::Context;
-#[cfg(feature = "ssh")]
 use std::collections::HashMap;
-#[cfg(feature = "ssh")]
 use std::net::SocketAddr;
-#[cfg(feature = "ssh")]
 use std::sync::Arc;
-#[cfg(feature = "ssh")]
 use tokio::sync::{Mutex, mpsc};
-#[cfg(feature = "ssh")]
 use tracing::{debug, error, info, warn};
 
-#[cfg(feature = "ssh")]
 use std::path::Path;
 
-#[cfg(feature = "ssh")]
 use russh::keys::PublicKey;
-#[cfg(feature = "ssh")]
 use russh::server::{Auth, Handler, Msg, Server, Session};
-#[cfg(feature = "ssh")]
-use russh::{Channel, ChannelId, CryptoVec};
+use russh::{Channel, ChannelId};
 
 /// Maximum frame size (16 MB should be plenty).
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
@@ -110,6 +99,9 @@ pub struct SshConfig {
     pub allow_password: bool,
     /// Whether to require public key authentication.
     pub require_pubkey: bool,
+    /// Whether unknown client keys may authenticate at SSH layer when
+    /// application-layer TOTP is enabled.
+    pub allow_unknown_keys_with_totp: bool,
 }
 
 impl Default for SshConfig {
@@ -124,6 +116,7 @@ impl Default for SshConfig {
             authorized_clients_path: config_dir.join("authorized_clients"),
             allow_password: false,
             require_pubkey: true,
+            allow_unknown_keys_with_totp: false,
         }
     }
 }
@@ -132,7 +125,6 @@ impl Default for SshConfig {
 #[derive(Debug, Clone)]
 pub struct AuthorizedClient {
     /// The public key.
-    #[cfg(feature = "ssh")]
     pub key: PublicKey,
     /// Optional comment (usually user@host).
     pub comment: Option<String>,
@@ -144,7 +136,6 @@ pub struct AuthorizedClient {
 /// ```text
 /// ssh-ed25519 AAAAC3NzaC1lZDI1NTE5... comment
 /// ```
-#[cfg(feature = "ssh")]
 pub fn load_authorized_clients(path: &Path) -> Result<Vec<AuthorizedClient>> {
     use std::io::{BufRead, BufReader};
 
@@ -191,7 +182,6 @@ pub fn load_authorized_clients(path: &Path) -> Result<Vec<AuthorizedClient>> {
 }
 
 /// Add a public key to the authorized_clients file.
-#[cfg(feature = "ssh")]
 pub fn add_authorized_client(path: &Path, key: &PublicKey, comment: Option<&str>) -> Result<()> {
     use std::io::Write;
 
@@ -222,7 +212,6 @@ pub fn add_authorized_client(path: &Path, key: &PublicKey, comment: Option<&str>
 }
 
 /// Get the fingerprint of a public key.
-#[cfg(feature = "ssh")]
 pub fn key_fingerprint(key: &PublicKey) -> String {
     // Use russh's internal HashAlg
     key.fingerprint(russh::keys::HashAlg::Sha256).to_string()
@@ -232,7 +221,6 @@ pub fn key_fingerprint(key: &PublicKey) -> String {
 // SSH Server Implementation
 // ============================================================================
 
-#[cfg(feature = "ssh")]
 mod server {
     use super::*;
 
@@ -312,9 +300,14 @@ mod server {
                 key
             };
 
-            // Build russh server config
+            // Build russh server config — publickey auth only.
+            // Restricting methods prevents standard SSH clients from being
+            // prompted for a password, which would never succeed.
             let config = russh::server::Config {
                 keys: vec![host_key],
+                methods: russh::MethodSet::from(
+                    &[russh::MethodKind::PublicKey][..]
+                ),
                 ..Default::default()
             };
 
@@ -344,6 +337,8 @@ mod server {
         pub async fn listen(&mut self, addr: SocketAddr) -> Result<()> {
             let config = self.config.clone();
             let authorized = self.authorized_clients.clone();
+            let authorized_clients_path = self.ssh_config.authorized_clients_path.clone();
+            let allow_unknown_keys_with_totp = self.ssh_config.allow_unknown_keys_with_totp;
             let tx = self.connection_tx.clone();
 
             info!(address = %addr, "SSH server listening");
@@ -352,6 +347,10 @@ mod server {
             tokio::spawn(async move {
                 let mut handler = SshHandler {
                     authorized_clients: authorized,
+                    authorized_clients_path,
+                    allow_unknown_keys_with_totp,
+                    peer_addr: None,
+                    authenticated_username: None,
                     connection_tx: tx,
                     sessions: Arc::new(Mutex::new(HashMap::new())),
                 };
@@ -389,15 +388,16 @@ mod server {
 
     /// Session state for a connected client.
     struct ClientSession {
-        username: String,
-        key_fingerprint: Option<String>,
-        peer_addr: Option<SocketAddr>,
-        channel_data_tx: Option<mpsc::Sender<Vec<u8>>>,
+        channel_data_tx: mpsc::Sender<Vec<u8>>,
     }
 
     /// SSH connection handler.
     struct SshHandler {
         authorized_clients: Arc<Mutex<Vec<AuthorizedClient>>>,
+        authorized_clients_path: PathBuf,
+        allow_unknown_keys_with_totp: bool,
+        peer_addr: Option<SocketAddr>,
+        authenticated_username: Option<String>,
         connection_tx: mpsc::Sender<SshTransport>,
         sessions: Arc<Mutex<HashMap<ChannelId, ClientSession>>>,
     }
@@ -406,6 +406,10 @@ mod server {
         fn clone(&self) -> Self {
             Self {
                 authorized_clients: self.authorized_clients.clone(),
+                authorized_clients_path: self.authorized_clients_path.clone(),
+                allow_unknown_keys_with_totp: self.allow_unknown_keys_with_totp,
+                peer_addr: self.peer_addr,
+                authenticated_username: self.authenticated_username.clone(),
                 connection_tx: self.connection_tx.clone(),
                 sessions: self.sessions.clone(),
             }
@@ -415,13 +419,81 @@ mod server {
     impl Server for SshHandler {
         type Handler = Self;
 
-        fn new_client(&mut self, _peer_addr: Option<SocketAddr>) -> Self::Handler {
-            self.clone()
+        fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> Self::Handler {
+            let mut cloned = self.clone();
+            cloned.peer_addr = peer_addr;
+            cloned.authenticated_username = None;
+            cloned
         }
     }
 
     impl Handler for SshHandler {
         type Error = anyhow::Error;
+
+        async fn pty_request(
+            &mut self,
+            channel: ChannelId,
+            _term: &str,
+            _col_width: u32,
+            _row_height: u32,
+            _pix_width: u32,
+            _pix_height: u32,
+            _modes: &[(russh::Pty, u32)],
+            session: &mut Session,
+        ) -> Result<(), Self::Error> {
+            // Acknowledge PTY allocation so OpenSSH clients don't block
+            // waiting for a success/failure reply.
+            session.channel_success(channel)?;
+            Ok(())
+        }
+
+        async fn shell_request(
+            &mut self,
+            channel: ChannelId,
+            session: &mut Session,
+        ) -> Result<(), Self::Error> {
+            // We don't provide an interactive shell, but must explicitly
+            // acknowledge the request to avoid client-side hangs.
+            session.channel_success(channel)?;
+            Ok(())
+        }
+
+        async fn exec_request(
+            &mut self,
+            channel: ChannelId,
+            _data: &[u8],
+            session: &mut Session,
+        ) -> Result<(), Self::Error> {
+            // TUI uses an exec-style request (`ssh host rustyclaw-gateway --ssh-stdio`).
+            // Accept it and continue using channel data as raw framed transport.
+            session.channel_success(channel)?;
+            Ok(())
+        }
+
+        async fn subsystem_request(
+            &mut self,
+            channel: ChannelId,
+            _name: &str,
+            session: &mut Session,
+        ) -> Result<(), Self::Error> {
+            // Accept subsystem requests for compatibility with OpenSSH subsystem mode.
+            session.channel_success(channel)?;
+            Ok(())
+        }
+
+        async fn auth_password(
+            &mut self,
+            user: &str,
+            _password: &str,
+        ) -> Result<Auth, Self::Error> {
+            warn!(user = user, "Password auth attempted but not supported");
+            Ok(Auth::Reject {
+                proceed_with_methods: Some(russh::MethodSet::from(
+                    &[russh::MethodKind::PublicKey][..]
+                )),
+                partial_success: false,
+            })
+        }
 
         async fn auth_publickey(
             &mut self,
@@ -431,7 +503,42 @@ mod server {
             let fingerprint = key_fingerprint(public_key);
             debug!(user = user, fingerprint = %fingerprint, "Public key auth attempt");
 
-            let clients = self.authorized_clients.lock().await;
+            let mut clients = self.authorized_clients.lock().await;
+
+            // Bootstrap mode: first connecting key is persisted and trusted.
+            if clients.is_empty() {
+                let comment = {
+                    let c = public_key.comment();
+                    if c.is_empty() {
+                        Some(format!("{}@rustyclaw", user))
+                    } else {
+                        Some(c.to_string())
+                    }
+                };
+
+                add_authorized_client(
+                    &self.authorized_clients_path,
+                    public_key,
+                    comment.as_deref(),
+                )?;
+
+                clients.push(AuthorizedClient {
+                    key: public_key.clone(),
+                    comment: comment.clone(),
+                });
+
+                warn!(
+                    user = user,
+                    fingerprint = %fingerprint,
+                    path = %self.authorized_clients_path.display(),
+                    "Bootstrapped first SSH client key into authorized_clients"
+                );
+
+                self.authenticated_username = Some(user.to_string());
+
+                return Ok(Auth::Accept);
+            }
+
             for client in clients.iter() {
                 if &client.key == public_key {
                     info!(
@@ -440,11 +547,21 @@ mod server {
                         comment = ?client.comment,
                         "SSH key authenticated"
                     );
+                    self.authenticated_username = Some(user.to_string());
                     return Ok(Auth::Accept);
                 }
             }
 
             warn!(user = user, fingerprint = %fingerprint, "Unknown SSH key");
+            if self.allow_unknown_keys_with_totp {
+                warn!(
+                    user = user,
+                    fingerprint = %fingerprint,
+                    "Allowing unknown SSH key because TOTP is enabled"
+                );
+                self.authenticated_username = Some(user.to_string());
+                return Ok(Auth::Accept);
+            }
             Ok(Auth::reject())
         }
 
@@ -464,18 +581,15 @@ mod server {
             sessions.insert(
                 channel.id(),
                 ClientSession {
-                    username: "unknown".to_string(), // Set during auth
-                    key_fingerprint: None,
-                    peer_addr: None,
-                    channel_data_tx: Some(data_tx),
+                    channel_data_tx: data_tx,
                 },
             );
 
             // Create the transport
             let transport = SshTransport {
                 peer_info: PeerInfo {
-                    addr: None,
-                    username: Some("unknown".to_string()),
+                    addr: self.peer_addr,
+                    username: self.authenticated_username.clone(),
                     key_fingerprint: None,
                     transport_type: TransportType::Ssh,
                 },
@@ -499,11 +613,13 @@ mod server {
             data: &[u8],
             _session: &mut Session,
         ) -> Result<(), Self::Error> {
-            let sessions = self.sessions.lock().await;
-            if let Some(client_session) = sessions.get(&channel) {
-                if let Some(tx) = &client_session.channel_data_tx {
-                    let _ = tx.send(data.to_vec()).await;
-                }
+            // Never await while holding the session map lock.
+            let tx = {
+                let sessions = self.sessions.lock().await;
+                sessions.get(&channel).map(|s| s.channel_data_tx.clone())
+            };
+            if let Some(tx) = tx {
+                let _ = tx.send(data.to_vec()).await;
             }
             Ok(())
         }
@@ -643,7 +759,6 @@ mod server {
     }
 }
 
-#[cfg(feature = "ssh")]
 pub use server::*;
 
 // ============================================================================
@@ -841,5 +956,6 @@ mod tests {
         );
         assert!(!config.allow_password);
         assert!(config.require_pubkey);
+        assert!(!config.allow_unknown_keys_with_totp);
     }
 }

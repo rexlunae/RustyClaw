@@ -31,6 +31,7 @@ pub struct ChatMessage {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum MessageRole {
     User,
     Assistant,

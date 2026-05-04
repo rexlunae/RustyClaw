@@ -15,15 +15,13 @@ use tokio_util::sync::CancellationToken;
 pub fn handle_start(
     config: &Config,
     vault_password: Option<&str>,
-    port: u16,
-    bind: &str,
+    ssh_listen: &str,
 ) -> Result<()> {
     let sp = t::spinner("Starting gateway…");
 
     match daemon::start(
         &config.settings_dir,
-        port,
-        bind,
+        ssh_listen,
         &[],
         None,
         vault_password,
@@ -31,26 +29,12 @@ pub fn handle_start(
         config.tls_key.as_deref(),
     ) {
         Ok(pid) => {
-            let scheme = if config.tls_cert.is_some() {
-                "wss"
-            } else {
-                "ws"
-            };
             t::spinner_ok(
                 &sp,
                 &format!(
-                    "Gateway started (PID {}, {})",
+                    "Gateway started (PID {}, SSH {})",
                     pid,
-                    t::info(&format!(
-                        "{}://{}:{}",
-                        scheme,
-                        if bind == "loopback" {
-                            "127.0.0.1"
-                        } else {
-                            bind
-                        },
-                        port
-                    )),
+                    t::info(ssh_listen),
                 ),
             );
             println!(
@@ -93,8 +77,7 @@ pub fn handle_stop(config: &Config) -> Result<()> {
 pub fn handle_restart(
     config: &Config,
     vault_password: Option<&str>,
-    port: u16,
-    bind: &str,
+    ssh_listen: &str,
 ) -> Result<()> {
     let sp = t::spinner("Restarting gateway…");
 
@@ -118,8 +101,7 @@ pub fn handle_restart(
 
     match daemon::start(
         &config.settings_dir,
-        port,
-        bind,
+        ssh_listen,
         &[],
         None,
         vault_password,
@@ -127,26 +109,12 @@ pub fn handle_restart(
         config.tls_key.as_deref(),
     ) {
         Ok(pid) => {
-            let scheme = if config.tls_cert.is_some() {
-                "wss"
-            } else {
-                "ws"
-            };
             t::spinner_ok(
                 &sp,
                 &format!(
-                    "Gateway restarted (PID {}, {})",
+                    "Gateway restarted (PID {}, SSH {})",
                     pid,
-                    t::info(&format!(
-                        "{}://{}:{}",
-                        scheme,
-                        if bind == "loopback" {
-                            "127.0.0.1"
-                        } else {
-                            bind
-                        },
-                        port
-                    )),
+                    t::info(ssh_listen),
                 ),
             );
         }
@@ -159,10 +127,11 @@ pub fn handle_restart(
 
 /// Handle `gateway status` command.
 pub fn handle_status(config: &Config, json: bool) {
-    let url = config
-        .gateway_url
-        .as_deref()
-        .unwrap_or("ws://127.0.0.1:9001");
+    let ssh_addr = config
+        .ssh
+        .as_ref()
+        .map(|s| s.bind.clone())
+        .unwrap_or_else(|| "0.0.0.0:2222".to_string());
     let status = daemon::status(&config.settings_dir);
 
     if json {
@@ -175,9 +144,9 @@ pub fn handle_status(config: &Config, json: bool) {
         if let Some(pid) = pid {
             print!(", \"pid\": {}", pid);
         }
-        println!(", \"gateway_url\": \"{}\" }}", url);
+        println!(", \"ssh_listen\": \"{}\" }}", ssh_addr);
     } else {
-        println!("{}", t::label_value("Gateway URL", url));
+        println!("{}", t::label_value("SSH Listen  ", &ssh_addr));
         match status {
             daemon::DaemonStatus::Running { pid } => {
                 println!(
@@ -318,17 +287,4 @@ pub async fn handle_run(config: Config, host: &str, port: u16) -> Result<()> {
     .await?;
 
     Ok(())
-}
-
-/// Parse gateway URL from config to get (port, bind_mode).
-pub fn parse_gateway_defaults(config: &Config) -> (u16, &'static str) {
-    if let Some(url) = &config.gateway_url {
-        if let Ok(parsed) = url::Url::parse(url) {
-            let port = parsed.port().unwrap_or(9001);
-            let host = parsed.host_str().unwrap_or("127.0.0.1");
-            let bind = if host == "0.0.0.0" { "lan" } else { "loopback" };
-            return (port, bind);
-        }
-    }
-    (9001, "loopback")
 }

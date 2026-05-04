@@ -7,16 +7,10 @@ use std::path::{Path, PathBuf};
 #[derive(Clone)]
 pub struct ClientKeyPair {
     /// The private key (kept secret).
-    #[cfg(feature = "ssh")]
     pub private_key: russh::keys::PrivateKey,
-    #[cfg(not(feature = "ssh"))]
-    pub private_key_pem: String,
 
     /// The public key (shared with gateway).
-    #[cfg(feature = "ssh")]
     pub public_key: russh::keys::PublicKey,
-    #[cfg(not(feature = "ssh"))]
-    pub public_key_openssh: String,
 
     /// Optional comment (e.g., "user@hostname").
     pub comment: Option<String>,
@@ -33,8 +27,7 @@ impl ClientKeyPair {
     }
 
     /// Load the private key for SSH authentication.
-    #[cfg(feature = "ssh")]
-    pub fn load_private_key(&self) -> Result<russh_keys::key::KeyPair> {
+    pub fn load_private_key(&self) -> Result<russh_keys::PrivateKey> {
         let path = default_client_key_path();
         let key_data = std::fs::read_to_string(&path).context("Failed to read private key")?;
         russh_keys::decode_secret_key(&key_data, None).context("Failed to decode private key")
@@ -42,7 +35,6 @@ impl ClientKeyPair {
 
     /// Get the public key in OpenSSH format (for display/copy).
     pub fn public_key_openssh(&self) -> String {
-        #[cfg(feature = "ssh")]
         {
             let key_str = self
                 .public_key
@@ -52,14 +44,6 @@ impl ClientKeyPair {
                 format!("{} {}", key_str.trim(), comment)
             } else {
                 key_str.trim().to_string()
-            }
-        }
-        #[cfg(not(feature = "ssh"))]
-        {
-            if let Some(ref comment) = self.comment {
-                format!("{} {}", self.public_key_openssh.trim(), comment)
-            } else {
-                self.public_key_openssh.clone()
             }
         }
     }
@@ -84,7 +68,6 @@ pub fn default_client_key_path() -> PathBuf {
 ///
 /// The `comment` is typically "user@hostname" and will be appended to
 /// the public key when displayed.
-#[cfg(feature = "ssh")]
 pub fn generate_client_keypair(comment: Option<String>) -> Result<ClientKeyPair> {
     use russh::keys::{Algorithm, PrivateKey};
 
@@ -101,13 +84,8 @@ pub fn generate_client_keypair(comment: Option<String>) -> Result<ClientKeyPair>
     })
 }
 
-#[cfg(not(feature = "ssh"))]
-pub fn generate_client_keypair(_comment: Option<String>) -> Result<ClientKeyPair> {
-    anyhow::bail!("SSH feature not enabled; cannot generate keypair")
-}
 
 /// Load an existing client keypair from disk.
-#[cfg(feature = "ssh")]
 pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
     let key_data = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read key file: {}", path.display()))?;
@@ -132,23 +110,10 @@ pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
     })
 }
 
-#[cfg(not(feature = "ssh"))]
-pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
-    let _key_data = std::fs::read_to_string(path)
-        .with_context(|| format!("Failed to read key file: {}", path.display()))?;
-
-    // Parse just enough to extract the public key line
-    // This is a simplified fallback when SSH feature is disabled
-    anyhow::bail!(
-        "SSH feature not enabled; cannot load keypair from {}",
-        path.display()
-    )
-}
 
 /// Save a client keypair to disk.
 ///
 /// The private key is saved with restrictive permissions (600 on Unix).
-#[cfg(feature = "ssh")]
 pub fn save_client_keypair(keypair: &ClientKeyPair, path: &Path) -> Result<()> {
     use russh::keys::ssh_key::LineEnding;
 
@@ -179,10 +144,6 @@ pub fn save_client_keypair(keypair: &ClientKeyPair, path: &Path) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(feature = "ssh"))]
-pub fn save_client_keypair(_keypair: &ClientKeyPair, _path: &Path) -> Result<()> {
-    anyhow::bail!("SSH feature not enabled; cannot save keypair")
-}
 
 /// Load or generate a client keypair.
 ///
@@ -211,14 +172,4 @@ mod tests {
         assert!(path.to_string_lossy().contains("client_ed25519_key"));
     }
 
-    #[test]
-    #[cfg(feature = "ssh")]
-    fn test_generate_keypair() {
-        let keypair = generate_client_keypair(Some("test@localhost".to_string()))
-            .expect("Should generate keypair");
-
-        let openssh = keypair.public_key_openssh();
-        assert!(openssh.starts_with("ssh-ed25519 "));
-        assert!(openssh.contains("test@localhost"));
-    }
 }

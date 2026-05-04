@@ -17,7 +17,7 @@ repository = "https://github.com/rexlunae/RustyClaw"
 rust-version = "1.86"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal", "steel-memory"))'] }
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
@@ -136,7 +136,7 @@ httpdate = "1.0"
 colored = "3.1"
 indicatif = "0.18"
 unicode-width = "0.2"
-rpassword = "7"
+rpassword = "=7.4.0"
 
 # TUI dependencies
 iocraft = "0.7"
