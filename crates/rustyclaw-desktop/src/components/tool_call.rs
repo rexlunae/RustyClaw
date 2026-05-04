@@ -1,115 +1,86 @@
-//! Tool call display panel.
+//! Collapsible panel showing tool-call arguments and result.
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::*;
 
-/// Props for ToolCallPanel.
+/// Props for [`ToolCallPanel`].
 #[derive(Props, Clone, PartialEq)]
 pub struct ToolCallPanelProps {
-    /// Tool call ID
     pub id: String,
-    /// Tool name
     pub name: String,
-    /// Tool arguments (JSON)
     pub arguments: String,
-    /// Tool result
     pub result: Option<String>,
-    /// Whether the result is an error
     #[props(default = false)]
     pub is_error: bool,
-    /// Whether the panel is collapsed
     #[props(default = true)]
     pub collapsed: bool,
 }
 
-/// Collapsible panel showing tool call details.
 #[component]
 pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
     let mut is_collapsed = use_signal(|| props.collapsed);
 
-    let status_color = if props.result.is_some() {
+    let (status_class, status_label, status_icon) = if props.result.is_some() {
         if props.is_error {
-            BulmaColor::Danger
+            ("is-error", "Failed", "✕")
         } else {
-            BulmaColor::Success
+            ("is-done", "Done", "✓")
         }
     } else {
-        BulmaColor::Info
+        ("is-running", "Running…", "⏳")
     };
 
-    let status_icon = if props.result.is_some() {
-        if props.is_error {
-            "fa-times-circle"
-        } else {
-            "fa-check-circle"
+    let panel_class = format!(
+        "tool-call {} {}",
+        status_class,
+        if *is_collapsed.read() { "" } else { "is-open" }
+    );
+    let panel_class = panel_class.trim().to_string();
+
+    let pretty_args = serde_json::from_str::<serde_json::Value>(&props.arguments)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| props.arguments.clone());
+
+    let chip_class = format!(
+        "chip {}",
+        match status_class {
+            "is-error" => "is-danger",
+            "is-running" => "is-info is-pulse",
+            _ => "is-success",
         }
-    } else {
-        "fa-spinner fa-spin"
-    };
+    );
 
     rsx! {
-        Message {
-            color: status_color,
-            class: "tool-call-panel".to_string(),
-
-            // Header (clickable, used for collapse toggle).
-            // We use a raw `message-header` div here instead of the typed
-            // MessageHeader component because MessageHeader renders a built-in
-            // `delete` button via `onclose`, while we want the entire header
-            // to act as a collapse toggle.
-            div {
-                class: "message-header",
-                style: "cursor: pointer;",
+        div { class: "{panel_class}",
+            div { class: "tool-head",
                 onclick: move |_| {
-                    let val = *is_collapsed.read();
-                    is_collapsed.set(!val);
+                    let v = *is_collapsed.read();
+                    is_collapsed.set(!v);
                 },
-
-                Icon { class: "is-small".to_string(), i { class: "fas fa-wrench" } }
-                span { style: "margin-left: 0.25rem; font-weight: 600;",
-                    "{props.name}"
+                span { class: "tool-name", "🔧 {props.name}" }
+                span { class: "tool-spacer" }
+                span { class: "{chip_class}",
+                    span { class: "dot" }
+                    span { "{status_icon} {status_label}" }
                 }
-
-                span { style: "margin-left: auto; display: inline-flex; align-items: center;",
-                    Icon { class: "is-small".to_string(), i { class: "fas {status_icon}" } }
-                    Icon {
-                        class: "is-small".to_string(),
-                        i {
-                            class: if *is_collapsed.read() { "fas fa-chevron-down" } else { "fas fa-chevron-up" }
-                        }
-                    }
-                }
+                span { class: "tool-chevron", "⌄" }
             }
 
-            // Body (collapsible)
             if !*is_collapsed.read() {
-                MessageBody {
-                    // Arguments
-                    div { class: "tool-arguments",
-                        style: "margin-bottom: 0.5rem;",
-
-                        strong { "Arguments:" }
-                        pre {
-                            style: "background: rgba(0,0,0,0.1); padding: 0.5rem; border-radius: 4px; overflow-x: auto; margin-top: 0.25rem;",
-                            code {
-                                // Pretty print JSON if possible
-                                {
-                                    serde_json::from_str::<serde_json::Value>(&props.arguments)
-                                        .map(|v| serde_json::to_string_pretty(&v).unwrap_or(props.arguments.clone()))
-                                        .unwrap_or(props.arguments.clone())
-                                }
-                            }
+                div { class: "tool-body",
+                    div { class: "tool-section",
+                        div { class: "tool-section-label", "Arguments" }
+                        pre { class: "tool-pre",
+                            code { "{pretty_args}" }
                         }
                     }
-
-                    // Result (if available)
-                    if let Some(result) = &props.result {
-                        div { class: "tool-result",
-                            strong {
-                                if props.is_error { "Error:" } else { "Result:" }
+                    if let Some(result) = props.result.as_ref() {
+                        div { class: "tool-section",
+                            div { class: "tool-section-label",
+                                if props.is_error { "Error" } else { "Result" }
                             }
                             pre {
-                                style: "background: rgba(0,0,0,0.1); padding: 0.5rem; border-radius: 4px; overflow-x: auto; margin-top: 0.25rem; max-height: 200px;",
+                                class: if props.is_error { "tool-pre is-error" } else { "tool-pre" },
                                 code { "{result}" }
                             }
                         }

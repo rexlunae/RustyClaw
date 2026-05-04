@@ -3,8 +3,9 @@
 use std::collections::VecDeque;
 
 /// Connection status to the gateway.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionStatus {
+    #[default]
     Disconnected,
     Connecting,
     Connected,
@@ -13,9 +14,20 @@ pub enum ConnectionStatus {
     Error(String),
 }
 
-impl Default for ConnectionStatus {
-    fn default() -> Self {
-        Self::Disconnected
+/// UI theme preference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Theme {
+    #[default]
+    Dark,
+    Light,
+}
+
+impl Theme {
+    pub fn as_attr(self) -> &'static str {
+        match self {
+            Theme::Dark => "dark",
+            Theme::Light => "light",
+        }
     }
 }
 
@@ -107,6 +119,12 @@ pub struct AppState {
 
     /// Status messages
     pub status_message: Option<String>,
+
+    /// Whether the sidebar is collapsed.
+    pub sidebar_collapsed: bool,
+
+    /// Active UI theme.
+    pub theme: Theme,
 }
 
 impl Default for AppState {
@@ -128,6 +146,8 @@ impl Default for AppState {
             model: None,
             provider: None,
             status_message: None,
+            sidebar_collapsed: false,
+            theme: Theme::default(),
         }
     }
 }
@@ -164,10 +184,10 @@ impl AppState {
 
     /// Append content to the current streaming message.
     pub fn append_to_current_message(&mut self, delta: &str) {
-        if let Some(msg) = self.messages.back_mut() {
-            if msg.is_streaming {
-                msg.content.push_str(delta);
-            }
+        if let Some(msg) = self.messages.back_mut()
+            && msg.is_streaming
+        {
+            msg.content.push_str(delta);
         }
     }
 

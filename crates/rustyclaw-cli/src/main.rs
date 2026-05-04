@@ -2583,24 +2583,22 @@ async fn send_gateway_reload(gateway_url: &str, totp_enabled: bool) -> Result<(S
                                 break;
                             }
                         }
-                        ServerFrameType::AuthChallenge => {
+                        ServerFrameType::AuthChallenge if totp_enabled => {
                             // Handle TOTP even when totp_enabled was false in config
-                            if totp_enabled {
-                                let code = rpassword::prompt_password(format!(
-                                    "{} 2FA code: ",
-                                    rustyclaw_core::theme::info("🔑")
-                                ))
-                                .unwrap_or_default();
-                                let auth_frame = ClientFrame {
-                                    frame_type: ClientFrameType::AuthResponse,
-                                    payload: ClientPayload::AuthResponse {
-                                        code: code.trim().to_string(),
-                                    },
-                                };
-                                let bytes = serialize_frame(&auth_frame)
-                                    .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
-                                writer.send(Message::Binary(bytes.into())).await?;
-                            }
+                            let code = rpassword::prompt_password(format!(
+                                "{} 2FA code: ",
+                                rustyclaw_core::theme::info("🔑")
+                            ))
+                            .unwrap_or_default();
+                            let auth_frame = ClientFrame {
+                                frame_type: ClientFrameType::AuthResponse,
+                                payload: ClientPayload::AuthResponse {
+                                    code: code.trim().to_string(),
+                                },
+                            };
+                            let bytes = serialize_frame(&auth_frame)
+                                .map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;
+                            writer.send(Message::Binary(bytes.into())).await?;
                         }
                         _ => {}
                     }

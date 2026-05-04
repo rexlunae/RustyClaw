@@ -387,15 +387,19 @@ pub async fn run_gateway(
     };
 
     // Determine SSH listen address from CLI option or config.
-    let ssh_listen = options.ssh_listen.clone().or_else(|| {
-        config.ssh.as_ref().and_then(|ssh_cfg| {
-            if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
-                Some(ssh_cfg.bind.clone())
-            } else {
-                None
-            }
+    let ssh_listen = options
+        .ssh_listen
+        .clone()
+        .or_else(|| {
+            config.ssh.as_ref().and_then(|ssh_cfg| {
+                if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
+                    Some(ssh_cfg.bind.clone())
+                } else {
+                    None
+                }
+            })
         })
-    }).unwrap_or_else(|| "0.0.0.0:2222".to_string());
+        .unwrap_or_else(|| "0.0.0.0:2222".to_string());
 
     let bind_addr: SocketAddr = ssh_listen
         .parse()
@@ -406,12 +410,22 @@ pub async fn run_gateway(
         host_key_path: options
             .ssh_host_key
             .clone()
-            .or_else(|| config.ssh.as_ref().map(|s| s.host_key_path(&config.settings_dir)))
+            .or_else(|| {
+                config
+                    .ssh
+                    .as_ref()
+                    .map(|s| s.host_key_path(&config.settings_dir))
+            })
             .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
         authorized_clients_path: options
             .ssh_authorized_clients
             .clone()
-            .or_else(|| config.ssh.as_ref().map(|s| s.authorized_keys_path(&config.settings_dir)))
+            .or_else(|| {
+                config
+                    .ssh
+                    .as_ref()
+                    .map(|s| s.authorized_keys_path(&config.settings_dir))
+            })
             .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
         allow_password: false,
         require_pubkey: true,
@@ -1854,7 +1868,7 @@ where
 
         // Poll both the model future and a short timer so cancel requests are
         // observed quickly even while waiting on provider/network latency.
-        let tick = std::time::Duration::from_millis(200).min((deadline - now).into());
+        let tick = std::time::Duration::from_millis(200).min(deadline - now);
         tokio::select! {
             res = &mut fut => return res.map(Some),
             _ = tokio::time::sleep(tick) => {}
@@ -2445,7 +2459,10 @@ mod tests {
     }
 
     impl MockTransport {
-        fn with_frames(peer: PeerInfo, frames: Vec<Option<ClientFrame>>) -> (Self, Arc<Mutex<Vec<ServerFrame>>>) {
+        fn with_frames(
+            peer: PeerInfo,
+            frames: Vec<Option<ClientFrame>>,
+        ) -> (Self, Arc<Mutex<Vec<ServerFrame>>>) {
             let outgoing = Arc::new(Mutex::new(Vec::new()));
             (
                 Self {
@@ -2515,8 +2532,10 @@ mod tests {
 
     fn test_config_with_temp_state() -> Result<(tempfile::TempDir, Config)> {
         let tmp = tempdir()?;
-        let mut cfg = Config::default();
-        cfg.settings_dir = tmp.path().join("state");
+        let cfg = Config {
+            settings_dir: tmp.path().join("state"),
+            ..Config::default()
+        };
 
         std::fs::create_dir_all(cfg.settings_dir.clone())?;
         std::fs::create_dir_all(cfg.workspace_dir())?;
@@ -2543,7 +2562,8 @@ mod tests {
         let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![None]);
 
         let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
-        let skill_mgr: SharedSkillManager = Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
         let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
 
         handle_transport_connection(
@@ -2593,7 +2613,8 @@ mod tests {
         let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
 
         let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
-        let skill_mgr: SharedSkillManager = Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
         let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
 
         handle_transport_connection(
@@ -2612,11 +2633,15 @@ mod tests {
 
         let frames = outgoing.lock().await;
         assert!(
-            frames.iter().any(|f| matches!(f.frame_type, ServerFrameType::Hello)),
+            frames
+                .iter()
+                .any(|f| matches!(f.frame_type, ServerFrameType::Hello)),
             "Expected hello frame"
         );
         assert!(
-            frames.iter().any(|f| matches!(f.frame_type, ServerFrameType::Error)),
+            frames
+                .iter()
+                .any(|f| matches!(f.frame_type, ServerFrameType::Error)),
             "Expected chat request to be processed and produce an error frame when model context is missing"
         );
 

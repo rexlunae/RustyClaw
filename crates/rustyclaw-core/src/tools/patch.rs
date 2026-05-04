@@ -56,7 +56,7 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> Result<String, St
 
         // Apply hunks in reverse order (to preserve line numbers)
         let mut sorted_hunks: Vec<_> = file_hunks.iter().collect();
-        sorted_hunks.sort_by(|a, b| b.old_start.cmp(&a.old_start));
+        sorted_hunks.sort_by_key(|h| std::cmp::Reverse(h.old_start));
 
         for hunk in sorted_hunks {
             lines = apply_hunk(&lines, hunk)?;

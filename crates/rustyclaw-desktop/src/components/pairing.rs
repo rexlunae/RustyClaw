@@ -1,42 +1,27 @@
-//! Pairing dialog with QR code generation.
+//! Pairing dialog: show keypair / QR, configure host:port, connect.
 
 use dioxus::prelude::*;
-use dioxus_bulma::components::ColumnSize;
-use dioxus_bulma::prelude::*;
 
-/// Props for PairingDialog.
 #[derive(Props, Clone, PartialEq)]
 pub struct PairingDialogProps {
-    /// Whether the dialog is visible
     pub visible: bool,
-    /// Client public key (for display)
     pub public_key: Option<String>,
-    /// QR code data URL (base64 PNG)
     pub qr_code_data_url: Option<String>,
-    /// Gateway host
     pub gateway_host: String,
-    /// Gateway port
     pub gateway_port: u16,
-    /// Callback when host changes
     pub on_host_change: EventHandler<String>,
-    /// Callback when port changes
     pub on_port_change: EventHandler<u16>,
-    /// Callback to connect
     pub on_connect: EventHandler<()>,
-    /// Callback to generate new keypair
     pub on_generate_key: EventHandler<()>,
-    /// Callback to cancel
     pub on_cancel: EventHandler<()>,
 }
 
-/// Pairing dialog component.
 #[component]
 pub fn PairingDialog(props: PairingDialogProps) -> Element {
     let mut host = use_signal(|| props.gateway_host.clone());
     let mut port_str = use_signal(|| props.gateway_port.to_string());
     let mut copied = use_signal(|| false);
 
-    // Reset copied state after 2 seconds
     use_effect(move || {
         if *copied.read() {
             spawn(async move {
@@ -50,142 +35,108 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
         return rsx! {};
     }
 
-    let public_key = props.public_key.clone();
+    let public_key_for_copy = props.public_key.clone();
     let handle_copy = move |_| {
-        if let Some(key) = &public_key {
-            // In a real implementation, use clipboard API
-            // For now, just mark as copied
+        if let Some(key) = &public_key_for_copy {
             tracing::info!("Copy public key: {}", key);
             copied.set(true);
         }
     };
 
     rsx! {
-        Modal {
-            active: true,
-            onclose: move |_| props.on_cancel.call(()),
+        div { class: "modal-backdrop",
+            onclick: move |_| props.on_cancel.call(()),
 
-            ModalCard { style: "max-width: 550px;",
+            div {
+                class: "modal",
+                style: "max-width: 540px;",
+                onclick: move |evt| evt.stop_propagation(),
 
-                ModalCardHead {
-                    onclose: move |_| props.on_cancel.call(()),
-                    p { class: "modal-card-title",
-                        Icon { i { class: "fas fa-link" } }
-                        " Pair with Gateway"
+                div { class: "modal-head",
+                    span { class: "modal-title", "🔗 Pair with gateway" }
+                    button {
+                        class: "modal-close",
+                        title: "Close",
+                        onclick: move |_| props.on_cancel.call(()),
+                        "✕"
                     }
                 }
 
-                ModalCardBody {
-                    // Public key display
-                    BulmaBox { style: "background: #f5f5f5;",
-                        p { class: "has-text-weight-semibold",
-                            Icon { class: "is-small".to_string(), i { class: "fas fa-key" } }
-                            " Your Public Key"
-                        }
-
-                        if let Some(key) = &props.public_key {
-                            div { style: "margin-top: 0.5rem;",
-                                pre {
-                                    style: "background: white; padding: 0.5rem; border-radius: 4px; font-size: 0.75rem; overflow-x: auto;",
-                                    "{key}"
-                                }
-
-                                Buttons {
-                                    alignment: ButtonsAlignment::Right,
-                                    style: "margin-top: 0.5rem;",
-
-                                    Button {
-                                        size: BulmaSize::Small,
-                                        color: if *copied.read() { BulmaColor::Success } else { BulmaColor::Light },
-                                        onclick: handle_copy,
-                                        Icon {
-                                            class: "is-small".to_string(),
-                                            i { class: if *copied.read() { "fas fa-check" } else { "fas fa-copy" } }
-                                        }
-                                        span { if *copied.read() { "Copied!" } else { "Copy" } }
-                                    }
+                div { class: "modal-body",
+                    // Public key card
+                    div { class: "pair-card",
+                        div { class: "pair-card-title", "🔑 Your public key" }
+                        if let Some(key) = props.public_key.as_ref() {
+                            pre { class: "key-pre", "{key}" }
+                            div {
+                                style: "display: flex; justify-content: flex-end; margin-top: 8px;",
+                                button {
+                                    class: if *copied.read() { "btn btn-primary btn-sm" } else { "btn btn-subtle btn-sm" },
+                                    onclick: handle_copy,
+                                    if *copied.read() { "✓ Copied!" } else { "📋 Copy" }
                                 }
                             }
                         } else {
-                            div { style: "margin-top: 0.5rem;",
-                                p { class: "has-text-grey", "No keypair generated" }
-                                Button {
-                                    size: BulmaSize::Small,
-                                    color: BulmaColor::Primary,
+                            div {
+                                style: "display: flex; justify-content: space-between; align-items: center; gap: 12px;",
+                                span { class: "field-help",
+                                    "No keypair generated yet."
+                                }
+                                button {
+                                    class: "btn btn-primary btn-sm",
                                     onclick: move |_| props.on_generate_key.call(()),
-                                    Icon { class: "is-small".to_string(), i { class: "fas fa-plus" } }
-                                    span { "Generate Keypair" }
+                                    "+ Generate keypair"
                                 }
                             }
                         }
                     }
 
                     // QR code
-                    if let Some(qr_url) = &props.qr_code_data_url {
-                        div { class: "has-text-centered",
-                            style: "margin: 1rem 0;",
-
-                            p { class: "has-text-grey is-size-7",
-                                "─── OR scan QR code ───"
-                            }
-
-                            img {
-                                src: "{qr_url}",
-                                alt: "Pairing QR Code",
-                                style: "max-width: 200px; margin: 1rem auto;",
+                    if let Some(qr_url) = props.qr_code_data_url.as_ref() {
+                        div { class: "pair-card",
+                            div { class: "pair-card-title", "📱 Scan to pair" }
+                            div { class: "qr-container",
+                                img {
+                                    src: "{qr_url}",
+                                    alt: "Pairing QR code",
+                                }
+                                span { class: "qr-label",
+                                    "Scan with your gateway's pairing client."
+                                }
                             }
                         }
                     }
 
-                    // Gateway connection settings
-                    BulmaBox {
-                        p { class: "has-text-weight-semibold",
-                            Icon { class: "is-small".to_string(), i { class: "fas fa-server" } }
-                            " Gateway"
-                        }
-
-                        Columns { style: "margin-top: 0.5rem;",
-                            Column { size: ColumnSize::Eight,
-                                Field {
-                                    FieldLabel { "Host" }
-                                    Control {
-                                        class: "has-icons-left".to_string(),
-                                        Input {
-                                            input_type: InputType::Text,
-                                            placeholder: "127.0.0.1".to_string(),
-                                            value: host.read().clone(),
-                                            oninput: move |evt: FormEvent| {
-                                                let value = evt.value();
-                                                host.set(value.clone());
-                                                props.on_host_change.call(value);
-                                            },
-                                        }
-                                        Icon {
-                                            class: "is-small is-left".to_string(),
-                                            i { class: "fas fa-network-wired" }
-                                        }
+                    // Gateway address
+                    div { class: "pair-card",
+                        div { class: "pair-card-title", "🖧 Gateway" }
+                        div { class: "field-row",
+                            div { class: "field", style: "flex: 2;",
+                                span { class: "field-label", "Host" }
+                                input {
+                                    class: "input",
+                                    r#type: "text",
+                                    placeholder: "127.0.0.1",
+                                    value: "{host}",
+                                    oninput: move |evt| {
+                                        let value = evt.value();
+                                        host.set(value.clone());
+                                        props.on_host_change.call(value);
                                     }
                                 }
                             }
-
-                            Column { size: ColumnSize::Four,
-                                Field {
-                                    FieldLabel { "Port" }
-                                    Control {
-                                        // Bulma's typed Input only exposes text/email/password/tel,
-                                        // so use a raw <input type="number"> here for numeric entry.
-                                        input {
-                                            class: "input",
-                                            r#type: "number",
-                                            placeholder: "2222",
-                                            value: "{port_str}",
-                                            oninput: move |evt| {
-                                                let value = evt.value();
-                                                port_str.set(value.clone());
-                                                if let Ok(port) = value.parse::<u16>() {
-                                                    props.on_port_change.call(port);
-                                                }
-                                            },
+                            div { class: "field", style: "flex: 1;",
+                                span { class: "field-label", "Port" }
+                                input {
+                                    class: "input",
+                                    r#type: "number",
+                                    placeholder: "2222",
+                                    value: "{port_str}",
+                                    oninput: move |evt| {
+                                        let value = evt.value();
+                                        port_str.set(value.clone());
+                                        if let Ok(port) = value.parse::<u16>() {
+                                            props.on_port_change.call(port);
                                         }
                                     }
                                 }
@@ -194,18 +145,16 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
                 }
 
-                ModalCardFoot { style: "justify-content: flex-end;",
-                    Button {
-                        color: BulmaColor::Light,
+                div { class: "modal-foot",
+                    button {
+                        class: "btn btn-ghost",
                         onclick: move |_| props.on_cancel.call(()),
                         "Cancel"
                     }
-
-                    Button {
-                        color: BulmaColor::Primary,
+                    button {
+                        class: "btn btn-primary",
                         onclick: move |_| props.on_connect.call(()),
-                        Icon { i { class: "fas fa-plug" } }
-                        span { "Connect" }
+                        "🔌 Connect"
                     }
                 }
             }

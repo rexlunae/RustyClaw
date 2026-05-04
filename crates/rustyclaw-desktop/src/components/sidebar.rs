@@ -1,157 +1,242 @@
-//! Sidebar component for sessions and settings.
+//! Sidebar component: brand, connection chip, sessions list, footer actions.
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::*;
 
 use crate::state::{ConnectionStatus, ThreadInfo};
 
-/// Props for Sidebar.
+/// Props for [`Sidebar`].
 #[derive(Props, Clone, PartialEq)]
 pub struct SidebarProps {
-    /// Connection status
     pub connection: ConnectionStatus,
-    /// Agent name
     pub agent_name: Option<String>,
-    /// Current model
     pub model: Option<String>,
-    /// Current provider
     pub provider: Option<String>,
-    /// Active threads
     pub threads: Vec<ThreadInfo>,
-    /// Current foreground thread ID
     pub foreground_id: Option<u64>,
-    /// Callback for new thread
+    pub collapsed: bool,
+    pub on_toggle_collapse: EventHandler<()>,
     pub on_new_thread: EventHandler<()>,
-    /// Callback for switching threads
     pub on_switch_thread: EventHandler<u64>,
-    /// Callback for settings
+    pub on_pair: EventHandler<()>,
     pub on_settings: EventHandler<()>,
+}
+
+/// Status chip describing the connection to the gateway.
+#[derive(Clone, Copy)]
+struct ConnInfo {
+    label: &'static str,
+    cls: &'static str,
+}
+
+fn classify(status: &ConnectionStatus) -> (ConnInfo, Option<String>) {
+    match status {
+        ConnectionStatus::Disconnected => (
+            ConnInfo {
+                label: "Disconnected",
+                cls: "is-warn",
+            },
+            None,
+        ),
+        ConnectionStatus::Connecting => (
+            ConnInfo {
+                label: "Connecting…",
+                cls: "is-info is-pulse",
+            },
+            None,
+        ),
+        ConnectionStatus::Connected => (
+            ConnInfo {
+                label: "Connected",
+                cls: "is-success",
+            },
+            None,
+        ),
+        ConnectionStatus::Authenticating => (
+            ConnInfo {
+                label: "Authenticating…",
+                cls: "is-info is-pulse",
+            },
+            None,
+        ),
+        ConnectionStatus::Authenticated => (
+            ConnInfo {
+                label: "Ready",
+                cls: "is-success",
+            },
+            None,
+        ),
+        ConnectionStatus::Error(e) => (
+            ConnInfo {
+                label: "Error",
+                cls: "is-danger",
+            },
+            Some(e.clone()),
+        ),
+    }
 }
 
 /// Sidebar component.
 #[component]
 pub fn Sidebar(props: SidebarProps) -> Element {
-    let connection_color = match &props.connection {
-        ConnectionStatus::Disconnected => "has-text-grey",
-        ConnectionStatus::Connecting => "has-text-warning",
-        ConnectionStatus::Connected | ConnectionStatus::Authenticated => "has-text-success",
-        ConnectionStatus::Authenticating => "has-text-info",
-        ConnectionStatus::Error(_) => "has-text-danger",
+    let collapsed = props.collapsed;
+    let aside_class = if collapsed {
+        "sidebar is-collapsed"
+    } else {
+        "sidebar"
     };
 
-    let connection_icon = match &props.connection {
-        ConnectionStatus::Disconnected => "fa-plug",
-        ConnectionStatus::Connecting | ConnectionStatus::Authenticating => "fa-spinner fa-spin",
-        ConnectionStatus::Connected | ConnectionStatus::Authenticated => "fa-check-circle",
-        ConnectionStatus::Error(_) => "fa-exclamation-circle",
-    };
-
-    let connection_text = match &props.connection {
-        ConnectionStatus::Disconnected => "Disconnected".to_string(),
-        ConnectionStatus::Connecting => "Connecting...".to_string(),
-        ConnectionStatus::Connected => "Connected".to_string(),
-        ConnectionStatus::Authenticating => "Authenticating...".to_string(),
-        ConnectionStatus::Authenticated => "Ready".to_string(),
-        ConnectionStatus::Error(e) => format!("Error: {}", e),
-    };
+    let (conn_info, conn_err) = classify(&props.connection);
+    let conn_chip_class = format!("chip {}", conn_info.cls);
 
     rsx! {
-        aside {
-            class: "sidebar",
-            style: "display: flex; flex-direction: column; padding: 1rem; height: 100%;",
-
-            Menu {
-                style: "display: flex; flex-direction: column; flex: 1; min-height: 0;",
-
-                // Agent header
-                div { class: "sidebar-header", style: "margin-bottom: 1rem;",
-                    MenuLabel {
-                        span { class: "icon-text",
-                            Icon { i { class: "fas fa-robot" } }
-                            span {
-                                if let Some(name) = &props.agent_name {
-                                    "{name}"
-                                } else {
-                                    "RustyClaw"
-                                }
+        aside { class: "{aside_class}",
+            // Brand row
+            div { class: "sidebar-brand",
+                span { class: "brand-mark", "🦞" }
+                if !collapsed {
+                    div { class: "brand-text",
+                        span { class: "brand-name",
+                            if let Some(name) = props.agent_name.as_ref() {
+                                "{name}"
+                            } else {
+                                "RustyClaw"
+                            }
+                        }
+                        span { class: "brand-sub",
+                            if props.agent_name.is_some() {
+                                "RustyClaw Agent"
+                            } else {
+                                "Agent OS"
                             }
                         }
                     }
-
-                    // Connection status
-                    p { class: "is-size-7 {connection_color}",
-                        Icon { class: "is-small".to_string(), i { class: "fas {connection_icon}" } }
-                        " {connection_text}"
+                }
+                button {
+                    class: "sidebar-collapse-btn",
+                    title: if collapsed { "Expand sidebar" } else { "Collapse sidebar" },
+                    onclick: move |_| props.on_toggle_collapse.call(()),
+                    if collapsed {
+                        "›"
+                    } else {
+                        "‹"
                     }
+                }
+            }
 
-                    // Model info
-                    if let Some(model) = &props.model {
-                        p { class: "is-size-7 has-text-grey",
-                            Icon { class: "is-small".to_string(), i { class: "fas fa-brain" } }
-                            " {model}"
+            // Connection / model chips
+            if !collapsed {
+                div { class: "sidebar-status",
+                    span { class: "{conn_chip_class}",
+                        span { class: "dot" }
+                        span { "{conn_info.label}" }
+                    }
+                    if let Some(err) = conn_err.as_ref() {
+                        span {
+                            class: "chip is-danger",
+                            title: "{err}",
+                            "⚠ {err}"
                         }
                     }
-                }
-
-                // Sessions section
-                MenuLabel { "Sessions" }
-
-                Button {
-                    color: BulmaColor::Primary,
-                    size: BulmaSize::Small,
-                    fullwidth: true,
-                    onclick: move |_| props.on_new_thread.call(()),
-                    Icon { class: "is-small".to_string(), i { class: "fas fa-plus" } }
-                    span { "New Session" }
-                }
-
-                MenuList {
-                    style: "flex: 1; overflow-y: auto; margin-top: 0.5rem;",
-
-                    for thread in props.threads.iter() {
-                        // Use raw <li>/<a> here so we can attach an `is-active`
-                        // class for the current thread; MenuItem doesn't expose
-                        // a typed `active` prop in dioxus-bulma 0.7.3.
-                        li { key: "{thread.id}",
-                            a {
-                                class: if props.foreground_id == Some(thread.id) { "is-active" } else { "" },
-                                style: "display: flex; align-items: center;",
-                                onclick: {
-                                    let thread_id = thread.id;
-                                    move |_| props.on_switch_thread.call(thread_id)
-                                },
-
-                                Icon { class: "is-small".to_string(), i { class: "fas fa-comments" } }
-                                span { style: "margin-left: 0.25rem; flex: 1;",
-                                    if let Some(label) = &thread.label {
-                                        "{label}"
-                                    } else {
-                                        "Session #{thread.id}"
-                                    }
-                                }
-                                Tag {
-                                    size: BulmaSize::Small,
-                                    rounded: true,
-                                    style: "margin-left: auto;",
-                                    "{thread.message_count}"
-                                }
+                    if let Some(model) = props.model.as_ref() {
+                        span { class: "chip",
+                            "🧠 ",
+                            if let Some(provider) = props.provider.as_ref() {
+                                "{provider} · {model}"
+                            } else {
+                                "{model}"
                             }
                         }
                     }
                 }
             }
 
-            // Footer with settings
-            div { class: "sidebar-footer",
-                style: "margin-top: auto; padding-top: 1rem; border-top: 1px solid #dbdbdb;",
+            // Sessions
+            div { class: "sidebar-section-label", "Sessions" }
+            button {
+                class: "sidebar-action is-primary",
+                onclick: move |_| props.on_new_thread.call(()),
+                title: "New session",
+                span { class: "icon-only", "＋" }
+                if !collapsed { span { "New session" } }
+            }
 
-                Button {
-                    color: BulmaColor::Light,
-                    size: BulmaSize::Small,
-                    fullwidth: true,
+            div { class: "sessions-list",
+                if props.threads.is_empty() {
+                    if !collapsed {
+                        div { class: "sidebar-empty-sessions",
+                            "No sessions yet — start one to begin chatting."
+                        }
+                    }
+                } else {
+                    for thread in props.threads.iter() {
+                        SessionRow {
+                            key: "{thread.id}",
+                            thread: thread.clone(),
+                            active: props.foreground_id == Some(thread.id),
+                            collapsed: collapsed,
+                            on_click: {
+                                let id = thread.id;
+                                let cb = props.on_switch_thread;
+                                move |_| cb.call(id)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Footer actions
+            div { class: "sidebar-footer",
+                button {
+                    class: "sidebar-action",
+                    onclick: move |_| props.on_pair.call(()),
+                    title: "Pair with gateway",
+                    span { class: "icon-only", "🔗" }
+                    if !collapsed { span { "Pair gateway" } }
+                }
+                button {
+                    class: "sidebar-action",
                     onclick: move |_| props.on_settings.call(()),
-                    Icon { class: "is-small".to_string(), i { class: "fas fa-cog" } }
-                    span { "Settings" }
+                    title: "Settings",
+                    span { class: "icon-only", "⚙" }
+                    if !collapsed { span { "Settings" } }
+                }
+            }
+        }
+    }
+}
+
+#[derive(Props, Clone, PartialEq)]
+struct SessionRowProps {
+    thread: ThreadInfo,
+    active: bool,
+    collapsed: bool,
+    on_click: EventHandler<()>,
+}
+
+#[component]
+fn SessionRow(props: SessionRowProps) -> Element {
+    let class = if props.active {
+        "session-row is-active"
+    } else {
+        "session-row"
+    };
+    let label = props
+        .thread
+        .label
+        .clone()
+        .unwrap_or_else(|| format!("Session #{}", props.thread.id));
+    let count = props.thread.message_count;
+
+    rsx! {
+        div {
+            class: "{class}",
+            title: "{label}",
+            onclick: move |_| props.on_click.call(()),
+            span { class: "session-icon", "💬" }
+            if !props.collapsed {
+                span { class: "session-label", "{label}" }
+                if count > 0 {
+                    span { class: "session-count", "{count}" }
                 }
             }
         }

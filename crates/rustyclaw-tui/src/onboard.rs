@@ -1778,7 +1778,7 @@ fn fuzzy_select(items: &[impl AsRef<str>], heading_text: &str) -> Result<Option<
         }
 
         // Sort by score descending (best matches first)
-        results.sort_by(|a, b| b.1.cmp(&a.1));
+        results.sort_by_key(|r| std::cmp::Reverse(r.1));
         results
     };
 

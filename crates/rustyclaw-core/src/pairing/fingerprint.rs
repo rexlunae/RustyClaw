@@ -49,7 +49,7 @@ pub fn calculate_fingerprint_from_openssh(public_key_openssh: &str) -> String {
     let hash = hasher.finalize();
 
     // Encode as base64 (without padding, to match ssh-keygen format)
-    let fingerprint = base64::engine::general_purpose::STANDARD_NO_PAD.encode(&hash);
+    let fingerprint = base64::engine::general_purpose::STANDARD_NO_PAD.encode(hash);
 
     format!("SHA256:{}", fingerprint)
 }
