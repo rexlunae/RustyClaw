@@ -17,11 +17,14 @@ pub struct SettingsDialogProps {
 
 #[component]
 pub fn SettingsDialog(props: SettingsDialogProps) -> Element {
+    // Hooks must be called unconditionally on every render and in the same
+    // order. Declare all signals before the visibility guard so the hook
+    // index stays stable when the dialog is opened/closed.
+    let mut url = use_signal(|| props.gateway_url.clone());
+
     if !props.visible {
         return rsx! {};
     }
-
-    let mut url = use_signal(|| props.gateway_url.clone());
 
     let dark_class = if props.theme == Theme::Dark {
         "is-active"
