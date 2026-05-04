@@ -159,8 +159,10 @@ mod tests {
 
     #[test]
     fn test_fingerprint_art() {
-        let fingerprint = "SHA256:AbCdEfGhIjKlMnOpQrStUvWxYz0123456789+/";
-        let art = format_fingerprint_art(fingerprint);
+        let key =
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKtJvJZDLNbPkTYf4ZbXaBeCq3I9sEG9qS9XvGBFMT4C test";
+        let fingerprint = calculate_fingerprint_from_openssh(key);
+        let art = format_fingerprint_art(&fingerprint);
 
         assert!(art.contains("+---[ED25519"));
         assert!(art.contains("+----[SHA256]"));
