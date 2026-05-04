@@ -26,34 +26,44 @@ pub fn render(input: &str) -> String {
 /// Strip the small set of HTML constructs that have no business appearing
 /// inside a chat bubble. Everything else is left as-is so markdown formatting
 /// (links, lists, code blocks, etc.) renders normally.
+///
+/// Forbidden tags are matched against the ASCII portion of the bytes (HTML
+/// tag names are always ASCII), but the kept regions are copied as contiguous
+/// `&str` slices so multi-byte characters (smart punctuation from
+/// `ENABLE_SMART_PUNCTUATION`, accented text, emoji, etc.) survive intact.
 fn sanitise(html: &str) -> String {
     const FORBIDDEN: &[&str] = &["script", "iframe", "object", "embed", "style"];
 
     let mut out = String::with_capacity(html.len());
     let bytes = html.as_bytes();
-    let mut i = 0;
+    let mut copy_from = 0usize;
+    let mut i = 0usize;
 
     while i < bytes.len() {
-        let byte = bytes[i];
-        if byte == b'<'
+        if bytes[i] == b'<'
             && let Some(forbidden) = FORBIDDEN
                 .iter()
                 .find(|tag| starts_with_tag(&bytes[i..], tag.as_bytes()))
         {
+            // Flush the safe slice before this forbidden tag.
+            out.push_str(&html[copy_from..i]);
+
             // Skip until matching closing tag (case-insensitive) or end of input.
             let close = format!("</{}>", forbidden);
             if let Some(idx) = find_case_insensitive(&html[i..], &close) {
                 i += idx + close.len();
+                copy_from = i;
+                continue;
             } else {
                 // Drop the rest if we can't find a closing tag.
-                break;
+                return out;
             }
-            continue;
         }
-        out.push(byte as char);
         i += 1;
     }
 
+    // Flush any remaining tail.
+    out.push_str(&html[copy_from..]);
     out
 }
 
@@ -116,5 +126,37 @@ mod tests {
     fn keeps_inline_code() {
         let html = render("use `foo` here");
         assert!(html.contains("<code>foo</code>"));
+    }
+
+    #[test]
+    fn preserves_smart_punctuation() {
+        // ENABLE_SMART_PUNCTUATION turns straight quotes into curly ones, which
+        // are multi-byte UTF-8. Ensure the sanitiser preserves them rather
+        // than mangling each byte individually.
+        let html = render("He said \"hello\" -- and left...");
+        assert!(
+            html.contains('\u{201C}') && html.contains('\u{201D}'),
+            "expected curly quotes in {html:?}"
+        );
+        assert!(html.contains('\u{2026}'), "expected ellipsis in {html:?}");
+        assert!(html.contains('\u{2013}'), "expected en dash in {html:?}");
+    }
+
+    #[test]
+    fn preserves_non_ascii_in_paragraphs() {
+        let html = render("Café — naïve façade 🦀");
+        assert!(html.contains("Café"), "got {html:?}");
+        assert!(html.contains("naïve"), "got {html:?}");
+        assert!(html.contains("façade"), "got {html:?}");
+        assert!(html.contains('🦀'), "got {html:?}");
+    }
+
+    #[test]
+    fn preserves_non_ascii_around_stripped_tag() {
+        let html = render("Hi 🦀 <script>bad()</script> there ©");
+        assert!(html.contains('🦀'));
+        assert!(html.contains('©'));
+        assert!(!html.contains("<script"));
+        assert!(!html.contains("bad()"));
     }
 }
