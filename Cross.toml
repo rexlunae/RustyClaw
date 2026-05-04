@@ -1,8 +1,23 @@
 [build.env]
 passthrough = ["RUST_BACKTRACE"]
 
+# `cross` Docker images ship a working cross-compile toolchain but not the
+# system libraries some Rust crates link against.  Several deps in this
+# workspace transitively pull in `openssl-sys` (via `russh-keys`, `native-tls`,
+# `reqwest`, `hf-hub`, etc.), which needs `libssl-dev` for the target
+# architecture.  Install it via `pre-build` so openssl-sys finds it via
+# pkg-config before falling back to vendored compilation.
+
 [target.aarch64-unknown-linux-gnu]
 image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
+pre-build = [
+    "dpkg --add-architecture arm64",
+    "apt-get update -qq && apt-get install --assume-yes --no-install-recommends libssl-dev:arm64 pkg-config",
+]
 
 [target.armv7-unknown-linux-gnueabihf]
 image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main"
+pre-build = [
+    "dpkg --add-architecture armhf",
+    "apt-get update -qq && apt-get install --assume-yes --no-install-recommends libssl-dev:armhf pkg-config",
+]
