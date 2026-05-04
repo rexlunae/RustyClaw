@@ -26,9 +26,9 @@ pub struct HatchingResult {
 pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let mut name = use_signal(String::new);
     let mut personality = use_signal(String::new);
-    let mut step = use_signal(|| 1);
+    let mut step = use_signal(|| 1u32);
 
-    let on_complete = props.on_complete.clone();
+    let on_complete = props.on_complete;
 
     let handle_next = move |_| {
         let current_step = *step.read();
@@ -61,49 +61,53 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
 
     rsx! {
-        div { class: "modal is-active",
-            div { class: "modal-background",
-                onclick: move |_| props.on_cancel.call(()),
-            }
+        Modal {
+            active: true,
+            onclose: move |_| props.on_cancel.call(()),
 
-            div { class: "modal-card",
-                style: "max-width: 500px;",
+            ModalCard { style: "max-width: 500px;",
 
-                header { class: "modal-card-head",
+                ModalCardHead {
+                    onclose: move |_| props.on_cancel.call(()),
                     p { class: "modal-card-title",
-                        span { class: "icon",
-                            i { class: "fas fa-egg" }
-                        }
+                        Icon { i { class: "fas fa-egg" } }
                         " Hatching"
                     }
                 }
 
-                section { class: "modal-card-body",
-                    // Progress indicator
-                    div { class: "steps",
-                        style: "display: flex; justify-content: center; margin-bottom: 1.5rem;",
+                ModalCardBody {
+                    // Progress indicator built from Bulma Tags.
+                    div {
+                        style: "display: flex; justify-content: center; align-items: center; margin-bottom: 1.5rem;",
 
-                        span {
-                            class: if current_step >= 1 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
+                        Tag {
+                            color: if current_step >= 1 { BulmaColor::Primary } else { BulmaColor::Light },
+                            size: BulmaSize::Medium,
                             "1"
                         }
-                        span { style: "width: 50px; height: 2px; background: #dbdbdb; align-self: center;" }
-                        span {
-                            class: if current_step >= 2 { "tag is-primary is-medium" } else { "tag is-light is-medium" },
+                        span { style: "width: 50px; height: 2px; background: #dbdbdb; margin: 0 0.5rem;" }
+                        Tag {
+                            color: if current_step >= 2 { BulmaColor::Primary } else { BulmaColor::Light },
+                            size: BulmaSize::Medium,
                             "2"
                         }
                     }
 
                     match current_step {
                         1 => rsx! {
-                            div { class: "content",
+                            Content {
                                 h4 { "What's your name?" }
                                 p { class: "has-text-grey",
                                     "This will be used to identify your agent."
                                 }
 
                                 Field {
-                                    Control { class: "has-icons-left",
+                                    Control {
+                                        class: "has-icons-left".to_string(),
+                                        // Bulma's Input doesn't expose `onkeypress`,
+                                        // and we want Enter-to-advance here, so we
+                                        // use a raw <input> with the `input` class
+                                        // (still styled as a Bulma input).
                                         input {
                                             class: "input is-medium",
                                             r#type: "text",
@@ -117,7 +121,8 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                                 }
                                             },
                                         }
-                                        span { class: "icon is-left",
+                                        Icon {
+                                            class: "is-small is-left".to_string(),
                                             i { class: "fas fa-robot" }
                                         }
                                     }
@@ -125,7 +130,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                             }
                         },
                         2 => rsx! {
-                            div { class: "content",
+                            Content {
                                 h4 { "Personality (optional)" }
                                 p { class: "has-text-grey",
                                     "Describe your agent's personality or leave blank for default."
@@ -133,12 +138,11 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
 
                                 Field {
                                     Control {
-                                        textarea {
-                                            class: "textarea",
-                                            placeholder: "e.g., Friendly and helpful, with a dry sense of humor",
-                                            rows: 4,
-                                            value: "{personality}",
-                                            oninput: move |evt| personality.set(evt.value()),
+                                        Textarea {
+                                            placeholder: "e.g., Friendly and helpful, with a dry sense of humor".to_string(),
+                                            rows: 4u32,
+                                            value: personality.read().clone(),
+                                            oninput: move |evt: FormEvent| personality.set(evt.value()),
                                         }
                                     }
                                 }
@@ -148,17 +152,12 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                     }
                 }
 
-                footer { class: "modal-card-foot",
-                    style: "justify-content: space-between;",
-
+                ModalCardFoot { style: "justify-content: space-between;",
                     if current_step > 1 {
                         Button {
                             color: BulmaColor::Light,
                             onclick: handle_back,
-
-                            span { class: "icon",
-                                i { class: "fas fa-arrow-left" }
-                            }
+                            Icon { i { class: "fas fa-arrow-left" } }
                             span { "Back" }
                         }
                     } else {
@@ -175,15 +174,11 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                         onclick: handle_next,
 
                         if current_step == 2 {
-                            span { class: "icon",
-                                i { class: "fas fa-check" }
-                            }
+                            Icon { i { class: "fas fa-check" } }
                             span { "Complete" }
                         } else {
                             span { "Next" }
-                            span { class: "icon",
-                                i { class: "fas fa-arrow-right" }
-                            }
+                            Icon { i { class: "fas fa-arrow-right" } }
                         }
                     }
                 }

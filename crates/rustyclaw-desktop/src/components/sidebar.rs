@@ -57,87 +57,84 @@ pub fn Sidebar(props: SidebarProps) -> Element {
 
     rsx! {
         aside {
-            class: "menu sidebar",
-            style: "width: 250px; padding: 1rem; background: #f5f5f5; border-right: 1px solid #dbdbdb; height: 100%; display: flex; flex-direction: column;",
+            class: "sidebar",
+            style: "display: flex; flex-direction: column; padding: 1rem; height: 100%;",
 
-            // Agent header
-            div { class: "sidebar-header",
-                style: "margin-bottom: 1rem;",
+            Menu {
+                style: "display: flex; flex-direction: column; flex: 1; min-height: 0;",
 
-                p { class: "menu-label",
-                    span { class: "icon-text",
-                        span { class: "icon",
-                            i { class: "fas fa-robot" }
-                        }
-                        span {
-                            if let Some(name) = &props.agent_name {
-                                "{name}"
-                            } else {
-                                "RustyClaw"
-                            }
-                        }
-                    }
-                }
-
-                // Connection status
-                p { class: "is-size-7 {connection_color}",
-                    span { class: "icon is-small",
-                        i { class: "fas {connection_icon}" }
-                    }
-                    " {connection_text}"
-                }
-
-                // Model info
-                if let Some(model) = &props.model {
-                    p { class: "is-size-7 has-text-grey",
-                        span { class: "icon is-small",
-                            i { class: "fas fa-brain" }
-                        }
-                        " {model}"
-                    }
-                }
-            }
-
-            // Threads/Sessions
-            p { class: "menu-label", "Sessions" }
-
-            Button {
-                color: BulmaColor::Primary,
-                size: BulmaSize::Small,
-                fullwidth: true,
-                onclick: move |_| props.on_new_thread.call(()),
-
-                span { class: "icon is-small",
-                    i { class: "fas fa-plus" }
-                }
-                span { "New Session" }
-            }
-
-            ul { class: "menu-list",
-                style: "flex: 1; overflow-y: auto; margin-top: 0.5rem;",
-
-                for thread in props.threads.iter() {
-                    li { key: "{thread.id}",
-                        a {
-                            class: if props.foreground_id == Some(thread.id) { "is-active" } else { "" },
-                            onclick: {
-                                let thread_id = thread.id;
-                                move |_| props.on_switch_thread.call(thread_id)
-                            },
-
-                            span { class: "icon is-small",
-                                i { class: "fas fa-comments" }
-                            }
+                // Agent header
+                div { class: "sidebar-header", style: "margin-bottom: 1rem;",
+                    MenuLabel {
+                        span { class: "icon-text",
+                            Icon { i { class: "fas fa-robot" } }
                             span {
-                                if let Some(label) = &thread.label {
-                                    "{label}"
+                                if let Some(name) = &props.agent_name {
+                                    "{name}"
                                 } else {
-                                    "Session #{thread.id}"
+                                    "RustyClaw"
                                 }
                             }
-                            span { class: "tag is-small is-rounded",
-                                style: "margin-left: auto;",
-                                "{thread.message_count}"
+                        }
+                    }
+
+                    // Connection status
+                    p { class: "is-size-7 {connection_color}",
+                        Icon { class: "is-small".to_string(), i { class: "fas {connection_icon}" } }
+                        " {connection_text}"
+                    }
+
+                    // Model info
+                    if let Some(model) = &props.model {
+                        p { class: "is-size-7 has-text-grey",
+                            Icon { class: "is-small".to_string(), i { class: "fas fa-brain" } }
+                            " {model}"
+                        }
+                    }
+                }
+
+                // Sessions section
+                MenuLabel { "Sessions" }
+
+                Button {
+                    color: BulmaColor::Primary,
+                    size: BulmaSize::Small,
+                    fullwidth: true,
+                    onclick: move |_| props.on_new_thread.call(()),
+                    Icon { class: "is-small".to_string(), i { class: "fas fa-plus" } }
+                    span { "New Session" }
+                }
+
+                MenuList {
+                    style: "flex: 1; overflow-y: auto; margin-top: 0.5rem;",
+
+                    for thread in props.threads.iter() {
+                        // Use raw <li>/<a> here so we can attach an `is-active`
+                        // class for the current thread; MenuItem doesn't expose
+                        // a typed `active` prop in dioxus-bulma 0.7.3.
+                        li { key: "{thread.id}",
+                            a {
+                                class: if props.foreground_id == Some(thread.id) { "is-active" } else { "" },
+                                style: "display: flex; align-items: center;",
+                                onclick: {
+                                    let thread_id = thread.id;
+                                    move |_| props.on_switch_thread.call(thread_id)
+                                },
+
+                                Icon { class: "is-small".to_string(), i { class: "fas fa-comments" } }
+                                span { style: "margin-left: 0.25rem; flex: 1;",
+                                    if let Some(label) = &thread.label {
+                                        "{label}"
+                                    } else {
+                                        "Session #{thread.id}"
+                                    }
+                                }
+                                Tag {
+                                    size: BulmaSize::Small,
+                                    rounded: true,
+                                    style: "margin-left: auto;",
+                                    "{thread.message_count}"
+                                }
                             }
                         }
                     }
@@ -153,10 +150,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     size: BulmaSize::Small,
                     fullwidth: true,
                     onclick: move |_| props.on_settings.call(()),
-
-                    span { class: "icon is-small",
-                        i { class: "fas fa-cog" }
-                    }
+                    Icon { class: "is-small".to_string(), i { class: "fas fa-cog" } }
                     span { "Settings" }
                 }
             }

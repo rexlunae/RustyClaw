@@ -1,6 +1,7 @@
 //! Pairing dialog with QR code generation.
 
 use dioxus::prelude::*;
+use dioxus_bulma::components::ColumnSize;
 use dioxus_bulma::prelude::*;
 
 /// Props for PairingDialog.
@@ -60,36 +61,25 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
     };
 
     rsx! {
-        div { class: "modal is-active",
-            div { class: "modal-background",
-                onclick: move |_| props.on_cancel.call(()),
-            }
+        Modal {
+            active: true,
+            onclose: move |_| props.on_cancel.call(()),
 
-            div { class: "modal-card",
-                style: "max-width: 550px;",
+            ModalCard { style: "max-width: 550px;",
 
-                header { class: "modal-card-head",
+                ModalCardHead {
+                    onclose: move |_| props.on_cancel.call(()),
                     p { class: "modal-card-title",
-                        span { class: "icon",
-                            i { class: "fas fa-link" }
-                        }
+                        Icon { i { class: "fas fa-link" } }
                         " Pair with Gateway"
-                    }
-                    button {
-                        class: "delete",
-                        onclick: move |_| props.on_cancel.call(()),
                     }
                 }
 
-                section { class: "modal-card-body",
+                ModalCardBody {
                     // Public key display
-                    div { class: "box",
-                        style: "background: #f5f5f5;",
-
+                    BulmaBox { style: "background: #f5f5f5;",
                         p { class: "has-text-weight-semibold",
-                            span { class: "icon is-small",
-                                i { class: "fas fa-key" }
-                            }
+                            Icon { class: "is-small".to_string(), i { class: "fas fa-key" } }
                             " Your Public Key"
                         }
 
@@ -100,15 +90,16 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                     "{key}"
                                 }
 
-                                div { class: "buttons is-right",
+                                Buttons {
+                                    alignment: ButtonsAlignment::Right,
                                     style: "margin-top: 0.5rem;",
 
                                     Button {
                                         size: BulmaSize::Small,
                                         color: if *copied.read() { BulmaColor::Success } else { BulmaColor::Light },
                                         onclick: handle_copy,
-
-                                        span { class: "icon is-small",
+                                        Icon {
+                                            class: "is-small".to_string(),
                                             i { class: if *copied.read() { "fas fa-check" } else { "fas fa-copy" } }
                                         }
                                         span { if *copied.read() { "Copied!" } else { "Copy" } }
@@ -122,10 +113,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                     size: BulmaSize::Small,
                                     color: BulmaColor::Primary,
                                     onclick: move |_| props.on_generate_key.call(()),
-
-                                    span { class: "icon is-small",
-                                        i { class: "fas fa-plus" }
-                                    }
+                                    Icon { class: "is-small".to_string(), i { class: "fas fa-plus" } }
                                     span { "Generate Keypair" }
                                 }
                             }
@@ -150,43 +138,42 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
 
                     // Gateway connection settings
-                    div { class: "box",
+                    BulmaBox {
                         p { class: "has-text-weight-semibold",
-                            span { class: "icon is-small",
-                                i { class: "fas fa-server" }
-                            }
+                            Icon { class: "is-small".to_string(), i { class: "fas fa-server" } }
                             " Gateway"
                         }
 
-                        div { class: "columns",
-                            style: "margin-top: 0.5rem;",
-
-                            div { class: "column is-8",
+                        Columns { style: "margin-top: 0.5rem;",
+                            Column { size: ColumnSize::Eight,
                                 Field {
                                     FieldLabel { "Host" }
-                                    Control { class: "has-icons-left",
-                                        input {
-                                            class: "input",
-                                            r#type: "text",
-                                            placeholder: "127.0.0.1",
-                                            value: "{host}",
-                                            oninput: move |evt| {
+                                    Control {
+                                        class: "has-icons-left".to_string(),
+                                        Input {
+                                            input_type: InputType::Text,
+                                            placeholder: "127.0.0.1".to_string(),
+                                            value: host.read().clone(),
+                                            oninput: move |evt: FormEvent| {
                                                 let value = evt.value();
                                                 host.set(value.clone());
                                                 props.on_host_change.call(value);
                                             },
                                         }
-                                        span { class: "icon is-left",
+                                        Icon {
+                                            class: "is-small is-left".to_string(),
                                             i { class: "fas fa-network-wired" }
                                         }
                                     }
                                 }
                             }
 
-                            div { class: "column is-4",
+                            Column { size: ColumnSize::Four,
                                 Field {
                                     FieldLabel { "Port" }
                                     Control {
+                                        // Bulma's typed Input only exposes text/email/password/tel,
+                                        // so use a raw <input type="number"> here for numeric entry.
                                         input {
                                             class: "input",
                                             r#type: "number",
@@ -207,9 +194,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     }
                 }
 
-                footer { class: "modal-card-foot",
-                    style: "justify-content: flex-end;",
-
+                ModalCardFoot { style: "justify-content: flex-end;",
                     Button {
                         color: BulmaColor::Light,
                         onclick: move |_| props.on_cancel.call(()),
@@ -219,10 +204,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     Button {
                         color: BulmaColor::Primary,
                         onclick: move |_| props.on_connect.call(()),
-
-                        span { class: "icon",
-                            i { class: "fas fa-plug" }
-                        }
+                        Icon { i { class: "fas fa-plug" } }
                         span { "Connect" }
                     }
                 }
