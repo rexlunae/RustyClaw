@@ -100,10 +100,12 @@ pub fn Chat(props: ChatProps) -> Element {
 
             // Input area
             div { class: "input-area",
-                style: "padding: 1rem; border-top: 1px solid #dbdbdb;",
 
                 Field { addons: true,
                     Control { expanded: true,
+                        // Bulma's Textarea component doesn't expose `onkeypress`,
+                        // and we need it for Enter-to-submit, so use a raw
+                        // <textarea> with the Bulma `textarea` class here.
                         textarea {
                             class: "textarea",
                             placeholder: "Type a message...",
@@ -124,9 +126,7 @@ pub fn Chat(props: ChatProps) -> Element {
                             loading: is_processing,
                             disabled: is_processing || input_ref.read().trim().is_empty(),
                             onclick: handle_submit,
-                            span { class: "icon",
-                                i { class: "fas fa-paper-plane" }
-                            }
+                            Icon { i { class: "fas fa-paper-plane" } }
                         }
                     }
                 }
