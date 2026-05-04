@@ -21,6 +21,8 @@ pub fn App() -> Element {
 
     // Gateway client (set when connected)
     let gateway: Signal<Option<Arc<Mutex<GatewayClient>>>> = use_signal(|| None);
+    let mut did_auto_connect = use_signal(|| false);
+    let mut active_event_client: Signal<Option<Arc<Mutex<GatewayClient>>>> = use_signal(|| None);
 
     // Dialog visibility
     let mut show_pairing = use_signal(|| false);
@@ -33,6 +35,11 @@ pub fn App() -> Element {
 
     // Auto-connect on mount
     use_effect(move || {
+        if *did_auto_connect.read() {
+            return;
+        }
+        did_auto_connect.set(true);
+
         let url = state.read().gateway_url.clone();
         spawn(async move {
             connect_to_gateway(&url, state, gateway).await;
@@ -43,6 +50,15 @@ pub fn App() -> Element {
     use_effect(move || {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
+            if active_event_client
+                .read()
+                .as_ref()
+                .is_some_and(|active| Arc::ptr_eq(active, &client))
+            {
+                return;
+            }
+            active_event_client.set(Some(client.clone()));
+
             spawn(async move {
                 loop {
                     let client_guard = client.lock().await;
