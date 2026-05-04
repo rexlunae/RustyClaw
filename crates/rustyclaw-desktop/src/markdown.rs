@@ -1,11 +1,25 @@
 //! Lightweight markdown → HTML rendering for assistant messages.
 //!
-//! We use `pulldown-cmark` directly and run a *minimal* sanitisation pass
-//! (strip `<script>`/`<iframe>`/`<style>`/`<object>` blocks) before injecting
-//! the result into the page. Inputs come from a paired RustyClaw gateway, but
-//! the desktop client should still avoid blindly trusting them.
+//! Output is injected into the desktop webview via `dangerous_inner_html`,
+//! so the renderer treats incoming markdown as untrusted and applies two
+//! layers of defence:
+//!
+//! 1. **Strip all raw HTML** at the `pulldown-cmark` event level. Assistant
+//!    messages don't need to inject custom HTML, so we drop every
+//!    `Event::Html` / `Event::InlineHtml` event before serialising. This
+//!    eliminates injected `<img onerror=...>`, `<svg onload=...>`, inline
+//!    event handlers, etc. *before* they ever reach the HTML output.
+//! 2. **Rewrite dangerous link URLs**. Markdown link/image targets like
+//!    `[click](javascript:alert(1))` or `![](data:text/html,<script>...)`
+//!    are still expressed as cmark events (`Tag::Link`/`Tag::Image`), so
+//!    we walk the event stream and replace any non-allow-listed URL
+//!    scheme with `#`.
+//!
+//! We also keep a small belt-and-suspenders pass that strips a few
+//! forbidden tag blocks (`script`, `iframe`, `object`, `embed`, `style`)
+//! after rendering, in case future cmark changes ever leak raw HTML.
 
-use pulldown_cmark::{Options, Parser, html};
+use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, html};
 
 /// Render a markdown string into a sanitised HTML fragment.
 pub fn render(input: &str) -> String {
@@ -16,11 +30,189 @@ pub fn render(input: &str) -> String {
     opts.insert(Options::ENABLE_SMART_PUNCTUATION);
 
     let parser = Parser::new_ext(input, opts);
+    let safe = SafeEventFilter::new(parser);
 
     let mut out = String::with_capacity(input.len());
-    html::push_html(&mut out, parser);
+    html::push_html(&mut out, safe);
 
     sanitise(&out)
+}
+
+/// Forbidden HTML tags whose content (not just the tags themselves) must be
+/// stripped — `pulldown-cmark` may emit these as separate open/close
+/// `Event::InlineHtml` events with plain `Event::Text` between them, so we
+/// need a small state machine to drop the text in the middle too.
+const FORBIDDEN_TAGS: &[&str] = &["script", "style", "iframe", "object", "embed", "noscript"];
+
+/// Stateful event-stream wrapper that:
+///   * drops every raw-HTML event (`Event::Html` / `Event::InlineHtml`),
+///   * additionally drops every event (including plain text) emitted
+///     between an opening forbidden tag (e.g. `<script>`) and its closing
+///     counterpart (`</script>`),
+///   * rewrites link/image URLs that use non-allow-listed schemes.
+struct SafeEventFilter<'a, I: Iterator<Item = Event<'a>>> {
+    inner: I,
+    skipping: Option<&'static str>,
+}
+
+impl<'a, I: Iterator<Item = Event<'a>>> SafeEventFilter<'a, I> {
+    fn new(inner: I) -> Self {
+        Self {
+            inner,
+            skipping: None,
+        }
+    }
+}
+
+impl<'a, I: Iterator<Item = Event<'a>>> Iterator for SafeEventFilter<'a, I> {
+    type Item = Event<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            let event = self.inner.next()?;
+
+            // If we're inside a forbidden block, drop everything until we
+            // see the matching closing tag.
+            if let Some(tag) = self.skipping {
+                if let Event::Html(s) | Event::InlineHtml(s) = &event
+                    && is_close_tag(s, tag)
+                {
+                    self.skipping = None;
+                }
+                continue;
+            }
+
+            match event {
+                Event::Html(ref s) | Event::InlineHtml(ref s) => {
+                    if let Some(tag) = forbidden_open_tag(s) {
+                        self.skipping = Some(tag);
+                    }
+                    // Drop *all* raw HTML events from the output. The
+                    // assistant's markdown should never need to inject
+                    // custom HTML, and this is the primary defence
+                    // against `<img onerror=...>`-style XSS.
+                    continue;
+                }
+                Event::Start(Tag::Link {
+                    link_type,
+                    dest_url,
+                    title,
+                    id,
+                }) => {
+                    return Some(Event::Start(Tag::Link {
+                        link_type,
+                        dest_url: sanitise_url(dest_url),
+                        title,
+                        id,
+                    }));
+                }
+                Event::Start(Tag::Image {
+                    link_type,
+                    dest_url,
+                    title,
+                    id,
+                }) => {
+                    return Some(Event::Start(Tag::Image {
+                        link_type,
+                        dest_url: sanitise_url_for_image(dest_url, link_type),
+                        title,
+                        id,
+                    }));
+                }
+                other => return Some(other),
+            }
+        }
+    }
+}
+
+/// If `s` looks like an opening tag for one of the forbidden tags
+/// (case-insensitive), return the canonical tag name. Otherwise `None`.
+fn forbidden_open_tag(s: &str) -> Option<&'static str> {
+    let bytes = s.as_bytes();
+    // Need at least `<x>`.
+    if bytes.len() < 2 || bytes[0] != b'<' || bytes[1] == b'/' {
+        return None;
+    }
+    for tag in FORBIDDEN_TAGS {
+        let tb = tag.as_bytes();
+        if bytes.len() < tb.len() + 1 {
+            continue;
+        }
+        let mut matches = true;
+        for (i, &t) in tb.iter().enumerate() {
+            if !bytes[1 + i].eq_ignore_ascii_case(&t) {
+                matches = false;
+                break;
+            }
+        }
+        if !matches {
+            continue;
+        }
+        let after = bytes.get(1 + tb.len()).copied().unwrap_or(b'\0');
+        if matches!(after, b' ' | b'\t' | b'\n' | b'\r' | b'>' | b'/') {
+            return Some(tag);
+        }
+    }
+    None
+}
+
+/// Whether `s` is a closing tag for `tag` (case-insensitive).
+fn is_close_tag(s: &str, tag: &str) -> bool {
+    let bytes = s.as_bytes();
+    let tb = tag.as_bytes();
+    // Need at least `</x>`.
+    if bytes.len() < tb.len() + 3 || bytes[0] != b'<' || bytes[1] != b'/' {
+        return false;
+    }
+    for (i, &t) in tb.iter().enumerate() {
+        if !bytes[2 + i].eq_ignore_ascii_case(&t) {
+            return false;
+        }
+    }
+    let after = bytes.get(2 + tb.len()).copied().unwrap_or(b'\0');
+    matches!(after, b' ' | b'\t' | b'\n' | b'\r' | b'>')
+}
+
+/// Allow-list of URL schemes that are safe to render inside a chat bubble.
+const SAFE_SCHEMES: &[&str] = &["http", "https", "mailto", "tel"];
+
+fn sanitise_url(url: CowStr<'_>) -> CowStr<'_> {
+    if is_safe_url(url.as_ref()) {
+        url
+    } else {
+        CowStr::Borrowed("#")
+    }
+}
+
+fn sanitise_url_for_image(url: CowStr<'_>, _link_type: LinkType) -> CowStr<'_> {
+    // Images use the same allow-list as links. We deliberately do NOT
+    // allow `data:` URIs even for images: they can carry SVG with
+    // embedded scripts.
+    sanitise_url(url)
+}
+
+fn is_safe_url(url: &str) -> bool {
+    let trimmed = url.trim_start();
+
+    // Relative URLs (no scheme) and fragment-only URLs are safe.
+    let scheme_end = match trimmed.find(':') {
+        Some(idx) => idx,
+        None => return true,
+    };
+
+    // A leading `/`, `?`, `#`, etc. before any `:` means this is a
+    // path/query/fragment, not a scheme.
+    let before_colon = &trimmed[..scheme_end];
+    if before_colon.is_empty()
+        || before_colon
+            .chars()
+            .any(|c| !c.is_ascii_alphanumeric() && c != '+' && c != '-' && c != '.')
+    {
+        return true;
+    }
+
+    let scheme_lower = before_colon.to_ascii_lowercase();
+    SAFE_SCHEMES.iter().any(|s| *s == scheme_lower)
 }
 
 /// Strip the small set of HTML constructs that have no business appearing
@@ -158,5 +350,77 @@ mod tests {
         assert!(html.contains('©'));
         assert!(!html.contains("<script"));
         assert!(!html.contains("bad()"));
+    }
+
+    #[test]
+    fn strips_inline_event_handlers_via_raw_html() {
+        // pulldown-cmark would normally pass these through as raw HTML
+        // events. We filter those out before rendering, so neither the
+        // tag nor the handler ever reaches the output.
+        let cases = [
+            "<img src=x onerror=\"alert(1)\">",
+            "<svg onload=\"alert(1)\"></svg>",
+            "<div onclick=\"alert(1)\">click</div>",
+        ];
+        for md in cases {
+            let html = render(md);
+            assert!(
+                !html.to_ascii_lowercase().contains("onerror"),
+                "onerror leaked: {html:?}"
+            );
+            assert!(
+                !html.to_ascii_lowercase().contains("onload"),
+                "onload leaked: {html:?}"
+            );
+            assert!(
+                !html.to_ascii_lowercase().contains("onclick"),
+                "onclick leaked: {html:?}"
+            );
+            assert!(!html.contains("alert(1)"), "alert leaked: {html:?}");
+        }
+    }
+
+    #[test]
+    fn rewrites_javascript_urls_in_links() {
+        let html = render("[click](javascript:alert(1))");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "javascript: leaked: {html:?}"
+        );
+        assert!(html.contains("href=\"#\""), "expected href=#, got {html:?}");
+    }
+
+    #[test]
+    fn rewrites_data_urls_in_images() {
+        let html = render("![pwn](data:text/html,<script>alert(1)</script>)");
+        assert!(
+            !html.to_ascii_lowercase().contains("data:"),
+            "data: leaked: {html:?}"
+        );
+        assert!(!html.contains("alert(1)"), "alert leaked: {html:?}");
+    }
+
+    #[test]
+    fn keeps_safe_urls() {
+        let html = render("[GitHub](https://github.com/foo/bar)");
+        assert!(html.contains("href=\"https://github.com/foo/bar\""));
+
+        let html = render("[mail](mailto:a@example.com)");
+        assert!(html.contains("href=\"mailto:a@example.com\""));
+
+        let html = render("[anchor](#section)");
+        assert!(html.contains("href=\"#section\""));
+
+        let html = render("[relative](./other)");
+        assert!(html.contains("href=\"./other\""));
+    }
+
+    #[test]
+    fn case_insensitive_javascript_scheme() {
+        let html = render("[x](JaVaScRiPt:alert(1))");
+        assert!(
+            !html.to_ascii_lowercase().contains("javascript:"),
+            "got {html:?}"
+        );
     }
 }
