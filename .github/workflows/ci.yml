@@ -93,6 +93,12 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
 
+      - name: Install ONNX Runtime (macOS x86_64)
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          brew install onnxruntime
+          echo "ORT_STRATEGY=system" >> $GITHUB_ENV
+          echo "ORT_LIB_LOCATION=$(brew --prefix onnxruntime)/lib" >> $GITHUB_ENV
 
       - name: Install cross
         if: matrix.use_cross
