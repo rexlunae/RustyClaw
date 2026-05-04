@@ -25,10 +25,8 @@ pub struct TuiRootProps {
 }
 
 // ── Static channels ─────────────────────────────────────────────────
-pub(super) static CHANNEL_RX: StdMutex<Option<sync_mpsc::Receiver<GwEvent>>> =
-    StdMutex::new(None);
-pub(super) static CHANNEL_TX: StdMutex<Option<sync_mpsc::Sender<UserInput>>> =
-    StdMutex::new(None);
+pub(super) static CHANNEL_RX: StdMutex<Option<sync_mpsc::Receiver<GwEvent>>> = StdMutex::new(None);
+pub(super) static CHANNEL_TX: StdMutex<Option<sync_mpsc::Sender<UserInput>>> = StdMutex::new(None);
 
 /// Build the slash-command autocomplete list for a `/{partial}` input.
 ///
@@ -192,9 +190,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut details_dialog_scroll = hooks.use_state(|| 0usize);
 
     let mut show_tool_perms_dialog = hooks.use_state(|| false);
-    let mut tool_perms_dialog_data: State<
-        Vec<crate::components::tool_perms_dialog::ToolPermInfo>,
-    > = hooks.use_state(Vec::new);
+    let mut tool_perms_dialog_data: State<Vec<crate::components::tool_perms_dialog::ToolPermInfo>> =
+        hooks.use_state(Vec::new);
     let mut tool_perms_selected: State<Option<usize>> = hooks.use_state(|| Some(0));
 
     // Scroll offsets for interactive dialogs
@@ -1004,38 +1001,32 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         KeyCode::Esc => {
                             show_model_selector.set(false);
                         }
-                        KeyCode::Up => {
-                            if !model_selector_loading.get() {
-                                let cur = model_selector_cursor.get();
-                                if cur > 0 {
-                                    model_selector_cursor.set(cur - 1);
-                                }
+                        KeyCode::Up if !model_selector_loading.get() => {
+                            let cur = model_selector_cursor.get();
+                            if cur > 0 {
+                                model_selector_cursor.set(cur - 1);
                             }
                         }
-                        KeyCode::Down => {
-                            if !model_selector_loading.get() {
-                                let cur = model_selector_cursor.get();
-                                let len = model_selector_models.read().len();
-                                if cur + 1 < len {
-                                    model_selector_cursor.set(cur + 1);
-                                }
+                        KeyCode::Down if !model_selector_loading.get() => {
+                            let cur = model_selector_cursor.get();
+                            let len = model_selector_models.read().len();
+                            if cur + 1 < len {
+                                model_selector_cursor.set(cur + 1);
                             }
                         }
-                        KeyCode::Enter => {
-                            if !model_selector_loading.get() {
-                                let cur = model_selector_cursor.get();
-                                let models = model_selector_models.read().clone();
-                                if let Some(model) = models.get(cur) {
-                                    let provider = model_selector_provider.read().clone();
-                                    show_model_selector.set(false);
-                                    if let Ok(guard) = tx_for_keys.lock() {
-                                        if let Some(ref tx) = *guard {
-                                            let _ = tx.send(UserInput::SelectModel {
-                                                provider,
-                                                model: model.clone(),
-                                            });
-                                        }
-                                    }
+                        KeyCode::Enter if !model_selector_loading.get() => {
+                            let cur = model_selector_cursor.get();
+                            let models = model_selector_models.read().clone();
+                            if let Some(model) = models.get(cur) {
+                                let provider = model_selector_provider.read().clone();
+                                show_model_selector.set(false);
+                                if let Ok(guard) = tx_for_keys.lock()
+                                    && let Some(ref tx) = *guard
+                                {
+                                    let _ = tx.send(UserInput::SelectModel {
+                                        provider,
+                                        model: model.clone(),
+                                    });
                                 }
                             }
                         }
@@ -1809,9 +1800,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                     // Many terminals normalize Ctrl+Shift+P to Ctrl+P.
                     KeyCode::Char(c)
                         if modifiers.contains(KeyModifiers::CONTROL)
-                            && c.eq_ignore_ascii_case(&'p') =>
+                            && c.eq_ignore_ascii_case(&'p')
+                            && !show_pairing.get() =>
                     {
-                        if !show_pairing.get() {
+                        {
                             // Generate keypair and populate dialog
                             use rustyclaw_core::pairing::{
                                 ClientKeyPair,

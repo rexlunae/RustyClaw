@@ -235,7 +235,7 @@ impl SessionManager {
             .collect();
 
         // Sort by created time descending
-        sessions.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
+        sessions.sort_by_key(|s| std::cmp::Reverse(s.created_ms));
         sessions.truncate(limit);
         sessions
     }

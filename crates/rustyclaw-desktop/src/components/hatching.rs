@@ -1,16 +1,11 @@
-//! Hatching dialog for first-run identity setup.
+//! First-run "hatching" wizard for naming and personality setup.
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::*;
 
-/// Props for HatchingDialog.
 #[derive(Props, Clone, PartialEq)]
 pub struct HatchingDialogProps {
-    /// Whether the dialog is visible
     pub visible: bool,
-    /// Callback when hatching is complete
     pub on_complete: EventHandler<HatchingResult>,
-    /// Callback to cancel
     pub on_cancel: EventHandler<()>,
 }
 
@@ -21,37 +16,11 @@ pub struct HatchingResult {
     pub personality: Option<String>,
 }
 
-/// Hatching dialog component.
 #[component]
 pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let mut name = use_signal(String::new);
     let mut personality = use_signal(String::new);
-    let mut step = use_signal(|| 1);
-
-    let on_complete = props.on_complete;
-
-    let handle_next = move |_| {
-        let current_step = *step.read();
-        if current_step == 1 && !name.read().trim().is_empty() {
-            step.set(2);
-        } else if current_step == 2 {
-            on_complete.call(HatchingResult {
-                name: name.read().trim().to_string(),
-                personality: if personality.read().trim().is_empty() {
-                    None
-                } else {
-                    Some(personality.read().trim().to_string())
-                },
-            });
-        }
-    };
-
-    let handle_back = move |_| {
-        let current_step = *step.read();
-        if current_step > 1 {
-            step.set(current_step - 1);
-        }
-    };
+    let mut step = use_signal(|| 1u8);
 
     if !props.visible {
         return rsx! {};
@@ -59,127 +28,127 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
 
     let current_step = *step.read();
     let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
+    let on_complete = props.on_complete;
+
+    let go_next = move || {
+        let s = *step.read();
+        if s == 1 {
+            if !name.read().trim().is_empty() {
+                step.set(2);
+            }
+        } else if s == 2 {
+            on_complete.call(HatchingResult {
+                name: name.read().trim().to_string(),
+                personality: {
+                    let p = personality.read().trim().to_string();
+                    if p.is_empty() { None } else { Some(p) }
+                },
+            });
+        }
+    };
+
+    let go_back = move || {
+        let s = *step.read();
+        if s > 1 {
+            step.set(s - 1);
+        }
+    };
 
     rsx! {
-        Modal {
-            active: true,
-            onclose: move |_| props.on_cancel.call(()),
+        div { class: "modal-backdrop",
+            onclick: move |evt| {
+                // Click outside the panel cancels.
+                evt.stop_propagation();
+                props.on_cancel.call(());
+            },
 
-            ModalCard { style: "max-width: 500px;",
+            div {
+                class: "modal",
+                style: "max-width: 480px;",
+                onclick: move |evt| evt.stop_propagation(),
 
-                ModalCardHead {
-                    onclose: move |_| props.on_cancel.call(()),
-                    p { class: "modal-card-title",
-                        Icon { i { class: "fas fa-egg" } }
-                        " Hatching"
+                div { class: "modal-head",
+                    span { class: "modal-title", "🥚 Hatching" }
+                    button {
+                        class: "modal-close",
+                        title: "Close",
+                        onclick: move |_| props.on_cancel.call(()),
+                        "✕"
                     }
                 }
 
-                ModalCardBody {
-                    // Progress indicator built from Bulma Tags.
-                    div {
-                        style: "display: flex; justify-content: center; align-items: center; margin-bottom: 1.5rem;",
-
-                        Tag {
-                            color: if current_step >= 1 { BulmaColor::Primary } else { BulmaColor::Light },
-                            size: BulmaSize::Medium,
-                            "1"
-                        }
-                        span { style: "width: 50px; height: 2px; background: #dbdbdb; margin: 0 0.5rem;" }
-                        Tag {
-                            color: if current_step >= 2 { BulmaColor::Primary } else { BulmaColor::Light },
-                            size: BulmaSize::Medium,
-                            "2"
-                        }
+                div { class: "modal-body",
+                    div { class: "steps",
+                        span { class: if current_step >= 1 { "step is-active" } else { "step" }, "1" }
+                        span { class: "step-bar" }
+                        span { class: if current_step >= 2 { "step is-active" } else { "step" }, "2" }
                     }
 
-                    match current_step {
-                        1 => rsx! {
-                            Content {
-                                h4 { "What's your name?" }
-                                p { class: "has-text-grey",
-                                    "This will be used to identify your agent."
-                                }
-
-                                Field {
-                                    Control {
-                                        class: "has-icons-left".to_string(),
-                                        // Bulma's Input doesn't expose `onkeypress`,
-                                        // and we want Enter-to-advance here, so we
-                                        // use a raw <input> with the `input` class
-                                        // (still styled as a Bulma input).
-                                        input {
-                                            class: "input is-medium",
-                                            r#type: "text",
-                                            placeholder: "Enter agent name",
-                                            value: "{name}",
-                                            autofocus: true,
-                                            oninput: move |evt| name.set(evt.value()),
-                                            onkeypress: move |evt: KeyboardEvent| {
-                                                if evt.key() == Key::Enter && !name.read().trim().is_empty() {
-                                                    step.set(2);
-                                                }
-                                            },
-                                        }
-                                        Icon {
-                                            class: "is-small is-left".to_string(),
-                                            i { class: "fas fa-robot" }
-                                        }
+                    if current_step == 1 {
+                        div { class: "field",
+                            span { class: "field-label", "Agent name" }
+                            input {
+                                class: "input",
+                                r#type: "text",
+                                placeholder: "Give your agent a name",
+                                value: "{name}",
+                                autofocus: true,
+                                oninput: move |evt| name.set(evt.value()),
+                                onkeydown: move |evt: KeyboardEvent| {
+                                    if evt.key() == Key::Enter && !name.read().trim().is_empty() {
+                                        evt.prevent_default();
+                                        let mut g = go_next;
+                                        g();
                                     }
                                 }
                             }
-                        },
-                        2 => rsx! {
-                            Content {
-                                h4 { "Personality (optional)" }
-                                p { class: "has-text-grey",
-                                    "Describe your agent's personality or leave blank for default."
-                                }
-
-                                Field {
-                                    Control {
-                                        Textarea {
-                                            placeholder: "e.g., Friendly and helpful, with a dry sense of humor".to_string(),
-                                            rows: 4,
-                                            value: personality.read().clone(),
-                                            oninput: move |evt: FormEvent| personality.set(evt.value()),
-                                        }
-                                    }
-                                }
+                            span { class: "field-help",
+                                "This is how RustyClaw will refer to your agent in the UI."
                             }
-                        },
-                        _ => rsx! {}
+                        }
+                    } else if current_step == 2 {
+                        div { class: "field",
+                            span { class: "field-label", "Personality (optional)" }
+                            textarea {
+                                class: "textarea",
+                                placeholder: "e.g. Friendly and curious, with a dry sense of humour",
+                                rows: "4",
+                                value: "{personality}",
+                                oninput: move |evt| personality.set(evt.value()),
+                            }
+                            span { class: "field-help",
+                                "Leave blank to use the default. You can change this later."
+                            }
+                        }
                     }
                 }
 
-                ModalCardFoot { style: "justify-content: space-between;",
+                div { class: "modal-foot is-split",
                     if current_step > 1 {
-                        Button {
-                            color: BulmaColor::Light,
-                            onclick: handle_back,
-                            Icon { i { class: "fas fa-arrow-left" } }
-                            span { "Back" }
+                        button {
+                            class: "btn btn-ghost",
+                            onclick: move |_| {
+                                let mut g = go_back;
+                                g();
+                            },
+                            "‹ Back"
                         }
                     } else {
-                        Button {
-                            color: BulmaColor::Light,
+                        button {
+                            class: "btn btn-ghost",
                             onclick: move |_| props.on_cancel.call(()),
                             "Cancel"
                         }
                     }
 
-                    Button {
-                        color: BulmaColor::Primary,
+                    button {
+                        class: "btn btn-primary",
                         disabled: is_next_disabled,
-                        onclick: handle_next,
-
-                        if current_step == 2 {
-                            Icon { i { class: "fas fa-check" } }
-                            span { "Complete" }
-                        } else {
-                            span { "Next" }
-                            Icon { i { class: "fas fa-arrow-right" } }
-                        }
+                        onclick: move |_| {
+                            let mut g = go_next;
+                            g();
+                        },
+                        if current_step == 2 { "✓ Complete" } else { "Next ›" }
                     }
                 }
             }

@@ -27,7 +27,10 @@ impl GatewayClient {
     pub async fn connect(url: &str) -> Result<Self> {
         let url = Url::parse(url)?;
         if url.scheme() != "ssh" {
-            anyhow::bail!("Unsupported gateway URL scheme '{}'; expected ssh://", url.scheme());
+            anyhow::bail!(
+                "Unsupported gateway URL scheme '{}'; expected ssh://",
+                url.scheme()
+            );
         }
 
         let host = url.host_str().unwrap_or("localhost").to_string();
@@ -161,10 +164,10 @@ impl GatewayClient {
 
                         match deserialize_frame::<ServerFrame>(&frame_buf) {
                             Ok(frame) => {
-                                if let Some(event) = frame_to_event(frame) {
-                                    if event_tx.send(event).await.is_err() {
-                                        break;
-                                    }
+                                if let Some(event) = frame_to_event(frame)
+                                    && event_tx.send(event).await.is_err()
+                                {
+                                    break;
                                 }
                             }
                             Err(err) => {
@@ -198,8 +201,7 @@ impl GatewayClient {
                                 ssh_err
                                     .lines()
                                     .map(str::trim)
-                                    .filter(|line| !line.is_empty())
-                                    .last()
+                                    .rfind(|line| !line.is_empty())
                                     .map(str::to_string)
                             })
                             .unwrap_or_else(|| "SSH connection closed".to_string());

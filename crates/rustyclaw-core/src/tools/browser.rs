@@ -228,6 +228,7 @@ mod real {
     }
 
     /// Get page content.
+    #[allow(dead_code)]
     pub async fn get_content(tab_id: Option<&str>) -> Result<String, String> {
         let state = browser_state().lock().await;
         let s = state.as_ref().ok_or("Browser not running")?;

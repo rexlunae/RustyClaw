@@ -32,13 +32,13 @@ pub async fn connect_and_pair(host: &str, port: u16, public_key: &str) -> Result
     impl client::Handler for PairingHandler {
         type Error = anyhow::Error;
 
-        fn check_server_key(
+        async fn check_server_key(
             &mut self,
             _server_public_key: &PublicKey,
-        ) -> impl std::future::Future<Output = std::result::Result<bool, Self::Error>> + Send {
-            // For pairing, we accept any server key
-            // In production, we'd want to verify/store the server fingerprint
-            async { Ok(true) }
+        ) -> std::result::Result<bool, Self::Error> {
+            // For pairing, we accept any server key.
+            // In production we'd want to verify/store the server fingerprint.
+            Ok(true)
         }
     }
 

@@ -2,12 +2,14 @@
 
 use std::sync::OnceLock;
 
+use dioxus::desktop::{Config as DesktopConfig, LogicalSize, WindowBuilder};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use url::Url;
 
 pub mod app;
 mod components;
 mod gateway;
+mod markdown;
 mod state;
 
 static GATEWAY_URL: OnceLock<Option<String>> = OnceLock::new();
@@ -22,7 +24,20 @@ pub fn run(gateway_url: Option<String>) {
         .try_init();
 
     tracing::info!("Starting RustyClaw Desktop");
-    dioxus::launch(app::App);
+
+    let window = WindowBuilder::new()
+        .with_title("RustyClaw")
+        .with_inner_size(LogicalSize::new(1180.0, 760.0))
+        .with_min_inner_size(LogicalSize::new(720.0, 480.0));
+
+    // Match the dark-theme background so there's no white flash on startup.
+    let cfg = DesktopConfig::new()
+        .with_window(window)
+        .with_background_color((15, 17, 21, 0xFF));
+
+    dioxus::LaunchBuilder::desktop()
+        .with_cfg(cfg)
+        .launch(app::App);
 }
 
 pub(crate) fn configured_gateway_url() -> Option<String> {

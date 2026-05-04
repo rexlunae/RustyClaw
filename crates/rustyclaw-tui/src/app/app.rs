@@ -394,7 +394,10 @@ impl App {
         let (pairing_default_host, pairing_default_port) =
             if let Ok(parsed) = url::Url::parse(&gateway_url) {
                 let h = parsed.host_str().unwrap_or("").to_string();
-                let p = parsed.port().map(|p| p.to_string()).unwrap_or_else(|| "2222".to_string());
+                let p = parsed
+                    .port()
+                    .map(|p| p.to_string())
+                    .unwrap_or_else(|| "2222".to_string());
                 (h, p)
             } else {
                 (String::new(), "2222".to_string())
@@ -462,18 +465,19 @@ impl App {
 
             // Ensure we have a RustyClaw client identity and use it for SSH auth.
             // This aligns runtime connection auth with the pairing key used by the gateway.
-            let client_key_path = match rustyclaw_core::pairing::ClientKeyPair::load_or_generate(None)
-            {
-                Ok(_) => rustyclaw_core::pairing::default_client_key_path(),
-                Err(e) => {
-                    let _ = gw_tx_ssh.send(GwEvent::error(format!(
-                        "Failed to load/generate client key: {}",
-                        e
-                    )));
-                    let _ = gw_tx_ssh.send(GwEvent::Disconnected("SSH auth setup failed".into()));
-                    return;
-                }
-            };
+            let client_key_path =
+                match rustyclaw_core::pairing::ClientKeyPair::load_or_generate(None) {
+                    Ok(_) => rustyclaw_core::pairing::default_client_key_path(),
+                    Err(e) => {
+                        let _ = gw_tx_ssh.send(GwEvent::error(format!(
+                            "Failed to load/generate client key: {}",
+                            e
+                        )));
+                        let _ =
+                            gw_tx_ssh.send(GwEvent::Disconnected("SSH auth setup failed".into()));
+                        return;
+                    }
+                };
 
             // Build the SSH command
             let mut cmd = tokio::process::Command::new("ssh");
@@ -487,10 +491,8 @@ impl App {
                 .unwrap_or_else(|| std::path::PathBuf::from("."))
                 .join("rustyclaw")
                 .join("known_hosts");
-            cmd.arg("-o").arg(format!(
-                "UserKnownHostsFile={}",
-                known_hosts_path.display()
-            ));
+            cmd.arg("-o")
+                .arg(format!("UserKnownHostsFile={}", known_hosts_path.display()));
             // Accept new host keys on first connect; reject changed keys.
             // This matches the pairing model: pair once, trust forever.
             cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
@@ -527,8 +529,7 @@ impl App {
                             Ok(_) => {
                                 let len = u32::from_be_bytes(len_buf) as usize;
                                 if len > 16 * 1024 * 1024 {
-                                    let _ =
-                                        gw_tx_ssh.send(GwEvent::error("SSH frame too large"));
+                                    let _ = gw_tx_ssh.send(GwEvent::error("SSH frame too large"));
                                     break;
                                 }
                                 let mut frame_buf = vec![0u8; len];
@@ -552,8 +553,7 @@ impl App {
                                                 let _ = gw_tx_ssh.send(GwEvent::ModelReady(detail.clone()));
                                             }
                                         } else {
-                                            let fa =
-                                                gateway_client::server_frame_to_action(&frame);
+                                            let fa = gateway_client::server_frame_to_action(&frame);
                                             if let Some(action) = fa.action {
                                                 let ev = action_to_gw_event(&action);
                                                 if let Some(ev) = ev {
@@ -563,10 +563,8 @@ impl App {
                                         }
                                     }
                                     Err(e) => {
-                                        let _ = gw_tx_ssh.send(GwEvent::error(format!(
-                                            "Protocol error: {}",
-                                            e
-                                        )));
+                                        let _ = gw_tx_ssh
+                                            .send(GwEvent::error(format!("Protocol error: {}", e)));
                                     }
                                 }
                             }
@@ -594,11 +592,8 @@ impl App {
                                         ssh_err
                                             .lines()
                                             .map(str::trim)
-                                            .filter(|l| !l.is_empty())
-                                            .filter(|l| !l.starts_with("**"))
-                                            .last()
-                                    })
-                                {
+                                            .rfind(|l| !l.is_empty() && !l.starts_with("**"))
+                                    }) {
                                     if line.contains("Permission denied") {
                                         "SSH authentication failed: this client key is not authorized on the gateway. Press Ctrl+P to pair, then retry.".to_string()
                                     } else if line.contains("Host key verification failed") {
@@ -620,8 +615,7 @@ impl App {
                 }
                 Err(e) => {
                     drop(sink_tx);
-                    let _ =
-                        gw_tx_ssh.send(GwEvent::error(format!("Failed to spawn ssh: {}", e)));
+                    let _ = gw_tx_ssh.send(GwEvent::error(format!("Failed to spawn ssh: {}", e)));
                     let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
                 }
             }
@@ -1675,8 +1669,7 @@ impl App {
                     tokio::spawn(async move {
                         match crate::pairing::connect_and_pair(&host, port, &public_key).await {
                             Ok(gateway_name) => {
-                                let _ =
-                                    gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
+                                let _ = gw_tx_pair.send(GwEvent::PairingSuccess { gateway_name });
                             }
                             Err(e) => {
                                 let _ = gw_tx_pair.send(GwEvent::PairingError(e.to_string()));

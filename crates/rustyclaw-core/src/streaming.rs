@@ -368,26 +368,23 @@ pub async fn call_anthropic_streaming(
                             }
                         }
                     }
-                    "content_block_stop" => {
-                        // A content block finished
-                        if in_thinking_block {
-                            in_thinking_block = false;
-                            // Generate a brief summary from the thinking content
-                            // (first ~100 chars or first sentence, whichever is shorter)
-                            let summary = if thinking_content.len() > 100 {
-                                let truncated = &thinking_content[..100];
-                                if let Some(period_pos) = truncated.find(". ") {
-                                    Some(truncated[..=period_pos].to_string())
-                                } else {
-                                    Some(format!("{}...", truncated))
-                                }
-                            } else if !thinking_content.is_empty() {
-                                Some(thinking_content.clone())
+                    "content_block_stop" if in_thinking_block => {
+                        in_thinking_block = false;
+                        // Generate a brief summary from the thinking content
+                        // (first ~100 chars or first sentence, whichever is shorter)
+                        let summary = if thinking_content.len() > 100 {
+                            let truncated = &thinking_content[..100];
+                            if let Some(period_pos) = truncated.find(". ") {
+                                Some(truncated[..=period_pos].to_string())
                             } else {
-                                None
-                            };
-                            let _ = tx.send(StreamChunk::ThinkingEnd { summary }).await;
-                        }
+                                Some(format!("{}...", truncated))
+                            }
+                        } else if !thinking_content.is_empty() {
+                            Some(thinking_content.clone())
+                        } else {
+                            None
+                        };
+                        let _ = tx.send(StreamChunk::ThinkingEnd { summary }).await;
                     }
                     "message_stop" => {
                         let _ = tx.send(StreamChunk::Done).await;
