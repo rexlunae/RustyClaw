@@ -371,9 +371,18 @@ pub async fn call_anthropic_streaming(
                     "content_block_stop" if in_thinking_block => {
                         in_thinking_block = false;
                         // Generate a brief summary from the thinking content
-                        // (first ~100 chars or first sentence, whichever is shorter)
+                        // (first ~100 chars or first sentence, whichever is shorter).
+                        // Truncate on a UTF-8 char boundary so multi-byte characters
+                        // (CJK text, emoji, smart punctuation, etc.) don't trigger
+                        // a `byte index N is not a char boundary` panic.
                         let summary = if thinking_content.len() > 100 {
-                            let truncated = &thinking_content[..100];
+                            let end = thinking_content
+                                .char_indices()
+                                .map(|(i, c)| i + c.len_utf8())
+                                .take_while(|&end| end <= 100)
+                                .last()
+                                .unwrap_or(0);
+                            let truncated = &thinking_content[..end];
                             if let Some(period_pos) = truncated.find(". ") {
                                 Some(truncated[..=period_pos].to_string())
                             } else {
