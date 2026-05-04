@@ -26,7 +26,7 @@ pub struct HatchingResult {
 pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
     let mut name = use_signal(String::new);
     let mut personality = use_signal(String::new);
-    let mut step = use_signal(|| 1u32);
+    let mut step = use_signal(|| 1);
 
     let on_complete = props.on_complete;
 
@@ -140,7 +140,7 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                                     Control {
                                         Textarea {
                                             placeholder: "e.g., Friendly and helpful, with a dry sense of humor".to_string(),
-                                            rows: 4u32,
+                                            rows: 4,
                                             value: personality.read().clone(),
                                             oninput: move |evt: FormEvent| personality.set(evt.value()),
                                         }
