@@ -1,6 +1,7 @@
 RustyClaw — a super-lightweight super-capable agentic tool with improved security.
 
 Run without a subcommand to launch the TUI.
+Use `rustyclaw desktop` for the desktop client.
 
 Usage: rustyclaw [OPTIONS] [COMMAND]
 
@@ -12,7 +13,9 @@ Commands:
   config         Config helpers: get / set / unset
   doctor         Health checks + quick fixes for gateway and configuration
   tui            Launch the terminal UI
+    desktop        Launch the desktop UI
   command        Send a one-shot message / slash-command
+    ask            Send a prompt to the model and print the response (headless mode)
   status         Show system status (gateway, model, workspace)
   gateway        Gateway management (start / stop / restart / status)
   skills         List / manage skills

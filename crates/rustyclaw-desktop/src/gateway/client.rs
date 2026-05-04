@@ -1,13 +1,13 @@
-//! WebSocket client for gateway communication.
+//! SSH stdio client for gateway communication.
 
-use anyhow::{Result, anyhow};
-use futures::{SinkExt, StreamExt};
+use anyhow::{Context, Result, anyhow};
 use rustyclaw_core::gateway::{
     ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType,
+    deserialize_frame, serialize_frame,
 };
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc};
-use tokio_tungstenite::{connect_async, tungstenite::Message};
 use url::Url;
 
 use super::protocol::{GatewayCommand, GatewayEvent, ThreadInfoDto};
@@ -26,8 +26,17 @@ impl GatewayClient {
     /// Connect to a gateway at the given URL.
     pub async fn connect(url: &str) -> Result<Self> {
         let url = Url::parse(url)?;
-        let (ws_stream, _) = connect_async(url.as_str()).await?;
-        let (mut write, mut read) = ws_stream.split();
+        if url.scheme() != "ssh" {
+            anyhow::bail!("Unsupported gateway URL scheme '{}'; expected ssh://", url.scheme());
+        }
+
+        let host = url.host_str().unwrap_or("localhost").to_string();
+        let port = url.port();
+        let user = if url.username().is_empty() {
+            None
+        } else {
+            Some(url.username().to_string())
+        };
 
         // Channels for communication
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
@@ -36,15 +45,79 @@ impl GatewayClient {
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let connected_clone = connected.clone();
 
+        let client_key_path = rustyclaw_core::pairing::ClientKeyPair::load_or_generate(None)
+            .map(|_| rustyclaw_core::pairing::default_client_key_path())
+            .context("Failed to load/generate client key")?;
+
+        let mut cmd = tokio::process::Command::new("ssh");
+        cmd.arg("-T");
+        cmd.arg("-o").arg("PreferredAuthentications=publickey");
+        cmd.arg("-o").arg("IdentitiesOnly=yes");
+        cmd.arg("-i").arg(&client_key_path);
+
+        let known_hosts_path = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("."))
+            .join("rustyclaw")
+            .join("known_hosts");
+        cmd.arg("-o")
+            .arg(format!("UserKnownHostsFile={}", known_hosts_path.display()));
+        cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
+        cmd.arg("-o").arg("BatchMode=yes");
+        if let Some(port) = port {
+            cmd.arg("-p").arg(port.to_string());
+        }
+        let target = if let Some(user) = &user {
+            format!("{}@{}", user, host)
+        } else {
+            host.clone()
+        };
+        cmd.arg(&target);
+        cmd.arg("rustyclaw-gateway").arg("--ssh-stdio");
+        cmd.stdin(std::process::Stdio::piped());
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = cmd.spawn().context("Failed to spawn ssh")?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("SSH stdin unavailable"))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("SSH stdout unavailable"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow!("SSH stderr unavailable"))?;
+
         // Spawn task to handle outgoing commands
         let event_tx_clone = event_tx.clone();
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 let frame = command_to_frame(cmd);
-                let data = bincode::serde::encode_to_vec(&frame, bincode::config::standard())
-                    .unwrap_or_default();
+                let data = match serialize_frame(&frame) {
+                    Ok(data) => data,
+                    Err(err) => {
+                        let _ = event_tx_clone
+                            .send(GatewayEvent::Error {
+                                message: format!("Failed to encode frame: {}", err),
+                            })
+                            .await;
+                        break;
+                    }
+                };
 
-                if write.send(Message::Binary(data.into())).await.is_err() {
+                let len = data.len() as u32;
+                let write_result: Result<(), std::io::Error> = async {
+                    stdin.write_all(&len.to_be_bytes()).await?;
+                    stdin.write_all(&data).await?;
+                    stdin.flush().await?;
+                    Ok(())
+                }
+                .await;
+
+                if write_result.is_err() {
                     let _ = event_tx_clone
                         .send(GatewayEvent::Disconnected {
                             reason: Some("Send failed".into()),
@@ -57,47 +130,90 @@ impl GatewayClient {
 
         // Spawn task to handle incoming messages
         tokio::spawn(async move {
-            while let Some(msg) = read.next().await {
-                match msg {
-                    Ok(Message::Binary(data)) => {
-                        if let Ok((frame, _)) = bincode::serde::decode_from_slice::<ServerFrame, _>(
-                            &data,
-                            bincode::config::standard(),
-                        ) {
-                            if let Some(event) = frame_to_event(frame) {
-                                if event_tx.send(event).await.is_err() {
-                                    break;
+            let mut len_buf = [0u8; 4];
+            loop {
+                match stdout.read_exact(&mut len_buf).await {
+                    Ok(_) => {
+                        let len = u32::from_be_bytes(len_buf) as usize;
+                        if len > 16 * 1024 * 1024 {
+                            let _ = event_tx
+                                .send(GatewayEvent::Error {
+                                    message: "SSH frame too large".into(),
+                                })
+                                .await;
+                            break;
+                        }
+
+                        let mut frame_buf = vec![0u8; len];
+                        let read_result: Result<(), std::io::Error> = async {
+                            stdout.read_exact(&mut frame_buf).await?;
+                            Ok(())
+                        }
+                        .await;
+                        if read_result.is_err() {
+                            let _ = event_tx
+                                .send(GatewayEvent::Disconnected {
+                                    reason: Some("SSH read error".into()),
+                                })
+                                .await;
+                            break;
+                        }
+
+                        match deserialize_frame::<ServerFrame>(&frame_buf) {
+                            Ok(frame) => {
+                                if let Some(event) = frame_to_event(frame) {
+                                    if event_tx.send(event).await.is_err() {
+                                        break;
+                                    }
                                 }
+                            }
+                            Err(err) => {
+                                let _ = event_tx
+                                    .send(GatewayEvent::Error {
+                                        message: format!("Protocol error: {}", err),
+                                    })
+                                    .await;
                             }
                         }
                     }
-                    Ok(Message::Text(text)) => {
-                        // Try JSON fallback
-                        if let Ok(frame) = serde_json::from_str::<ServerFrame>(&text) {
-                            if let Some(event) = frame_to_event(frame) {
-                                if event_tx.send(event).await.is_err() {
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                    Ok(Message::Close(_)) => {
-                        let _ = event_tx
-                            .send(GatewayEvent::Disconnected { reason: None })
-                            .await;
-                        break;
-                    }
-                    Err(e) => {
+                    Err(_) => {
+                        let mut stderr_buf = Vec::new();
+                        let _ = stderr.read_to_end(&mut stderr_buf).await;
+                        let ssh_err = String::from_utf8_lossy(&stderr_buf);
+                        let reason = ssh_err
+                            .lines()
+                            .map(str::trim)
+                            .filter(|line| !line.is_empty())
+                            .find(|line| {
+                                line.contains("Permission denied")
+                                    || line.contains("Host key verification failed")
+                                    || line.contains("Connection refused")
+                                    || line.contains("Connection timed out")
+                                    || line.contains("No route to host")
+                                    || line.contains("Could not resolve hostname")
+                                    || line.contains("kex_exchange_identification")
+                            })
+                            .map(str::to_string)
+                            .or_else(|| {
+                                ssh_err
+                                    .lines()
+                                    .map(str::trim)
+                                    .filter(|line| !line.is_empty())
+                                    .last()
+                                    .map(str::to_string)
+                            })
+                            .unwrap_or_else(|| "SSH connection closed".to_string());
                         let _ = event_tx
                             .send(GatewayEvent::Disconnected {
-                                reason: Some(e.to_string()),
+                                reason: Some(reason),
                             })
                             .await;
                         break;
                     }
-                    _ => {}
                 }
             }
+
+            let _ = child.wait().await;
             connected_clone.store(false, std::sync::atomic::Ordering::SeqCst);
         });
 

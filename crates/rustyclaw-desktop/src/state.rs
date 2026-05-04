@@ -113,7 +113,8 @@ impl Default for AppState {
     fn default() -> Self {
         Self {
             connection: ConnectionStatus::Disconnected,
-            gateway_url: "ws://127.0.0.1:9001".to_string(),
+            gateway_url: crate::configured_gateway_url()
+                .unwrap_or_else(|| "ssh://127.0.0.1:2222".to_string()),
             messages: VecDeque::new(),
             input: String::new(),
             is_processing: false,

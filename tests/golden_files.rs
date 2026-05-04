@@ -139,6 +139,12 @@ fn test_golden_tui_help() {
 }
 
 #[test]
+fn test_golden_desktop_help() {
+    let output = get_help(&["desktop"]);
+    check_golden("help_desktop", &output);
+}
+
+#[test]
 fn test_golden_configure_help() {
     let output = get_help(&["configure"]);
     check_golden("help_configure", &output);

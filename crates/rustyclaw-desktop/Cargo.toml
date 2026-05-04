@@ -14,6 +14,10 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[lib]
+name = "rustyclaw_desktop"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rustyclaw-desktop"
 path = "src/main.rs"
@@ -59,6 +63,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Error handling
 anyhow = "1"
 thiserror = "2"
+
+# Config directory lookup for SSH known_hosts handling
+dirs.workspace = true
 
 [features]
 default = []

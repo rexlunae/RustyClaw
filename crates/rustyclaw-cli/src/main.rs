@@ -16,6 +16,8 @@ use rustyclaw_core::gateway::{
 use rustyclaw_core::providers;
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
+#[cfg(feature = "desktop")]
+use rustyclaw_desktop as desktop_app;
 #[cfg(feature = "tui")]
 use rustyclaw_tui::app::App;
 #[cfg(feature = "tui")]
@@ -34,7 +36,7 @@ mod commands;
     version,
     about = "RustyClaw — lightweight agentic assistant",
     long_about = "RustyClaw — a super-lightweight super-capable agentic tool with improved security.\n\n\
-                  Run without a subcommand to launch the TUI."
+                  Run without a subcommand to launch the TUI. Use `rustyclaw desktop` for the desktop client."
 )]
 struct Cli {
     #[command(flatten)]
@@ -69,6 +71,9 @@ enum Commands {
     /// Launch the terminal UI
     #[command(alias = "ui")]
     Tui(TuiArgs),
+
+    /// Launch the desktop UI
+    Desktop(DesktopArgs),
 
     /// Send a one-shot message / slash-command
     #[command(alias = "cmd", alias = "run", alias = "message")]
@@ -333,6 +338,13 @@ struct TuiArgs {
     /// Send an initial message instead of entering interactive mode
     #[arg(long, value_name = "TEXT")]
     message: Option<String>,
+}
+
+#[derive(Debug, Args, Default)]
+struct DesktopArgs {
+    /// Gateway URL (overrides config)
+    #[arg(long = "url", value_name = "URL")]
+    url: Option<String>,
 }
 
 // ── Command / Message ───────────────────────────────────────────────────────
@@ -839,6 +851,26 @@ async fn main() -> Result<()> {
             {
                 eprintln!(
                     "TUI is not available in this build. Build with --features tui to enable."
+                );
+                std::process::exit(1);
+            }
+        }
+
+        // ── Desktop ─────────────────────────────────────────────
+        Commands::Desktop(args) => {
+            #[cfg(feature = "desktop")]
+            {
+                let gateway_url = args
+                    .url
+                    .or_else(|| config.gateway_url.clone())
+                    .unwrap_or_else(|| "ws://127.0.0.1:9001".to_string());
+                desktop_app::run(Some(gateway_url));
+            }
+            #[cfg(not(feature = "desktop"))]
+            {
+                let _ = args;
+                eprintln!(
+                    "Desktop UI is not available in this build. Build with --features desktop to enable."
                 );
                 std::process::exit(1);
             }

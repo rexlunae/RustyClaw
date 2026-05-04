@@ -153,9 +153,22 @@ This interactive wizard sets up:
 # Interactive terminal UI
 rustyclaw tui
 
+# Desktop UI
+rustyclaw desktop
+
 # Or run as a daemon for integrations
 rustyclaw gateway start
 ```
+
+The desktop client uses the same configured gateway as `rustyclaw tui`. You can
+override it at launch time with:
+
+```bash
+rustyclaw desktop --url ssh://127.0.0.1:2222
+```
+
+By default, both `rustyclaw tui` and `rustyclaw desktop` connect to the SSH-based
+gateway transport at `ssh://127.0.0.1:2222` unless your config overrides it.
 
 ## Messaging
 
@@ -179,13 +192,14 @@ The `rustyclaw onboard` wizard walks you through this setup step-by-step.
 
 ## Building from Source
 
-RustyClaw is organized as a **Cargo workspace** with three crates:
+RustyClaw is organized as a **Cargo workspace** with four crates:
 
 | Crate | Path | Description |
 |-------|------|-------------|
 | **rustyclaw-core** | `crates/rustyclaw-core/` | Core library — config, gateway, tools, secrets, providers |
 | **rustyclaw-cli** | `crates/rustyclaw-cli/` | CLI binaries (`rustyclaw` and `rustyclaw-gateway`) |
 | **rustyclaw-tui** | `crates/rustyclaw-tui/` | Terminal UI client (ratatui) |
+| **rustyclaw-desktop** | `crates/rustyclaw-desktop/` | Desktop UI client (Dioxus) |
 
 ### Prerequisites
 
@@ -193,13 +207,23 @@ RustyClaw is organized as a **Cargo workspace** with three crates:
 - **OpenSSL** development headers (vendored by default)
 
 ```bash
-# macOS — no extra deps needed (uses vendored OpenSSL)
+# macOS — no extra deps needed for the TUI; desktop uses the system WebView
 
 # Ubuntu / Debian
 sudo apt install build-essential pkg-config
 
 # Fedora / RHEL
 sudo dnf install gcc openssl-devel
+```
+
+For the desktop client you also need native webview/GTK libraries on Linux:
+
+```bash
+# Ubuntu / Debian
+sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev
+
+# Fedora / RHEL
+sudo dnf install gtk3-devel webkit2gtk4.1-devel
 ```
 
 ### Build the Workspace
@@ -218,6 +242,17 @@ cargo build --release
 Binaries are produced at:
 - `target/release/rustyclaw` — main CLI + TUI
 - `target/release/rustyclaw-gateway` — standalone gateway daemon
+- `target/release/rustyclaw-desktop` — desktop GUI client
+
+You can launch the desktop client either directly or through the unified CLI:
+
+```bash
+# Direct desktop binary
+cargo run -p rustyclaw-desktop
+
+# Unified CLI entrypoint (uses the same SSH gateway default as the TUI)
+cargo run -p rustyclaw -- desktop
+```
 
 ### Feature Flags
 
@@ -228,6 +263,7 @@ Features are split across the workspace crates:
 | Feature | Description | Default |
 |---------|-------------|---------|
 | `tui` | Terminal UI (ratatui + crossterm) | ✅ |
+| `desktop` | Desktop UI launcher (`rustyclaw desktop`) | ✅ |
 
 **rustyclaw-core** (library crate):
 
@@ -257,6 +293,9 @@ cargo check -p rustyclaw-core
 
 # Build only the TUI client
 cargo check -p rustyclaw-tui
+
+# Build only the desktop client
+cargo check -p rustyclaw-desktop
 ```
 
 ### Running Tests

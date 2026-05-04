@@ -177,7 +177,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                                         input {
                                             class: "input",
                                             r#type: "number",
-                                            placeholder: "9001",
+                                            placeholder: "2222",
                                             value: "{port_str}",
                                             oninput: move |evt| {
                                                 let value = evt.value();

@@ -1,4 +1,4 @@
-//! Gateway WebSocket client.
+//! Gateway client transport.
 
 mod client;
 mod protocol;

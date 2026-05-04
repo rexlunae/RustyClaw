@@ -170,7 +170,7 @@ pub fn App() -> Element {
                 public_key: public_key.read().clone(),
                 qr_code_data_url: qr_code_url.read().clone(),
                 gateway_host: "127.0.0.1".to_string(),
-                gateway_port: 9001,
+                gateway_port: 2222,
                 on_host_change: move |_| {},
                 on_port_change: move |_| {},
                 on_connect: move |_| {
