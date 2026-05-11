@@ -1997,7 +1997,7 @@ async fn dispatch_text_message(
 
     // Store the original API key for non-Copilot providers.
     // For Copilot, we'll refresh the session token on each loop iteration.
-    let original_api_key = resolved.api_key.clone();
+    let mut original_api_key = resolved.api_key.clone();
 
     // ── Agentic tool loop ───────────────────────────────────────────
     // No hard limit — the model will stop when it's done. The user can
@@ -2202,7 +2202,8 @@ async fn dispatch_text_message(
                                     }
                                 }
                                 // Update the resolved request with the new key and retry.
-                                resolved.api_key = Some(key);
+                                resolved.api_key = Some(key.clone());
+                                original_api_key = Some(key);
                                 protocol::server::send_info(
                                     writer,
                                     &format!("Credential received for {} — retrying…", display),
