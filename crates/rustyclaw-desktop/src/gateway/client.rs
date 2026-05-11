@@ -329,6 +329,30 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
                 label: label.unwrap_or_default(),
             },
         },
+        GatewayCommand::UserPromptResponse {
+            id,
+            dismissed,
+            value,
+        } => ClientFrame {
+            frame_type: ClientFrameType::UserPromptResponse,
+            payload: ClientPayload::UserPromptResponse {
+                id,
+                dismissed,
+                value,
+            },
+        },
+        GatewayCommand::CredentialResponse {
+            id,
+            dismissed,
+            value,
+        } => ClientFrame {
+            frame_type: ClientFrameType::CredentialResponse,
+            payload: ClientPayload::CredentialResponse {
+                id,
+                dismissed,
+                value,
+            },
+        },
         GatewayCommand::SecretsList => ClientFrame {
             frame_type: ClientFrameType::SecretsList,
             payload: ClientPayload::SecretsList,
@@ -415,6 +439,24 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
             name,
             arguments,
         }),
+        ServerPayload::UserPromptRequest { id, prompt } => {
+            Some(GatewayEvent::UserPromptRequest { id, prompt })
+        }
+        ServerPayload::CredentialRequest {
+            id,
+            provider,
+            secret_name,
+            message,
+        } => Some(GatewayEvent::CredentialRequest {
+            id,
+            provider,
+            secret_name,
+            message,
+        }),
+        ServerPayload::DeviceFlowStart { url, code } => {
+            Some(GatewayEvent::DeviceFlowStart { url, code })
+        }
+        ServerPayload::DeviceFlowComplete => Some(GatewayEvent::DeviceFlowComplete),
         ServerPayload::ThreadsUpdate {
             threads,
             foreground_id,

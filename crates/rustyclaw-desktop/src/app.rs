@@ -4,11 +4,13 @@ use dioxus::prelude::*;
 use std::sync::Arc;
 
 use crate::components::{
-    Chat, HatchingDialog, HatchingResult, PairingDialog, SettingsDialog, Sidebar, SwarmAgentInfo,
-    SwarmInfo, SwarmPanel, generate_qr_code,
+    Chat, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
+    PairingDialog, SettingsDialog, Sidebar, SwarmAgentInfo, SwarmInfo, SwarmPanel,
+    ToolApprovalDialog, UserPromptDialog, VaultUnlockDialog, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
 use crate::state::{AppState, ConnectionStatus, Theme, ThreadInfo};
+use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
@@ -31,6 +33,32 @@ pub fn App() -> Element {
     let mut show_settings = use_signal(|| false);
     let mut show_swarm = use_signal(|| false);
     let mut swarm_creating = use_signal(|| false);
+
+    // Tool approval state
+    let mut tool_approval_id = use_signal(String::new);
+    let mut tool_approval_name = use_signal(String::new);
+    let mut tool_approval_args = use_signal(String::new);
+    let mut show_tool_approval = use_signal(|| false);
+
+    // Vault unlock state
+    let mut show_vault_unlock = use_signal(|| false);
+    let mut vault_unlock_error = use_signal(|| None::<String>);
+
+    // User prompt state
+    let mut show_user_prompt = use_signal(|| false);
+    let mut user_prompt_data: Signal<Option<UserPrompt>> = use_signal(|| None);
+
+    // Credential request state
+    let mut show_cred_request = use_signal(|| false);
+    let mut cred_request_id = use_signal(String::new);
+    let mut cred_request_provider = use_signal(String::new);
+    let mut cred_request_secret = use_signal(String::new);
+    let mut cred_request_message = use_signal(String::new);
+
+    // Device flow state
+    let mut show_device_flow = use_signal(|| false);
+    let mut device_flow_url = use_signal(String::new);
+    let mut device_flow_code = use_signal(String::new);
 
     // QR code for pairing
     let mut qr_code_url = use_signal(|| None::<String>);
@@ -74,6 +102,48 @@ pub fn App() -> Element {
                     }
                 }
             });
+        }
+    });
+
+    // Sync pending events from state into dialog signals
+    use_effect(move || {
+        let s = state.read();
+        if let Some((id, name, args)) = &s.pending_tool_approval {
+            tool_approval_id.set(id.clone());
+            tool_approval_name.set(name.clone());
+            tool_approval_args.set(args.clone());
+            show_tool_approval.set(true);
+        } else {
+            show_tool_approval.set(false);
+        }
+
+        if s.vault_locked && matches!(s.connection, ConnectionStatus::Connected) {
+            show_vault_unlock.set(true);
+        }
+
+        if let Some(prompt) = &s.pending_user_prompt {
+            user_prompt_data.set(Some(prompt.clone()));
+            show_user_prompt.set(true);
+        } else {
+            show_user_prompt.set(false);
+        }
+
+        if let Some((id, provider, secret, msg)) = &s.pending_credential_request {
+            cred_request_id.set(id.clone());
+            cred_request_provider.set(provider.clone());
+            cred_request_secret.set(secret.clone());
+            cred_request_message.set(msg.clone());
+            show_cred_request.set(true);
+        } else {
+            show_cred_request.set(false);
+        }
+
+        if let Some((url, code)) = &s.pending_device_flow {
+            device_flow_url.set(url.clone());
+            device_flow_code.set(code.clone());
+            show_device_flow.set(true);
+        } else {
+            show_device_flow.set(false);
         }
     });
 
@@ -335,6 +405,120 @@ pub fn App() -> Element {
                 },
                 on_close: move |_| show_swarm.set(false),
             }
+
+            ToolApprovalDialog {
+                visible: *show_tool_approval.read(),
+                id: tool_approval_id.read().clone(),
+                tool_name: tool_approval_name.read().clone(),
+                arguments: tool_approval_args.read().clone(),
+                on_approve: move |id: String| {
+                    state.write().pending_tool_approval = None;
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::ToolApprove { id, approved: true }).await;
+                        });
+                    }
+                },
+                on_deny: move |id: String| {
+                    state.write().pending_tool_approval = None;
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::ToolApprove { id, approved: false }).await;
+                        });
+                    }
+                },
+            }
+
+            VaultUnlockDialog {
+                visible: *show_vault_unlock.read(),
+                error: vault_unlock_error.read().clone(),
+                on_submit: move |password: String| {
+                    vault_unlock_error.set(None);
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::VaultUnlock { password }).await;
+                        });
+                    }
+                },
+                on_cancel: move |_| show_vault_unlock.set(false),
+            }
+
+            UserPromptDialog {
+                visible: *show_user_prompt.read(),
+                prompt: user_prompt_data.read().clone(),
+                on_respond: move |(id, value): (String, PromptResponseValue)| {
+                    state.write().pending_user_prompt = None;
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::UserPromptResponse {
+                                id,
+                                dismissed: false,
+                                value,
+                            }).await;
+                        });
+                    }
+                },
+                on_dismiss: move |id: String| {
+                    state.write().pending_user_prompt = None;
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::UserPromptResponse {
+                                id,
+                                dismissed: true,
+                                value: PromptResponseValue::Text(String::new()),
+                            }).await;
+                        });
+                    }
+                },
+            }
+
+            CredentialRequestDialog {
+                visible: *show_cred_request.read(),
+                id: cred_request_id.read().clone(),
+                provider: cred_request_provider.read().clone(),
+                secret_name: cred_request_secret.read().clone(),
+                message: cred_request_message.read().clone(),
+                on_submit: move |(id, value): (String, String)| {
+                    state.write().pending_credential_request = None;
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::CredentialResponse {
+                                id,
+                                dismissed: false,
+                                value: Some(value),
+                            }).await;
+                        });
+                    }
+                },
+                on_dismiss: move |id: String| {
+                    state.write().pending_credential_request = None;
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::CredentialResponse {
+                                id,
+                                dismissed: true,
+                                value: None,
+                            }).await;
+                        });
+                    }
+                },
+            }
+
+            DeviceFlowDialog {
+                visible: *show_device_flow.read(),
+                url: device_flow_url.read().clone(),
+                code: device_flow_code.read().clone(),
+                on_close: move |_| {
+                    state.write().pending_device_flow = None;
+                },
+            }
         }
     }
 }
@@ -504,12 +688,7 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             name,
             arguments,
         } => {
-            state.write().status_message = Some(format!(
-                "Tool approval requested: {} ({}) — {} chars",
-                name,
-                id,
-                arguments.len()
-            ));
+            state.write().pending_tool_approval = Some((id, name, arguments));
         }
         GatewayEvent::ThreadsUpdate {
             threads,
@@ -527,6 +706,24 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
                 })
                 .collect();
             state.write().foreground_thread_id = foreground_id;
+        }
+        GatewayEvent::UserPromptRequest { id: _, prompt } => {
+            state.write().pending_user_prompt = Some(prompt);
+        }
+        GatewayEvent::CredentialRequest {
+            id,
+            provider,
+            secret_name,
+            message,
+        } => {
+            state.write().pending_credential_request =
+                Some((id, provider, secret_name, message));
+        }
+        GatewayEvent::DeviceFlowStart { url, code } => {
+            state.write().pending_device_flow = Some((url, code));
+        }
+        GatewayEvent::DeviceFlowComplete => {
+            state.write().pending_device_flow = None;
         }
         GatewayEvent::Error { message } => {
             state.write().status_message = Some(message);

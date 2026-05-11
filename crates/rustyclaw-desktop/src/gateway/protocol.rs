@@ -74,6 +74,30 @@ pub enum GatewayEvent {
         arguments: String,
     },
 
+    /// User prompt request (agent asking for user input)
+    UserPromptRequest {
+        #[allow(dead_code)]
+        id: String,
+        prompt: rustyclaw_core::user_prompt_types::UserPrompt,
+    },
+
+    /// Credential request (gateway needs an API key/token)
+    CredentialRequest {
+        id: String,
+        provider: String,
+        secret_name: String,
+        message: String,
+    },
+
+    /// Device flow started (OAuth)
+    DeviceFlowStart {
+        url: String,
+        code: String,
+    },
+
+    /// Device flow completed
+    DeviceFlowComplete,
+
     /// Threads/sessions updated
     ThreadsUpdate {
         threads: Vec<ThreadInfoDto>,
@@ -118,6 +142,22 @@ pub enum GatewayCommand {
     /// Approve tool call
     #[serde(rename = "tool_approve")]
     ToolApprove { id: String, approved: bool },
+
+    /// Respond to a user prompt
+    #[serde(rename = "user_prompt_response")]
+    UserPromptResponse {
+        id: String,
+        dismissed: bool,
+        value: rustyclaw_core::user_prompt_types::PromptResponseValue,
+    },
+
+    /// Respond to a credential request
+    #[serde(rename = "credential_response")]
+    CredentialResponse {
+        id: String,
+        dismissed: bool,
+        value: Option<String>,
+    },
 
     /// Switch to a thread
     #[serde(rename = "thread_switch")]
