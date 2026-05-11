@@ -348,13 +348,41 @@ pub async fn handle(
 
         // ── Token refresh ───────────────────────────────────────────
         GatewayError::TokenRefresh { ref message } => {
-            protocol::server::send_error(
-                writer,
-                &format!("Token refresh failed: {}", message),
-            )
-            .await?;
-            providers::send_response_done(writer).await?;
-            Ok(ControlFlow::Break(()))
+            // For DeviceFlow providers, a failed token refresh means the
+            // stored OAuth token is stale — re-run the device flow instead
+            // of just showing an error.
+            let provider_def = crate_providers::provider_by_id(&resolved.provider);
+            let auth_method = provider_def
+                .map(|p| p.auth_method)
+                .unwrap_or(crate_providers::AuthMethod::ApiKey);
+
+            if auth_method == crate_providers::AuthMethod::DeviceFlow {
+                let provider_id = resolved.provider.clone();
+                let secret_name =
+                    crate_providers::secret_key_for_provider(&provider_id)
+                        .unwrap_or("API_KEY");
+                let display =
+                    crate_providers::display_name_for_provider(&provider_id);
+                let _ = message; // suppress unused warning; logged above
+                handle_device_flow(
+                    writer,
+                    resolved,
+                    original_api_key,
+                    vault,
+                    provider_def,
+                    secret_name,
+                    display,
+                )
+                .await
+            } else {
+                protocol::server::send_error(
+                    writer,
+                    &format!("Token refresh failed: {}", message),
+                )
+                .await?;
+                providers::send_response_done(writer).await?;
+                Ok(ControlFlow::Break(()))
+            }
         }
 
         // ── Token limit ─────────────────────────────────────────────
