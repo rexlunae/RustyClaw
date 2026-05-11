@@ -2155,80 +2155,179 @@ async fn dispatch_text_message(
                 // Detect authentication errors (401/403) and prompt the user
                 // for the missing credential instead of just failing.
                 if is_auth_error(&err_str) {
+                    let provider_def = crate::providers::provider_by_id(&resolved.provider);
                     let secret_name = crate::providers::secret_key_for_provider(&resolved.provider)
                         .unwrap_or("API_KEY");
                     let display =
                         crate::providers::display_name_for_provider(&resolved.provider);
+                    let auth_method = provider_def
+                        .map(|p| p.auth_method)
+                        .unwrap_or(crate::providers::AuthMethod::ApiKey);
 
-                    let help_text = crate::providers::provider_by_id(&resolved.provider)
-                        .and_then(|p| p.help_text)
-                        .unwrap_or("Enter the API key for this provider");
-
-                    let request_id = format!("cred_{}", uuid::Uuid::new_v4());
-                    let message = format!(
-                        "Authentication failed for {}. {}.",
-                        display, help_text
-                    );
-
-                    protocol::server::send_credential_request(
-                        writer,
-                        &request_id,
-                        &resolved.provider,
-                        secret_name,
-                        &message,
-                    )
-                    .await?;
-
-                    // Wait for the user's response (with 5 minute timeout).
-                    let cred_result = {
-                        let mut rx = credential_rx.lock().await;
-                        tokio::time::timeout(
-                            std::time::Duration::from_secs(300),
-                            rx.recv(),
-                        )
-                        .await
-                    };
-
-                    match cred_result {
-                        Ok(Some((id, dismissed, value)))
-                            if id == request_id && !dismissed =>
-                        {
-                            if let Some(key) = value {
-                                // Store the credential in the vault for future use.
-                                {
-                                    let mut v = vault.lock().await;
-                                    if let Err(e) = v.store_secret(secret_name, &key) {
-                                        warn!(error = %e, "Failed to store credential in vault");
-                                    }
-                                }
-                                // Update the resolved request with the new key and retry.
-                                resolved.api_key = Some(key.clone());
-                                original_api_key = Some(key);
+                    match auth_method {
+                        crate::providers::AuthMethod::DeviceFlow => {
+                            // Run the OAuth device flow from the gateway.
+                            if let Some(df_config) = provider_def.and_then(|p| p.device_flow) {
                                 protocol::server::send_info(
                                     writer,
-                                    &format!("Credential received for {} — retrying…", display),
-                                )
-                                .await?;
-                                continue; // retry the model call
+                                    &format!("Authentication failed for {}. Starting device flow…", display),
+                                ).await?;
+
+                                match crate::providers::start_device_flow(df_config).await {
+                                    Ok(auth_resp) => {
+                                        protocol::server::send_device_flow_start(
+                                            writer,
+                                            &auth_resp.verification_uri,
+                                            &auth_resp.user_code,
+                                        ).await?;
+
+                                        // Poll for the token.
+                                        let interval = std::time::Duration::from_secs(auth_resp.interval.max(5));
+                                        let deadline = tokio::time::Instant::now()
+                                            + std::time::Duration::from_secs(auth_resp.expires_in);
+                                        let mut token_result = None;
+
+                                        loop {
+                                            tokio::time::sleep(interval).await;
+                                            if tokio::time::Instant::now() >= deadline {
+                                                break;
+                                            }
+                                            match crate::providers::poll_device_token(
+                                                df_config, &auth_resp.device_code,
+                                            ).await {
+                                                Ok(Some(token)) => {
+                                                    token_result = Some(token);
+                                                    break;
+                                                }
+                                                Ok(None) => {
+                                                    // Still pending — continue polling
+                                                }
+                                                Err(e) => {
+                                                    warn!(error = %e, "Device flow poll failed");
+                                                    break;
+                                                }
+                                            }
+                                        }
+
+                                        protocol::server::send_device_flow_complete(writer).await?;
+
+                                        if let Some(token) = token_result {
+                                            // Store the token in the vault.
+                                            {
+                                                let mut v = vault.lock().await;
+                                                if let Err(e) = v.store_secret(secret_name, &token) {
+                                                    warn!(error = %e, "Failed to store device flow token in vault");
+                                                }
+                                            }
+                                            resolved.api_key = Some(token.clone());
+                                            original_api_key = Some(token);
+                                            protocol::server::send_info(
+                                                writer,
+                                                &format!("{} authenticated via device flow — retrying…", display),
+                                            ).await?;
+                                            continue; // retry the model call
+                                        }
+
+                                        // Token was not obtained — timed out or failed.
+                                        protocol::server::send_error(
+                                            writer,
+                                            &format!("Device flow for {} timed out or failed.", display),
+                                        ).await?;
+                                        providers::send_response_done(writer).await?;
+                                        return Ok(());
+                                    }
+                                    Err(e) => {
+                                        protocol::server::send_error(
+                                            writer,
+                                            &format!("Failed to start device flow for {}: {}", display, e),
+                                        ).await?;
+                                        providers::send_response_done(writer).await?;
+                                        return Ok(());
+                                    }
+                                }
+                            } else {
+                                // DeviceFlow auth but no config — fall through to error.
+                                protocol::server::send_error(
+                                    writer,
+                                    &format!("Authentication failed for {} but no device flow config found.", display),
+                                ).await?;
+                                providers::send_response_done(writer).await?;
+                                return Ok(());
                             }
-                            // Value was None — treat as dismissed
-                            protocol::server::send_error(writer, "No credential value provided.")
-                                .await?;
-                            providers::send_response_done(writer).await?;
-                            return Ok(());
                         }
-                        _ => {
-                            // Dismissed, timed out, or mismatched ID
-                            protocol::server::send_error(
+                        crate::providers::AuthMethod::ApiKey | crate::providers::AuthMethod::None => {
+                            // API key auth — prompt the user for a manual key.
+                            let help_text = provider_def
+                                .and_then(|p| p.help_text)
+                                .unwrap_or("Enter the API key for this provider");
+
+                            let request_id = format!("cred_{}", uuid::Uuid::new_v4());
+                            let message = format!(
+                                "Authentication failed for {}. {}.",
+                                display, help_text
+                            );
+
+                            protocol::server::send_credential_request(
                                 writer,
-                                &format!(
-                                    "Authentication failed for {} and no credential was provided.",
-                                    display
-                                ),
+                                &request_id,
+                                &resolved.provider,
+                                secret_name,
+                                &message,
                             )
                             .await?;
-                            providers::send_response_done(writer).await?;
-                            return Ok(());
+
+                            // Wait for the user's response (with 5 minute timeout).
+                            let cred_result = {
+                                let mut rx = credential_rx.lock().await;
+                                tokio::time::timeout(
+                                    std::time::Duration::from_secs(300),
+                                    rx.recv(),
+                                )
+                                .await
+                            };
+
+                            match cred_result {
+                                Ok(Some((id, dismissed, value)))
+                                    if id == request_id && !dismissed =>
+                                {
+                                    if let Some(key) = value {
+                                        // Store the credential in the vault for future use.
+                                        {
+                                            let mut v = vault.lock().await;
+                                            if let Err(e) = v.store_secret(secret_name, &key) {
+                                                warn!(error = %e, "Failed to store credential in vault");
+                                            }
+                                        }
+                                        // Update the resolved request with the new key and retry.
+                                        resolved.api_key = Some(key.clone());
+                                        original_api_key = Some(key);
+                                        protocol::server::send_info(
+                                            writer,
+                                            &format!("Credential received for {} — retrying…", display),
+                                        )
+                                        .await?;
+                                        continue; // retry the model call
+                                    }
+                                    // Value was None — treat as dismissed
+                                    protocol::server::send_error(writer, "No credential value provided.")
+                                        .await?;
+                                    providers::send_response_done(writer).await?;
+                                    return Ok(());
+                                }
+                                _ => {
+                                    // Dismissed, timed out, or mismatched ID
+                                    protocol::server::send_error(
+                                        writer,
+                                        &format!(
+                                            "Authentication failed for {} and no credential was provided.",
+                                            display
+                                        ),
+                                    )
+                                    .await?;
+                                    providers::send_response_done(writer).await?;
+                                    return Ok(());
+                                }
+                            }
                         }
                     }
                 }

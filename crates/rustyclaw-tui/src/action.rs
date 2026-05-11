@@ -78,6 +78,8 @@ pub enum Action {
     },
     /// Device flow authentication failed
     DeviceFlowFailed(String),
+    /// Device flow completed (gateway-driven) — dismiss the device flow dialog
+    DeviceFlowComplete,
     /// Open the credential-management dialog for a secret
     ShowCredentialDialog {
         name: String,

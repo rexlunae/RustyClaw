@@ -1814,6 +1814,14 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             message: message.clone(),
         }),
 
+        // ── Interactive: device flow (gateway-driven) ────────────────────
+        Action::DeviceFlowCodeReady { url, code } => Some(GwEvent::DeviceFlowCode {
+            provider: String::new(), // provider context already shown via Info frame
+            url: url.clone(),
+            code: code.clone(),
+        }),
+        Action::DeviceFlowComplete => Some(GwEvent::DeviceFlowDone),
+
         // ── Tasks ───────────────────────────────────────────────────────
 
         // ── Threads ─────────────────────────────────────────────────────
