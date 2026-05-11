@@ -52,6 +52,7 @@ pub enum ErrorKind {
     DeviceFlow,
     Config,
     TokenRefresh,
+    UnexpectedFinish,
 }
 
 impl fmt::Display for ErrorKind {
@@ -73,6 +74,7 @@ impl ErrorKind {
             Self::DeviceFlow => "device_flow",
             Self::Config => "config",
             Self::TokenRefresh => "token_refresh",
+            Self::UnexpectedFinish => "unexpected_finish",
         }
     }
 }
@@ -112,6 +114,10 @@ pub enum GatewayError {
 
     /// Token refresh (bearer / Copilot session) failed.
     TokenRefresh { message: String },
+
+    /// The model finished with an unexpected reason but no tool calls.
+    /// This is informational (not an error) — logged via `send_info`.
+    UnexpectedFinish { reason: String },
 }
 
 impl fmt::Display for GatewayError {
@@ -139,6 +145,13 @@ impl fmt::Display for GatewayError {
             Self::TokenRefresh { message } => {
                 write!(f, "Token refresh failed: {}", message)
             }
+            Self::UnexpectedFinish { reason } => {
+                write!(
+                    f,
+                    "Model finished with reason '{}' but no tool calls.",
+                    reason
+                )
+            }
         }
     }
 }
@@ -159,6 +172,7 @@ impl GatewayError {
             Self::DeviceFlow { .. } => ErrorKind::DeviceFlow,
             Self::Config { .. } => ErrorKind::Config,
             Self::TokenRefresh { .. } => ErrorKind::TokenRefresh,
+            Self::UnexpectedFinish { .. } => ErrorKind::UnexpectedFinish,
         }
     }
 
@@ -388,6 +402,20 @@ pub async fn handle(
         // ── Vault error ─────────────────────────────────────────────
         GatewayError::Vault { ref message } => {
             protocol::server::send_error(writer, message).await?;
+            Ok(ControlFlow::Break(()))
+        }
+
+        // ── Unexpected finish reason (info, not error) ──────────────
+        GatewayError::UnexpectedFinish { ref reason } => {
+            protocol::server::send_info(
+                writer,
+                &format!(
+                    "Model finished with reason '{}' but no tool calls.",
+                    reason
+                ),
+            )
+            .await?;
+            providers::send_response_done(writer).await?;
             Ok(ControlFlow::Break(()))
         }
 
@@ -637,6 +665,7 @@ mod tests {
         assert_eq!(ErrorKind::DeviceFlow.as_str(), "device_flow");
         assert_eq!(ErrorKind::Config.as_str(), "config");
         assert_eq!(ErrorKind::TokenRefresh.as_str(), "token_refresh");
+        assert_eq!(ErrorKind::UnexpectedFinish.as_str(), "unexpected_finish");
     }
 
     #[test]
@@ -687,6 +716,12 @@ mod tests {
             message: "timeout".into(),
         };
         assert!(!provider.is_non_fatal());
+
+        let unexpected = GatewayError::UnexpectedFinish {
+            reason: "content_filter".into(),
+        };
+        assert!(unexpected.to_string().contains("content_filter"));
+        assert!(!unexpected.is_non_fatal());
     }
 
     #[test]
