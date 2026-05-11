@@ -285,6 +285,12 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, St
     let session_keys: Vec<String> = {
         let mgr = manager
             .lock()
+    let manager = swarm_manager();
+
+    // Phase 1: extract session keys while holding the swarm lock.
+    let session_keys: Vec<String> = {
+        let mgr = manager
+            .lock()
             .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
         mgr.get(name)
             .map(|inst| inst.agent_sessions.values().cloned().collect())
