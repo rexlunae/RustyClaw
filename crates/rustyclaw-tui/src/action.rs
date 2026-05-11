@@ -216,6 +216,19 @@ pub enum Action {
     UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
     /// User responded to a structured prompt
     UserPromptResponse(rustyclaw_core::user_prompt_types::UserPromptResponse),
+    /// Gateway is requesting an API key or credential from the user
+    CredentialRequest {
+        id: String,
+        provider: String,
+        secret_name: String,
+        message: String,
+    },
+    /// User responded to a credential request
+    CredentialResponse {
+        id: String,
+        dismissed: bool,
+        value: Option<String>,
+    },
     /// Gateway sent a threads update (unified tasks + threads)
     ThreadsUpdate {
         threads: Vec<ThreadInfo>,

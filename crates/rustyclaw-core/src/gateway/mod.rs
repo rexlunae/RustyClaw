@@ -115,12 +115,12 @@ pub type SharedObserver = Arc<dyn crate::observability::Observer>;
 
 // Re-export protocol helpers for external use
 pub use protocol::server::{
-    parse_client_frame, send_frame, send_reload_result, send_secrets_delete_credential_result,
-    send_secrets_delete_result, send_secrets_get_result, send_secrets_has_totp_result,
-    send_secrets_list_result, send_secrets_peek_result, send_secrets_remove_totp_result,
-    send_secrets_set_disabled_result, send_secrets_set_policy_result,
-    send_secrets_setup_totp_result, send_secrets_store_result, send_secrets_verify_totp_result,
-    send_vault_unlocked,
+    parse_client_frame, send_credential_request, send_frame, send_reload_result,
+    send_secrets_delete_credential_result, send_secrets_delete_result, send_secrets_get_result,
+    send_secrets_has_totp_result, send_secrets_list_result, send_secrets_peek_result,
+    send_secrets_remove_totp_result, send_secrets_set_disabled_result,
+    send_secrets_set_policy_result, send_secrets_setup_totp_result, send_secrets_store_result,
+    send_secrets_verify_totp_result, send_vault_unlocked,
 };
 
 // Re-export validate_model_connection for external use
@@ -1010,6 +1010,11 @@ async fn handle_connection(
     )>(4);
     let user_prompt_rx = Arc::new(Mutex::new(user_prompt_rx));
 
+    // Channel for credential responses (used when auth fails mid-conversation).
+    let (credential_tx, credential_rx) =
+        tokio::sync::mpsc::channel::<(String, bool, Option<String>)>(4);
+    let credential_rx = Arc::new(Mutex::new(credential_rx));
+
     // Channel for model task responses (concurrent execution).
     let (_model_task_tx, mut model_task_rx) = concurrent::channel();
 
@@ -1042,6 +1047,12 @@ async fn handle_connection(
                             if frame.frame_type == ClientFrameType::UserPromptResponse {
                                 if let ClientPayload::UserPromptResponse { id, dismissed, value } = frame.payload {
                                     let _ = user_prompt_tx.send((id, dismissed, value)).await;
+                                    continue;
+                                }
+                            }
+                            if frame.frame_type == ClientFrameType::CredentialResponse {
+                                if let ClientPayload::CredentialResponse { id, dismissed, value } = frame.payload {
+                                    let _ = credential_tx.send((id, dismissed, value)).await;
                                     continue;
                                 }
                             }
@@ -1395,6 +1406,7 @@ async fn handle_connection(
                                     &shared_config,
                                     &approval_rx,
                                     &user_prompt_rx,
+                                    &credential_rx,
                                     &mut thread_mgr,
                                 )
                                 .await
@@ -1594,10 +1606,11 @@ async fn handle_connection(
                                     send_frame(&mut *writer, &frame).await?;
                                 }
                             }
-                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } => {
+                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.
                                 // UserPromptResponse handled by the reader task.
+                                // CredentialResponse handled by the reader task.
                             }
                         }
             }
@@ -1905,6 +1918,28 @@ where
     }
 }
 
+/// Check whether an error message indicates an authentication failure (HTTP 401/403).
+///
+/// Provider call functions format errors like "Provider returned 401 Unauthorized — …"
+/// or "Anthropic returned 401 — …".  This heuristic matches those patterns so the
+/// gateway can prompt for credentials instead of immediately failing.
+fn is_auth_error(error_msg: &str) -> bool {
+    // Match common HTTP auth-error status codes in provider error messages.
+    let patterns = [
+        "returned 401",
+        "returned 403",
+        "HTTP 401",
+        "HTTP 403",
+        "401 Unauthorized",
+        "403 Forbidden",
+        "authentication_error",
+        "invalid_api_key",
+        "invalid x-api-key",
+    ];
+    let lower = error_msg.to_lowercase();
+    patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
+}
+
 async fn dispatch_text_message(
     http: &reqwest::Client,
     req: &ChatRequest,
@@ -1928,6 +1963,7 @@ async fn dispatch_text_message(
             )>,
         >,
     >,
+    credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
     thread_mgr: &mut crate::threads::ThreadManager,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
@@ -2114,7 +2150,90 @@ async fn dispatch_text_message(
                 return Ok(());
             }
             Err(err) => {
-                protocol::server::send_error(writer, &err.to_string()).await?;
+                let err_str = err.to_string();
+
+                // Detect authentication errors (401/403) and prompt the user
+                // for the missing credential instead of just failing.
+                if is_auth_error(&err_str) {
+                    let secret_name = crate::providers::secret_key_for_provider(&resolved.provider)
+                        .unwrap_or("API_KEY");
+                    let display =
+                        crate::providers::display_name_for_provider(&resolved.provider);
+
+                    let help_text = crate::providers::provider_by_id(&resolved.provider)
+                        .and_then(|p| p.help_text)
+                        .unwrap_or("Enter the API key for this provider");
+
+                    let request_id = format!("cred_{}", uuid::Uuid::new_v4());
+                    let message = format!(
+                        "Authentication failed for {}. {}.",
+                        display, help_text
+                    );
+
+                    protocol::server::send_credential_request(
+                        writer,
+                        &request_id,
+                        &resolved.provider,
+                        secret_name,
+                        &message,
+                    )
+                    .await?;
+
+                    // Wait for the user's response (with 5 minute timeout).
+                    let cred_result = {
+                        let mut rx = credential_rx.lock().await;
+                        tokio::time::timeout(
+                            std::time::Duration::from_secs(300),
+                            rx.recv(),
+                        )
+                        .await
+                    };
+
+                    match cred_result {
+                        Ok(Some((id, dismissed, value)))
+                            if id == request_id && !dismissed =>
+                        {
+                            if let Some(key) = value {
+                                // Store the credential in the vault for future use.
+                                {
+                                    let mut v = vault.lock().await;
+                                    if let Err(e) = v.store_secret(secret_name, &key) {
+                                        warn!(error = %e, "Failed to store credential in vault");
+                                    }
+                                }
+                                // Update the resolved request with the new key and retry.
+                                resolved.api_key = Some(key);
+                                protocol::server::send_info(
+                                    writer,
+                                    &format!("Credential received for {} — retrying…", display),
+                                )
+                                .await?;
+                                continue; // retry the model call
+                            }
+                            // Value was None — treat as dismissed
+                            protocol::server::send_error(writer, "No credential value provided.")
+                                .await?;
+                            providers::send_response_done(writer).await?;
+                            return Ok(());
+                        }
+                        _ => {
+                            // Dismissed, timed out, or mismatched ID
+                            protocol::server::send_error(
+                                writer,
+                                &format!(
+                                    "Authentication failed for {} and no credential was provided.",
+                                    display
+                                ),
+                            )
+                            .await?;
+                            providers::send_response_done(writer).await?;
+                            return Ok(());
+                        }
+                    }
+                }
+
+                // Non-auth error — report and stop.
+                protocol::server::send_error(writer, &err_str).await?;
                 providers::send_response_done(writer).await?;
                 return Ok(());
             }

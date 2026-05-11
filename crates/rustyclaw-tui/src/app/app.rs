@@ -97,6 +97,13 @@ pub(crate) enum GwEvent {
     },
     /// Gateway requests structured user input (ask_user tool)
     UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
+    /// Gateway requests an API key or credential from the user
+    CredentialRequest {
+        id: String,
+        provider: String,
+        secret_name: String,
+        message: String,
+    },
     /// Vault is locked — user needs to provide password
     VaultLocked,
     /// Vault was successfully unlocked
@@ -234,6 +241,12 @@ pub(crate) enum UserInput {
         id: String,
         dismissed: bool,
         value: rustyclaw_core::user_prompt_types::PromptResponseValue,
+    },
+    /// User responded to a credential request
+    CredentialResponse {
+        id: String,
+        dismissed: bool,
+        value: Option<String>,
     },
     /// Cancel the active model/tool run.
     CancelCurrentRequest,
@@ -737,6 +750,25 @@ impl App {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::UserPromptResponse,
                             payload: ClientPayload::UserPromptResponse {
+                                id,
+                                dismissed,
+                                value,
+                            },
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink.send_binary(data).await;
+                        }
+                    }
+                }
+                Ok(UserInput::CredentialResponse {
+                    id,
+                    dismissed,
+                    value,
+                }) => {
+                    if let Some(ref mut sink) = gw_sink {
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::CredentialResponse,
+                            payload: ClientPayload::CredentialResponse {
                                 id,
                                 dismissed,
                                 value,
@@ -1768,6 +1800,19 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
 
         // ── Interactive: user prompt ────────────────────────────────────
         Action::UserPromptRequest(prompt) => Some(GwEvent::UserPromptRequest(prompt.clone())),
+
+        // ── Interactive: credential request ─────────────────────────────
+        Action::CredentialRequest {
+            id,
+            provider,
+            secret_name,
+            message,
+        } => Some(GwEvent::CredentialRequest {
+            id: id.clone(),
+            provider: provider.clone(),
+            secret_name: secret_name.clone(),
+            message: message.clone(),
+        }),
 
         // ── Tasks ───────────────────────────────────────────────────────
 
