@@ -1148,3 +1148,103 @@ p { margin: 0; }
     white-space: nowrap;
     border: 0;
 }
+
+/* ============================================================
+   Swarm Panel
+   ============================================================ */
+
+.swarm-empty {
+    text-align: center;
+    padding: 2rem 1rem;
+}
+.swarm-empty-text {
+    color: var(--rc-text-faint);
+    margin-bottom: 1rem;
+}
+.swarm-hint {
+    color: var(--rc-text-faint);
+    font-size: 0.82rem;
+    margin-top: 0.75rem;
+}
+
+.swarm-card {
+    background: var(--rc-surface-2);
+    border: 1px solid var(--rc-border);
+    border-radius: var(--rc-radius-md);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+
+.swarm-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 0.5rem;
+}
+.swarm-card-title {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+.swarm-name {
+    font-weight: 600;
+    font-size: 1rem;
+    color: var(--rc-text);
+}
+.swarm-card-meta {
+    display: flex;
+    gap: 0.35rem;
+    flex-wrap: wrap;
+}
+.swarm-card-desc {
+    color: var(--rc-text-faint);
+    font-size: 0.85rem;
+    margin: 0.25rem 0 0.75rem;
+}
+
+.swarm-agents {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+}
+.swarm-agent {
+    background: var(--rc-surface-1);
+    border: 1px solid var(--rc-border);
+    border-radius: var(--rc-radius-sm);
+    padding: 0.5rem 0.65rem;
+    transition: border-color 0.15s;
+}
+.swarm-agent.is-active {
+    border-color: var(--rc-success);
+}
+.swarm-agent-name {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    font-weight: 500;
+    font-size: 0.88rem;
+    margin-bottom: 0.15rem;
+}
+.agent-role-icon { font-size: 1rem; }
+.swarm-agent-desc {
+    color: var(--rc-text-faint);
+    font-size: 0.78rem;
+    line-height: 1.3;
+}
+
+.swarm-card-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--rc-border);
+}
+
+.swarm-actions {
+    display: flex;
+    justify-content: center;
+    padding-top: 0.75rem;
+}

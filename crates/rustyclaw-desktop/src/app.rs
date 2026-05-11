@@ -5,7 +5,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::components::{
-    Chat, HatchingDialog, HatchingResult, PairingDialog, SettingsDialog, Sidebar, generate_qr_code,
+    Chat, HatchingDialog, HatchingResult, PairingDialog, SettingsDialog, Sidebar, SwarmAgentInfo,
+    SwarmInfo, SwarmPanel, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
 use crate::state::{AppState, ConnectionStatus, Theme, ThreadInfo};
@@ -28,6 +29,8 @@ pub fn App() -> Element {
     let mut show_pairing = use_signal(|| false);
     let mut show_hatching = use_signal(|| state.read().needs_hatching);
     let mut show_settings = use_signal(|| false);
+    let mut show_swarm = use_signal(|| false);
+    let mut swarm_creating = use_signal(|| false);
 
     // QR code for pairing
     let mut qr_code_url = use_signal(|| None::<String>);
@@ -165,6 +168,7 @@ pub fn App() -> Element {
                     foreground_id: state.read().foreground_thread_id,
                     threads: state.read().threads.clone(),
                     on_settings: move |_| show_settings.set(true),
+                    on_swarm: move |_| show_swarm.set(true),
                 }
 
                 // Connection / status banners
@@ -263,6 +267,30 @@ pub fn App() -> Element {
                 on_reconnect: move |_| do_reconnect(),
                 on_close: move |_| show_settings.set(false),
             }
+
+            SwarmPanel {
+                swarms: get_swarm_infos(),
+                creating: *swarm_creating.read(),
+                visible: *show_swarm.read(),
+                on_create: move |template: String| {
+                    swarm_creating.set(true);
+                    spawn(async move {
+                        let result = create_swarm_from_template(&template);
+                        swarm_creating.set(false);
+                        if let Err(e) = result {
+                            state.write().status_message =
+                                Some(format!("Failed to create swarm: {}", e));
+                        }
+                    });
+                },
+                on_stop: move |name: String| {
+                    if let Err(e) = stop_swarm(&name) {
+                        state.write().status_message =
+                            Some(format!("Failed to stop swarm: {}", e));
+                    }
+                },
+                on_close: move |_| show_swarm.set(false),
+            }
         }
     }
 }
@@ -275,6 +303,7 @@ struct TopBarProps {
     foreground_id: Option<u64>,
     threads: Vec<ThreadInfo>,
     on_settings: EventHandler<()>,
+    on_swarm: EventHandler<()>,
 }
 
 #[component]
@@ -310,6 +339,12 @@ fn TopBar(props: TopBarProps) -> Element {
                 }
             }
             div { class: "topbar-right",
+                button {
+                    class: "icon-btn",
+                    title: "Swarm Manager",
+                    onclick: move |_| props.on_swarm.call(()),
+                    "🐝"
+                }
                 button {
                     class: "icon-btn",
                     title: "Settings",
@@ -457,4 +492,66 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             state.write().status_message = Some(message);
         }
     }
+}
+
+// ── Swarm helpers ───────────────────────────────────────────────────────────
+
+/// Build the current list of swarm infos from the global swarm manager.
+fn get_swarm_infos() -> Vec<SwarmInfo> {
+    use rustyclaw_core::swarm::swarm_manager;
+
+    let mgr = match swarm_manager().lock() {
+        Ok(m) => m,
+        Err(_) => return Vec::new(),
+    };
+
+    mgr.list()
+        .into_iter()
+        .map(|inst| SwarmInfo {
+            name: inst.config.name.clone(),
+            status: inst.status.to_string(),
+            description: inst.config.description.clone(),
+            tasks_routed: inst.tasks_routed,
+            uptime_secs: inst.runtime_secs(),
+            agents: inst
+                .config
+                .agents
+                .iter()
+                .map(|a| SwarmAgentInfo {
+                    id: a.id.clone(),
+                    name: a.name.clone(),
+                    role: a.role.to_string(),
+                    description: a.description.clone(),
+                    has_session: inst.agent_sessions.contains_key(&a.id),
+                })
+                .collect(),
+        })
+        .collect()
+}
+
+/// Create a swarm from a built-in template.
+fn create_swarm_from_template(template: &str) -> Result<(), String> {
+    use rustyclaw_core::swarm::{builtin_templates, swarm_manager};
+
+    let templates = builtin_templates();
+    let cfg = templates
+        .into_iter()
+        .find(|t| t.name == template)
+        .ok_or_else(|| format!("Unknown template: {}", template))?;
+
+    let name = cfg.name.clone();
+    let mgr = swarm_manager();
+    let mut m = mgr.lock().map_err(|_| "Lock error".to_string())?;
+    m.create(cfg)?;
+    m.start(&name)?;
+    Ok(())
+}
+
+/// Stop a running swarm.
+fn stop_swarm(name: &str) -> Result<(), String> {
+    use rustyclaw_core::swarm::swarm_manager;
+
+    let mgr = swarm_manager();
+    let mut m = mgr.lock().map_err(|_| "Lock error".to_string())?;
+    m.stop(name)
 }

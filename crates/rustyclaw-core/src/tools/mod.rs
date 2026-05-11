@@ -25,6 +25,7 @@ mod secrets_tools;
 mod sessions_tools;
 mod skills_tools;
 mod sysadmin;
+mod swarm_tools;
 mod system_tools;
 pub mod uv;
 mod web;
@@ -37,6 +38,12 @@ use npm::exec_npm_manage;
 // Agent setup orchestrator
 use agent_setup::exec_agent_setup;
 mod params;
+
+// Swarm tools
+use swarm_tools::{
+    exec_swarm_create, exec_swarm_list, exec_swarm_send, exec_swarm_status, exec_swarm_stop,
+    exec_swarm_templates,
+};
 
 // Re-export helpers for external use
 pub use helpers::{
@@ -298,6 +305,12 @@ pub fn tool_summary(name: &str) -> &'static str {
         "npm_manage" => "Manage Node.js packages & scripts via npm",
         "agent_setup" => "Set up local model infrastructure",
         "pdf" => "Analyze PDF files (extract text, metadata, page counts)",
+        "swarm_create" => "Create and start a multi-agent swarm",
+        "swarm_list" => "List all swarms and their status",
+        "swarm_status" => "Get detailed status for a swarm",
+        "swarm_send" => "Send a task to a swarm agent",
+        "swarm_stop" => "Stop a running swarm",
+        "swarm_templates" => "List available swarm templates",
         _ => "Unknown tool",
     }
 }
@@ -429,6 +442,12 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &AGENT_SETUP,
         &ASK_USER,
         &PDF,
+        &SWARM_CREATE,
+        &SWARM_LIST,
+        &SWARM_STATUS,
+        &SWARM_SEND,
+        &SWARM_STOP,
+        &SWARM_TEMPLATES,
     ]
 }
 
@@ -1253,6 +1272,57 @@ pub static PDF: ToolDef = ToolDef {
     execute: exec_pdf,
 };
 
+// ── Swarm tools ─────────────────────────────────────────────────────────────
+
+pub static SWARM_CREATE: ToolDef = ToolDef {
+    name: "swarm_create",
+    description: "Create and start a multi-agent swarm from a built-in template or custom config. \
+                  Templates: 'openswarm' (8 agents: orchestrator + 7 specialists covering research, \
+                  data analysis, slides, docs, images, video, and assistant tasks). \
+                  Use swarm_templates to see available templates.",
+    parameters: vec![],
+    execute: exec_swarm_create,
+};
+
+pub static SWARM_LIST: ToolDef = ToolDef {
+    name: "swarm_list",
+    description: "List all swarms and their current status (running, idle, stopped).",
+    parameters: vec![],
+    execute: exec_swarm_list,
+};
+
+pub static SWARM_STATUS: ToolDef = ToolDef {
+    name: "swarm_status",
+    description: "Get detailed status for a named swarm including agents, communication flows, \
+                  session mappings, and task routing statistics.",
+    parameters: vec![],
+    execute: exec_swarm_status,
+};
+
+pub static SWARM_SEND: ToolDef = ToolDef {
+    name: "swarm_send",
+    description: "Send a task or message to a specific agent within a running swarm. \
+                  If no agent is specified, the message is routed to the orchestrator. \
+                  The orchestrator can then delegate to the appropriate specialist(s).",
+    parameters: vec![],
+    execute: exec_swarm_send,
+};
+
+pub static SWARM_STOP: ToolDef = ToolDef {
+    name: "swarm_stop",
+    description: "Stop a running swarm and clean up all its agent sessions.",
+    parameters: vec![],
+    execute: exec_swarm_stop,
+};
+
+pub static SWARM_TEMPLATES: ToolDef = ToolDef {
+    name: "swarm_templates",
+    description: "List available built-in swarm templates with their agent rosters. \
+                  Use swarm_create with a template name to instantiate one.",
+    parameters: vec![],
+    execute: exec_swarm_templates,
+};
+
 // Re-export parameter functions from params module
 pub use params::*;
 
@@ -1374,6 +1444,12 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "npm_manage" => npm_manage_params(),
         "agent_setup" => agent_setup_params(),
         "pdf" => pdf_params(),
+        "swarm_create" => swarm_create_params(),
+        "swarm_list" => swarm_list_params(),
+        "swarm_status" => swarm_status_params(),
+        "swarm_send" => swarm_send_params(),
+        "swarm_stop" => swarm_stop_params(),
+        "swarm_templates" => swarm_templates_params(),
         _ => vec![],
     }
 }

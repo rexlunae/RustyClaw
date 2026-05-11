@@ -6,6 +6,7 @@ mod message;
 mod pairing;
 mod settings;
 mod sidebar;
+mod swarm_panel;
 mod tool_call;
 
 pub use chat::Chat;
@@ -13,3 +14,4 @@ pub use hatching::{HatchingDialog, HatchingResult};
 pub use pairing::{PairingDialog, generate_qr_code};
 pub use settings::SettingsDialog;
 pub use sidebar::Sidebar;
+pub use swarm_panel::{SwarmAgentInfo, SwarmInfo, SwarmPanel};

@@ -47,6 +47,7 @@ pub mod skills;
 pub mod soul;
 #[cfg(feature = "steel-memory")]
 pub mod steel_memory;
+pub mod swarm;
 pub mod streaming;
 pub mod tasks;
 pub mod theme;

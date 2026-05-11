@@ -1808,3 +1808,79 @@ pub fn pdf_params() -> Vec<ToolParam> {
         },
     ]
 }
+
+// ── Swarm tool parameters ───────────────────────────────────────────────────
+
+pub fn swarm_create_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "template".into(),
+            description: "Name of a built-in template (e.g. 'openswarm'). \
+                          Use swarm_templates to see available templates. \
+                          Ignored if 'config' is provided."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "config".into(),
+            description: "Full swarm configuration as a JSON object. \
+                          Overrides the template parameter. Must include \
+                          'name', 'agents', and 'flows' fields."
+                .into(),
+            param_type: "object".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn swarm_list_params() -> Vec<ToolParam> {
+    vec![]
+}
+
+pub fn swarm_status_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "name".into(),
+        description: "Name of the swarm to inspect.".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
+pub fn swarm_send_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "swarm".into(),
+            description: "Name of the swarm to route through.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "agent".into(),
+            description: "Target agent ID within the swarm (e.g. 'deep_research', \
+                          'data_analyst'). Defaults to 'orchestrator' if omitted."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "message".into(),
+            description: "The task or message to send to the agent.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+    ]
+}
+
+pub fn swarm_stop_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "name".into(),
+        description: "Name of the swarm to stop.".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
+pub fn swarm_templates_params() -> Vec<ToolParam> {
+    vec![]
+}
