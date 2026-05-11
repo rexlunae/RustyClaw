@@ -2,6 +2,8 @@
 
 use std::collections::VecDeque;
 
+use rustyclaw_core::user_prompt_types::UserPrompt;
+
 /// Connection status to the gateway.
 #[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ConnectionStatus {
@@ -125,6 +127,18 @@ pub struct AppState {
 
     /// Active UI theme.
     pub theme: Theme,
+
+    /// Pending tool approval request (id, name, arguments).
+    pub pending_tool_approval: Option<(String, String, String)>,
+
+    /// Pending user prompt from the agent.
+    pub pending_user_prompt: Option<UserPrompt>,
+
+    /// Pending credential request (id, provider, secret_name, message).
+    pub pending_credential_request: Option<(String, String, String, String)>,
+
+    /// Pending device flow (url, code).
+    pub pending_device_flow: Option<(String, String)>,
 }
 
 impl Default for AppState {
@@ -148,6 +162,10 @@ impl Default for AppState {
             status_message: None,
             sidebar_collapsed: false,
             theme: Theme::default(),
+            pending_tool_approval: None,
+            pending_user_prompt: None,
+            pending_credential_request: None,
+            pending_device_flow: None,
         }
     }
 }
