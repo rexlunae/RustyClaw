@@ -42,7 +42,7 @@ The `swarm` subcommand manages multi-agent orchestration:
 ```bash
 rustyclaw swarm templates    # List available swarm templates
 rustyclaw swarm list         # List active swarms (empty by default)
-rustyclaw swarm create [TEMPLATE]  # Create swarm (default: openswarm)
+rustyclaw swarm create [TEMPLATE]  # Create swarm (default: swarm)
 rustyclaw swarm send <SWARM> <MESSAGE>  # Send message to swarm
 rustyclaw swarm status <SWARM>   # Show swarm status
 rustyclaw swarm stop <SWARM>     # Stop a swarm
@@ -130,8 +130,8 @@ handle_device_flow(writer, resolved, ...)  // now safe to pass &mut resolved
 
 ## Test Strategy
 
-1. **Happy paths:** `templates` (8 agents listed), `create openswarm` (success + agent list), `list` (empty state message)
-2. **Error paths:** `create nonexistent` (exit 1), `send nonexistent "msg"` (exit 1), `stop nonexistent` (exit 1), `send openswarm` with no message (exit 1)
+1. **Happy paths:** `templates` (8 agents listed), `create swarm` (success + agent list), `list` (empty state message)
+2. **Error paths:** `create nonexistent` (exit 1), `send nonexistent "msg"` (exit 1), `stop nonexistent` (exit 1), `send swarm` with no message (exit 1)
 3. **Help text:** `--help` for each subcommand — verify args, defaults, options
 4. **Gateway errors:** Run focused error module tests, verify frame type routing via grep, build TUI binary
 5. **Desktop UI:** SwarmPanel compiles but requires Dioxus desktop runtime. Verify via `cargo check -p rustyclaw-desktop` on CI.

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Predefined specialist roles mirroring the OpenSwarm agent roster.
+/// Predefined specialist roles for swarm agents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentRole {
@@ -125,7 +125,7 @@ impl std::fmt::Display for SwarmStatus {
 /// built-in template.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmConfig {
-    /// Unique name for this swarm (e.g. "openswarm", "seo-swarm").
+    /// Unique name for this swarm (e.g. "swarm", "seo-swarm").
     pub name: String,
     /// Human-readable description.
     #[serde(default)]

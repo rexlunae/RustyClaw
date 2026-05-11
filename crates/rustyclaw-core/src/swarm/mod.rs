@@ -1,4 +1,4 @@
-//! Swarm — multi-agent orchestration inspired by OpenSwarm.
+//! Swarm — multi-agent orchestration.
 //!
 //! A *swarm* is a named collection of specialist agents coordinated by an
 //! orchestrator.  Each agent has a role, system instructions, and a set of
@@ -11,7 +11,7 @@
 //!   conversation to a single specialist who interacts directly with the user.
 //!
 //! Swarms can be created from built-in templates (e.g. the default 8-agent
-//! OpenSwarm layout) or defined in TOML configuration files.
+//! layout) or defined in TOML configuration files.
 
 mod config;
 mod manager;

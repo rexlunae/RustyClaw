@@ -1,6 +1,6 @@
 //! Built-in swarm templates.
 //!
-//! The default template mirrors the OpenSwarm agent roster: an orchestrator
+//! The default template mirrors the default swarm agent roster: an orchestrator
 //! plus seven specialists covering research, data analysis, slides, docs,
 //! image generation, video generation, and general virtual-assistant tasks.
 
@@ -23,8 +23,8 @@ apply to every agent in the swarm.\n\n\
 - Use `sessions_send` to communicate with other agents when needed.\n\
 - Return results to the orchestrator promptly so it can merge outputs.";
 
-/// Build the default OpenSwarm-style template.
-fn default_openswarm_template() -> SwarmConfig {
+/// Build the default swarm template.
+fn default_swarm_template() -> SwarmConfig {
     let agents = vec![
         SwarmAgent {
             id: "orchestrator".into(),
@@ -285,10 +285,10 @@ fn default_openswarm_template() -> SwarmConfig {
     }
 
     SwarmConfig {
-        name: "openswarm".into(),
+        name: "swarm".into(),
         description: "Default multi-agent swarm — orchestrator + 7 specialists \
             covering research, data analysis, slides, docs, images, video, and \
-            general assistant tasks.  Inspired by VRSEN/OpenSwarm."
+            general assistant tasks."
             .into(),
         shared_instructions: DEFAULT_SHARED_INSTRUCTIONS.into(),
         agents,
@@ -298,7 +298,7 @@ fn default_openswarm_template() -> SwarmConfig {
 
 /// Return all built-in swarm templates.
 pub fn builtin_templates() -> Vec<SwarmConfig> {
-    vec![default_openswarm_template()]
+    vec![default_swarm_template()]
 }
 
 #[cfg(test)]
@@ -310,7 +310,7 @@ mod tests {
         let templates = builtin_templates();
         assert_eq!(templates.len(), 1);
         let t = &templates[0];
-        assert_eq!(t.name, "openswarm");
+        assert_eq!(t.name, "swarm");
         assert_eq!(t.agents.len(), 8);
     }
 
