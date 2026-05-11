@@ -40,6 +40,7 @@ pub struct ChatProps {
     pub is_thinking: bool,
     pub agent_name: Option<String>,
     pub on_submit: EventHandler<String>,
+    pub on_cancel: EventHandler<()>,
     pub on_input_change: EventHandler<String>,
 }
 
@@ -150,13 +151,17 @@ pub fn Chat(props: ChatProps) -> Element {
                     }
                     button {
                         class: "composer-send",
-                        title: "Send (Enter)",
-                        disabled: is_processing || input_ref.read().trim().is_empty(),
+                        title: if is_processing { "Cancel request" } else { "Send (Enter)" },
+                        disabled: !is_processing && input_ref.read().trim().is_empty(),
                         onclick: move |_| {
-                            let mut s = send_now;
-                            s();
+                            if is_processing {
+                                props.on_cancel.call(());
+                            } else {
+                                let mut s = send_now;
+                                s();
+                            }
                         },
-                        if is_processing { "…" } else { "↑" }
+                        if is_processing { "×" } else { "↑" }
                     }
                 }
                 div { class: "composer-hint",

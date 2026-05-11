@@ -5,6 +5,4 @@
 pub mod gateway;
 
 // Re-export handlers for use in main.rs
-pub use gateway::{
-    handle_restart, handle_run, handle_start, handle_status, handle_stop,
-};
+pub use gateway::{handle_restart, handle_run, handle_start, handle_status, handle_stop};

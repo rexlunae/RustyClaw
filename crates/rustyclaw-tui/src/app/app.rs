@@ -17,8 +17,8 @@ use std::sync::mpsc as sync_mpsc;
 use rustyclaw_core::commands::{CommandAction, CommandContext, CommandResponse, handle_command};
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
-    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame, deserialize_frame,
-    serialize_frame,
+    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame, WireFrame,
+    deserialize_frame, deserialize_wire_frame, serialize_wire_frame,
 };
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
@@ -28,6 +28,22 @@ use crate::gateway_client;
 
 use super::tui_component;
 use super::tui_component::TuiRoot;
+
+fn serialize_frame(frame: &ClientFrame) -> std::result::Result<Vec<u8>, String> {
+    serialize_client_frame(frame, 0)
+}
+
+fn serialize_client_frame(
+    frame: &ClientFrame,
+    stream_id: u64,
+) -> std::result::Result<Vec<u8>, String> {
+    serialize_wire_frame(&WireFrame::new(stream_id, frame.clone()))
+}
+
+fn deserialize_server_frame(data: &[u8]) -> std::result::Result<WireFrame<ServerFrame>, String> {
+    deserialize_wire_frame::<ServerFrame>(data)
+        .or_else(|_| deserialize_frame::<ServerFrame>(data).map(WireFrame::control))
+}
 
 // ── Channel message types ───────────────────────────────────────────────────
 
@@ -410,7 +426,7 @@ impl App {
         // ── Gateway sink abstraction ────────────────────────────────────
         //
         // SSH-only transport: the TUI spawns `ssh user@host
-        // rustyclaw-gateway --ssh-stdio` and communicates over the
+        // rustyclaw-gateway run --ssh-stdio` and communicates over the
         // subprocess's stdin/stdout using length-prefixed binary frames.
 
         enum GatewaySink {
@@ -507,7 +523,7 @@ impl App {
                 host.clone()
             };
             cmd.arg(&target);
-            cmd.arg("rustyclaw-gateway").arg("--ssh-stdio");
+            cmd.arg("rustyclaw-gateway").arg("run").arg("--ssh-stdio");
 
             cmd.stdin(std::process::Stdio::piped());
             cmd.stdout(std::process::Stdio::piped());
@@ -538,8 +554,9 @@ impl App {
                                         .send(GwEvent::Disconnected("SSH read error".into()));
                                     break;
                                 }
-                                match deserialize_frame::<ServerFrame>(&frame_buf) {
-                                    Ok(frame) => {
+                                match deserialize_server_frame(&frame_buf) {
+                                    Ok(envelope) => {
+                                        let frame = envelope.frame;
                                         let is_model_ready = matches!(
                                             &frame.payload,
                                             rustyclaw_core::gateway::ServerPayload::Status {
@@ -650,6 +667,8 @@ impl App {
 
         // ── Tokio loop: handle UserInput from UI ────────────────────────
         let mut conversation: Vec<ChatMessage> = Vec::new();
+        let mut next_stream_id: u64 = 1;
+        let mut active_stream_id: u64 = 0;
         let config = &mut self.config;
         let secrets_manager = &mut self.secrets_manager;
         let skill_manager = &mut self.skill_manager;
@@ -658,6 +677,9 @@ impl App {
             // Poll user_rx (non-blocking on tokio side)
             match user_rx.try_recv() {
                 Ok(UserInput::Chat(text)) => {
+                    let stream_id = next_stream_id;
+                    next_stream_id = next_stream_id.saturating_add(2);
+                    active_stream_id = stream_id;
                     conversation.push(ChatMessage::text("user", &text));
                     if let Some(ref mut sink) = gw_sink {
                         let frame = ClientFrame {
@@ -666,7 +688,7 @@ impl App {
                                 messages: conversation.clone(),
                             },
                         };
-                        if let Ok(data) = serialize_frame(&frame) {
+                        if let Ok(data) = serialize_client_frame(&frame, stream_id) {
                             let _ = sink.send_binary(data).await;
                         }
                     }
@@ -677,7 +699,7 @@ impl App {
                             frame_type: ClientFrameType::AuthResponse,
                             payload: ClientPayload::AuthResponse { code },
                         };
-                        if let Ok(data) = serialize_frame(&frame) {
+                        if let Ok(data) = serialize_client_frame(&frame, active_stream_id) {
                             let _ = sink.send_binary(data).await;
                         }
                     }
@@ -737,6 +759,7 @@ impl App {
                     }
                 }
                 Ok(UserInput::AssistantResponse(text)) => {
+                    active_stream_id = 0;
                     // Feed the completed assistant response into the conversation
                     // so subsequent Chat frames include the full history.
                     conversation.push(ChatMessage::text("assistant", &text));

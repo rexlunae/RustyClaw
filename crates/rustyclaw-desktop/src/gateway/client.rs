@@ -3,9 +3,10 @@
 use anyhow::{Context, Result, anyhow};
 use rustyclaw_core::gateway::{
     ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType,
-    deserialize_frame, serialize_frame,
+    WireFrame, deserialize_frame, deserialize_wire_frame, serialize_wire_frame,
 };
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc};
 use url::Url;
@@ -47,6 +48,8 @@ impl GatewayClient {
 
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let connected_clone = connected.clone();
+        let next_stream_id = Arc::new(AtomicU64::new(1));
+        let active_stream_id = Arc::new(AtomicU64::new(0));
 
         let client_key_path = rustyclaw_core::pairing::ClientKeyPair::load_or_generate(None)
             .map(|_| rustyclaw_core::pairing::default_client_key_path())
@@ -75,7 +78,7 @@ impl GatewayClient {
             host.clone()
         };
         cmd.arg(&target);
-        cmd.arg("rustyclaw-gateway").arg("--ssh-stdio");
+        cmd.arg("rustyclaw-gateway").arg("run").arg("--ssh-stdio");
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
@@ -96,10 +99,21 @@ impl GatewayClient {
 
         // Spawn task to handle outgoing commands
         let event_tx_clone = event_tx.clone();
+        let next_stream_id_tx = next_stream_id.clone();
+        let active_stream_id_tx = active_stream_id.clone();
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
+                let stream_id = match &cmd {
+                    GatewayCommand::Chat { .. } => {
+                        let id = next_stream_id_tx.fetch_add(2, Ordering::Relaxed);
+                        active_stream_id_tx.store(id, Ordering::Relaxed);
+                        id
+                    }
+                    GatewayCommand::Cancel => active_stream_id_tx.load(Ordering::Relaxed),
+                    _ => 0,
+                };
                 let frame = command_to_frame(cmd);
-                let data = match serialize_frame(&frame) {
+                let data = match serialize_wire_frame(&WireFrame::new(stream_id, frame)) {
                     Ok(data) => data,
                     Err(err) => {
                         let _ = event_tx_clone
@@ -132,6 +146,7 @@ impl GatewayClient {
         });
 
         // Spawn task to handle incoming messages
+        let active_stream_id_rx = active_stream_id.clone();
         tokio::spawn(async move {
             let mut len_buf = [0u8; 4];
             loop {
@@ -162,9 +177,15 @@ impl GatewayClient {
                             break;
                         }
 
-                        match deserialize_frame::<ServerFrame>(&frame_buf) {
-                            Ok(frame) => {
-                                if let Some(event) = frame_to_event(frame)
+                        match decode_server_wire_frame(&frame_buf) {
+                            Ok(envelope) => {
+                                if matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. }) {
+                                    let active = active_stream_id_rx.load(Ordering::Relaxed);
+                                    if active == envelope.stream_id {
+                                        active_stream_id_rx.store(0, Ordering::Relaxed);
+                                    }
+                                }
+                                if let Some(event) = frame_to_event(envelope.frame)
                                     && event_tx.send(event).await.is_err()
                                 {
                                     break;
@@ -268,6 +289,11 @@ impl GatewayClient {
         self.send(GatewayCommand::ToolApprove { id, approved })
             .await
     }
+}
+
+fn decode_server_wire_frame(data: &[u8]) -> std::result::Result<WireFrame<ServerFrame>, String> {
+    deserialize_wire_frame::<ServerFrame>(data)
+        .or_else(|_| deserialize_frame::<ServerFrame>(data).map(WireFrame::control))
 }
 
 /// Convert a gateway command to a client frame.

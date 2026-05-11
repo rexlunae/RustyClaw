@@ -62,7 +62,10 @@
 //! [4 bytes: frame length (big-endian u32)][N bytes: bincode frame]
 //! ```
 
-use super::protocol::{ClientFrame, ServerFrame, deserialize_frame, serialize_frame};
+use super::protocol::{
+    ClientFrame, ServerFrame, WireFrame, deserialize_frame, deserialize_wire_frame,
+    serialize_wire_frame,
+};
 use super::transport::TransportAcceptor;
 use super::transport::{PeerInfo, Transport, TransportReader, TransportType, TransportWriter};
 use anyhow::Result;
@@ -85,6 +88,19 @@ use russh::{Channel, ChannelId};
 
 /// Maximum frame size (16 MB should be plenty).
 const MAX_FRAME_SIZE: u32 = 16 * 1024 * 1024;
+
+fn decode_client_wire_frame(data: &[u8]) -> Result<WireFrame<ClientFrame>> {
+    match deserialize_wire_frame::<ClientFrame>(data) {
+        Ok(frame) => Ok(frame),
+        Err(wire_err) => deserialize_frame::<ClientFrame>(data)
+            .map(WireFrame::control)
+            .map_err(|frame_err| anyhow::anyhow!("wire decode failed: {}; legacy decode failed: {}", wire_err, frame_err)),
+    }
+}
+
+fn encode_server_wire_frame(stream_id: u64, frame: &ServerFrame) -> Result<Vec<u8>> {
+    serialize_wire_frame(&WireFrame::new(stream_id, frame.clone())).map_err(|e| anyhow::anyhow!(e))
+}
 
 /// Configuration for the SSH transport.
 #[derive(Debug, Clone)]
@@ -305,9 +321,7 @@ mod server {
             // prompted for a password, which would never succeed.
             let config = russh::server::Config {
                 keys: vec![host_key],
-                methods: russh::MethodSet::from(
-                    &[russh::MethodKind::PublicKey][..]
-                ),
+                methods: russh::MethodSet::from(&[russh::MethodKind::PublicKey][..]),
                 ..Default::default()
             };
 
@@ -489,7 +503,7 @@ mod server {
             warn!(user = user, "Password auth attempted but not supported");
             Ok(Auth::Reject {
                 proceed_with_methods: Some(russh::MethodSet::from(
-                    &[russh::MethodKind::PublicKey][..]
+                    &[russh::MethodKind::PublicKey][..],
                 )),
                 partial_success: false,
             })
@@ -650,7 +664,7 @@ mod server {
             &self.peer_info
         }
 
-        async fn recv(&mut self) -> Result<Option<ClientFrame>> {
+        async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
             let mut buffer = self.recv_buffer.lock().await;
             let mut data_rx = self.data_rx.lock().await;
 
@@ -666,9 +680,7 @@ mod server {
 
                     if buffer.len() >= 4 + len {
                         let frame_data: Vec<u8> = buffer.drain(..4 + len).skip(4).collect();
-                        return deserialize_frame(&frame_data)
-                            .map(Some)
-                            .map_err(|e| anyhow::anyhow!(e));
+                        return decode_client_wire_frame(&frame_data).map(Some);
                     }
                 }
 
@@ -680,8 +692,8 @@ mod server {
             }
         }
 
-        async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
-            let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
+        async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
+            let data = encode_server_wire_frame(stream_id, frame)?;
             let len = data.len() as u32;
 
             // Send length prefix + data
@@ -707,32 +719,58 @@ mod server {
         }
 
         fn into_split(self: Box<Self>) -> (Box<dyn TransportReader>, Box<dyn TransportWriter>) {
-            // For SSH, we can't easily split the channel, so we use Arc
-            let peer_info = self.peer_info.clone();
-            let shared = Arc::new(Mutex::new(*self));
+            let SshTransport {
+                peer_info,
+                data_rx,
+                channel_handle,
+                recv_buffer,
+            } = *self;
+
             (
                 Box::new(SshReader {
-                    inner: shared.clone(),
                     peer_info: peer_info.clone(),
+                    data_rx,
+                    recv_buffer,
                 }),
                 Box::new(SshWriter {
-                    inner: shared,
-                    _peer_info: peer_info,
+                    channel_handle,
                 }),
             )
         }
     }
 
     struct SshReader {
-        inner: Arc<Mutex<SshTransport>>,
         peer_info: PeerInfo,
+        data_rx: Mutex<mpsc::Receiver<Vec<u8>>>,
+        recv_buffer: Mutex<Vec<u8>>,
     }
 
     #[async_trait]
     impl TransportReader for SshReader {
-        async fn recv(&mut self) -> Result<Option<ClientFrame>> {
-            let mut transport = self.inner.lock().await;
-            transport.recv().await
+        async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
+            let mut buffer = self.recv_buffer.lock().await;
+            let mut data_rx = self.data_rx.lock().await;
+
+            loop {
+                if buffer.len() >= 4 {
+                    let len =
+                        u32::from_be_bytes([buffer[0], buffer[1], buffer[2], buffer[3]]) as usize;
+
+                    if len > MAX_FRAME_SIZE as usize {
+                        anyhow::bail!("Frame too large: {} bytes", len);
+                    }
+
+                    if buffer.len() >= 4 + len {
+                        let frame_data: Vec<u8> = buffer.drain(..4 + len).skip(4).collect();
+                        return decode_client_wire_frame(&frame_data).map(Some);
+                    }
+                }
+
+                match data_rx.recv().await {
+                    Some(data) => buffer.extend(data),
+                    None => return Ok(None),
+                }
+            }
         }
 
         fn peer_info(&self) -> &PeerInfo {
@@ -741,20 +779,33 @@ mod server {
     }
 
     struct SshWriter {
-        inner: Arc<Mutex<SshTransport>>,
-        _peer_info: PeerInfo,
+        channel_handle: Arc<Mutex<Option<Channel<Msg>>>>,
     }
 
     #[async_trait]
     impl TransportWriter for SshWriter {
-        async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
-            let mut transport = self.inner.lock().await;
-            transport.send(frame).await
+        async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
+            let data = encode_server_wire_frame(stream_id, frame)?;
+            let len = data.len() as u32;
+
+            let mut packet = Vec::with_capacity(4 + data.len());
+            packet.extend_from_slice(&len.to_be_bytes());
+            packet.extend_from_slice(&data);
+
+            let channel = self.channel_handle.lock().await;
+            if let Some(ch) = channel.as_ref() {
+                ch.data(&packet[..]).await?;
+            }
+
+            Ok(())
         }
 
         async fn close(&mut self) -> Result<()> {
-            let mut transport = self.inner.lock().await;
-            transport.close().await
+            let mut channel = self.channel_handle.lock().await;
+            if let Some(ch) = channel.take() {
+                ch.eof().await?;
+            }
+            Ok(())
         }
     }
 }
@@ -802,7 +853,7 @@ impl Transport for StdioTransport {
         &self.peer_info
     }
 
-    async fn recv(&mut self) -> Result<Option<ClientFrame>> {
+    async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
         loop {
             // Check if we have a complete frame in the buffer
             if self.recv_buffer.len() >= 4 {
@@ -819,9 +870,7 @@ impl Transport for StdioTransport {
 
                 if self.recv_buffer.len() >= 4 + len {
                     let frame_data: Vec<u8> = self.recv_buffer.drain(..4 + len).skip(4).collect();
-                    return deserialize_frame(&frame_data)
-                        .map(Some)
-                        .map_err(|e| anyhow::anyhow!(e));
+                    return decode_client_wire_frame(&frame_data).map(Some);
                 }
             }
 
@@ -835,8 +884,8 @@ impl Transport for StdioTransport {
         }
     }
 
-    async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
-        let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
+    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
+        let data = encode_server_wire_frame(stream_id, frame)?;
         let len = data.len() as u32;
 
         // Send length prefix + data
@@ -876,7 +925,7 @@ struct StdioReader {
 
 #[async_trait]
 impl TransportReader for StdioReader {
-    async fn recv(&mut self) -> Result<Option<ClientFrame>> {
+    async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
         loop {
             if self.recv_buffer.len() >= 4 {
                 let len = u32::from_be_bytes([
@@ -892,9 +941,7 @@ impl TransportReader for StdioReader {
 
                 if self.recv_buffer.len() >= 4 + len {
                     let frame_data: Vec<u8> = self.recv_buffer.drain(..4 + len).skip(4).collect();
-                    return deserialize_frame(&frame_data)
-                        .map(Some)
-                        .map_err(|e| anyhow::anyhow!(e));
+                    return decode_client_wire_frame(&frame_data).map(Some);
                 }
             }
 
@@ -918,8 +965,8 @@ struct StdioWriter {
 
 #[async_trait]
 impl TransportWriter for StdioWriter {
-    async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
-        let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
+    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()> {
+        let data = encode_server_wire_frame(stream_id, frame)?;
         let len = data.len() as u32;
 
         self.stdout.write_all(&len.to_be_bytes()).await?;

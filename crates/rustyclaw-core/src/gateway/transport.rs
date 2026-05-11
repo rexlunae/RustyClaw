@@ -36,7 +36,7 @@
 //!   standard SSH and frames are sent over the channel's stdin/stdout.
 //!   Supports both standalone server mode and OpenSSH subsystem mode.
 
-use super::protocol::{ClientFrame, ServerFrame};
+use super::protocol::{CONTROL_STREAM_ID, ClientFrame, ServerFrame, WireFrame};
 use anyhow::Result;
 use async_trait::async_trait;
 use std::net::SocketAddr;
@@ -93,10 +93,15 @@ pub trait Transport: Send + Sync {
     ///
     /// Returns `None` if the connection is closed cleanly.
     /// Returns `Err` on protocol errors or unexpected disconnection.
-    async fn recv(&mut self) -> Result<Option<ClientFrame>>;
+    async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>>;
 
     /// Send a frame to the client.
-    async fn send(&mut self, frame: &ServerFrame) -> Result<()>;
+    async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+        self.send_on_stream(CONTROL_STREAM_ID, frame).await
+    }
+
+    /// Send a frame to the client on a logical stream.
+    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()>;
 
     /// Close the transport gracefully.
     async fn close(&mut self) -> Result<()>;
@@ -112,7 +117,7 @@ pub trait Transport: Send + Sync {
 #[async_trait]
 pub trait TransportReader: Send + Sync {
     /// Receive the next frame from the client.
-    async fn recv(&mut self) -> Result<Option<ClientFrame>>;
+    async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>>;
 
     /// Get information about the connected peer.
     fn peer_info(&self) -> &PeerInfo;
@@ -122,10 +127,38 @@ pub trait TransportReader: Send + Sync {
 #[async_trait]
 pub trait TransportWriter: Send + Sync {
     /// Send a frame to the client.
-    async fn send(&mut self, frame: &ServerFrame) -> Result<()>;
+    async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+        self.send_on_stream(CONTROL_STREAM_ID, frame).await
+    }
+
+    /// Send a frame to the client on a logical stream.
+    async fn send_on_stream(&mut self, stream_id: u64, frame: &ServerFrame) -> Result<()>;
 
     /// Close the transport gracefully.
     async fn close(&mut self) -> Result<()>;
+}
+
+/// Writer adapter that pins all writes to one logical stream.
+pub struct ScopedTransportWriter<'a> {
+    inner: &'a mut dyn TransportWriter,
+    stream_id: u64,
+}
+
+impl<'a> ScopedTransportWriter<'a> {
+    pub fn new(inner: &'a mut dyn TransportWriter, stream_id: u64) -> Self {
+        Self { inner, stream_id }
+    }
+}
+
+#[async_trait]
+impl<'a> TransportWriter for ScopedTransportWriter<'a> {
+    async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
+        self.inner.send_on_stream(self.stream_id, frame).await
+    }
+
+    async fn close(&mut self) -> Result<()> {
+        self.inner.close().await
+    }
 }
 
 // ============================================================================

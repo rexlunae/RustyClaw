@@ -139,49 +139,52 @@ impl ProviderRegistry {
         let target_config = Arc::clone(&config);
 
         let client = ClientBuilder::default()
-            .with_service_target_resolver_fn(move |mut service_target: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
-                // The model string is formatted as "{provider_id}::{model_name}" by
-                // resolve_full_model.  Extract the provider_id from the namespace portion
-                // (the part before "::") to look up the provider config.
-                let provider_id = match service_target.model.model_name.namespace() {
-                    Some(id) => id,
-                    None => return Ok(service_target),
-                };
+            .with_service_target_resolver_fn(
+                move |mut service_target: ServiceTarget| -> genai::resolver::Result<ServiceTarget> {
+                    // The model string is formatted as "{provider_id}::{model_name}" by
+                    // resolve_full_model.  Extract the provider_id from the namespace portion
+                    // (the part before "::") to look up the provider config.
+                    let provider_id = match service_target.model.model_name.namespace() {
+                        Some(id) => id,
+                        None => return Ok(service_target),
+                    };
 
-                let provider = match target_config.providers.get(provider_id) {
-                    Some(p) => p,
-                    None => return Ok(service_target),
-                };
+                    let provider = match target_config.providers.get(provider_id) {
+                        Some(p) => p,
+                        None => return Ok(service_target),
+                    };
 
-                // Map the config `api` string to the correct genai AdapterKind and
-                // replace the auto-detected (fallback) adapter kind.
-                match api_str_to_adapter_kind(&provider.api) {
-                    Some(adapter_kind) => {
-                        service_target.model.adapter_kind = adapter_kind;
+                    // Map the config `api` string to the correct genai AdapterKind and
+                    // replace the auto-detected (fallback) adapter kind.
+                    match api_str_to_adapter_kind(&provider.api) {
+                        Some(adapter_kind) => {
+                            service_target.model.adapter_kind = adapter_kind;
+                        }
+                        None => {
+                            warn!(
+                                provider = %provider_id,
+                                api = %provider.api,
+                                "Unknown api value; falling back to genai auto-detection"
+                            );
+                        }
                     }
-                    None => {
-                        warn!(
-                            provider = %provider_id,
-                            api = %provider.api,
-                            "Unknown api value; falling back to genai auto-detection"
-                        );
+
+                    // Override the endpoint if a base URL is configured.
+                    if let Some(ref base_url) = provider.base_url {
+                        debug!(provider = %provider_id, url = %base_url, "Using custom base URL");
+                        service_target.endpoint =
+                            genai::resolver::Endpoint::from_owned(base_url.clone());
                     }
-                }
 
-                // Override the endpoint if a base URL is configured.
-                if let Some(ref base_url) = provider.base_url {
-                    debug!(provider = %provider_id, url = %base_url, "Using custom base URL");
-                    service_target.endpoint = genai::resolver::Endpoint::from_owned(base_url.clone());
-                }
+                    // Set auth from the provider config if an API key is available.
+                    if let Some(api_key) = provider.resolve_api_key() {
+                        debug!(provider = %provider_id, "Resolved API key from config");
+                        service_target.auth = AuthData::from_single(api_key);
+                    }
 
-                // Set auth from the provider config if an API key is available.
-                if let Some(api_key) = provider.resolve_api_key() {
-                    debug!(provider = %provider_id, "Resolved API key from config");
-                    service_target.auth = AuthData::from_single(api_key);
-                }
-
-                Ok(service_target)
-            })
+                    Ok(service_target)
+                },
+            )
             .build();
 
         Ok(Self { config, client })
@@ -706,7 +709,9 @@ mod tests {
         };
 
         let registry = ProviderRegistry::new(config).unwrap();
-        let result = registry.resolve_full_model("google/gemini-2.5-pro").unwrap();
+        let result = registry
+            .resolve_full_model("google/gemini-2.5-pro")
+            .unwrap();
 
         // provider_id ("google") is used as the genai namespace, separated by "::"
         assert_eq!(result, "google::gemini-2.5-pro");
@@ -760,10 +765,7 @@ mod tests {
             api_str_to_adapter_kind("openai-compatible"),
             Some(AdapterKind::OpenAI)
         );
-        assert_eq!(
-            api_str_to_adapter_kind("gemini"),
-            Some(AdapterKind::Gemini)
-        );
+        assert_eq!(api_str_to_adapter_kind("gemini"), Some(AdapterKind::Gemini));
         assert_eq!(
             api_str_to_adapter_kind("anthropic"),
             Some(AdapterKind::Anthropic)
@@ -771,7 +773,10 @@ mod tests {
         assert_eq!(api_str_to_adapter_kind("openai"), Some(AdapterKind::OpenAI));
         assert_eq!(api_str_to_adapter_kind("groq"), Some(AdapterKind::Groq));
         assert_eq!(api_str_to_adapter_kind("ollama"), Some(AdapterKind::Ollama));
-        assert_eq!(api_str_to_adapter_kind("deepseek"), Some(AdapterKind::DeepSeek));
+        assert_eq!(
+            api_str_to_adapter_kind("deepseek"),
+            Some(AdapterKind::DeepSeek)
+        );
         assert_eq!(api_str_to_adapter_kind("xai"), Some(AdapterKind::Xai));
         assert_eq!(api_str_to_adapter_kind("unknown-api"), None);
     }

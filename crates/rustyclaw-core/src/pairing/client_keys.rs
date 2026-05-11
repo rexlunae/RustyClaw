@@ -84,7 +84,6 @@ pub fn generate_client_keypair(comment: Option<String>) -> Result<ClientKeyPair>
     })
 }
 
-
 /// Load an existing client keypair from disk.
 pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
     let key_data = std::fs::read_to_string(path)
@@ -109,7 +108,6 @@ pub fn load_client_keypair(path: &Path) -> Result<ClientKeyPair> {
         comment,
     })
 }
-
 
 /// Save a client keypair to disk.
 ///
@@ -144,7 +142,6 @@ pub fn save_client_keypair(keypair: &ClientKeyPair, path: &Path) -> Result<()> {
     Ok(())
 }
 
-
 /// Load or generate a client keypair.
 ///
 /// If the keypair exists at `path`, loads it. Otherwise, generates a new
@@ -171,5 +168,4 @@ mod tests {
         let path = default_client_key_path();
         assert!(path.to_string_lossy().contains("client_ed25519_key"));
     }
-
 }

@@ -185,11 +185,7 @@ async fn main() -> Result<()> {
         None => RunArgs::default(),
     };
 
-    // SSH stdio mode runs without any TCP listeners — just stdin/stdout
-    if args.ssh_stdio {
-        println!("{}", t::icon_ok("Running in SSH subsystem mode (stdio)"));
-        return run_ssh_stdio_mode(config, args).await;
-    }
+    let protocol_stdio = args.ssh_stdio;
 
     let host = match args.bind {
         GatewayBind::Loopback => "127.0.0.1",
@@ -207,23 +203,26 @@ async fn main() -> Result<()> {
     let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
 
     // Determine the actual SSH listen address (CLI arg > config > default)
-    let ssh_addr = args.ssh_listen.clone().or_else(|| {
-        config.ssh.as_ref().and_then(|s| {
-            if s.enabled && s.mode == "standalone" {
-                Some(s.bind.clone())
-            } else {
-                None
-            }
+    let ssh_addr = args
+        .ssh_listen
+        .clone()
+        .or_else(|| {
+            config.ssh.as_ref().and_then(|s| {
+                if s.enabled && s.mode == "standalone" {
+                    Some(s.bind.clone())
+                } else {
+                    None
+                }
+            })
         })
-    }).unwrap_or_else(|| "0.0.0.0:2222".to_string());
+        .unwrap_or_else(|| "0.0.0.0:2222".to_string());
 
-    println!(
-        "{}",
-        t::icon_ok(&format!(
-            "Gateway listening on SSH {}",
-            t::info(&ssh_addr)
-        ))
-    );
+    if !protocol_stdio {
+        println!(
+            "{}",
+            t::icon_ok(&format!("Gateway listening on SSH {}", t::info(&ssh_addr)))
+        );
+    }
     // Keep the ws:// listen var for run_gateway options but don't surface it.
     let _ = scheme;
 
@@ -252,7 +251,9 @@ async fn main() -> Result<()> {
 
         if config.secrets_password_protected {
             if let Some(pw) = env_password {
-                println!("  {} Vault password provided by launcher", t::icon_ok(""));
+                if !protocol_stdio {
+                    println!("  {} Vault password provided by launcher", t::icon_ok(""));
+                }
                 SecretsManager::with_password(&creds_dir, pw)
             } else if std::io::stdin().is_terminal() {
                 // Interactive foreground mode — prompt for password.
@@ -262,10 +263,12 @@ async fn main() -> Result<()> {
                 SecretsManager::with_password(&creds_dir, password)
             } else {
                 // Daemon mode with no password — start locked.
-                println!(
-                    "  {} Vault locked (no password provided — clients can unlock via WebSocket)",
-                    t::muted("🔒")
-                );
+                if !protocol_stdio {
+                    println!(
+                        "  {} Vault locked (no password provided — clients can unlock via SSH)",
+                        t::muted("🔒")
+                    );
+                }
                 SecretsManager::locked(&creds_dir)
             }
         } else {
@@ -301,14 +304,16 @@ async fn main() -> Result<()> {
             };
             match ModelContext::from_config(&config, api_key) {
                 Ok(ctx) => {
-                    println!(
-                        "{} {} via {} ({})",
-                        t::icon_ok("Model:"),
-                        t::info(&ctx.model),
-                        t::info(&ctx.provider),
-                        t::muted(&ctx.base_url),
-                    );
-                    if ctx.api_key.is_some() {
+                    if !protocol_stdio {
+                        println!(
+                            "{} {} via {} ({})",
+                            t::icon_ok("Model:"),
+                            t::info(&ctx.model),
+                            t::info(&ctx.provider),
+                            t::muted(&ctx.base_url),
+                        );
+                    }
+                    if ctx.api_key.is_some() && !protocol_stdio {
                         println!("  {} API key provided by launcher", t::icon_ok(""));
                     }
                     Some(ctx)
@@ -323,14 +328,16 @@ async fn main() -> Result<()> {
             let mut v = shared_vault.lock().await;
             match ModelContext::resolve(&config, &mut v) {
                 Ok(ctx) => {
-                    println!(
-                        "{} {} via {} ({})",
-                        t::icon_ok("Model:"),
-                        t::info(&ctx.model),
-                        t::info(&ctx.provider),
-                        t::muted(&ctx.base_url),
-                    );
-                    if ctx.api_key.is_some() {
+                    if !protocol_stdio {
+                        println!(
+                            "{} {} via {} ({})",
+                            t::icon_ok("Model:"),
+                            t::info(&ctx.model),
+                            t::info(&ctx.provider),
+                            t::muted(&ctx.base_url),
+                        );
+                    }
+                    if ctx.api_key.is_some() && !protocol_stdio {
                         println!("  {} API key loaded from vault", t::icon_ok(""));
                     }
                     Some(ctx)
@@ -415,95 +422,6 @@ async fn main() -> Result<()> {
     daemon::remove_pid(&settings_dir);
 
     result
-}
-
-/// Run the gateway in SSH subsystem (stdio) mode.
-///
-/// This mode is used when the gateway is invoked via OpenSSH's subsystem
-/// mechanism. Instead of listening on TCP, we read/write frames on stdin/stdout.
-async fn run_ssh_stdio_mode(config: Config, _args: RunArgs) -> Result<()> {
-    use rustyclaw_core::gateway::{StdioTransport, Transport};
-
-    // Get username from SSH environment
-    let username = std::env::var("USER")
-        .or_else(|_| std::env::var("SSH_USER"))
-        .ok();
-
-    // Create the stdio transport
-    let mut transport = StdioTransport::new(username);
-
-    // ── Open the secrets vault ───────────────────────────────────────────
-    let vault = {
-        let creds_dir = config.credentials_dir();
-        let env_password = std::env::var("RUSTYCLAW_VAULT_PASSWORD").ok();
-        if env_password.is_some() {
-            // SAFETY: single-threaded at this point.
-            unsafe {
-                std::env::remove_var("RUSTYCLAW_VAULT_PASSWORD");
-            }
-        }
-
-        if config.secrets_password_protected {
-            if let Some(pw) = env_password {
-                SecretsManager::with_password(&creds_dir, pw)
-            } else {
-                // In stdio mode, we can't prompt for password
-                SecretsManager::locked(&creds_dir)
-            }
-        } else {
-            SecretsManager::new(&creds_dir)
-        }
-    };
-
-    let shared_vault: rustyclaw_core::gateway::SharedVault =
-        std::sync::Arc::new(tokio::sync::Mutex::new(vault));
-
-    // ── Resolve model context ────────────────────────────────────────────
-    let _model_ctx = {
-        let env_key = std::env::var("RUSTYCLAW_MODEL_API_KEY").ok();
-
-        if let Some(ref key) = env_key {
-            unsafe {
-                std::env::remove_var("RUSTYCLAW_MODEL_API_KEY");
-            }
-
-            let api_key = if key.is_empty() {
-                None
-            } else {
-                Some(key.clone())
-            };
-            ModelContext::from_config(&config, api_key).ok()
-        } else {
-            let mut v = shared_vault.lock().await;
-            ModelContext::resolve(&config, &mut v).ok()
-        }
-    };
-
-    // Load skills
-    let skills_dir = config.skills_dir();
-    let mut sm = rustyclaw_core::skills::SkillManager::new(skills_dir);
-    let _ = sm.load_skills();
-    if let Some(url) = config.clawhub_url.as_deref() {
-        sm.set_registry(url, config.clawhub_token.clone());
-    }
-    let _shared_skills: rustyclaw_core::gateway::SharedSkillManager =
-        std::sync::Arc::new(tokio::sync::Mutex::new(sm));
-
-    // Set up cancellation
-    let cancel = CancellationToken::new();
-    let cancel_for_signal = cancel.clone();
-    tokio::spawn(async move {
-        let _ = tokio::signal::ctrl_c().await;
-        cancel_for_signal.cancel();
-    });
-
-    // TODO: Run the actual connection handler with the stdio transport
-    // For now, this is a stub that just logs and exits
-    eprintln!("SSH stdio mode not yet fully implemented");
-    eprintln!("Transport peer info: {:?}", transport.peer_info());
-
-    transport.close().await?;
-    Ok(())
 }
 
 /// Handle pairing subcommands.

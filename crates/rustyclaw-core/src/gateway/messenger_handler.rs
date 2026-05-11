@@ -717,7 +717,7 @@ async fn process_incoming_message(
         } else if resolved.provider == "google" {
             providers::call_google_with_tools(http, &resolved).await
         } else {
-            providers::call_openai_with_tools(http, &resolved).await
+            providers::call_openai_with_tools(http, &resolved, None).await
         };
 
         let model_resp = match result {

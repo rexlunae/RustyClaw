@@ -1,5 +1,5 @@
+use anyhow_tracing::{Result, anyhow};
 use tracing::{debug, instrument, warn};
-use anyhow_tracing::{anyhow, Result};
 
 use super::SharedSkillManager;
 

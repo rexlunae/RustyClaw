@@ -142,7 +142,8 @@ pub async fn wait_for_auth_response(reader: &mut dyn TransportReader) -> Result<
     debug!("Waiting for auth_response frame");
     loop {
         match reader.recv().await {
-            Ok(Some(frame)) => {
+            Ok(Some(envelope)) => {
+                let frame = envelope.frame;
                 if frame.frame_type == ClientFrameType::AuthResponse {
                     if let ClientPayload::AuthResponse { code } = frame.payload {
                         debug!("Received valid auth_response");

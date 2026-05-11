@@ -89,7 +89,7 @@ impl ChannelSink {
 
 #[async_trait]
 impl TransportWriter for ChannelSink {
-    async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+    async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
         let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
         self.tx
             .send(ModelTaskMessage::Frame(data))

@@ -2,7 +2,6 @@
 
 use dioxus::prelude::*;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
 use crate::components::{
     Chat, HatchingDialog, HatchingResult, PairingDialog, SettingsDialog, Sidebar, SwarmAgentInfo,
@@ -21,9 +20,10 @@ pub fn App() -> Element {
     let mut state = use_signal(AppState::default);
 
     // Gateway client (set when connected)
-    let gateway: Signal<Option<Arc<Mutex<GatewayClient>>>> = use_signal(|| None);
+    let gateway: Signal<Option<Arc<GatewayClient>>> = use_signal(|| None);
     let mut did_auto_connect = use_signal(|| false);
-    let mut active_event_client: Signal<Option<Arc<Mutex<GatewayClient>>>> = use_signal(|| None);
+    let mut active_event_client: Signal<Option<Arc<GatewayClient>>> = use_signal(|| None);
+    let mut auth_code = use_signal(String::new);
 
     // Dialog visibility
     let mut show_pairing = use_signal(|| false);
@@ -64,12 +64,10 @@ pub fn App() -> Element {
 
             spawn(async move {
                 loop {
-                    let client_guard = client.lock().await;
-                    if !client_guard.is_connected() {
+                    if !client.is_connected() {
                         break;
                     }
-                    if let Some(event) = client_guard.recv().await {
-                        drop(client_guard);
+                    if let Some(event) = client.recv().await {
                         handle_gateway_event(event, state);
                     } else {
                         break;
@@ -91,8 +89,7 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let client_guard = client.lock().await;
-                if let Err(e) = client_guard.chat(message).await {
+                if let Err(e) = client.chat(message).await {
                     tracing::error!("Failed to send message: {}", e);
                 }
             });
@@ -103,8 +100,7 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let client_guard = client.lock().await;
-                let _ = client_guard
+                let _ = client
                     .send(GatewayCommand::ThreadCreate { label: None })
                     .await;
             });
@@ -115,13 +111,24 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let client_guard = client.lock().await;
-                let _ = client_guard
+                let _ = client
                     .send(GatewayCommand::ThreadSwitch { thread_id })
                     .await;
             });
         }
         state.write().clear_messages();
+    };
+
+    let on_cancel = move |_| {
+        state.write().status_message = Some("Cancellation requested…".to_string());
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                if let Err(e) = client.send(GatewayCommand::Cancel).await {
+                    tracing::error!("Failed to send cancel: {}", e);
+                }
+            });
+        }
     };
 
     // Closure used by every "reconnect" entry-point. It only captures `Copy`
@@ -190,7 +197,43 @@ pub fn App() -> Element {
                             }
                         }
                     }
-                } else if matches!(state.read().connection.clone(), ConnectionStatus::Connecting | ConnectionStatus::Authenticating) {
+                } else if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
+                    div { class: "banner is-info",
+                        span { class: "banner-text",
+                            "🔐 Enter your gateway TOTP code to finish pairing."
+                        }
+                        div { class: "banner-actions",
+                            input {
+                                class: "input input-sm",
+                                r#type: "text",
+                                placeholder: "TOTP code",
+                                value: "{auth_code}",
+                                oninput: move |evt| auth_code.set(evt.value()),
+                            }
+                            button {
+                                class: "btn btn-primary btn-sm",
+                                onclick: move |_| {
+                                    let code = auth_code.read().trim().to_string();
+                                    if code.is_empty() {
+                                        state.write().status_message = Some("Enter the TOTP code shown by your authenticator.".to_string());
+                                        return;
+                                    }
+
+                                    let gw = gateway.read().clone();
+                                    if let Some(client) = gw {
+                                        auth_code.set(String::new());
+                                        spawn(async move {
+                                            if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
+                                                tracing::error!("Failed to send auth code: {}", e);
+                                            }
+                                        });
+                                    }
+                                },
+                                "Verify"
+                            }
+                        }
+                    }
+                } else if matches!(state.read().connection.clone(), ConnectionStatus::Connecting) {
                     div { class: "banner is-info",
                         span { class: "banner-text",
                             "🔄 Connecting to gateway…"
@@ -218,6 +261,7 @@ pub fn App() -> Element {
                     is_thinking: state.read().is_thinking,
                     agent_name: state.read().agent_name.clone(),
                     on_submit: on_submit,
+                    on_cancel: on_cancel,
                     on_input_change: move |value| state.write().input = value,
                 }
             }
@@ -360,13 +404,13 @@ fn TopBar(props: TopBarProps) -> Element {
 async fn connect_to_gateway(
     url: &str,
     mut state: Signal<AppState>,
-    mut gateway: Signal<Option<Arc<Mutex<GatewayClient>>>>,
+    mut gateway: Signal<Option<Arc<GatewayClient>>>,
 ) {
     state.write().connection = ConnectionStatus::Connecting;
 
     match GatewayClient::connect(url).await {
         Ok(client) => {
-            gateway.set(Some(Arc::new(Mutex::new(client))));
+            gateway.set(Some(Arc::new(client)));
             state.write().connection = ConnectionStatus::Connected;
         }
         Err(e) => {

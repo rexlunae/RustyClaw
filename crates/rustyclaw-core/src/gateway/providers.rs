@@ -409,7 +409,7 @@ pub async fn compact_conversation(
     } else if resolved.provider == "google" {
         call_google_with_tools(http, &summary_req).await
     } else {
-        call_openai_with_tools(http, &summary_req).await
+        call_openai_with_tools(http, &summary_req, None).await
     };
 
     let summary = match summary_result {
@@ -826,7 +826,10 @@ fn consume_sse_text(text: &str) -> Result<serde_json::Value> {
 ///
 /// This handles the case where a provider returns a streaming response
 /// even though we didn't request `"stream": true`.
-async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value> {
+async fn consume_sse_stream(
+    resp: reqwest::Response,
+    mut writer: Option<&mut dyn TransportWriter>,
+) -> Result<serde_json::Value> {
     use futures_util::StreamExt;
     use std::time::Duration;
     use tokio::time::timeout;
@@ -840,6 +843,10 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
     let mut finish_reason: Option<String> = None;
     let mut usage: Option<serde_json::Value> = None;
     let mut model = String::new();
+
+    if let Some(w) = writer.as_deref_mut() {
+        server::send_stream_start(w).await?;
+    }
 
     // Timeout for waiting on next chunk — if exceeded, assume stream is done
     let chunk_timeout = Duration::from_secs(30);
@@ -905,6 +912,9 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
                                     // Text content
                                     if let Some(c) = delta.get("content").and_then(|v| v.as_str()) {
                                         content.push_str(c);
+                                        if let Some(w) = writer.as_deref_mut() {
+                                            send_chunk(w, c).await?;
+                                        }
                                     }
 
                                     // Tool calls (streamed incrementally)
@@ -1049,6 +1059,7 @@ async fn consume_sse_stream(resp: reqwest::Response) -> Result<serde_json::Value
 pub async fn call_openai_with_tools(
     http: &reqwest::Client,
     req: &ProviderRequest,
+    mut writer: Option<&mut dyn TransportWriter>,
 ) -> Result<ModelResponse> {
     let url = format!("{}/chat/completions", req.base_url.trim_end_matches('/'));
 
@@ -1100,16 +1111,16 @@ pub async fn call_openai_with_tools(
     // Check if the server returned a streaming response (SSE) despite us
     // not requesting one.  Some providers (e.g. GitHub Copilot) may force
     // streaming.  If so, consume the SSE stream and reassemble the response.
-    let content_type = resp
+    let is_sse_response = resp
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
+        .is_some_and(|content_type| content_type.contains("text/event-stream"));
 
     // Detect SSE by content-type (may include charset, e.g., "text/event-stream; charset=utf-8")
-    let data: serde_json::Value = if content_type.contains("text/event-stream") {
+    let data: serde_json::Value = if is_sse_response {
         // Server is streaming — parse SSE events.
-        consume_sse_stream(resp).await?
+        consume_sse_stream(resp, writer.take()).await?
     } else {
         // Normal JSON response — but check if it actually looks like SSE
         let text = resp.text().await.context("Failed to read response body")?;
@@ -1137,6 +1148,14 @@ pub async fn call_openai_with_tools(
         if !text.trim().is_empty() {
             result.text = text.to_string();
         }
+    }
+
+    if let Some(w) = writer.as_deref_mut()
+        && !result.text.is_empty()
+        && !is_sse_response
+    {
+        server::send_stream_start(w).await?;
+        send_chunk(w, &result.text).await?;
     }
 
     // Extract tool calls (skip incomplete ones with empty id or name).

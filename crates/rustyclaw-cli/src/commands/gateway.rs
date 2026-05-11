@@ -12,11 +12,7 @@ use rustyclaw_core::theme as t;
 use tokio_util::sync::CancellationToken;
 
 /// Handle `gateway start` command.
-pub fn handle_start(
-    config: &Config,
-    vault_password: Option<&str>,
-    ssh_listen: &str,
-) -> Result<()> {
+pub fn handle_start(config: &Config, vault_password: Option<&str>, ssh_listen: &str) -> Result<()> {
     let sp = t::spinner("Starting gateway…");
 
     match daemon::start(
@@ -31,11 +27,7 @@ pub fn handle_start(
         Ok(pid) => {
             t::spinner_ok(
                 &sp,
-                &format!(
-                    "Gateway started (PID {}, SSH {})",
-                    pid,
-                    t::info(ssh_listen),
-                ),
+                &format!("Gateway started (PID {}, SSH {})", pid, t::info(ssh_listen),),
             );
             println!(
                 "  {}",

@@ -162,6 +162,42 @@ pub enum StatusType {
 // Binary Frame Types
 // ============================================================================
 
+/// Protocol version for multiplexed SSH/stdin wire envelopes.
+pub const WIRE_PROTOCOL_VERSION: u16 = 1;
+
+/// Stream ID used for connection-level control frames.
+pub const CONTROL_STREAM_ID: u64 = 0;
+
+/// A multiplexed wire envelope around an application frame.
+///
+/// The outer SSH/stdin transport still uses a length prefix. The payload inside
+/// that length prefix is this bincode-serialized envelope, which gives each
+/// logical request/response flow an independent stream ID.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WireFrame<T> {
+    pub version: u16,
+    pub stream_id: u64,
+    pub sequence: u64,
+    pub flags: u16,
+    pub frame: T,
+}
+
+impl<T> WireFrame<T> {
+    pub fn new(stream_id: u64, frame: T) -> Self {
+        Self {
+            version: WIRE_PROTOCOL_VERSION,
+            stream_id,
+            sequence: 0,
+            flags: 0,
+            frame,
+        }
+    }
+
+    pub fn control(frame: T) -> Self {
+        Self::new(CONTROL_STREAM_ID, frame)
+    }
+}
+
 /// Generic client frame envelope.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientFrame {
@@ -458,6 +494,18 @@ pub fn deserialize_frame<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result
     let (result, _) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
         .map_err(|e| e.to_string())?;
     Ok(result)
+}
+
+/// Serialize a multiplexed wire frame.
+pub fn serialize_wire_frame<T: serde::Serialize>(frame: &WireFrame<T>) -> Result<Vec<u8>, String> {
+    serialize_frame(frame)
+}
+
+/// Deserialize a multiplexed wire frame.
+pub fn deserialize_wire_frame<T: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<WireFrame<T>, String> {
+    deserialize_frame(bytes)
 }
 
 #[cfg(test)]
@@ -838,6 +886,29 @@ mod tests {
                 }
                 _ => panic!("Expected ToolCall payload"),
             }
+        }
+
+        #[test]
+        fn test_wire_frame_round_trip_preserves_stream_id() {
+            let frame = ClientFrame {
+                frame_type: ClientFrameType::Chat,
+                payload: ClientPayload::Chat {
+                    messages: vec![crate::gateway::protocol::types::ChatMessage::text(
+                        "user", "hello",
+                    )],
+                },
+            };
+            let wire = WireFrame::new(7, frame);
+
+            let bytes = serialize_wire_frame(&wire).expect("serialize should succeed");
+            let decoded: WireFrame<ClientFrame> =
+                deserialize_wire_frame(&bytes).expect("deserialize should succeed");
+
+            assert_eq!(decoded.version, WIRE_PROTOCOL_VERSION);
+            assert_eq!(decoded.stream_id, 7);
+            assert_eq!(decoded.sequence, 0);
+            assert_eq!(decoded.flags, 0);
+            assert_eq!(decoded.frame.frame_type, ClientFrameType::Chat);
         }
     }
 }

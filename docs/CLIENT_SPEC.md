@@ -10,7 +10,7 @@ the AI agent experience to a user. The reference client is `rustyclaw-tui`
 
 ## 1. Architecture Overview
 
-```
+```text
 ┌──────────────────────────────────────────────────────────────┐
 │                      rustyclaw-core                          │
 │  config · gateway protocol · secrets · skills · providers    │
@@ -36,8 +36,9 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.1 Gateway Connection
 
 | Requirement | Description |
-|---|---|
-| **WebSocket connect** | Connect to the gateway at a configured `ws://` or `wss://` URL using the binary frame protocol defined in `rustyclaw-core::gateway`. |
+| --- | --- |
+| **SSH connect** | Connect to the gateway at a configured `ssh://` URL using the binary frame protocol defined in `rustyclaw-core::gateway`. |
+| **Wire framing** | Send and receive length-prefixed bincode `WireFrame<T>` envelopes. Stream `0` is reserved for connection-level control; chat requests SHOULD use nonzero client-allocated stream IDs. |
 | **Hello handshake** | Receive and process the `Hello` server frame (provider, model, version, capabilities). |
 | **Auth challenge** | Handle `AuthChallenge` frames — prompt the user for a TOTP code and send `AuthResponse`. |
 | **Auth result** | Process `AuthResult` (ok/fail/retry). Display errors. Allow retry on failure. |
@@ -48,7 +49,7 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.2 Chat / Conversation
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **Send messages** | Accept user text input and send `Chat` client frames to the gateway. |
 | **Receive responses** | Process `Delta` (streaming token), `Done`, and `Error` server frames. |
 | **Streaming display** | Display assistant responses incrementally as `Delta` frames arrive. |
@@ -60,7 +61,7 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.3 Tool Approval
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **Tool call display** | Show tool invocations (name, arguments) before execution. |
 | **Approval prompt** | When the gateway sends `ToolApproval`, present approve/deny/always-approve UI. |
 | **Approval response** | Send `ToolApprovalResponse` with the user's decision. |
@@ -70,7 +71,7 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.4 Secrets Management
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **List secrets** | Display stored secret names (never values) via `/secrets list`. |
 | **Store secret** | Prompt for name + value and send `SecretStore` to the gateway. |
 | **Delete secret** | Support `/secrets delete <name>`. |
@@ -80,7 +81,7 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.5 Model & Provider Selection
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **Show current model** | Display the active provider + model from the `Hello` frame. |
 | **Switch model** | Support `/model` command to change the active model. |
 | **Provider selection** | List available providers and allow switching. |
@@ -90,7 +91,7 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.6 Sessions
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **List sessions** | Show saved conversation sessions via `/sessions list`. |
 | **Resume session** | Resume a previous session by key via `/sessions resume <key>`. |
 | **Save session** | Save the current conversation via `/sessions save`. |
@@ -99,7 +100,7 @@ A feature-complete client MUST implement the following capabilities.
 ### 2.7 Skills
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **List skills** | Show installed skills with enabled/disabled status. |
 | **Skill info** | Display skill details (name, description, tools, required secrets). |
 | **Enable/disable** | Toggle skills on/off. |
@@ -109,7 +110,7 @@ A feature-complete client MUST implement the following capabilities.
 The client MUST handle these slash commands (delegating to `rustyclaw-core::commands`):
 
 | Command | Description |
-|---|---|
+| --- | --- |
 | `/help` | Show available commands |
 | `/clear` | Clear conversation history |
 | `/status` | Show system status |
@@ -126,7 +127,7 @@ The client MUST handle these slash commands (delegating to `rustyclaw-core::comm
 ### 2.9 Configuration
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **Load config** | Load from `~/.rustyclaw/config.toml` (or `--config` override). |
 | **Settings dir** | Respect `--settings-dir` override. |
 | **No-color mode** | Support `--no-color` / `NO_COLOR` env var. |
@@ -135,7 +136,7 @@ The client MUST handle these slash commands (delegating to `rustyclaw-core::comm
 ### 2.10 Onboarding (Optional but Recommended)
 
 | Requirement | Description |
-|---|---|
+| --- | --- |
 | **First-run wizard** | Detect missing config and guide the user through setup. |
 | **Provider selection** | Let the user choose a model provider. |
 | **API key entry** | Securely accept and store API keys. |
@@ -154,7 +155,9 @@ redefine protocol or domain types.
 
 - `ClientFrame`, `ClientFrameType`, `ClientPayload` — outgoing frames
 - `ServerFrame`, `ServerFrameType`, `ServerPayload` — incoming frames
+- `WireFrame<T>` — multiplexing envelope containing protocol version, stream ID, sequence, flags, and the application frame
 - `serialize_frame()`, `deserialize_frame()` — binary codec
+- `serialize_wire_frame()`, `deserialize_wire_frame()` — binary codec for multiplexed SSH/stdin payloads
 - `ChatMessage` — conversation entry (role + content)
 - `ModelContext` — resolved model configuration
 

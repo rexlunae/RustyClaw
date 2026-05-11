@@ -856,8 +856,8 @@ async fn fetch_google_models_detailed(
             // (which lives in the query string for Gemini) into both
             // `tracing::warn!(error = %err)` output and the TUI details
             // dialog. We re-attach the redacted `public_url` via context.
-            let err = wrap_err(e.without_url())
-                .context(format!("GET {} failed to send", public_url));
+            let err =
+                wrap_err(e.without_url()).context(format!("GET {} failed to send", public_url));
             return Err(details.emit_warning(err));
         }
     };

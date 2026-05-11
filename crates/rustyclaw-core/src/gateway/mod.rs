@@ -40,7 +40,8 @@ pub mod ssh;
 // Re-export protocol types
 pub use protocol::{
     ClientFrame, ClientFrameType, ClientPayload, SecretEntryDto, ServerFrame, ServerFrameType,
-    ServerPayload, StatusType, deserialize_frame, serialize_frame,
+    ServerPayload, StatusType, WireFrame, deserialize_frame, deserialize_wire_frame,
+    serialize_frame, serialize_wire_frame,
 };
 
 // Re-export public types (includes protocol types via types module)
@@ -54,7 +55,8 @@ pub use messenger_handler::{SharedMessengerManager, create_messenger_manager, ru
 
 // Re-export transport types
 pub use transport::{
-    PeerInfo, Transport, TransportAcceptor, TransportReader, TransportType, TransportWriter,
+    PeerInfo, ScopedTransportWriter, Transport, TransportAcceptor, TransportReader,
+    TransportType, TransportWriter,
 };
 
 // Re-export SSH types
@@ -324,6 +326,28 @@ pub async fn run_gateway(
     let shared_config: SharedConfig = Arc::new(RwLock::new(config.clone()));
     let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
     let rate_limiter = auth::new_rate_limiter();
+
+    if options.ssh_stdio {
+        let username = std::env::var("USER")
+            .or_else(|_| std::env::var("SSH_USER"))
+            .ok();
+        let transport = Box::new(StdioTransport::new(username));
+
+        info!("Gateway running in SSH stdio mode");
+        return handle_transport_connection(
+            transport,
+            shared_config,
+            shared_model_ctx,
+            shared_copilot_session,
+            vault,
+            skill_mgr,
+            task_mgr,
+            observer,
+            rate_limiter,
+            cancel,
+        )
+        .await;
+    }
 
     // ── Initialize and start messenger loop ─────────────────────────
     //
@@ -972,7 +996,7 @@ async fn handle_connection(
     // even while dispatch_text_message is running. Messages are forwarded
     // through a channel; cancel requests set a shared flag.
     let tool_cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
-    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<ClientFrame>(32);
+    let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<WireFrame<ClientFrame>>(32);
 
     // Channel for tool-approval responses (used by the Ask permission flow).
     let (approval_tx, approval_rx) = tokio::sync::mpsc::channel::<(String, bool)>(4);
@@ -1000,8 +1024,10 @@ async fn handle_connection(
                 _ = reader_cancel.cancelled() => break,
                 result = reader.recv() => {
                     match result {
-                        Ok(Some(frame)) => {
-                            trace!(frame_type = ?frame.frame_type, "Received client frame");
+                        Ok(Some(envelope)) => {
+                            let stream_id = envelope.stream_id;
+                            let frame = envelope.frame.clone();
+                            trace!(stream_id, frame_type = ?frame.frame_type, "Received client frame");
                             // Intercept cancel, approval, and prompt responses
                             if frame.frame_type == ClientFrameType::Cancel {
                                 reader_tool_cancel.store(true, Ordering::Relaxed);
@@ -1020,7 +1046,7 @@ async fn handle_connection(
                                 }
                             }
                             // Forward all other frames to the main loop
-                            if frame_tx.send(frame).await.is_err() {
+                            if frame_tx.send(envelope).await.is_err() {
                                 break;
                             }
                         }
@@ -1043,12 +1069,14 @@ async fn handle_connection(
                 break;
             }
             msg = frame_rx.recv() => {
-                let frame = match msg {
+                let envelope = match msg {
                     Some(f) => f,
                     None => break, // Channel closed (reader exited)
                 };
+                let stream_id = envelope.stream_id;
+                let frame = envelope.frame;
 
-                trace!(frame_type = ?frame.frame_type, "Handling client frame");
+                trace!(stream_id, frame_type = ?frame.frame_type, "Handling client frame");
                 // Reset cancel flag for new request
                 tool_cancel.store(false, Ordering::Relaxed);
 
@@ -1351,12 +1379,13 @@ async fn handle_connection(
                                     api_key: None,
                                 };
 
+                                let mut stream_writer = ScopedTransportWriter::new(&mut *writer, stream_id);
                                 if let Err(err) = dispatch_text_message(
                                     &http,
                                     &chat_request,
                                     current_model_ctx.as_deref(),
                                     copilot_session.as_deref(),
-                                    &mut *writer,
+                                    &mut stream_writer,
                                     &workspace_dir,
                                     &vault,
                                     &skill_mgr,
@@ -1377,7 +1406,7 @@ async fn handle_connection(
                                             message: err.to_string(),
                                         },
                                     };
-                                    send_frame(&mut *writer, &error_frame).await?;
+                                    send_frame(&mut stream_writer, &error_frame).await?;
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {
@@ -1480,7 +1509,7 @@ async fn handle_connection(
                                                     } else if ctx.provider == "google" {
                                                         providers::call_google_with_tools(&http, &summary_req).await
                                                     } else {
-                                                        providers::call_openai_with_tools(&http, &summary_req).await
+                                                        providers::call_openai_with_tools(&http, &summary_req, None).await
                                                     };
 
                                                     match summary_result {
@@ -2052,7 +2081,7 @@ async fn dispatch_text_message(
             .await
         } else {
             await_model_with_cancel(
-                providers::call_openai_with_tools(http, &resolved),
+                providers::call_openai_with_tools(http, &resolved, Some(writer)),
                 tool_cancel,
                 model_timeout,
             )
@@ -2100,7 +2129,10 @@ async fn dispatch_text_message(
             tool_calls = model_resp.tool_calls.len(),
             "Model response received"
         );
-        if !model_resp.text.is_empty() && resolved.provider != "anthropic" {
+        if !model_resp.text.is_empty()
+            && resolved.provider != "anthropic"
+            && resolved.provider == "google"
+        {
             trace!(chars = model_resp.text.len(), "Sending chunk to TUI");
             providers::send_chunk(writer, &model_resp.text).await?;
         }
@@ -2481,11 +2513,17 @@ mod tests {
             &self.peer
         }
 
-        async fn recv(&mut self) -> Result<Option<ClientFrame>> {
-            Ok(self.incoming.lock().await.pop_front().unwrap_or(None))
+        async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
+            Ok(self
+                .incoming
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(None)
+                .map(WireFrame::control))
         }
 
-        async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+        async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
             self.outgoing.lock().await.push(frame.clone());
             Ok(())
         }
@@ -2509,8 +2547,14 @@ mod tests {
 
     #[async_trait]
     impl TransportReader for MockReader {
-        async fn recv(&mut self) -> Result<Option<ClientFrame>> {
-            Ok(self.incoming.lock().await.pop_front().unwrap_or(None))
+        async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
+            Ok(self
+                .incoming
+                .lock()
+                .await
+                .pop_front()
+                .unwrap_or(None)
+                .map(WireFrame::control))
         }
 
         fn peer_info(&self) -> &PeerInfo {
@@ -2520,7 +2564,7 @@ mod tests {
 
     #[async_trait]
     impl TransportWriter for MockWriter {
-        async fn send(&mut self, frame: &ServerFrame) -> Result<()> {
+        async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
             self.outgoing.lock().await.push(frame.clone());
             Ok(())
         }
