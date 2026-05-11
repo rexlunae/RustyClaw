@@ -122,6 +122,13 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         hooks.use_state(|| None);
     let mut user_prompt_selected = hooks.use_state(|| 0usize);
 
+    // ── Credential request dialog state ───────────────────────────────
+    let mut show_credential_request = hooks.use_state(|| false);
+    let mut credential_request_id = hooks.use_state(String::new);
+    let mut credential_request_provider = hooks.use_state(String::new);
+    let mut credential_request_message = hooks.use_state(String::new);
+    let mut credential_request_input = hooks.use_state(String::new);
+
     // ── Provider / model selection dialog state ─────────────────────
     let mut show_provider_selector = hooks.use_state(|| false);
     let mut provider_selector_items: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -496,6 +503,19 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                             m.push(DisplayMessage::info(desc.clone()));
                                         }
                                     }
+                                    messages.set(m);
+                                }
+                                GwEvent::CredentialRequest { id, provider, secret_name: _, message } => {
+                                    credential_request_id.set(id);
+                                    credential_request_provider.set(provider.clone());
+                                    credential_request_message.set(message.clone());
+                                    credential_request_input.set(String::new());
+                                    show_credential_request.set(true);
+                                    let mut m = messages.read().clone();
+                                    m.push(DisplayMessage::warning(format!(
+                                        "🔑 Credential required for {} — enter API key",
+                                        provider,
+                                    )));
                                     messages.set(m);
                                 }
                                 GwEvent::VaultLocked => {
@@ -1359,6 +1379,68 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                     return;
                 }
 
+                // ── Credential request dialog ────────────────────
+                if show_credential_request.get() {
+                    match code {
+                        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
+                            should_quit.set(true);
+                            if let Ok(guard) = tx_for_keys.lock() {
+                                if let Some(ref tx) = *guard {
+                                    let _ = tx.send(UserInput::Quit);
+                                }
+                            }
+                        }
+                        KeyCode::Esc => {
+                            let id = credential_request_id.read().clone();
+                            show_credential_request.set(false);
+                            credential_request_input.set(String::new());
+                            let mut m = messages.read().clone();
+                            m.push(DisplayMessage::info("Credential request dismissed."));
+                            messages.set(m);
+                            if let Ok(guard) = tx_for_keys.lock() {
+                                if let Some(ref tx) = *guard {
+                                    let _ = tx.send(UserInput::CredentialResponse {
+                                        id,
+                                        dismissed: true,
+                                        value: None,
+                                    });
+                                }
+                            }
+                        }
+                        KeyCode::Char(c) => {
+                            let mut input = credential_request_input.read().clone();
+                            input.push(c);
+                            credential_request_input.set(input);
+                        }
+                        KeyCode::Backspace => {
+                            let mut input = credential_request_input.read().clone();
+                            input.pop();
+                            credential_request_input.set(input);
+                        }
+                        KeyCode::Enter => {
+                            let id = credential_request_id.read().clone();
+                            let input = credential_request_input.read().clone();
+                            show_credential_request.set(false);
+                            credential_request_input.set(String::new());
+
+                            let mut m = messages.read().clone();
+                            m.push(DisplayMessage::user("→ [credential provided]".to_string()));
+                            messages.set(m);
+                            if let Ok(guard) = tx_for_keys.lock() {
+                                if let Some(ref tx) = *guard {
+                                    let _ = tx.send(UserInput::CredentialResponse {
+                                        id,
+                                        dismissed: false,
+                                        value: Some(input),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    return;
+                }
+
                 // ── Normal mode keyboard ────────────────────────
                 // Details dialog: Esc to close, PgUp/PgDn to scroll
                 if show_details_dialog.get() {
@@ -1886,6 +1968,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_tool_approval.get()
                 && !show_vault_unlock.get()
                 && !show_user_prompt.get()
+                && !show_credential_request.get()
                 && !show_secrets_dialog.get()
                 && !show_skills_dialog.get()
                 && !show_tool_perms_dialog.get()
@@ -1970,6 +2053,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             user_prompt_input: user_prompt_input.read().clone(),
             user_prompt_type: user_prompt_type.read().clone(),
             user_prompt_selected: user_prompt_selected.get(),
+            show_credential_request: show_credential_request.get(),
+            credential_request_provider: credential_request_provider.read().clone(),
+            credential_request_message: credential_request_message.read().clone(),
+            credential_request_input_len: credential_request_input.read().len(),
             show_secrets_dialog: show_secrets_dialog.get(),
             secrets_data: secrets_dialog_data.read().clone(),
             secrets_agent_access: secrets_agent_access.get(),

@@ -58,6 +58,8 @@ pub enum ClientFrameType {
     ThreadClose = 23,
     /// Rename a thread.
     ThreadRename = 24,
+    /// User response to a credential request.
+    CredentialResponse = 25,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -134,6 +136,8 @@ pub enum ServerFrameType {
     ThreadCreated = 33,
     /// Thread switched result.
     ThreadSwitched = 34,
+    /// Credential request — gateway needs the user to provide an API key or credential.
+    CredentialRequest = 35,
 }
 
 /// Status frame sub-types.
@@ -285,6 +289,15 @@ pub enum ClientPayload {
     ThreadRename {
         thread_id: u64,
         new_label: String,
+    },
+    /// User response to a credential request.
+    CredentialResponse {
+        /// Matches the `id` from `CredentialRequest`.
+        id: String,
+        /// Whether the user dismissed the request without providing a value.
+        dismissed: bool,
+        /// The credential value (API key, token, etc.).
+        value: Option<String>,
     },
 }
 
@@ -438,6 +451,18 @@ pub enum ServerPayload {
         /// Optional summary of the thread being switched to
         context_summary: Option<String>,
     },
+    /// Credential request — the gateway detected an auth failure and needs the
+    /// user to supply an API key or other credential.
+    CredentialRequest {
+        /// Unique request ID.
+        id: String,
+        /// Provider that needs the credential (e.g. "anthropic", "openai").
+        provider: String,
+        /// Name of the secret/env-var the credential will be stored as.
+        secret_name: String,
+        /// Human-readable message explaining what is needed.
+        message: String,
+    },
 }
 
 /// DTO for task info in updates.
@@ -548,6 +573,11 @@ mod tests {
             assert_eq!(ServerFrameType::ResponseDone as u8, 28);
             assert_eq!(ServerFrameType::ToolApprovalRequest as u8, 29);
             assert_eq!(ServerFrameType::UserPromptRequest as u8, 30);
+            assert_eq!(ServerFrameType::TasksUpdate as u8, 31);
+            assert_eq!(ServerFrameType::ThreadsUpdate as u8, 32);
+            assert_eq!(ServerFrameType::ThreadCreated as u8, 33);
+            assert_eq!(ServerFrameType::ThreadSwitched as u8, 34);
+            assert_eq!(ServerFrameType::CredentialRequest as u8, 35);
         }
 
         #[test]
@@ -571,6 +601,13 @@ mod tests {
             assert_eq!(ClientFrameType::Chat as u8, 16);
             assert_eq!(ClientFrameType::ToolApprovalResponse as u8, 17);
             assert_eq!(ClientFrameType::UserPromptResponse as u8, 18);
+            assert_eq!(ClientFrameType::TasksRequest as u8, 19);
+            assert_eq!(ClientFrameType::ThreadCreate as u8, 20);
+            assert_eq!(ClientFrameType::ThreadSwitch as u8, 21);
+            assert_eq!(ClientFrameType::ThreadList as u8, 22);
+            assert_eq!(ClientFrameType::ThreadClose as u8, 23);
+            assert_eq!(ClientFrameType::ThreadRename as u8, 24);
+            assert_eq!(ClientFrameType::CredentialResponse as u8, 25);
         }
 
         #[test]

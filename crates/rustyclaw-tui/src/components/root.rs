@@ -8,6 +8,7 @@ use iocraft::prelude::*;
 use crate::components::api_key_dialog::ApiKeyDialog;
 use crate::components::auth_dialog::AuthDialog;
 use crate::components::command_menu::CommandMenu;
+use crate::components::credential_request_dialog::CredentialRequestDialog;
 use crate::components::details_dialog::DetailsDialog;
 use crate::components::device_flow_dialog::DeviceFlowDialog;
 use crate::components::hatching_dialog::HatchingDialog;
@@ -92,6 +93,12 @@ pub struct RootProps {
     pub user_prompt_type: Option<rustyclaw_core::user_prompt_types::PromptType>,
     pub user_prompt_selected: usize,
 
+    // credential request dialog overlay
+    pub show_credential_request: bool,
+    pub credential_request_provider: String,
+    pub credential_request_message: String,
+    pub credential_request_input_len: usize,
+
     // secrets dialog overlay
     pub show_secrets_dialog: bool,
     pub secrets_data: Vec<SecretInfo>,
@@ -174,6 +181,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let show_approval = props.show_tool_approval;
     let show_vault = props.show_vault_unlock;
     let show_prompt = props.show_user_prompt;
+    let show_credential = props.show_credential_request;
 
     let secrets_data = std::mem::take(&mut props.secrets_data);
     let secrets_agent = props.secrets_agent_access;
@@ -385,6 +393,27 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             input: props.user_prompt_input.clone(),
                             prompt_type: props.user_prompt_type.clone(),
                             selected: props.user_prompt_selected,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Credential request dialog overlay ────────────────────────
+            #(if show_credential {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        CredentialRequestDialog(
+                            provider: props.credential_request_provider.clone(),
+                            message: props.credential_request_message.clone(),
+                            input_len: props.credential_request_input_len,
                         )
                     }
                 }.into_any()

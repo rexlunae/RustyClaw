@@ -439,6 +439,29 @@ pub async fn send_user_prompt_request(
     send_frame(writer, &frame).await
 }
 
+/// Build and send a credential request frame.
+///
+/// Sent when the gateway detects an authentication failure from a model
+/// provider and needs the user to supply an API key or other credential.
+pub async fn send_credential_request(
+    writer: &mut dyn TransportWriter,
+    id: &str,
+    provider: &str,
+    secret_name: &str,
+    message: &str,
+) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::CredentialRequest,
+        payload: ServerPayload::CredentialRequest {
+            id: id.into(),
+            provider: provider.into(),
+            secret_name: secret_name.into(),
+            message: message.into(),
+        },
+    };
+    send_frame(writer, &frame).await
+}
+
 /// Build and send a tasks update frame.
 pub async fn send_tasks_update(
     writer: &mut dyn TransportWriter,

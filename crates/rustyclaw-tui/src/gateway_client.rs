@@ -268,6 +268,17 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
                 context_summary: context_summary.clone(),
             })
         }
+        ServerPayload::CredentialRequest {
+            id,
+            provider,
+            secret_name,
+            message,
+        } => FrameAction::just_action(Action::CredentialRequest {
+            id: id.clone(),
+            provider: provider.clone(),
+            secret_name: secret_name.clone(),
+            message: message.clone(),
+        }),
         ServerPayload::Empty => FrameAction::none(),
     }
 }
