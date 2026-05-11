@@ -2218,11 +2218,8 @@ async fn dispatch_text_message(
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             } else {
-                let traced = errors::GatewayError::Provider {
-                    message: format!(
-                        "Model finished with reason '{}' but no tool calls.",
-                        finish_reason
-                    ),
+                let traced = errors::GatewayError::UnexpectedFinish {
+                    reason: finish_reason.to_string(),
                 }.into_traced();
                 match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
                     std::ops::ControlFlow::Continue(()) => continue,
