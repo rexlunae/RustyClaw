@@ -19,6 +19,7 @@ pub mod canvas_handler;
 mod command_wrapper;
 pub mod concurrent;
 pub mod csrf;
+pub mod errors;
 pub mod health;
 mod helpers;
 pub mod mcp_handler;
@@ -1918,28 +1919,6 @@ where
     }
 }
 
-/// Check whether an error message indicates an authentication failure (HTTP 401/403).
-///
-/// Provider call functions format errors like "Provider returned 401 Unauthorized — …"
-/// or "Anthropic returned 401 — …".  This heuristic matches those patterns so the
-/// gateway can prompt for credentials instead of immediately failing.
-fn is_auth_error(error_msg: &str) -> bool {
-    // Match common HTTP auth-error status codes in provider error messages.
-    let patterns = [
-        "returned 401",
-        "returned 403",
-        "HTTP 401",
-        "HTTP 403",
-        "401 Unauthorized",
-        "403 Forbidden",
-        "authentication_error",
-        "invalid_api_key",
-        "invalid x-api-key",
-    ];
-    let lower = error_msg.to_lowercase();
-    patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
-}
-
 async fn dispatch_text_message(
     http: &reqwest::Client,
     req: &ChatRequest,
@@ -2040,9 +2019,13 @@ async fn dispatch_text_message(
         {
             Ok(token) => resolved.api_key = token,
             Err(err) => {
-                protocol::server::send_error(writer, &format!("Token refresh failed: {}", err))
-                    .await?;
-                return Ok(());
+                let traced = errors::GatewayError::TokenRefresh {
+                    message: err.to_string(),
+                }.into_traced();
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Break(()) => return Ok(()),
+                }
             }
         }
 
@@ -2077,13 +2060,11 @@ async fn dispatch_text_message(
             {
                 Ok(()) => {} // compacted in-place
                 Err(err) => {
-                    // Non-fatal — log a warning and keep going with the
-                    // full context; the provider may still accept it.
-                    let _ = protocol::server::send_info(
-                        writer,
-                        &format!("Context compaction failed: {}", err),
-                    )
-                    .await;
+                    let traced = errors::GatewayError::ContextCompaction {
+                        message: err.to_string(),
+                    }.into_traced();
+                    // Non-fatal — handle logs and continues.
+                    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await;
                 }
             }
         }
@@ -2145,197 +2126,18 @@ async fn dispatch_text_message(
         let model_resp = match result {
             Ok(Some(r)) => r,
             Ok(None) => {
-                protocol::server::send_info(writer, "Run cancelled by user.").await?;
-                providers::send_response_done(writer).await?;
-                return Ok(());
+                let traced = errors::GatewayError::Cancelled.into_traced();
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Break(()) => return Ok(()),
+                }
             }
             Err(err) => {
-                let err_str = err.to_string();
-
-                // Detect authentication errors (401/403) and prompt the user
-                // for the missing credential instead of just failing.
-                if is_auth_error(&err_str) {
-                    let provider_def = crate::providers::provider_by_id(&resolved.provider);
-                    let secret_name = crate::providers::secret_key_for_provider(&resolved.provider)
-                        .unwrap_or("API_KEY");
-                    let display =
-                        crate::providers::display_name_for_provider(&resolved.provider);
-                    let auth_method = provider_def
-                        .map(|p| p.auth_method)
-                        .unwrap_or(crate::providers::AuthMethod::ApiKey);
-
-                    match auth_method {
-                        crate::providers::AuthMethod::DeviceFlow => {
-                            // Run the OAuth device flow from the gateway.
-                            if let Some(df_config) = provider_def.and_then(|p| p.device_flow) {
-                                protocol::server::send_info(
-                                    writer,
-                                    &format!("Authentication failed for {}. Starting device flow…", display),
-                                ).await?;
-
-                                match crate::providers::start_device_flow(df_config).await {
-                                    Ok(auth_resp) => {
-                                        protocol::server::send_device_flow_start(
-                                            writer,
-                                            &auth_resp.verification_uri,
-                                            &auth_resp.user_code,
-                                        ).await?;
-
-                                        // Poll for the token.
-                                        let interval = std::time::Duration::from_secs(auth_resp.interval.max(5));
-                                        let deadline = tokio::time::Instant::now()
-                                            + std::time::Duration::from_secs(auth_resp.expires_in);
-                                        let mut token_result = None;
-
-                                        loop {
-                                            tokio::time::sleep(interval).await;
-                                            if tokio::time::Instant::now() >= deadline {
-                                                break;
-                                            }
-                                            match crate::providers::poll_device_token(
-                                                df_config, &auth_resp.device_code,
-                                            ).await {
-                                                Ok(Some(token)) => {
-                                                    token_result = Some(token);
-                                                    break;
-                                                }
-                                                Ok(None) => {
-                                                    // Still pending — continue polling
-                                                }
-                                                Err(e) => {
-                                                    warn!(error = %e, "Device flow poll failed");
-                                                    break;
-                                                }
-                                            }
-                                        }
-
-                                        protocol::server::send_device_flow_complete(writer).await?;
-
-                                        if let Some(token) = token_result {
-                                            // Store the token in the vault.
-                                            {
-                                                let mut v = vault.lock().await;
-                                                if let Err(e) = v.store_secret(secret_name, &token) {
-                                                    warn!(error = %e, "Failed to store device flow token in vault");
-                                                }
-                                            }
-                                            resolved.api_key = Some(token.clone());
-                                            original_api_key = Some(token);
-                                            protocol::server::send_info(
-                                                writer,
-                                                &format!("{} authenticated via device flow — retrying…", display),
-                                            ).await?;
-                                            continue; // retry the model call
-                                        }
-
-                                        // Token was not obtained — timed out or failed.
-                                        protocol::server::send_error(
-                                            writer,
-                                            &format!("Device flow for {} timed out or failed.", display),
-                                        ).await?;
-                                        providers::send_response_done(writer).await?;
-                                        return Ok(());
-                                    }
-                                    Err(e) => {
-                                        protocol::server::send_error(
-                                            writer,
-                                            &format!("Failed to start device flow for {}: {}", display, e),
-                                        ).await?;
-                                        providers::send_response_done(writer).await?;
-                                        return Ok(());
-                                    }
-                                }
-                            } else {
-                                // DeviceFlow auth but no config — fall through to error.
-                                protocol::server::send_error(
-                                    writer,
-                                    &format!("Authentication failed for {} but no device flow config found.", display),
-                                ).await?;
-                                providers::send_response_done(writer).await?;
-                                return Ok(());
-                            }
-                        }
-                        crate::providers::AuthMethod::ApiKey | crate::providers::AuthMethod::None => {
-                            // API key auth — prompt the user for a manual key.
-                            let help_text = provider_def
-                                .and_then(|p| p.help_text)
-                                .unwrap_or("Enter the API key for this provider");
-
-                            let request_id = format!("cred_{}", uuid::Uuid::new_v4());
-                            let message = format!(
-                                "Authentication failed for {}. {}.",
-                                display, help_text
-                            );
-
-                            protocol::server::send_credential_request(
-                                writer,
-                                &request_id,
-                                &resolved.provider,
-                                secret_name,
-                                &message,
-                            )
-                            .await?;
-
-                            // Wait for the user's response (with 5 minute timeout).
-                            let cred_result = {
-                                let mut rx = credential_rx.lock().await;
-                                tokio::time::timeout(
-                                    std::time::Duration::from_secs(300),
-                                    rx.recv(),
-                                )
-                                .await
-                            };
-
-                            match cred_result {
-                                Ok(Some((id, dismissed, value)))
-                                    if id == request_id && !dismissed =>
-                                {
-                                    if let Some(key) = value {
-                                        // Store the credential in the vault for future use.
-                                        {
-                                            let mut v = vault.lock().await;
-                                            if let Err(e) = v.store_secret(secret_name, &key) {
-                                                warn!(error = %e, "Failed to store credential in vault");
-                                            }
-                                        }
-                                        // Update the resolved request with the new key and retry.
-                                        resolved.api_key = Some(key.clone());
-                                        original_api_key = Some(key);
-                                        protocol::server::send_info(
-                                            writer,
-                                            &format!("Credential received for {} — retrying…", display),
-                                        )
-                                        .await?;
-                                        continue; // retry the model call
-                                    }
-                                    // Value was None — treat as dismissed
-                                    protocol::server::send_error(writer, "No credential value provided.")
-                                        .await?;
-                                    providers::send_response_done(writer).await?;
-                                    return Ok(());
-                                }
-                                _ => {
-                                    // Dismissed, timed out, or mismatched ID
-                                    protocol::server::send_error(
-                                        writer,
-                                        &format!(
-                                            "Authentication failed for {} and no credential was provided.",
-                                            display
-                                        ),
-                                    )
-                                    .await?;
-                                    providers::send_response_done(writer).await?;
-                                    return Ok(());
-                                }
-                            }
-                        }
-                    }
+                let traced = errors::classify_model_error(err, &resolved.provider);
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
-
-                // Non-auth error — report and stop.
-                protocol::server::send_error(writer, &err_str).await?;
-                providers::send_response_done(writer).await?;
-                return Ok(());
             }
         };
 
@@ -2410,24 +2212,22 @@ async fn dispatch_text_message(
                 providers::send_response_done(writer).await?;
                 return Ok(());
             } else if finish_reason == "length" {
-                // Hit token limit — warn and stop
-                protocol::server::send_info(writer, "Response truncated due to token limit.")
-                    .await?;
-                providers::send_response_done(writer).await?;
-                return Ok(());
+                let traced = errors::GatewayError::TokenLimit.into_traced();
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Break(()) => return Ok(()),
+                }
             } else {
-                // Unexpected finish_reason with no tool calls
-                // Log it and treat as done (better than looping forever)
-                protocol::server::send_info(
-                    writer,
-                    &format!(
+                let traced = errors::GatewayError::Provider {
+                    message: format!(
                         "Model finished with reason '{}' but no tool calls.",
                         finish_reason
                     ),
-                )
-                .await?;
-                providers::send_response_done(writer).await?;
-                return Ok(());
+                }.into_traced();
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Break(()) => return Ok(()),
+                }
             }
         }
 
@@ -2600,15 +2400,8 @@ async fn dispatch_text_message(
     }
 
     // If we exhausted all rounds, send what we have and stop.
-    protocol::server::send_error(
-        writer,
-        &format!(
-            "Safety limit reached ({} tool rounds) — stopping to prevent infinite loop.",
-            MAX_TOOL_ROUNDS
-        ),
-    )
-    .await?;
-    providers::send_response_done(writer).await?;
+    let traced = errors::GatewayError::ToolLoopExhausted { rounds: MAX_TOOL_ROUNDS }.into_traced();
+    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await?;
     Ok(())
 }
 
@@ -2911,31 +2704,4 @@ mod tests {
         Ok(())
     }
 
-    #[test]
-    fn test_is_auth_error_positive_cases() {
-        // These should all be detected as auth errors
-        assert!(is_auth_error("Provider returned 401 Unauthorized"));
-        assert!(is_auth_error("Anthropic returned 403 Forbidden"));
-        assert!(is_auth_error("HTTP 401"));
-        assert!(is_auth_error("HTTP 403"));
-        assert!(is_auth_error("401 Unauthorized"));
-        assert!(is_auth_error("403 Forbidden"));
-        assert!(is_auth_error("authentication_error"));
-        assert!(is_auth_error("invalid_api_key"));
-        assert!(is_auth_error("invalid x-api-key"));
-        // Case insensitivity
-        assert!(is_auth_error("AUTHENTICATION_ERROR"));
-        assert!(is_auth_error("Invalid_Api_Key"));
-    }
-
-    #[test]
-    fn test_is_auth_error_negative_cases() {
-        // These should NOT be detected as auth errors
-        assert!(!is_auth_error("Connection timeout after 30s"));
-        assert!(!is_auth_error("Model not found"));
-        assert!(!is_auth_error("Rate limit exceeded (429)"));
-        assert!(!is_auth_error(""));
-        assert!(!is_auth_error("returned 500 Internal Server Error"));
-        assert!(!is_auth_error("Network error"));
-    }
 }
