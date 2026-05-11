@@ -1502,7 +1502,8 @@ async fn main() -> Result<()> {
                     let mgr = swarm_manager();
                     let target = agent.as_deref().unwrap_or("orchestrator");
 
-                    {
+                    // Phase 1: validate swarm/agent and extract info.
+                    let (agent_name, agent_instructions, existing_session) = {
                         let mut m =
                             mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                         let inst = m
@@ -1511,12 +1512,65 @@ async fn main() -> Result<()> {
                         if inst.status != rustyclaw_core::swarm::SwarmStatus::Running {
                             anyhow::bail!("Swarm '{}' is not running", swarm);
                         }
+                        let a = inst
+                            .config
+                            .agents
+                            .iter()
+                            .find(|a| a.id == target)
+                            .ok_or_else(|| {
+                                let ids: Vec<&str> =
+                                    inst.config.agents.iter().map(|a| a.id.as_str()).collect();
+                                anyhow::anyhow!(
+                                    "Agent '{}' not found in swarm '{}'. Available: {}",
+                                    target,
+                                    swarm,
+                                    ids.join(", ")
+                                )
+                            })?;
+                        let name = a.name.clone();
+                        let instructions = a.instructions.clone();
+                        let existing = inst.agent_sessions.get(target).cloned();
                         inst.record_task();
-                    }
+                        (name, instructions, existing)
+                    };
+
+                    // Phase 2: route via session manager (no swarm lock held).
+                    let session_mgr = rustyclaw_core::sessions::session_manager();
+                    let mut sess_mgr = session_mgr
+                        .lock()
+                        .map_err(|_| anyhow::anyhow!("Session manager lock error"))?;
+
+                    let session_key = if let Some(existing) = existing_session {
+                        sess_mgr
+                            .send_message(&existing, &msg)
+                            .map_err(|e| anyhow::anyhow!(e))?;
+                        existing
+                    } else {
+                        let label = format!("swarm:{}:{}", swarm, target);
+                        let task = format!(
+                            "[Swarm: {} | Agent: {}]\n\n{}\n\nSystem Instructions:\n{}",
+                            swarm, agent_name, msg, agent_instructions
+                        );
+                        let key =
+                            sess_mgr.spawn_subagent(target, &task, Some(label), None);
+                        drop(sess_mgr);
+
+                        // Phase 3: store session key back.
+                        let mut m =
+                            mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
+                        if let Some(inst) = m.get_mut(&swarm) {
+                            inst.agent_sessions
+                                .insert(target.to_string(), key.clone());
+                        }
+                        key
+                    };
 
                     println!(
                         "{}",
-                        t::icon_ok(&format!("Task sent to {} in swarm '{}'", target, swarm))
+                        t::icon_ok(&format!(
+                            "Task routed to {} ({}) in swarm '{}' — session: {}",
+                            agent_name, target, swarm, session_key
+                        ))
                     );
                     println!("  Message: {}", t::muted(&msg));
                 }

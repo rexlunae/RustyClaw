@@ -280,16 +280,18 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, St
     debug!(swarm = %name, "Stopping swarm");
 
     let manager = swarm_manager();
-    let mut mgr = manager
-        .lock()
-        .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
 
-    // Complete any active sessions
-    let session_keys: Vec<String> = mgr
-        .get(name)
-        .map(|inst| inst.agent_sessions.values().cloned().collect())
-        .unwrap_or_default();
+    // Phase 1: extract session keys while holding the swarm lock.
+    let session_keys: Vec<String> = {
+        let mgr = manager
+            .lock()
+            .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
+        mgr.get(name)
+            .map(|inst| inst.agent_sessions.values().cloned().collect())
+            .unwrap_or_default()
+    };
 
+    // Phase 2: complete sessions (no swarm lock held).
     let session_mgr = crate::sessions::session_manager();
     if let Ok(mut sess_mgr) = session_mgr.lock() {
         for key in &session_keys {
@@ -297,6 +299,10 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, St
         }
     }
 
+    // Phase 3: re-acquire swarm lock and stop.
+    let mut mgr = manager
+        .lock()
+        .map_err(|_| "Failed to re-acquire swarm manager lock".to_string())?;
     mgr.stop(name)?;
 
     Ok(format!(

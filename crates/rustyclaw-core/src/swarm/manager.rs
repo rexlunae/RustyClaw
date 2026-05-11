@@ -84,6 +84,7 @@ impl SwarmInstance {
 }
 
 /// Manages all swarm instances.
+#[derive(Debug)]
 pub struct SwarmManager {
     swarms: HashMap<String, SwarmInstance>,
 }
