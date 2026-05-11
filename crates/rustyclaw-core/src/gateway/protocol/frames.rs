@@ -1006,4 +1006,100 @@ mod frame_size_tests {
             panic!("Wrong payload type");
         }
     }
+
+    #[test]
+    fn test_credential_request_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::CredentialRequest,
+            payload: ServerPayload::CredentialRequest {
+                id: "cred_test_123".into(),
+                provider: "anthropic".into(),
+                secret_name: "ANTHROPIC_API_KEY".into(),
+                message: "Authentication failed for Anthropic. Enter your API key.".into(),
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame =
+            deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        assert_eq!(decoded.frame_type, ServerFrameType::CredentialRequest);
+        match decoded.payload {
+            ServerPayload::CredentialRequest {
+                id,
+                provider,
+                secret_name,
+                message,
+            } => {
+                assert_eq!(id, "cred_test_123");
+                assert_eq!(provider, "anthropic");
+                assert_eq!(secret_name, "ANTHROPIC_API_KEY");
+                assert_eq!(
+                    message,
+                    "Authentication failed for Anthropic. Enter your API key."
+                );
+            }
+            _ => panic!("Expected CredentialRequest payload"),
+        }
+    }
+
+    #[test]
+    fn test_credential_response_roundtrip() {
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::CredentialResponse,
+            payload: ClientPayload::CredentialResponse {
+                id: "cred_test_123".into(),
+                dismissed: false,
+                value: Some("sk-test-key-abc123".into()),
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame =
+            deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        assert_eq!(decoded.frame_type, ClientFrameType::CredentialResponse);
+        match decoded.payload {
+            ClientPayload::CredentialResponse {
+                id,
+                dismissed,
+                value,
+            } => {
+                assert_eq!(id, "cred_test_123");
+                assert!(!dismissed);
+                assert_eq!(value, Some("sk-test-key-abc123".into()));
+            }
+            _ => panic!("Expected CredentialResponse payload"),
+        }
+    }
+
+    #[test]
+    fn test_credential_response_dismissed_roundtrip() {
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::CredentialResponse,
+            payload: ClientPayload::CredentialResponse {
+                id: "cred_dismiss_456".into(),
+                dismissed: true,
+                value: None,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame =
+            deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        assert_eq!(decoded.frame_type, ClientFrameType::CredentialResponse);
+        match decoded.payload {
+            ClientPayload::CredentialResponse {
+                id,
+                dismissed,
+                value,
+            } => {
+                assert_eq!(id, "cred_dismiss_456");
+                assert!(dismissed);
+                assert_eq!(value, None);
+            }
+            _ => panic!("Expected CredentialResponse payload"),
+        }
+    }
 }

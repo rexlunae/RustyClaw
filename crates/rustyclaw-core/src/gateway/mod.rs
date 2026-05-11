@@ -2811,4 +2811,32 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_is_auth_error_positive_cases() {
+        // These should all be detected as auth errors
+        assert!(is_auth_error("Provider returned 401 Unauthorized"));
+        assert!(is_auth_error("Anthropic returned 403 Forbidden"));
+        assert!(is_auth_error("HTTP 401"));
+        assert!(is_auth_error("HTTP 403"));
+        assert!(is_auth_error("401 Unauthorized"));
+        assert!(is_auth_error("403 Forbidden"));
+        assert!(is_auth_error("authentication_error"));
+        assert!(is_auth_error("invalid_api_key"));
+        assert!(is_auth_error("invalid x-api-key"));
+        // Case insensitivity
+        assert!(is_auth_error("AUTHENTICATION_ERROR"));
+        assert!(is_auth_error("Invalid_Api_Key"));
+    }
+
+    #[test]
+    fn test_is_auth_error_negative_cases() {
+        // These should NOT be detected as auth errors
+        assert!(!is_auth_error("Connection timeout after 30s"));
+        assert!(!is_auth_error("Model not found"));
+        assert!(!is_auth_error("Rate limit exceeded (429)"));
+        assert!(!is_auth_error(""));
+        assert!(!is_auth_error("returned 500 Internal Server Error"));
+        assert!(!is_auth_error("Network error"));
+    }
 }
