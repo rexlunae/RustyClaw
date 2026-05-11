@@ -138,6 +138,10 @@ pub enum ServerFrameType {
     ThreadSwitched = 34,
     /// Credential request — gateway needs the user to provide an API key or credential.
     CredentialRequest = 35,
+    /// Device flow started — gateway is running OAuth device flow; show URL + code to user.
+    DeviceFlowStart = 36,
+    /// Device flow completed — dismiss the device flow dialog.
+    DeviceFlowComplete = 37,
 }
 
 /// Status frame sub-types.
@@ -463,6 +467,16 @@ pub enum ServerPayload {
         /// Human-readable message explaining what is needed.
         message: String,
     },
+    /// Device flow started — the gateway is running an OAuth device flow and
+    /// needs the user to visit a URL and enter a code.
+    DeviceFlowStart {
+        /// Verification URL the user should open.
+        url: String,
+        /// One-time code to enter at that URL.
+        code: String,
+    },
+    /// Device flow completed — the gateway obtained the token; dismiss the dialog.
+    DeviceFlowComplete,
 }
 
 /// DTO for task info in updates.
@@ -578,6 +592,8 @@ mod tests {
             assert_eq!(ServerFrameType::ThreadCreated as u8, 33);
             assert_eq!(ServerFrameType::ThreadSwitched as u8, 34);
             assert_eq!(ServerFrameType::CredentialRequest as u8, 35);
+            assert_eq!(ServerFrameType::DeviceFlowStart as u8, 36);
+            assert_eq!(ServerFrameType::DeviceFlowComplete as u8, 37);
         }
 
         #[test]
