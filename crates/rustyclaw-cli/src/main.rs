@@ -502,8 +502,8 @@ enum SkillsCommands {
 enum SwarmCommands {
     /// Create a new swarm from a template
     Create {
-        /// Template name (default: 'openswarm')
-        #[arg(value_name = "TEMPLATE", default_value = "openswarm")]
+        /// Template name (default: 'swarm')
+        #[arg(value_name = "TEMPLATE", default_value = "swarm")]
         template: String,
     },
     /// List all swarms

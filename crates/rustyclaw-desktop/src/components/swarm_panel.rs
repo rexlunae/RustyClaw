@@ -79,11 +79,11 @@ pub fn SwarmPanel(props: SwarmPanelProps) -> Element {
                             button {
                                 class: "btn btn-primary",
                                 disabled: props.creating,
-                                onclick: move |_| props.on_create.call("openswarm".into()),
+                                onclick: move |_| props.on_create.call("swarm".into()),
                                 if props.creating {
                                     "Creating…"
                                 } else {
-                                    "🚀 Create OpenSwarm"
+                                    "🚀 Create Swarm"
                                 }
                             }
                             p {
@@ -110,7 +110,7 @@ pub fn SwarmPanel(props: SwarmPanelProps) -> Element {
                             button {
                                 class: "btn btn-subtle btn-sm",
                                 disabled: props.creating,
-                                onclick: move |_| props.on_create.call("openswarm".into()),
+                                onclick: move |_| props.on_create.call("swarm".into()),
                                 if props.creating {
                                     "Creating…"
                                 } else {

@@ -21,7 +21,7 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> Result<String, 
         serde_json::from_value(cfg_val.clone())
             .map_err(|e| format!("Invalid swarm config: {e}"))?
     } else {
-        let tpl_name = template_name.unwrap_or("openswarm");
+        let tpl_name = template_name.unwrap_or("swarm");
         let templates = builtin_templates();
         templates
             .into_iter()
@@ -78,7 +78,7 @@ pub fn exec_swarm_list(args: &Value, _workspace_dir: &Path) -> Result<String, St
     let swarms = mgr.list();
     if swarms.is_empty() {
         return Ok(
-            "No swarms defined. Use swarm_create to create one (template: 'openswarm').".into(),
+            "No swarms defined. Use swarm_create to create one (template: 'swarm').".into(),
         );
     }
 

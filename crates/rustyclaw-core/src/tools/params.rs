@@ -1815,7 +1815,7 @@ pub fn swarm_create_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "template".into(),
-            description: "Name of a built-in template (e.g. 'openswarm'). \
+            description: "Name of a built-in template (e.g. 'swarm'). \
                           Use swarm_templates to see available templates. \
                           Ignored if 'config' is provided."
                 .into(),

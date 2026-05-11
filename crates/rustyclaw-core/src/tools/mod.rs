@@ -1277,7 +1277,7 @@ pub static PDF: ToolDef = ToolDef {
 pub static SWARM_CREATE: ToolDef = ToolDef {
     name: "swarm_create",
     description: "Create and start a multi-agent swarm from a built-in template or custom config. \
-                  Templates: 'openswarm' (8 agents: orchestrator + 7 specialists covering research, \
+                  Templates: 'swarm' (8 agents: orchestrator + 7 specialists covering research, \
                   data analysis, slides, docs, images, video, and assistant tasks). \
                   Use swarm_templates to see available templates.",
     parameters: vec![],
