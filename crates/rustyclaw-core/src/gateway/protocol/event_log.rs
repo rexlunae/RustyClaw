@@ -95,11 +95,12 @@ impl fmt::Display for ProtocolEvent {
 /// Writes events to a file with timestamps. Rotates when the file exceeds
 /// `MAX_LOG_SIZE`. The logger is designed to never fail — I/O errors are
 /// silently ignored so protocol operations are never blocked by logging.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct ProtocolEventLog {
     inner: Arc<Mutex<LogInner>>,
 }
 
+#[derive(Debug)]
 struct LogInner {
     file: Option<std::fs::File>,
     path: PathBuf,

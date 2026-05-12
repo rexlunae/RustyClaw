@@ -2044,8 +2044,7 @@ async fn dispatch_text_message(
                 }.into_traced();
                 match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => {
-                        if local_copilot.is_none()
-                            && crate::providers::needs_copilot_session(&resolved.provider)
+                        if crate::providers::needs_copilot_session(&resolved.provider)
                             && original_api_key.is_some()
                         {
                             let session = Arc::new(CopilotSession::new(
@@ -2169,8 +2168,7 @@ async fn dispatch_text_message(
                 let traced = errors::classify_model_error(err, &resolved.provider);
                 match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => {
-                        if local_copilot.is_none()
-                            && crate::providers::needs_copilot_session(&resolved.provider)
+                        if crate::providers::needs_copilot_session(&resolved.provider)
                             && original_api_key.is_some()
                         {
                             let session = Arc::new(CopilotSession::new(
