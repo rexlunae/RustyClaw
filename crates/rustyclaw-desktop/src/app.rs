@@ -55,11 +55,6 @@ pub fn App() -> Element {
     let mut cred_request_secret = use_signal(String::new);
     let mut cred_request_message = use_signal(String::new);
 
-    // Device flow state
-    let mut show_device_flow = use_signal(|| false);
-    let mut device_flow_url = use_signal(String::new);
-    let mut device_flow_code = use_signal(String::new);
-
     // QR code for pairing
     let mut qr_code_url = use_signal(|| None::<String>);
     let mut public_key = use_signal(|| None::<String>);
@@ -138,14 +133,6 @@ pub fn App() -> Element {
             show_cred_request.set(true);
         } else {
             show_cred_request.set(false);
-        }
-
-        if let Some((url, code)) = &s.pending_device_flow {
-            device_flow_url.set(url.clone());
-            device_flow_code.set(code.clone());
-            show_device_flow.set(true);
-        } else {
-            show_device_flow.set(false);
         }
     });
 
@@ -514,11 +501,18 @@ pub fn App() -> Element {
             }
 
             DeviceFlowDialog {
-                visible: *show_device_flow.read(),
-                url: device_flow_url.read().clone(),
-                code: device_flow_code.read().clone(),
+                visible: state.read().pending_device_flow.is_some(),
+                url: state.read().pending_device_flow.as_ref().map(|(u, _)| u.clone()).unwrap_or_default(),
+                code: state.read().pending_device_flow.as_ref().map(|(_, c)| c.clone()).unwrap_or_default(),
                 on_close: move |_| {
                     state.write().pending_device_flow = None;
+                    state.write().status_message = Some("Device flow cancelled.".to_string());
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::Cancel).await;
+                        });
+                    }
                 },
             }
         }
