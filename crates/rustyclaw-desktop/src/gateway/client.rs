@@ -5,6 +5,9 @@ use rustyclaw_core::gateway::{
     ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType,
     WireFrame, deserialize_frame, deserialize_wire_frame, serialize_wire_frame,
 };
+use rustyclaw_core::gateway::protocol::event_log::{
+    Direction, ProtocolEventLog, default_log_path,
+};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -97,6 +100,16 @@ impl GatewayClient {
             .take()
             .ok_or_else(|| anyhow!("SSH stderr unavailable"))?;
 
+        // Create protocol event log
+        let event_log = default_log_path()
+            .map(ProtocolEventLog::new)
+            .unwrap_or_else(ProtocolEventLog::noop);
+        event_log.log(rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::Connection {
+            message: format!("connecting to {}", target),
+        });
+        let event_log_tx = event_log.clone();
+        let event_log_rx = event_log.clone();
+
         // Spawn task to handle outgoing commands
         let event_tx_clone = event_tx.clone();
         let next_stream_id_tx = next_stream_id.clone();
@@ -113,9 +126,14 @@ impl GatewayClient {
                     _ => 0,
                 };
                 let frame = command_to_frame(cmd);
+                let frame_type_name = format!("{:?}", frame.frame_type);
                 let data = match serialize_wire_frame(&WireFrame::new(stream_id, frame)) {
                     Ok(data) => data,
                     Err(err) => {
+                        event_log_tx.log(rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::EncodeError {
+                            frame_type: frame_type_name.clone(),
+                            error: err.clone(),
+                        });
                         let _ = event_tx_clone
                             .send(GatewayEvent::Error {
                                 message: format!("Failed to encode frame: {}", err),
@@ -124,6 +142,7 @@ impl GatewayClient {
                         break;
                     }
                 };
+                event_log_tx.log_frame(Direction::Sent, &frame_type_name, stream_id, data.len());
 
                 let len = data.len() as u32;
                 let write_result: Result<(), std::io::Error> = async {
@@ -179,6 +198,13 @@ impl GatewayClient {
 
                         match decode_server_wire_frame(&frame_buf) {
                             Ok(envelope) => {
+                                let frame_type_name = format!("{:?}", envelope.frame.frame_type);
+                                event_log_rx.log_frame(
+                                    Direction::Received,
+                                    &frame_type_name,
+                                    envelope.stream_id,
+                                    len,
+                                );
                                 if matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. }) {
                                     let active = active_stream_id_rx.load(Ordering::Relaxed);
                                     if active == envelope.stream_id {
@@ -192,6 +218,11 @@ impl GatewayClient {
                                 }
                             }
                             Err(err) => {
+                                event_log_rx.log_decode_error(
+                                    Direction::Received,
+                                    len,
+                                    &err,
+                                );
                                 let _ = event_tx
                                     .send(GatewayEvent::Error {
                                         message: format!("Protocol error: {}", err),

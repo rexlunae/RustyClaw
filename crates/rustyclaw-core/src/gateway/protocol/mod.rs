@@ -10,6 +10,7 @@
 //! Each frame has a type enum as the first field to allow dispatch.
 //! Text frames are not supported and will be rejected.
 
+pub mod event_log;
 pub mod frames;
 pub mod server;
 pub mod types;
