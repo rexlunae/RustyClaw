@@ -72,7 +72,7 @@ pub const GITHUB_COPILOT_DEVICE_FLOW: DeviceFlowConfig = DeviceFlowConfig {
     client_id: "Iv1.b507a08c87ecfe98", // GitHub Copilot CLI client ID
     device_auth_url: "https://github.com/login/device/code",
     token_url: "https://github.com/login/oauth/access_token",
-    scope: Some("read:user"),
+    scope: None, // OAuth App's default scopes include Copilot access
 };
 
 pub const PROVIDERS: &[ProviderDef] = &[
@@ -1013,10 +1013,10 @@ pub async fn start_device_flow(config: &DeviceFlowConfig) -> Result<DeviceAuthRe
         .with_context(|| format!("failed to build HTTP client for POST {}", url))
         .map_err(|e| details.clone().emit_warning(e))?;
 
-    let params = [
-        ("client_id", config.client_id),
-        ("scope", config.scope.unwrap_or("")),
-    ];
+    let mut params: Vec<(&str, &str)> = vec![("client_id", config.client_id)];
+    if let Some(scope) = config.scope {
+        params.push(("scope", scope));
+    }
 
     let resp = match client
         .post(config.device_auth_url)
