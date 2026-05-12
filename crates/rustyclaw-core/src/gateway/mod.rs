@@ -2022,7 +2022,7 @@ async fn dispatch_text_message(
                 let traced = errors::GatewayError::TokenRefresh {
                     message: err.to_string(),
                 }.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
@@ -2064,7 +2064,7 @@ async fn dispatch_text_message(
                         message: err.to_string(),
                     }.into_traced();
                     // Non-fatal — handle logs and continues.
-                    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await;
+                    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await;
                 }
             }
         }
@@ -2127,14 +2127,14 @@ async fn dispatch_text_message(
             Ok(Some(r)) => r,
             Ok(None) => {
                 let traced = errors::GatewayError::Cancelled.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             }
             Err(err) => {
                 let traced = errors::classify_model_error(err, &resolved.provider);
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
@@ -2213,7 +2213,7 @@ async fn dispatch_text_message(
                 return Ok(());
             } else if finish_reason == "length" {
                 let traced = errors::GatewayError::TokenLimit.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
@@ -2221,7 +2221,7 @@ async fn dispatch_text_message(
                 let traced = errors::GatewayError::UnexpectedFinish {
                     reason: finish_reason.to_string(),
                 }.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await? {
+                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
@@ -2398,7 +2398,7 @@ async fn dispatch_text_message(
 
     // If we exhausted all rounds, send what we have and stop.
     let traced = errors::GatewayError::ToolLoopExhausted { rounds: MAX_TOOL_ROUNDS }.into_traced();
-    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx).await?;
+    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await?;
     Ok(())
 }
 

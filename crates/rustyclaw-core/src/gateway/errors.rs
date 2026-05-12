@@ -25,6 +25,8 @@
 
 use std::fmt;
 use std::ops::ControlFlow;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -268,6 +270,7 @@ pub async fn handle(
     credential_rx: &std::sync::Arc<
         Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>,
     >,
+    tool_cancel: &Arc<AtomicBool>,
 ) -> anyhow::Result<ControlFlow<(), ()>> {
     // Try to recover the typed GatewayError.
     let gw_err = match downcast_gateway_error(&err) {
@@ -309,6 +312,7 @@ pub async fn handle(
                         provider_def,
                         secret_name,
                         display,
+                        tool_cancel,
                     )
                     .await
                 }
@@ -372,6 +376,7 @@ pub async fn handle(
                     provider_def,
                     secret_name,
                     display,
+                    tool_cancel,
                 )
                 .await
             } else {
@@ -466,6 +471,7 @@ async fn handle_device_flow(
     provider_def: Option<&'static crate_providers::ProviderDef>,
     secret_name: &str,
     display: &str,
+    tool_cancel: &Arc<AtomicBool>,
 ) -> anyhow::Result<ControlFlow<(), ()>> {
     let df_config = match provider_def.and_then(|p| p.device_flow) {
         Some(cfg) => cfg,
@@ -520,6 +526,9 @@ async fn handle_device_flow(
 
     loop {
         tokio::time::sleep(interval).await;
+        if tool_cancel.load(Ordering::Relaxed) {
+            break;
+        }
         if tokio::time::Instant::now() >= deadline {
             break;
         }
