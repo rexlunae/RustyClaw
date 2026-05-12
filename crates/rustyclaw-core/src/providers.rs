@@ -1132,9 +1132,20 @@ pub async fn poll_device_token(
     // response shape is slightly unexpected.
     let raw: RawTokenResponse = match serde_json::from_str(&body) {
         Ok(r) => r,
-        Err(e) => {
-            let err = wrap_err(e).context(format!("POST {}: failed to parse token response", url));
-            return Err(details.emit_warning(err));
+        Err(_json_err) => {
+            // Fallback: try URL-encoded form parsing (GitHub may return
+            // "access_token=xxx&token_type=bearer" instead of JSON).
+            match parse_form_encoded_token_response(&body) {
+                Some(r) => r,
+                None => {
+                    let err = anyhow!(
+                        "POST {}: failed to parse token response (tried JSON and form-encoded): {}",
+                        url,
+                        &body[..body.len().min(200)]
+                    );
+                    return Err(details.emit_warning(err));
+                }
+            }
         }
     };
     let token_response: TokenResponse = raw.into();
@@ -1160,6 +1171,41 @@ pub async fn poll_device_token(
             }
         }
     }
+}
+
+/// Parse a URL-encoded token response (fallback when JSON isn't returned).
+///
+/// GitHub's token endpoint historically defaults to `application/x-www-form-urlencoded`.
+/// Format: `access_token=xxx&token_type=bearer&scope=read:user`
+/// Or: `error=authorization_pending&error_description=...`
+fn parse_form_encoded_token_response(body: &str) -> Option<RawTokenResponse> {
+    let trimmed = body.trim();
+    if trimmed.starts_with('{') || !trimmed.contains('=') {
+        return None;
+    }
+    let params: std::collections::HashMap<String, String> = trimmed
+        .split('&')
+        .filter_map(|pair| pair.split_once('='))
+        .map(|(k, v)| {
+            // In application/x-www-form-urlencoded, '+' means space.
+            // Replace before percent-decoding since urlencoding::decode
+            // only handles %XX sequences (RFC 3986), not form '+' → space.
+            let plus_decoded = v.replace('+', " ");
+            let decoded = urlencoding::decode(&plus_decoded)
+                .map(|d| d.into_owned())
+                .unwrap_or_else(|_| plus_decoded);
+            (k.to_string(), decoded)
+        })
+        .collect();
+
+    Some(RawTokenResponse {
+        access_token: params.get("access_token").cloned(),
+        refresh_token: params.get("refresh_token").cloned(),
+        expires_in: params.get("expires_in").and_then(|s| s.parse().ok()),
+        token_type: params.get("token_type").cloned(),
+        error: params.get("error").cloned(),
+        error_description: params.get("error_description").cloned(),
+    })
 }
 
 // ── Copilot session token exchange ──────────────────────────────────────────
@@ -1422,6 +1468,38 @@ mod tests {
             }
             _ => panic!("Expected Pending variant"),
         }
+    }
+
+    #[test]
+    fn test_form_encoded_token_response_parsing() {
+        // Success response in URL-encoded format
+        let body = "access_token=gho_xxx123&token_type=bearer&scope=read%3Auser";
+        let raw = parse_form_encoded_token_response(body).unwrap();
+        let response: TokenResponse = raw.into();
+        match response {
+            TokenResponse::Success { access_token, .. } => {
+                assert_eq!(access_token, "gho_xxx123");
+            }
+            _ => panic!("Expected Success variant"),
+        }
+
+        // Pending response in URL-encoded format ('+' must decode to space)
+        let body = "error=authorization_pending&error_description=waiting+for+user";
+        let raw = parse_form_encoded_token_response(body).unwrap();
+        let response: TokenResponse = raw.into();
+        match response {
+            TokenResponse::Pending { error, error_description } => {
+                assert_eq!(error, "authorization_pending");
+                assert_eq!(error_description, Some("waiting for user".to_string()));
+            }
+            _ => panic!("Expected Pending variant"),
+        }
+
+        // Should return None for JSON
+        assert!(parse_form_encoded_token_response(r#"{"access_token":"x"}"#).is_none());
+
+        // Should return None for empty / no '='
+        assert!(parse_form_encoded_token_response("hello world").is_none());
     }
 
     #[test]
