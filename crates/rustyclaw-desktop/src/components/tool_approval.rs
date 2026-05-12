@@ -19,7 +19,8 @@ pub fn ToolApprovalDialog(props: ToolApprovalDialogProps) -> Element {
     }
 
     let truncated_args = if props.arguments.len() > 500 {
-        format!("{}…", &props.arguments[..500])
+        let end = props.arguments.floor_char_boundary(500);
+        format!("{}…", &props.arguments[..end])
     } else {
         props.arguments.clone()
     };
