@@ -2037,7 +2037,16 @@ async fn dispatch_text_message(
         )
         .await
         {
-            Ok(token) => resolved.api_key = token,
+            Ok(token) => {
+                resolved.api_key = token;
+                // Use the plan-specific API base URL from the session exchange
+                // (e.g. api.individual.githubcopilot.com) when available.
+                if let Some(session) = effective_copilot {
+                    if let Some(base) = session.api_base_url().await {
+                        resolved.base_url = base;
+                    }
+                }
+            }
             Err(err) => {
                 let traced = errors::GatewayError::TokenRefresh {
                     message: err.to_string(),
