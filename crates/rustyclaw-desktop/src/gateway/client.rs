@@ -453,8 +453,8 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
             secret_name,
             message,
         }),
-        ServerPayload::DeviceFlowStart { url, code } => {
-            Some(GatewayEvent::DeviceFlowStart { url, code })
+        ServerPayload::DeviceFlowStart { url, code, message } => {
+            Some(GatewayEvent::DeviceFlowStart { url, code, message })
         }
         ServerPayload::DeviceFlowComplete => Some(GatewayEvent::DeviceFlowComplete),
         ServerPayload::ThreadsUpdate {

@@ -474,6 +474,9 @@ pub enum ServerPayload {
         url: String,
         /// One-time code to enter at that URL.
         code: String,
+        /// Optional error message from the provider that triggered the flow.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        message: Option<String>,
     },
     /// Device flow completed — the gateway obtained the token; dismiss the dialog.
     DeviceFlowComplete,

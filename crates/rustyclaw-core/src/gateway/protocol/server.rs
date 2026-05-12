@@ -482,12 +482,14 @@ pub async fn send_device_flow_start(
     writer: &mut dyn TransportWriter,
     url: &str,
     code: &str,
+    message: Option<&str>,
 ) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::DeviceFlowStart,
         payload: ServerPayload::DeviceFlowStart {
             url: url.into(),
             code: code.into(),
+            message: message.map(Into::into),
         },
     };
     send_frame(writer, &frame).await
