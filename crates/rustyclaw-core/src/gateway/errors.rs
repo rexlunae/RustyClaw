@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::warn;
+use tracing::{info, warn};
 
 use super::protocol;
 use super::providers;
@@ -293,7 +293,7 @@ pub async fn handle(
 
     match gw_err {
         // ── Auth errors ─────────────────────────────────────────────
-        GatewayError::Auth { ref provider, .. } => {
+        GatewayError::Auth { ref provider, ref message } => {
             let provider_def = crate_providers::provider_by_id(provider);
             let secret_name =
                 crate_providers::secret_key_for_provider(provider).unwrap_or("API_KEY");
@@ -313,6 +313,7 @@ pub async fn handle(
                         secret_name,
                         display,
                         tool_cancel,
+                        Some(message.as_str()),
                     )
                     .await
                 }
@@ -367,7 +368,6 @@ pub async fn handle(
                         .unwrap_or("API_KEY");
                 let display =
                     crate_providers::display_name_for_provider(&provider_id);
-                let _ = message; // suppress unused warning; logged above
                 handle_device_flow(
                     writer,
                     resolved,
@@ -377,6 +377,7 @@ pub async fn handle(
                     secret_name,
                     display,
                     tool_cancel,
+                    Some(message.as_str()),
                 )
                 .await
             } else {
@@ -472,6 +473,7 @@ async fn handle_device_flow(
     secret_name: &str,
     display: &str,
     tool_cancel: &Arc<AtomicBool>,
+    trigger_message: Option<&str>,
 ) -> anyhow::Result<ControlFlow<(), ()>> {
     let df_config = match provider_def.and_then(|p| p.device_flow) {
         Some(cfg) => cfg,
@@ -489,14 +491,12 @@ async fn handle_device_flow(
         }
     };
 
-    protocol::server::send_info(
-        writer,
-        &format!(
-            "Authentication failed for {}. Starting device flow…",
-            display
-        ),
-    )
-    .await?;
+    // Send the provider's error message so the client can display it.
+    let info_msg = match trigger_message {
+        Some(msg) => format!("{}: {} \u{2014} starting device flow\u{2026}", display, msg),
+        None => format!("Authentication failed for {}. Starting device flow\u{2026}", display),
+    };
+    protocol::server::send_info(writer, &info_msg).await?;
 
     let auth_resp = match crate_providers::start_device_flow(df_config).await {
         Ok(r) => r,
@@ -524,21 +524,38 @@ async fn handle_device_flow(
         tokio::time::Instant::now() + std::time::Duration::from_secs(auth_resp.expires_in);
     let mut token_result = None;
 
+    let mut poll_count: u32 = 0;
     loop {
         tokio::time::sleep(interval).await;
         if tool_cancel.load(Ordering::Relaxed) {
             break;
         }
         if tokio::time::Instant::now() >= deadline {
+            let _ = protocol::server::send_info(
+                writer,
+                &format!("{}: device flow timed out after {} polls", display, poll_count),
+            )
+            .await;
             break;
         }
+        poll_count += 1;
         match crate_providers::poll_device_token(df_config, &auth_resp.device_code).await {
             Ok(Some(token)) => {
+                info!(polls = poll_count, "Device flow poll succeeded");
                 token_result = Some(token);
                 break;
             }
-            Ok(None) => {} // still pending
+            Ok(None) => {
+                if poll_count == 1 {
+                    info!("Device flow polling active — waiting for user to authorize");
+                }
+            }
             Err(e) => {
+                let _ = protocol::server::send_info(
+                    writer,
+                    &format!("{}: poll error — {}", display, e),
+                )
+                .await;
                 warn!(error = %e, "Device flow poll failed");
                 break;
             }
