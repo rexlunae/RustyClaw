@@ -1125,10 +1125,19 @@ pub async fn poll_device_token(
     };
     details = details.clone().with_body(&body);
 
+    // Log poll response at info level for debugging, but redact if it
+    // contains an access token (secret).
+    let safe_preview = if body.contains("access_token") {
+        "<redacted: contains access_token>".to_string()
+    } else {
+        let end = body.len().min(120);
+        let end = body.floor_char_boundary(end);
+        body[..end].to_string()
+    };
     tracing::info!(
         status = %status,
         body_len = body.len(),
-        body_preview = %&body[..body.len().min(120)],
+        body_preview = %safe_preview,
         "Device flow token poll response"
     );
 
