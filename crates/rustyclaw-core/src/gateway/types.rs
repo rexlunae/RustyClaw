@@ -196,6 +196,7 @@ pub struct CopilotSession {
 struct CopilotSessionEntry {
     token: String,
     expires_at: i64,
+    api_base_url: Option<String>,
 }
 
 impl CopilotSession {
@@ -214,6 +215,7 @@ impl CopilotSession {
             inner: tokio::sync::Mutex::new(Some(CopilotSessionEntry {
                 token: session_token,
                 expires_at,
+                api_base_url: None,
             })),
         }
     }
@@ -250,12 +252,27 @@ impl CopilotSession {
         // Exchange the OAuth token for a fresh session token.
         let session = providers::exchange_copilot_session(http, oauth_token).await?;
 
+        let api_base_url = session
+            .endpoints
+            .and_then(|e| e.api)
+            .map(|u| u.trim_end_matches('/').to_string());
+
         let token = session.token.clone();
         *guard = Some(CopilotSessionEntry {
             token: session.token,
             expires_at: session.expires_at,
+            api_base_url,
         });
         Ok(token)
+    }
+
+    /// Return the plan-specific API base URL from the last session exchange.
+    ///
+    /// Returns `None` if no exchange has occurred yet or the response
+    /// did not include an `endpoints.api` field.
+    pub async fn api_base_url(&self) -> Option<String> {
+        let guard = self.inner.lock().await;
+        guard.as_ref().and_then(|e| e.api_base_url.clone())
     }
 }
 
