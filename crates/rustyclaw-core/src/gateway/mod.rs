@@ -2042,8 +2042,10 @@ async fn dispatch_text_message(
                 // Use the plan-specific API base URL from the session exchange
                 // (e.g. api.individual.githubcopilot.com) when available.
                 if let Some(session) = effective_copilot {
-                    if let Some(base) = session.api_base_url().await {
-                        resolved.base_url = base;
+                    if crate::providers::needs_copilot_session(&resolved.provider) {
+                        if let Some(base) = session.api_base_url().await {
+                            resolved.base_url = base;
+                        }
                     }
                 }
             }
