@@ -7,6 +7,8 @@ pub struct DeviceFlowDialogProps {
     pub visible: bool,
     pub url: String,
     pub code: String,
+    /// Optional error message from the provider that triggered the flow.
+    pub message: Option<String>,
     pub on_close: EventHandler<()>,
 }
 
@@ -28,6 +30,13 @@ pub fn DeviceFlowDialog(props: DeviceFlowDialogProps) -> Element {
                 }
 
                 div { class: "modal-body",
+                    if let Some(ref msg) = props.message {
+                        p {
+                            style: "color: var(--warning); margin-bottom: 12px; font-size: 0.85em; padding: 8px 12px; background: var(--bg-surface); border-radius: 6px; border-left: 3px solid var(--warning);",
+                            "Provider: {msg}"
+                        }
+                    }
+
                     p {
                         style: "color: var(--text-dim); margin-bottom: 16px;",
                         "Visit the URL below and enter the code to authenticate."

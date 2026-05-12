@@ -474,6 +474,9 @@ pub enum ServerPayload {
         url: String,
         /// One-time code to enter at that URL.
         code: String,
+        /// Optional error message from the provider that triggered the flow.
+        /// Do NOT use skip_serializing_if here — bincode is positional.
+        message: Option<String>,
     },
     /// Device flow completed — the gateway obtained the token; dismiss the dialog.
     DeviceFlowComplete,
@@ -755,6 +758,87 @@ mod tests {
 
             assert_eq!(decoded.frame_type, ClientFrameType::Chat);
             matches!(decoded.payload, ClientPayload::Empty);
+        }
+
+        #[test]
+        fn test_server_frame_roundtrip_device_flow_start_no_message() {
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::DeviceFlowStart,
+                payload: ServerPayload::DeviceFlowStart {
+                    url: "https://github.com/login/device".into(),
+                    code: "ABCD-1234".into(),
+                    message: None,
+                },
+            };
+
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ServerFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+
+            match decoded.payload {
+                ServerPayload::DeviceFlowStart { url, code, message } => {
+                    assert_eq!(url, "https://github.com/login/device");
+                    assert_eq!(code, "ABCD-1234");
+                    assert_eq!(message, None);
+                }
+                _ => panic!("Expected DeviceFlowStart payload"),
+            }
+        }
+
+        #[test]
+        fn test_server_frame_roundtrip_device_flow_start_with_message() {
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::DeviceFlowStart,
+                payload: ServerPayload::DeviceFlowStart {
+                    url: "https://github.com/login/device".into(),
+                    code: "WXYZ-5678".into(),
+                    message: Some("401 Unauthorized: token expired".into()),
+                },
+            };
+
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ServerFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+
+            match decoded.payload {
+                ServerPayload::DeviceFlowStart { url, code, message } => {
+                    assert_eq!(url, "https://github.com/login/device");
+                    assert_eq!(code, "WXYZ-5678");
+                    assert_eq!(message, Some("401 Unauthorized: token expired".into()));
+                }
+                _ => panic!("Expected DeviceFlowStart payload"),
+            }
+        }
+
+        /// Verify that a DeviceFlowStart frame with message=None followed by
+        /// other frames in a byte buffer doesn't corrupt deserialization
+        /// (regression test for the skip_serializing_if bug).
+        #[test]
+        fn test_device_flow_start_does_not_corrupt_subsequent_frames() {
+            let df_frame = ServerFrame {
+                frame_type: ServerFrameType::DeviceFlowStart,
+                payload: ServerPayload::DeviceFlowStart {
+                    url: "https://github.com/login/device".into(),
+                    code: "TEST-CODE".into(),
+                    message: None,
+                },
+            };
+            let complete_frame = ServerFrame {
+                frame_type: ServerFrameType::DeviceFlowComplete,
+                payload: ServerPayload::DeviceFlowComplete,
+            };
+
+            // Serialize both independently and verify each roundtrips
+            let df_bytes = serialize_frame(&df_frame).expect("serialize DeviceFlowStart");
+            let complete_bytes = serialize_frame(&complete_frame).expect("serialize DeviceFlowComplete");
+
+            let decoded_df: ServerFrame = deserialize_frame(&df_bytes)
+                .expect("deserialize DeviceFlowStart should succeed");
+            let decoded_complete: ServerFrame = deserialize_frame(&complete_bytes)
+                .expect("deserialize DeviceFlowComplete should succeed");
+
+            assert!(matches!(decoded_df.payload, ServerPayload::DeviceFlowStart { .. }));
+            assert!(matches!(decoded_complete.payload, ServerPayload::DeviceFlowComplete));
         }
 
         #[test]
