@@ -119,6 +119,8 @@ pub fn App() -> Element {
 
         if s.vault_locked && matches!(s.connection, ConnectionStatus::Connected) {
             show_vault_unlock.set(true);
+        } else {
+            show_vault_unlock.set(false);
         }
 
         if let Some(prompt) = &s.pending_user_prompt {
