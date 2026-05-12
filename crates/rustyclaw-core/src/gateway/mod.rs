@@ -1986,7 +1986,7 @@ async fn dispatch_text_message(
         && resolved.api_key.is_some()
     {
         let session = Arc::new(CopilotSession::new(
-            resolved.api_key.clone().unwrap(),
+            resolved.api_key.clone().expect("checked is_some above"),
         ));
         local_copilot = Some(session.clone());
         let mut s = shared_copilot_session.write().await;
@@ -2049,7 +2049,7 @@ async fn dispatch_text_message(
                             && original_api_key.is_some()
                         {
                             let session = Arc::new(CopilotSession::new(
-                                original_api_key.clone().unwrap(),
+                                original_api_key.clone().expect("checked is_some above"),
                             ));
                             local_copilot = Some(session.clone());
                             let mut s = shared_copilot_session.write().await;
@@ -2174,7 +2174,7 @@ async fn dispatch_text_message(
                             && original_api_key.is_some()
                         {
                             let session = Arc::new(CopilotSession::new(
-                                original_api_key.clone().unwrap(),
+                                original_api_key.clone().expect("checked is_some above"),
                             ));
                             local_copilot = Some(session.clone());
                             let mut s = shared_copilot_session.write().await;
