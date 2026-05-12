@@ -502,9 +502,8 @@ pub fn App() -> Element {
 
             DeviceFlowDialog {
                 visible: state.read().pending_device_flow.is_some(),
-                url: state.read().pending_device_flow.as_ref().map(|(u, _, _)| u.clone()).unwrap_or_default(),
-                code: state.read().pending_device_flow.as_ref().map(|(_, c, _)| c.clone()).unwrap_or_default(),
-                message: state.read().pending_device_flow.as_ref().and_then(|(_, _, m)| m.clone()),
+                url: state.read().pending_device_flow.as_ref().map(|(u, _)| u.clone()).unwrap_or_default(),
+                code: state.read().pending_device_flow.as_ref().map(|(_, c)| c.clone()).unwrap_or_default(),
                 on_close: move |_| {
                     state.write().pending_device_flow = None;
                     state.write().status_message = Some("Device flow cancelled.".to_string());
@@ -716,8 +715,8 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             state.write().pending_credential_request =
                 Some((id, provider, secret_name, message));
         }
-        GatewayEvent::DeviceFlowStart { url, code, message } => {
-            state.write().pending_device_flow = Some((url, code, message));
+        GatewayEvent::DeviceFlowStart { url, code } => {
+            state.write().pending_device_flow = Some((url, code));
         }
         GatewayEvent::DeviceFlowComplete => {
             state.write().pending_device_flow = None;
