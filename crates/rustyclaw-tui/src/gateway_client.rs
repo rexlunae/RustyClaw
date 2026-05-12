@@ -279,7 +279,7 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             secret_name: secret_name.clone(),
             message: message.clone(),
         }),
-        ServerPayload::DeviceFlowStart { url, code } => {
+        ServerPayload::DeviceFlowStart { url, code, message: _ } => {
             FrameAction::just_action(Action::DeviceFlowCodeReady {
                 url: url.clone(),
                 code: code.clone(),

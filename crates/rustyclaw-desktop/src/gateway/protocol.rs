@@ -93,6 +93,7 @@ pub enum GatewayEvent {
     DeviceFlowStart {
         url: String,
         code: String,
+        message: Option<String>,
     },
 
     /// Device flow completed

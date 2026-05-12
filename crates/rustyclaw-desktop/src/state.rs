@@ -137,8 +137,8 @@ pub struct AppState {
     /// Pending credential request (id, provider, secret_name, message).
     pub pending_credential_request: Option<(String, String, String, String)>,
 
-    /// Pending device flow (url, code).
-    pub pending_device_flow: Option<(String, String)>,
+    /// Pending device flow (url, code, message).
+    pub pending_device_flow: Option<(String, String, Option<String>)>,
 }
 
 impl Default for AppState {
