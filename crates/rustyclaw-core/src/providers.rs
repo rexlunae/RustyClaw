@@ -1125,7 +1125,12 @@ pub async fn poll_device_token(
     };
     details = details.clone().with_body(&body);
 
-    tracing::debug!("Device flow token poll response: {}", body);
+    tracing::info!(
+        status = %status,
+        body_len = body.len(),
+        body_preview = %&body[..body.len().min(120)],
+        "Device flow token poll response"
+    );
 
     // Parse as a flat struct first, then interpret.  This avoids the
     // fragility of serde(untagged) which silently fails when the

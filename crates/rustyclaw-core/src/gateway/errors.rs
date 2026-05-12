@@ -515,6 +515,7 @@ async fn handle_device_flow(
         writer,
         &auth_resp.verification_uri,
         &auth_resp.user_code,
+        trigger_message,
     )
     .await?;
 
