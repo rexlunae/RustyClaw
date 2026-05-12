@@ -1190,9 +1190,13 @@ fn parse_form_encoded_token_response(body: &str) -> Option<RawTokenResponse> {
         .split('&')
         .filter_map(|pair| pair.split_once('='))
         .map(|(k, v)| {
-            let decoded = urlencoding::decode(v)
+            // In application/x-www-form-urlencoded, '+' means space.
+            // Replace before percent-decoding since urlencoding::decode
+            // only handles %XX sequences (RFC 3986), not form '+' → space.
+            let plus_decoded = v.replace('+', " ");
+            let decoded = urlencoding::decode(&plus_decoded)
                 .map(|d| d.into_owned())
-                .unwrap_or_else(|_| v.to_string());
+                .unwrap_or_else(|_| plus_decoded);
             (k.to_string(), decoded)
         })
         .collect();
@@ -1482,14 +1486,14 @@ mod tests {
             _ => panic!("Expected Success variant"),
         }
 
-        // Pending response in URL-encoded format
+        // Pending response in URL-encoded format ('+' must decode to space)
         let body = "error=authorization_pending&error_description=waiting+for+user";
         let raw = parse_form_encoded_token_response(body).unwrap();
         let response: TokenResponse = raw.into();
         match response {
             TokenResponse::Pending { error, error_description } => {
                 assert_eq!(error, "authorization_pending");
-                assert!(error_description.is_some());
+                assert_eq!(error_description, Some("waiting for user".to_string()));
             }
             _ => panic!("Expected Pending variant"),
         }
