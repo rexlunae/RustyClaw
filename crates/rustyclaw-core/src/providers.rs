@@ -1130,25 +1130,11 @@ pub async fn poll_device_token(
     // Parse as a flat struct first, then interpret.  This avoids the
     // fragility of serde(untagged) which silently fails when the
     // response shape is slightly unexpected.
-    //
-    // GitHub's token endpoint may return either JSON or URL-encoded
-    // form data (especially if the Accept header isn't fully respected).
-    // Try JSON first, then fall back to URL-encoded parsing.
     let raw: RawTokenResponse = match serde_json::from_str(&body) {
         Ok(r) => r,
-        Err(_json_err) => {
-            // Fallback: try URL-encoded form parsing (e.g. "access_token=xxx&token_type=bearer")
-            match parse_form_encoded_token_response(&body) {
-                Some(r) => r,
-                None => {
-                    let err = anyhow!(
-                        "POST {}: failed to parse token response (tried JSON and form-encoded): {}",
-                        url,
-                        &body[..body.len().min(200)]
-                    );
-                    return Err(details.emit_warning(err));
-                }
-            }
+        Err(e) => {
+            let err = wrap_err(e).context(format!("POST {}: failed to parse token response", url));
+            return Err(details.emit_warning(err));
         }
     };
     let token_response: TokenResponse = raw.into();
@@ -1174,37 +1160,6 @@ pub async fn poll_device_token(
             }
         }
     }
-}
-
-/// Parse a URL-encoded token response (fallback when JSON isn't returned).
-///
-/// GitHub's token endpoint historically defaults to `application/x-www-form-urlencoded`.
-/// Format: `access_token=xxx&token_type=bearer&scope=read:user`
-/// Or: `error=authorization_pending&error_description=...`
-fn parse_form_encoded_token_response(body: &str) -> Option<RawTokenResponse> {
-    let trimmed = body.trim();
-    if trimmed.starts_with('{') || !trimmed.contains('=') {
-        return None;
-    }
-    let params: std::collections::HashMap<String, String> = trimmed
-        .split('&')
-        .filter_map(|pair| pair.split_once('='))
-        .map(|(k, v)| {
-            let decoded = urlencoding::decode(v)
-                .map(|d| d.into_owned())
-                .unwrap_or_else(|_| v.to_string());
-            (k.to_string(), decoded)
-        })
-        .collect();
-
-    Some(RawTokenResponse {
-        access_token: params.get("access_token").cloned(),
-        refresh_token: params.get("refresh_token").cloned(),
-        expires_in: params.get("expires_in").and_then(|s| s.parse().ok()),
-        token_type: params.get("token_type").cloned(),
-        error: params.get("error").cloned(),
-        error_description: params.get("error_description").cloned(),
-    })
 }
 
 // ── Copilot session token exchange ──────────────────────────────────────────
@@ -1467,38 +1422,6 @@ mod tests {
             }
             _ => panic!("Expected Pending variant"),
         }
-    }
-
-    #[test]
-    fn test_form_encoded_token_response_parsing() {
-        // Success response in URL-encoded format
-        let body = "access_token=gho_xxx123&token_type=bearer&scope=read%3Auser";
-        let raw = parse_form_encoded_token_response(body).unwrap();
-        let response: TokenResponse = raw.into();
-        match response {
-            TokenResponse::Success { access_token, .. } => {
-                assert_eq!(access_token, "gho_xxx123");
-            }
-            _ => panic!("Expected Success variant"),
-        }
-
-        // Pending response in URL-encoded format
-        let body = "error=authorization_pending&error_description=waiting+for+user";
-        let raw = parse_form_encoded_token_response(body).unwrap();
-        let response: TokenResponse = raw.into();
-        match response {
-            TokenResponse::Pending { error, error_description } => {
-                assert_eq!(error, "authorization_pending");
-                assert!(error_description.is_some());
-            }
-            _ => panic!("Expected Pending variant"),
-        }
-
-        // Should return None for JSON
-        assert!(parse_form_encoded_token_response(r#"{"access_token":"x"}"#).is_none());
-
-        // Should return None for empty / no '='
-        assert!(parse_form_encoded_token_response("hello world").is_none());
     }
 
     #[test]

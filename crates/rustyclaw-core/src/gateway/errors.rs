@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
-use tracing::{info, warn};
+use tracing::warn;
 
 use super::protocol;
 use super::providers;
@@ -544,16 +544,10 @@ async fn handle_device_flow(
         poll_count += 1;
         match crate_providers::poll_device_token(df_config, &auth_resp.device_code).await {
             Ok(Some(token)) => {
-                info!(polls = poll_count, "Device flow poll succeeded");
                 token_result = Some(token);
                 break;
             }
-            Ok(None) => {
-                // Log first pending response so user can verify polling is active.
-                if poll_count == 1 {
-                    info!("Device flow polling active — waiting for user to authorize");
-                }
-            }
+            Ok(None) => {} // still pending — authorization_pending or slow_down
             Err(e) => {
                 let _ = protocol::server::send_info(
                     writer,
