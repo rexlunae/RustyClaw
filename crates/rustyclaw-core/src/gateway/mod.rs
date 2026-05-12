@@ -1405,6 +1405,7 @@ async fn handle_connection(
                                     observer.as_ref(),
                                     &tool_cancel,
                                     &shared_config,
+                                    &shared_copilot_session,
                                     &approval_rx,
                                     &user_prompt_rx,
                                     &credential_rx,
@@ -1932,6 +1933,7 @@ async fn dispatch_text_message(
     observer: Option<&SharedObserver>,
     tool_cancel: &ToolCancelFlag,
     shared_config: &SharedConfig,
+    shared_copilot_session: &SharedCopilotSession,
     approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
     user_prompt_rx: &Arc<
         Mutex<
@@ -1974,6 +1976,23 @@ async fn dispatch_text_message(
         }
     }
 
+    // If we have an API key for a Copilot provider but no CopilotSession,
+    // create one so the OAuth-to-session-token exchange works.  Without
+    // this, the raw OAuth token would be sent as-is and rejected by the
+    // Copilot API, re-triggering the device flow in an infinite loop.
+    let mut local_copilot: Option<Arc<CopilotSession>> = None;
+    if copilot_session.is_none()
+        && crate::providers::needs_copilot_session(&resolved.provider)
+        && resolved.api_key.is_some()
+    {
+        let session = Arc::new(CopilotSession::new(
+            resolved.api_key.clone().unwrap(),
+        ));
+        local_copilot = Some(session.clone());
+        let mut s = shared_copilot_session.write().await;
+        *s = Some(session);
+    }
+
     // Store the original API key for non-Copilot providers.
     // For Copilot, we'll refresh the session token on each loop iteration.
     let mut original_api_key = resolved.api_key.clone();
@@ -2009,11 +2028,12 @@ async fn dispatch_text_message(
 
         // Refresh the bearer token before each model call.
         // For Copilot providers, this ensures the session token is still valid.
+        let effective_copilot = local_copilot.as_deref().or(copilot_session);
         match auth::resolve_bearer_token(
             http,
             &resolved.provider,
             original_api_key.as_deref(),
-            copilot_session,
+            effective_copilot,
         )
         .await
         {
@@ -2023,7 +2043,20 @@ async fn dispatch_text_message(
                     message: err.to_string(),
                 }.into_traced();
                 match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
-                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Continue(()) => {
+                        if local_copilot.is_none()
+                            && crate::providers::needs_copilot_session(&resolved.provider)
+                            && original_api_key.is_some()
+                        {
+                            let session = Arc::new(CopilotSession::new(
+                                original_api_key.clone().unwrap(),
+                            ));
+                            local_copilot = Some(session.clone());
+                            let mut s = shared_copilot_session.write().await;
+                            *s = Some(session);
+                        }
+                        continue;
+                    }
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             }
@@ -2135,7 +2168,20 @@ async fn dispatch_text_message(
             Err(err) => {
                 let traced = errors::classify_model_error(err, &resolved.provider);
                 match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
-                    std::ops::ControlFlow::Continue(()) => continue,
+                    std::ops::ControlFlow::Continue(()) => {
+                        if local_copilot.is_none()
+                            && crate::providers::needs_copilot_session(&resolved.provider)
+                            && original_api_key.is_some()
+                        {
+                            let session = Arc::new(CopilotSession::new(
+                                original_api_key.clone().unwrap(),
+                            ));
+                            local_copilot = Some(session.clone());
+                            let mut s = shared_copilot_session.write().await;
+                            *s = Some(session);
+                        }
+                        continue;
+                    }
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             }
