@@ -152,14 +152,16 @@ pub fn App() -> Element {
                         )
                     };
 
+                    // Process non-chunk events first so that StreamStart
+                    // creates the assistant message before chunks are appended.
+                    for event in events {
+                        handle_gateway_event(event, state);
+                    }
                     if !chunks.is_empty() {
                         let mut s = state.write();
                         s.append_to_current_message(&chunks);
                         s.streaming_chunks += count;
                         s.streaming_bytes += bytes;
-                    }
-                    for event in events {
-                        handle_gateway_event(event, state);
                     }
                 }
             });
