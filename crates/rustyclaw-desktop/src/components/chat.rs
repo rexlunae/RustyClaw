@@ -63,23 +63,34 @@ pub fn Chat(props: ChatProps) -> Element {
         });
     }
 
-    // Auto-scroll: when at the bottom and new content arrives, stay pinned.
-    let msg_count = props.messages.len();
-    let is_streaming = props.is_streaming;
+    // Auto-scroll: when the user is near the bottom of the messages
+    // container, scroll to the very bottom as new content arrives.
+    // Dioxus use_effect only re-runs when Signal reads change, so we
+    // mirror the relevant prop values into local signals.
+    let mut scroll_msg_count = use_signal(|| props.messages.len());
+    let mut scroll_chunk_count = use_signal(|| props.streaming_chunks);
+    let mut scroll_streaming = use_signal(|| props.is_streaming);
+    scroll_msg_count.set(props.messages.len());
+    scroll_chunk_count.set(props.streaming_chunks);
+    scroll_streaming.set(props.is_streaming);
     use_effect(move || {
-        // Re-run whenever the message count or streaming state changes
-        let _count = msg_count;
-        let _stream = is_streaming;
-        document::eval(r#"
-            const el = document.querySelector('.messages');
-            if (el) {
-                const threshold = 80;
-                const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
-                if (atBottom) {
+        let _ = (
+            *scroll_msg_count.read(),
+            *scroll_chunk_count.read(),
+            *scroll_streaming.read(),
+        );
+        document::eval(
+            r#"
+            (function() {
+                var el = document.querySelector('.messages');
+                if (!el) return;
+                var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                if (nearBottom) {
                     el.scrollTop = el.scrollHeight;
                 }
-            }
-        "#);
+            })();
+        "#,
+        );
     });
 
     let on_submit = props.on_submit;
