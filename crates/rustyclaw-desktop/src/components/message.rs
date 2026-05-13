@@ -28,11 +28,13 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
     let time_str = local.format("%H:%M").to_string();
     let time_full = local.format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let is_assistant = matches!(props.role, MessageRole::Assistant);
+    let render_markdown = matches!(props.role, MessageRole::Assistant)
+        // Plaintext while streaming: markdown re-parsing on every chunk
+        // (100+ per second) overwhelms the webview and backs up the event
+        // channel.  Markdown renders once when ResponseDone arrives.
+        && !props.is_streaming;
 
-    let content_html = if is_assistant && props.is_streaming {
-        Some(markdown::render_streaming(&props.content))
-    } else if is_assistant {
+    let content_html = if render_markdown {
         Some(markdown::render(&props.content))
     } else {
         None
@@ -55,6 +57,9 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                 } else {
                     div { class: "msg-content is-plain",
                         "{props.content}"
+                        if props.is_streaming {
+                            span { class: "streaming-cursor" }
+                        }
                     }
                 }
             }
