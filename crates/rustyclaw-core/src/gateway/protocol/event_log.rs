@@ -57,6 +57,10 @@ pub enum ProtocolEvent {
     DeviceFlow {
         message: String,
     },
+    /// Streaming progress summary.
+    Streaming {
+        message: String,
+    },
 }
 
 impl fmt::Display for ProtocolEvent {
@@ -86,6 +90,7 @@ impl fmt::Display for ProtocolEvent {
             }
             ProtocolEvent::Connection { message } => write!(f, "CONN {}", message),
             ProtocolEvent::DeviceFlow { message } => write!(f, "DEVICE_FLOW {}", message),
+            ProtocolEvent::Streaming { message } => write!(f, "STREAM {}", message),
         }
     }
 }
@@ -182,6 +187,13 @@ impl ProtocolEventLog {
     /// Log a device flow event (convenience wrapper).
     pub fn log_device_flow(&self, message: &str) {
         self.log(ProtocolEvent::DeviceFlow {
+            message: message.to_string(),
+        });
+    }
+
+    /// Log a streaming progress event (convenience wrapper).
+    pub fn log_streaming(&self, message: &str) {
+        self.log(ProtocolEvent::Streaming {
             message: message.to_string(),
         });
     }

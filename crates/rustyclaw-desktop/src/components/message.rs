@@ -28,12 +28,11 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
     let time_str = local.format("%H:%M").to_string();
     let time_full = local.format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let render_markdown = matches!(props.role, MessageRole::Assistant)
-        // Don't try to parse partial markdown while it's streaming in: an
-        // unbalanced ``` would re-render the whole message every chunk.
-        && !props.is_streaming;
+    let is_assistant = matches!(props.role, MessageRole::Assistant);
 
-    let content_html = if render_markdown {
+    let content_html = if is_assistant && props.is_streaming {
+        Some(markdown::render_streaming(&props.content))
+    } else if is_assistant {
         Some(markdown::render(&props.content))
     } else {
         None
@@ -56,9 +55,6 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                 } else {
                     div { class: "msg-content is-plain",
                         "{props.content}"
-                        if props.is_streaming {
-                            span { class: "streaming-cursor" }
-                        }
                     }
                 }
             }
