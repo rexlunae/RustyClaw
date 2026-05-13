@@ -42,14 +42,23 @@ impl Default for SessionContext<'_> {
 /// - Workspace context (SOUL.md, AGENTS.md, TOOLS.md, etc.)
 /// - Skills context
 /// - Active tasks section
-/// - Model guidance
+/// - Model guidance (when `model_registry` is provided)
 /// - Tool usage guidelines
 /// - Silent reply and heartbeat guidance
 /// - Runtime info
 pub async fn build_system_prompt(
     config: &Config,
     task_mgr: &SharedTaskManager,
-    model_registry: &SharedModelRegistry,
+    skill_mgr: &SharedSkillManager,
+) -> String {
+    build_system_prompt_full(config, task_mgr, None, skill_mgr, SessionContext::default()).await
+}
+
+/// Build a complete system prompt with all optional parameters.
+pub async fn build_system_prompt_full(
+    config: &Config,
+    task_mgr: &SharedTaskManager,
+    model_registry: Option<&SharedModelRegistry>,
     skill_mgr: &SharedSkillManager,
     ctx: SessionContext<'_>,
 ) -> String {
@@ -95,9 +104,12 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         }
     }
 
-    // Add model selection guidance for sub-agents
-    let model_guidance = super::model_handler::generate_model_prompt_section(model_registry).await;
-    parts.push(model_guidance);
+    // Add model selection guidance for sub-agents (when registry available)
+    if let Some(registry) = model_registry {
+        let model_guidance =
+            super::model_handler::generate_model_prompt_section(registry).await;
+        parts.push(model_guidance);
+    }
 
     // Add comprehensive tool usage guidelines
     parts.push(build_tool_usage_section());
