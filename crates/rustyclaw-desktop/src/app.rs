@@ -132,10 +132,11 @@ pub fn App() -> Element {
 
                     // Yield to the Dioxus renderer so the UI stays
                     // responsive during high-frequency streaming.
-                    // This also lets more chunks accumulate in the
-                    // channel buffer for better batching.
+                    // Using yield_now() instead of tokio::time::sleep
+                    // because Dioxus's spawn executor may not drive
+                    // tokio's timer, which would hang the event loop.
                     if state.read().is_streaming {
-                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                        tokio::task::yield_now().await;
                     }
                 }
             });
