@@ -47,7 +47,7 @@ impl GatewayClient {
 
         // Channels for communication
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
-        let (event_tx, event_rx) = mpsc::channel::<GatewayEvent>(64);
+        let (event_tx, event_rx) = mpsc::channel::<GatewayEvent>(1024);
 
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let connected_clone = connected.clone();

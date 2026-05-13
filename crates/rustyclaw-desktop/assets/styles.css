@@ -824,6 +824,32 @@ p { margin: 0; }
     40%           { transform: translateY(-4px); opacity: 1; }
 }
 
+/* ---- Streaming progress indicator ---- */
+
+.streaming-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 16px;
+    color: var(--rc-text-muted);
+    font-size: 12.5px;
+}
+.streaming-progress-icon {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--rc-primary);
+    flex-shrink: 0;
+}
+.streaming-progress-icon.streaming-pulse {
+    animation: pulse-glow 1.4s ease-in-out infinite;
+}
+@keyframes pulse-glow {
+    0%, 100% { opacity: 0.4; transform: scale(1); }
+    50%      { opacity: 1;   transform: scale(1.3); }
+}
+.streaming-progress-text {
+    font-family: var(--rc-font-mono);
+}
+
 /* ---- Composer / input ---- */
 
 .composer-wrap {
