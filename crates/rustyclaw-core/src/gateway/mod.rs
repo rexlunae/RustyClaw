@@ -29,6 +29,7 @@ pub mod protocol;
 mod providers;
 mod secrets_handler;
 mod skills_handler;
+pub mod system_prompt;
 pub mod task_handler;
 pub mod thinking_clock;
 mod tool_executor;
@@ -1364,6 +1365,23 @@ async fn handle_connection(
                                 // Re-read copilot session from shared state
                                 let copilot_session = shared_copilot_session.read().await.clone();
                                 let workspace_dir = config.workspace_dir();
+
+                                // Ensure a system prompt is present. The TUI
+                                // sends the full conversation (including a
+                                // system message), but the desktop client
+                                // only sends the user message. When missing,
+                                // build one from the workspace context so
+                                // that SOUL.md, IDENTITY.md, etc. are
+                                // included.
+                                let mut messages = messages;
+                                if messages.is_empty() || messages[0].role != "system" {
+                                    let sys = system_prompt::build_system_prompt(
+                                        &config,
+                                        &task_mgr,
+                                        &skill_mgr,
+                                    ).await;
+                                    messages.insert(0, ChatMessage::text("system", &sys));
+                                }
 
                                 // Inject thread context into system prompt if available
                                 let messages_with_context = {
