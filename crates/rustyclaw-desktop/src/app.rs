@@ -115,11 +115,23 @@ pub fn App() -> Element {
                         for event in std::iter::once(first).chain(extra) {
                             match event {
                                 GatewayEvent::Chunk { delta } => {
-                                    b.chunk_count += 1;
-                                    b.chunk_bytes += delta.len();
-                                    b.chunk_buf.push_str(&delta);
+                                    // Coalesce consecutive chunks into one entry.
+                                    if let Some(BufferEntry::Chunks {
+                                        text, count, bytes, ..
+                                    }) = b.entries.last_mut()
+                                    {
+                                        *count += 1;
+                                        *bytes += delta.len();
+                                        text.push_str(&delta);
+                                    } else {
+                                        b.entries.push(BufferEntry::Chunks {
+                                            text: delta.clone(),
+                                            count: 1,
+                                            bytes: delta.len(),
+                                        });
+                                    }
                                 }
-                                other => b.events.push(other),
+                                other => b.entries.push(BufferEntry::Event(other)),
                             }
                         }
                     }
@@ -142,26 +154,26 @@ pub fn App() -> Element {
                         break;
                     }
 
-                    let (chunks, events, count, bytes) = {
+                    let entries = {
                         let mut b = buffer.lock().expect("stream buffer poisoned");
-                        (
-                            std::mem::take(&mut b.chunk_buf),
-                            std::mem::take(&mut b.events),
-                            std::mem::replace(&mut b.chunk_count, 0),
-                            std::mem::replace(&mut b.chunk_bytes, 0),
-                        )
+                        std::mem::take(&mut b.entries)
                     };
 
-                    // Process non-chunk events first so that StreamStart
-                    // creates the assistant message before chunks are appended.
-                    for event in events {
-                        handle_gateway_event(event, state);
-                    }
-                    if !chunks.is_empty() {
-                        let mut s = state.write();
-                        s.append_to_current_message(&chunks);
-                        s.streaming_chunks += count;
-                        s.streaming_bytes += bytes;
+                    // Process entries in original order so that
+                    // StreamStart → Chunks → ResponseDone sequencing
+                    // is preserved.
+                    for entry in entries {
+                        match entry {
+                            BufferEntry::Event(event) => {
+                                handle_gateway_event(event, state);
+                            }
+                            BufferEntry::Chunks { text, count, bytes } => {
+                                let mut s = state.write();
+                                s.append_to_current_message(&text);
+                                s.streaming_chunks += count;
+                                s.streaming_bytes += bytes;
+                            }
+                        }
                     }
                 }
             });
@@ -654,15 +666,20 @@ fn TopBar(props: TopBarProps) -> Element {
 
 // ── Shared buffer for the worker → UI bridge ───────────────────────────────
 
+/// An entry in the ordered event buffer.  Consecutive Chunk events
+/// are coalesced into a single `Chunks` entry to reduce signal writes,
+/// while preserving the ordering of non-chunk events relative to chunks.
+enum BufferEntry {
+    Event(GatewayEvent),
+    Chunks { text: String, count: u32, bytes: usize },
+}
+
 /// Intermediate buffer between the tokio event-consumer worker and
 /// the Dioxus UI task.  The worker writes at full speed; the UI task
 /// drains on each `Notify` wake-up.
 #[derive(Default)]
 struct EventBuffer {
-    events: Vec<GatewayEvent>,
-    chunk_buf: String,
-    chunk_count: u32,
-    chunk_bytes: usize,
+    entries: Vec<BufferEntry>,
 }
 
 /// Connect to the gateway.
