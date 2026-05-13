@@ -175,4 +175,8 @@ pub enum GatewayCommand {
     /// Cancel current operation
     #[serde(rename = "cancel")]
     Cancel,
+
+    /// Switch to a different provider/model
+    #[serde(rename = "model_switch")]
+    ModelSwitch { provider: String, model: String },
 }

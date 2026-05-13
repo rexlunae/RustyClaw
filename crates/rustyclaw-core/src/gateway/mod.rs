@@ -1353,10 +1353,18 @@ async fn handle_connection(
                                 if let Some(thread) = thread_mgr.foreground_mut() {
                                     // Find the last user message (typically the new one)
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+                                        // Auto-label the thread from the first user message
+                                        let should_label = thread.message_count() == 0
+                                            && (thread.label.starts_with("Session #")
+                                                || thread.label == "Main");
                                         thread.add_message(
                                             crate::threads::MessageRole::User,
                                             &last_user.content,
                                         );
+                                        if should_label {
+                                            let label = auto_thread_label(&last_user.content);
+                                            thread.label = label;
+                                        }
                                     }
                                 }
 
@@ -1625,6 +1633,68 @@ async fn handle_connection(
                                     };
                                     send_frame(&mut *writer, &frame).await?;
                                 }
+                            }
+                            ClientPayload::ModelSwitch { provider, model } => {
+                                debug!("Model switch request: {} / {}", provider, model);
+                                let base_url = crate_providers::base_url_for_provider(&provider)
+                                    .unwrap_or("")
+                                    .to_string();
+                                let api_key = {
+                                    let key_name = crate_providers::secret_key_for_provider(&provider);
+                                    if let Some(name) = key_name {
+                                        let mut v = vault.lock().await;
+                                        v.get_secret(name, true)
+                                            .ok()
+                                            .flatten()
+                                            .or_else(|| std::env::var(name).ok())
+                                    } else {
+                                        None
+                                    }
+                                };
+
+                                let new_ctx = Arc::new(ModelContext {
+                                    provider: provider.clone(),
+                                    model: model.clone(),
+                                    base_url,
+                                    api_key: api_key.clone(),
+                                });
+
+                                // Reinitialize Copilot session if needed
+                                let new_session = init_copilot_session(
+                                    &provider,
+                                    api_key.as_deref(),
+                                    &vault,
+                                ).await;
+                                {
+                                    let mut session = shared_copilot_session.write().await;
+                                    *session = new_session;
+                                }
+                                {
+                                    let mut ctx = shared_model_ctx.write().await;
+                                    *ctx = Some(new_ctx);
+                                }
+
+                                // Also update the config so it persists across restarts
+                                {
+                                    let mut cfg = shared_config.write().await;
+                                    let base = crate_providers::base_url_for_provider(&provider)
+                                        .map(String::from);
+                                    cfg.model = Some(crate::config::ModelProvider {
+                                        provider: provider.clone(),
+                                        model: Some(model.clone()),
+                                        base_url: base,
+                                    });
+                                    let _ = cfg.save(None);
+                                }
+
+                                let display = crate_providers::display_name_for_provider(&provider);
+                                send_reload_result(&mut *writer, true, &provider, &model, None).await?;
+                                let detail = format!("{} / {}", display, model);
+                                protocol::server::send_status(
+                                    &mut *writer,
+                                    StatusType::ModelConfigured,
+                                    &detail,
+                                ).await?;
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
@@ -2548,6 +2618,21 @@ pub async fn run_stdio_gateway(
         cancel,
     )
     .await
+}
+
+/// Derive a short thread label from the first user message.
+fn auto_thread_label(content: &str) -> String {
+    let trimmed = content.trim();
+    // Use the first line, capped at 50 chars on a word boundary.
+    let first_line = trimmed.lines().next().unwrap_or(trimmed);
+    if first_line.len() <= 50 {
+        first_line.to_string()
+    } else {
+        match first_line[..50].rfind(' ') {
+            Some(pos) if pos > 20 => format!("{}…", &first_line[..pos]),
+            _ => format!("{}…", &first_line[..50]),
+        }
+    }
 }
 
 #[cfg(test)]

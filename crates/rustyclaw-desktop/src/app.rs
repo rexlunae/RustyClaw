@@ -322,42 +322,6 @@ pub fn App() -> Element {
                             }
                         }
                     }
-                } else if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
-                    div { class: "banner is-info",
-                        span { class: "banner-text",
-                            "🔐 Enter your gateway TOTP code to finish pairing."
-                        }
-                        div { class: "banner-actions",
-                            input {
-                                class: "input input-sm",
-                                r#type: "text",
-                                placeholder: "TOTP code",
-                                value: "{auth_code}",
-                                oninput: move |evt| auth_code.set(evt.value()),
-                            }
-                            button {
-                                class: "btn btn-primary btn-sm",
-                                onclick: move |_| {
-                                    let code = auth_code.read().trim().to_string();
-                                    if code.is_empty() {
-                                        state.write().status_message = Some("Enter the TOTP code shown by your authenticator.".to_string());
-                                        return;
-                                    }
-
-                                    let gw = gateway.read().clone();
-                                    if let Some(client) = gw {
-                                        auth_code.set(String::new());
-                                        spawn(async move {
-                                            if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
-                                                tracing::error!("Failed to send auth code: {}", e);
-                                            }
-                                        });
-                                    }
-                                },
-                                "Verify"
-                            }
-                        }
-                    }
                 } else if matches!(state.read().connection.clone(), ConnectionStatus::Connecting) {
                     div { class: "banner is-info",
                         span { class: "banner-text",
@@ -434,9 +398,28 @@ pub fn App() -> Element {
                 visible: *show_settings.read(),
                 theme: state.read().theme,
                 gateway_url: state.read().gateway_url.clone(),
+                current_provider: state.read().provider.clone(),
+                current_model: state.read().model.clone(),
                 on_theme_change: move |t: Theme| state.write().theme = t,
                 on_gateway_url_change: move |v: String| state.write().gateway_url = v,
                 on_reconnect: move |_| do_reconnect(),
+                on_model_change: move |(provider, model): (String, String)| {
+                    let prov_clone = provider.clone();
+                    let model_clone = model.clone();
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client.send(GatewayCommand::ModelSwitch {
+                                provider: prov_clone,
+                                model: model_clone,
+                            }).await {
+                                tracing::error!("Failed to send model switch: {}", e);
+                            }
+                        });
+                    }
+                    state.write().provider = Some(provider);
+                    state.write().model = Some(model);
+                },
                 on_close: move |_| show_settings.set(false),
             }
 
@@ -584,6 +567,78 @@ pub fn App() -> Element {
                         });
                     }
                 },
+            }
+
+            // TOTP authentication modal
+            if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
+                div { class: "modal-backdrop",
+                    onclick: |_| {},
+                    div {
+                        class: "modal",
+                        onclick: move |evt| evt.stop_propagation(),
+                        div { class: "modal-head",
+                            span { class: "modal-title", "Gateway Authentication" }
+                        }
+                        div { class: "modal-body",
+                            p {
+                                style: "margin-bottom: 16px; color: var(--rc-text-muted); font-size: 13px;",
+                                "Enter the TOTP code from your authenticator app to connect to the gateway."
+                            }
+                            div { class: "field",
+                                label { class: "field-label", "TOTP Code" }
+                                input {
+                                    class: "input totp-input",
+                                    r#type: "text",
+                                    placeholder: "000000",
+                                    value: "{auth_code}",
+                                    autofocus: true,
+                                    maxlength: "8",
+                                    oninput: move |evt| auth_code.set(evt.value()),
+                                    onkeydown: move |evt: KeyboardEvent| {
+                                        if evt.key() == Key::Enter {
+                                            evt.prevent_default();
+                                            let code = auth_code.read().trim().to_string();
+                                            if code.is_empty() {
+                                                return;
+                                            }
+                                            let gw = gateway.read().clone();
+                                            if let Some(client) = gw {
+                                                auth_code.set(String::new());
+                                                spawn(async move {
+                                                    if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
+                                                        tracing::error!("Failed to send auth code: {}", e);
+                                                    }
+                                                });
+                                            }
+                                        }
+                                    },
+                                }
+                            }
+                        }
+                        div { class: "modal-foot",
+                            button {
+                                class: "btn btn-primary",
+                                disabled: auth_code.read().trim().is_empty(),
+                                onclick: move |_| {
+                                    let code = auth_code.read().trim().to_string();
+                                    if code.is_empty() {
+                                        return;
+                                    }
+                                    let gw = gateway.read().clone();
+                                    if let Some(client) = gw {
+                                        auth_code.set(String::new());
+                                        spawn(async move {
+                                            if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
+                                                tracing::error!("Failed to send auth code: {}", e);
+                                            }
+                                        });
+                                    }
+                                },
+                                "Verify"
+                            }
+                        }
+                    }
+                }
             }
         }
     }

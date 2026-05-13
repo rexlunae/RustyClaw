@@ -14,14 +14,24 @@ pub struct MessageBubbleProps {
     pub timestamp: DateTime<Utc>,
     #[props(default = false)]
     pub is_streaming: bool,
+    /// Display name for the agent (shown on assistant messages).
+    pub agent_name: Option<String>,
 }
 
 #[component]
 pub fn MessageBubble(props: MessageBubbleProps) -> Element {
     let (row_class, name, avatar) = match props.role {
-        MessageRole::User => ("msg-row is-user", "You", "🧑"),
-        MessageRole::Assistant => ("msg-row is-assistant", "Assistant", "🦞"),
-        MessageRole::System => ("msg-row is-system", "System", "⚙"),
+        MessageRole::User => ("msg-row is-user", "You".to_string(), "🧑"),
+        MessageRole::Assistant => {
+            let label = props
+                .agent_name
+                .as_deref()
+                .filter(|n| !n.is_empty())
+                .unwrap_or("Assistant")
+                .to_string();
+            ("msg-row is-assistant", label, "🦞")
+        }
+        MessageRole::System => ("msg-row is-system", "System".to_string(), "⚙"),
     };
 
     let local: DateTime<Local> = props.timestamp.with_timezone(&Local);
