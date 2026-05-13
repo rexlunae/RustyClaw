@@ -38,6 +38,9 @@ pub struct ChatProps {
     pub input: String,
     pub is_processing: bool,
     pub is_thinking: bool,
+    pub is_streaming: bool,
+    pub streaming_chunks: u32,
+    pub streaming_bytes: usize,
     pub agent_name: Option<String>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
@@ -122,6 +125,18 @@ pub fn Chat(props: ChatProps) -> Element {
                                         }
                                     }
                                 }
+                            }
+                        }
+
+                        if props.is_streaming {
+                            StreamingProgress {
+                                chunks: props.streaming_chunks,
+                                bytes: props.streaming_bytes,
+                            }
+                        } else if props.is_processing {
+                            div { class: "streaming-progress",
+                                span { class: "streaming-progress-icon", "⏳" }
+                                span { class: "streaming-progress-text", "Processing…" }
                             }
                         }
                     }
@@ -210,6 +225,39 @@ fn EmptyState(props: EmptyStateProps) -> Element {
                     }
                 }
             }
+        }
+    }
+}
+
+// ── Streaming progress indicator ───────────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct StreamingProgressProps {
+    chunks: u32,
+    bytes: usize,
+}
+
+#[component]
+fn StreamingProgress(props: StreamingProgressProps) -> Element {
+    let label = if props.bytes >= 1024 {
+        format!(
+            "Streaming\u{2026} {} chunks, {:.1} KB",
+            props.chunks,
+            props.bytes as f64 / 1024.0,
+        )
+    } else if props.chunks > 0 {
+        format!(
+            "Streaming\u{2026} {} chunks, {} B",
+            props.chunks, props.bytes,
+        )
+    } else {
+        "Streaming\u{2026}".to_string()
+    };
+
+    rsx! {
+        div { class: "streaming-progress",
+            span { class: "streaming-progress-icon streaming-pulse" }
+            span { class: "streaming-progress-text", "{label}" }
         }
     }
 }

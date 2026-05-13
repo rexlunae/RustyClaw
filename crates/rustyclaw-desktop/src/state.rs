@@ -139,6 +139,12 @@ pub struct AppState {
 
     /// Pending device flow (url, code, message).
     pub pending_device_flow: Option<(String, String, Option<String>)>,
+
+    /// Number of streaming chunks received in the current response.
+    pub streaming_chunks: u32,
+
+    /// Total bytes received in the current streaming response.
+    pub streaming_bytes: usize,
 }
 
 impl Default for AppState {
@@ -166,6 +172,8 @@ impl Default for AppState {
             pending_user_prompt: None,
             pending_credential_request: None,
             pending_device_flow: None,
+            streaming_chunks: 0,
+            streaming_bytes: 0,
         }
     }
 }
@@ -197,6 +205,8 @@ impl AppState {
         };
         self.messages.push_back(msg);
         self.is_streaming = true;
+        self.streaming_chunks = 0;
+        self.streaming_bytes = 0;
         id
     }
 
@@ -216,6 +226,8 @@ impl AppState {
         }
         self.is_streaming = false;
         self.is_processing = false;
+        self.streaming_chunks = 0;
+        self.streaming_bytes = 0;
     }
 
     /// Add a tool call to the current message.

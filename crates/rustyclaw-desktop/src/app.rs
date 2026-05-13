@@ -102,22 +102,40 @@ pub fn App() -> Element {
                     let extra = client.drain_available().await;
 
                     let mut chunk_buf = String::new();
+                    let mut chunk_count: u32 = 0;
                     for event in std::iter::once(first).chain(extra) {
                         match event {
                             GatewayEvent::Chunk { delta } => {
                                 chunk_buf.push_str(&delta);
+                                chunk_count += 1;
                             }
                             other => {
                                 if !chunk_buf.is_empty() {
-                                    state.write().append_to_current_message(&chunk_buf);
+                                    let mut s = state.write();
+                                    s.append_to_current_message(&chunk_buf);
+                                    s.streaming_chunks += chunk_count;
+                                    s.streaming_bytes += chunk_buf.len();
+                                    drop(s);
                                     chunk_buf.clear();
+                                    chunk_count = 0;
                                 }
                                 handle_gateway_event(other, state);
                             }
                         }
                     }
                     if !chunk_buf.is_empty() {
-                        state.write().append_to_current_message(&chunk_buf);
+                        let mut s = state.write();
+                        s.append_to_current_message(&chunk_buf);
+                        s.streaming_chunks += chunk_count;
+                        s.streaming_bytes += chunk_buf.len();
+                    }
+
+                    // Yield to the Dioxus renderer so the UI stays
+                    // responsive during high-frequency streaming.
+                    // This also lets more chunks accumulate in the
+                    // channel buffer for better batching.
+                    if state.read().is_streaming {
+                        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
                     }
                 }
             });
@@ -342,6 +360,9 @@ pub fn App() -> Element {
                     input: state.read().input.clone(),
                     is_processing: state.read().is_processing,
                     is_thinking: state.read().is_thinking,
+                    is_streaming: state.read().is_streaming,
+                    streaming_chunks: state.read().streaming_chunks,
+                    streaming_bytes: state.read().streaming_bytes,
                     agent_name: state.read().agent_name.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
