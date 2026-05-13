@@ -90,10 +90,34 @@ pub fn App() -> Element {
                     if !client.is_connected() {
                         break;
                     }
-                    if let Some(event) = client.recv().await {
-                        handle_gateway_event(event, state);
-                    } else {
-                        break;
+                    // Block until at least one event arrives.
+                    let first = match client.recv().await {
+                        Some(e) => e,
+                        None => break,
+                    };
+
+                    // Drain any additional buffered events so we can
+                    // batch rapid-fire chunks into a single state write
+                    // instead of re-rendering the webview per token.
+                    let extra = client.drain_available().await;
+
+                    let mut chunk_buf = String::new();
+                    for event in std::iter::once(first).chain(extra) {
+                        match event {
+                            GatewayEvent::Chunk { delta } => {
+                                chunk_buf.push_str(&delta);
+                            }
+                            other => {
+                                if !chunk_buf.is_empty() {
+                                    state.write().append_to_current_message(&chunk_buf);
+                                    chunk_buf.clear();
+                                }
+                                handle_gateway_event(other, state);
+                            }
+                        }
+                    }
+                    if !chunk_buf.is_empty() {
+                        state.write().append_to_current_message(&chunk_buf);
                     }
                 }
             });

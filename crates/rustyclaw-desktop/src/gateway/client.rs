@@ -308,10 +308,24 @@ impl GatewayClient {
             .map_err(|_| anyhow!("Failed to send command"))
     }
 
-    /// Receive the next event from the gateway.
+    /// Receive the next event from the gateway (blocks until one arrives).
     pub async fn recv(&self) -> Option<GatewayEvent> {
         let mut rx = self.event_rx.lock().await;
         rx.recv().await
+    }
+
+    /// Drain all currently-buffered events without blocking.
+    ///
+    /// The caller must already hold the lock (obtained via `recv`).
+    /// This is used to batch rapidly-arriving chunk events so the UI
+    /// doesn't re-render on every single token.
+    pub async fn drain_available(&self) -> Vec<GatewayEvent> {
+        let mut rx = self.event_rx.lock().await;
+        let mut events = Vec::new();
+        while let Ok(event) = rx.try_recv() {
+            events.push(event);
+        }
+        events
     }
 
     /// Check if connected.

@@ -30,6 +30,10 @@ pub fn render(input: &str) -> String {
 ///
 /// Closes any open fenced code block so the partial content renders
 /// correctly, then appends a blinking cursor span after the HTML.
+///
+/// Currently unused: re-parsing markdown on every chunk (~120/sec)
+/// overwhelms the webview.  Kept for future throttled rendering.
+#[allow(dead_code)]
 pub fn render_streaming(input: &str) -> String {
     let patched = balance_fences(input);
     let mut html = render_inner(&patched);
@@ -39,6 +43,7 @@ pub fn render_streaming(input: &str) -> String {
 
 /// Close an open fenced code block if the number of opening fences
 /// exceeds the number of closing fences.
+#[allow(dead_code)]
 fn balance_fences(input: &str) -> String {
     let mut depth: usize = 0;
     for line in input.lines() {
