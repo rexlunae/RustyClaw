@@ -168,6 +168,9 @@ impl GatewayClient {
         let active_stream_id_rx = active_stream_id.clone();
         tokio::spawn(async move {
             let mut len_buf = [0u8; 4];
+            // Streaming stats for the event log.
+            let mut stream_chunk_count: u32 = 0;
+            let mut stream_total_bytes: usize = 0;
             loop {
                 match stdout.read_exact(&mut len_buf).await {
                     Ok(_) => {
@@ -205,6 +208,25 @@ impl GatewayClient {
                                     envelope.stream_id,
                                     len,
                                 );
+                                // Track streaming progress.
+                                match &envelope.frame.payload {
+                                    ServerPayload::StreamStart => {
+                                        stream_chunk_count = 0;
+                                        stream_total_bytes = 0;
+                                        event_log_rx.log_streaming("started");
+                                    }
+                                    ServerPayload::Chunk { delta } => {
+                                        stream_chunk_count += 1;
+                                        stream_total_bytes += delta.len();
+                                    }
+                                    ServerPayload::ResponseDone { .. } => {
+                                        event_log_rx.log_streaming(&format!(
+                                            "done chunks={} chars={}",
+                                            stream_chunk_count, stream_total_bytes,
+                                        ));
+                                    }
+                                    _ => {}
+                                }
                                 if matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. }) {
                                     let active = active_stream_id_rx.load(Ordering::Relaxed);
                                     if active == envelope.stream_id {

@@ -62,6 +62,31 @@ pub async fn send_with_retry(builder: reqwest::RequestBuilder) -> Result<reqwest
 
 // ── Streaming helpers ───────────────────────────────────────────────────────
 
+/// Find the next SSE event boundary in the buffer.
+///
+/// Returns `(position, bytes_to_skip)` where `position` is the start of the
+/// blank-line separator and `bytes_to_skip` is how many bytes to consume
+/// (2 for `\n\n`, 4 for `\r\n\r\n`).
+fn find_event_boundary(buf: &str) -> Option<(usize, usize)> {
+    let bytes = buf.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'\n' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+            return Some((i, 2));
+        }
+        if bytes[i] == b'\r'
+            && i + 3 < bytes.len()
+            && bytes[i + 1] == b'\n'
+            && bytes[i + 2] == b'\r'
+            && bytes[i + 3] == b'\n'
+        {
+            return Some((i, 4));
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Send a single chunk frame as binary.
 pub async fn send_chunk(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
     server::send_chunk(writer, delta)
@@ -871,10 +896,11 @@ async fn consume_sse_stream(
 
         buffer.push_str(&chunk_str);
 
-        // Process complete SSE events (terminated by double newline)
-        while let Some(event_end) = buffer.find("\n\n") {
+        // Process complete SSE events (terminated by a blank line).
+        // Handle both Unix (\n\n) and Windows (\r\n\r\n) line endings.
+        while let Some((event_end, skip)) = find_event_boundary(&buffer) {
             let event = buffer[..event_end].to_string();
-            buffer = buffer[event_end + 2..].to_string();
+            buffer = buffer[event_end + skip..].to_string();
 
             for line in event.lines() {
                 if let Some(data) = line.strip_prefix("data: ") {
@@ -1088,8 +1114,13 @@ pub async fn call_openai_with_tools(
         "messages": messages,
         "max_tokens": 16384,
         "stream": true,
-        "stream_options": { "include_usage": true },
     });
+    // stream_options is an OpenAI extension — only include for providers
+    // known to support it.  Copilot and other proxies may reject or
+    // mishandle unrecognised fields.
+    if !crate::providers::needs_copilot_session(&req.provider) {
+        body["stream_options"] = json!({ "include_usage": true });
+    }
     if !tool_defs.is_empty() {
         body["tools"] = json!(tool_defs);
     }

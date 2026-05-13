@@ -23,6 +23,44 @@ use pulldown_cmark::{CowStr, Event, LinkType, Options, Parser, Tag, html};
 
 /// Render a markdown string into a sanitised HTML fragment.
 pub fn render(input: &str) -> String {
+    render_inner(input)
+}
+
+/// Render a markdown string that is still being streamed.
+///
+/// Closes any open fenced code block so the partial content renders
+/// correctly, then appends a blinking cursor span after the HTML.
+pub fn render_streaming(input: &str) -> String {
+    let patched = balance_fences(input);
+    let mut html = render_inner(&patched);
+    html.push_str(r#"<span class="streaming-cursor"></span>"#);
+    html
+}
+
+/// Close an open fenced code block if the number of opening fences
+/// exceeds the number of closing fences.
+fn balance_fences(input: &str) -> String {
+    let mut depth: usize = 0;
+    for line in input.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            if depth > 0 && trimmed.trim() == "```" {
+                depth -= 1;
+            } else {
+                depth += 1;
+            }
+        }
+    }
+    if depth > 0 {
+        let mut out = input.to_string();
+        out.push_str("\n```");
+        out
+    } else {
+        input.to_string()
+    }
+}
+
+fn render_inner(input: &str) -> String {
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_STRIKETHROUGH);
     opts.insert(Options::ENABLE_TABLES);
