@@ -428,6 +428,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::Cancel,
             payload: ClientPayload::Empty,
         },
+        GatewayCommand::ModelSwitch { provider, model } => ClientFrame {
+            frame_type: ClientFrameType::ModelSwitch,
+            payload: ClientPayload::ModelSwitch { provider, model },
+        },
     }
 }
 

@@ -60,6 +60,8 @@ pub enum ClientFrameType {
     ThreadRename = 24,
     /// User response to a credential request.
     CredentialResponse = 25,
+    /// Switch to a different provider/model.
+    ModelSwitch = 26,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -302,6 +304,11 @@ pub enum ClientPayload {
         dismissed: bool,
         /// The credential value (API key, token, etc.).
         value: Option<String>,
+    },
+    /// Switch to a different provider/model.
+    ModelSwitch {
+        provider: String,
+        model: String,
     },
 }
 
@@ -627,6 +634,7 @@ mod tests {
             assert_eq!(ClientFrameType::ThreadClose as u8, 23);
             assert_eq!(ClientFrameType::ThreadRename as u8, 24);
             assert_eq!(ClientFrameType::CredentialResponse as u8, 25);
+            assert_eq!(ClientFrameType::ModelSwitch as u8, 26);
         }
 
         #[test]

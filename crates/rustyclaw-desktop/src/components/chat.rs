@@ -63,6 +63,25 @@ pub fn Chat(props: ChatProps) -> Element {
         });
     }
 
+    // Auto-scroll: when at the bottom and new content arrives, stay pinned.
+    let msg_count = props.messages.len();
+    let is_streaming = props.is_streaming;
+    use_effect(move || {
+        // Re-run whenever the message count or streaming state changes
+        let _count = msg_count;
+        let _stream = is_streaming;
+        document::eval(r#"
+            const el = document.querySelector('.messages');
+            if (el) {
+                const threshold = 80;
+                const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+                if (atBottom) {
+                    el.scrollTop = el.scrollHeight;
+                }
+            }
+        "#);
+    });
+
     let on_submit = props.on_submit;
     let is_processing = props.is_processing;
     let has_messages = !props.messages.is_empty();
@@ -96,6 +115,7 @@ pub fn Chat(props: ChatProps) -> Element {
                                     content: msg.content.clone(),
                                     timestamp: msg.timestamp,
                                     is_streaming: msg.is_streaming,
+                                    agent_name: props.agent_name.clone(),
                                 }
                                 for tool in msg.tool_calls.iter() {
                                     ToolCallPanel {
@@ -116,7 +136,9 @@ pub fn Chat(props: ChatProps) -> Element {
                                 div { class: "msg-avatar", "🦞" }
                                 div { class: "msg-body",
                                     div { class: "msg-header",
-                                        span { class: "msg-name", "Assistant" }
+                                        span { class: "msg-name",
+                                            {props.agent_name.as_deref().unwrap_or("Assistant")}
+                                        }
                                     }
                                     div { class: "thinking",
                                         span { "Thinking" }

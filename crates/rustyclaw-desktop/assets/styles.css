@@ -1026,6 +1026,15 @@ p { margin: 0; }
 .textarea { resize: vertical; min-height: 80px; }
 .field-help { color: var(--rc-text-faint); font-size: 11.5px; }
 
+/* ---- TOTP input ---- */
+.totp-input {
+    font-family: var(--rc-font-mono);
+    font-size: 22px;
+    letter-spacing: 0.3em;
+    text-align: center;
+    padding: 12px 10px;
+}
+
 /* ---- Step indicator (hatching) ---- */
 
 .steps {
