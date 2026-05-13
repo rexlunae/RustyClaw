@@ -1,7 +1,7 @@
 //! Top-level application component.
 
 use dioxus::prelude::*;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{
     Chat, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
@@ -85,58 +85,81 @@ pub fn App() -> Element {
             }
             active_event_client.set(Some(client.clone()));
 
-            spawn(async move {
+            // Shared buffer between the tokio worker and the
+            // Dioxus UI task.  The worker pushes events at full
+            // speed; the UI task drains the buffer when notified.
+            let buffer: Arc<StdMutex<EventBuffer>> =
+                Arc::new(StdMutex::new(EventBuffer::default()));
+            let notify = Arc::new(tokio::sync::Notify::new());
+
+            // ── Worker (tokio thread) ──────────────────────────
+            // Runs on the tokio runtime, completely independent
+            // of the Dioxus virtualdom.  Never blocked by
+            // rendering — the SSH reader will never stall.
+            let client_w = client.clone();
+            let buf_w = buffer.clone();
+            let notify_w = notify.clone();
+            tokio::spawn(async move {
                 loop {
-                    if !client.is_connected() {
+                    if !client_w.is_connected() {
                         break;
                     }
-                    // Block until at least one event arrives.
-                    let first = match client.recv().await {
+                    let first = match client_w.recv().await {
                         Some(e) => e,
                         None => break,
                     };
+                    let extra = client_w.drain_available().await;
 
-                    // Drain any additional buffered events so we can
-                    // batch rapid-fire chunks into a single state write
-                    // instead of re-rendering the webview per token.
-                    let extra = client.drain_available().await;
-
-                    let mut chunk_buf = String::new();
-                    let mut chunk_count: u32 = 0;
-                    for event in std::iter::once(first).chain(extra) {
-                        match event {
-                            GatewayEvent::Chunk { delta } => {
-                                chunk_buf.push_str(&delta);
-                                chunk_count += 1;
-                            }
-                            other => {
-                                if !chunk_buf.is_empty() {
-                                    let mut s = state.write();
-                                    s.append_to_current_message(&chunk_buf);
-                                    s.streaming_chunks += chunk_count;
-                                    s.streaming_bytes += chunk_buf.len();
-                                    drop(s);
-                                    chunk_buf.clear();
-                                    chunk_count = 0;
+                    {
+                        let mut b = buf_w.lock().expect("stream buffer poisoned");
+                        for event in std::iter::once(first).chain(extra) {
+                            match event {
+                                GatewayEvent::Chunk { delta } => {
+                                    b.chunk_count += 1;
+                                    b.chunk_bytes += delta.len();
+                                    b.chunk_buf.push_str(&delta);
                                 }
-                                handle_gateway_event(other, state);
+                                other => b.events.push(other),
                             }
                         }
                     }
-                    if !chunk_buf.is_empty() {
-                        let mut s = state.write();
-                        s.append_to_current_message(&chunk_buf);
-                        s.streaming_chunks += chunk_count;
-                        s.streaming_bytes += chunk_buf.len();
+                    notify_w.notify_one();
+                }
+                // Final wake so the UI task can observe disconnect.
+                notify_w.notify_one();
+            });
+
+            // ── UI updater (Dioxus task) ───────────────────────
+            // Suspends on `notified().await`, which is a *true*
+            // suspend — the virtualdom stops polling us and can
+            // render.  When the worker signals new data, the
+            // waker fires and we drain the buffer in one shot.
+            spawn(async move {
+                loop {
+                    notify.notified().await;
+
+                    if !client.is_connected() {
+                        break;
                     }
 
-                    // Yield to the Dioxus renderer so the UI stays
-                    // responsive during high-frequency streaming.
-                    // Using yield_now() instead of tokio::time::sleep
-                    // because Dioxus's spawn executor may not drive
-                    // tokio's timer, which would hang the event loop.
-                    if state.read().is_streaming {
-                        tokio::task::yield_now().await;
+                    let (chunks, events, count, bytes) = {
+                        let mut b = buffer.lock().expect("stream buffer poisoned");
+                        (
+                            std::mem::take(&mut b.chunk_buf),
+                            std::mem::take(&mut b.events),
+                            std::mem::replace(&mut b.chunk_count, 0),
+                            std::mem::replace(&mut b.chunk_bytes, 0),
+                        )
+                    };
+
+                    if !chunks.is_empty() {
+                        let mut s = state.write();
+                        s.append_to_current_message(&chunks);
+                        s.streaming_chunks += count;
+                        s.streaming_bytes += bytes;
+                    }
+                    for event in events {
+                        handle_gateway_event(event, state);
                     }
                 }
             });
@@ -625,6 +648,19 @@ fn TopBar(props: TopBarProps) -> Element {
             }
         }
     }
+}
+
+// ── Shared buffer for the worker → UI bridge ───────────────────────────────
+
+/// Intermediate buffer between the tokio event-consumer worker and
+/// the Dioxus UI task.  The worker writes at full speed; the UI task
+/// drains on each `Notify` wake-up.
+#[derive(Default)]
+struct EventBuffer {
+    events: Vec<GatewayEvent>,
+    chunk_buf: String,
+    chunk_count: u32,
+    chunk_bytes: usize,
 }
 
 /// Connect to the gateway.
