@@ -536,6 +536,55 @@ pub fn run_onboard_wizard(
             AuthMethod::None => {
                 // No authentication needed
             }
+            AuthMethod::OptionalApiKey => {
+                let existing = secrets.get_secret(secret_key, true)?;
+                if existing.is_some() {
+                    let reuse = prompt_line(
+                        &mut reader,
+                        &format!(
+                            "{} ",
+                            t::accent(&format!(
+                                "An API key for {} is already stored. Keep it? [Y/n]:",
+                                provider.display
+                            ))
+                        ),
+                    )?;
+                    if reuse.trim().eq_ignore_ascii_case("n") {
+                        let key = prompt_secret(
+                            &mut reader,
+                            &format!("{} ", t::accent("Enter API key (or leave blank to remove):")),
+                        )?;
+                        if key.trim().is_empty() {
+                            println!(
+                                "  {}",
+                                t::icon_ok("Key removed — will connect without authentication.")
+                            );
+                        } else {
+                            secrets.store_secret(secret_key, key.trim())?;
+                            println!("  {}", t::icon_ok("API key updated."));
+                        }
+                    } else {
+                        println!("  {}", t::icon_ok("Keeping existing API key."));
+                    }
+                } else {
+                    let key = prompt_secret(
+                        &mut reader,
+                        &format!(
+                            "{} ",
+                            t::accent("Enter API key (optional — press Enter to skip):")
+                        ),
+                    )?;
+                    if key.trim().is_empty() {
+                        println!(
+                            "  {}",
+                            t::icon_ok("No key — connecting without authentication.")
+                        );
+                    } else {
+                        secrets.store_secret(secret_key, key.trim())?;
+                        println!("  {}", t::icon_ok("API key stored securely."));
+                    }
+                }
+            }
         }
         println!();
     }

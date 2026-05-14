@@ -30,6 +30,8 @@ pub enum AuthMethod {
     DeviceFlow,
     /// No authentication required.
     None,
+    /// API key is optional (e.g. Ollama: local needs no key, cloud does).
+    OptionalApiKey,
 }
 
 /// Device flow configuration for OAuth providers.
@@ -204,14 +206,14 @@ pub const PROVIDERS: &[ProviderDef] = &[
     },
     ProviderDef {
         id: "ollama",
-        display: "Ollama (local)",
-        auth_method: AuthMethod::None,
-        secret_key: None,
+        display: "Ollama (local or cloud)",
+        auth_method: AuthMethod::OptionalApiKey,
+        secret_key: Some("OLLAMA_API_KEY"),
         device_flow: None,
         base_url: Some("http://localhost:11434/v1"),
         models: &["llama3.1", "mistral", "codellama", "deepseek-coder"],
         help_url: None,
-        help_text: Some("No key needed — runs locally. Install: ollama.com"),
+        help_text: Some("No key needed for local Ollama. For Ollama Cloud set OLLAMA_API_KEY."),
     },
     ProviderDef {
         id: "lmstudio",
@@ -437,8 +439,8 @@ pub async fn fetch_models_detailed(
         "google" => fetch_google_models_detailed(base, api_key).await,
         // GitHub Copilot exposes a Copilot-specific model list API.
         "github-copilot" => fetch_github_copilot_models_detailed(base, api_key).await,
-        // Local providers — no auth needed, OpenAI-compatible /v1/models
-        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, None).await,
+        // Local providers — auth optional, OpenAI-compatible /v1/models
+        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, api_key).await,
         // Everything else is OpenAI-compatible
         _ => fetch_openai_compatible_models_detailed(base, api_key).await,
     };
@@ -1378,10 +1380,10 @@ mod tests {
         assert_eq!(copilot_proxy.auth_method, AuthMethod::DeviceFlow);
         assert!(copilot_proxy.device_flow.is_some());
 
-        // No auth providers
+        // Optional auth providers
         let ollama = provider_by_id("ollama").unwrap();
-        assert_eq!(ollama.auth_method, AuthMethod::None);
-        assert!(ollama.secret_key.is_none());
+        assert_eq!(ollama.auth_method, AuthMethod::OptionalApiKey);
+        assert_eq!(ollama.secret_key, Some("OLLAMA_API_KEY"));
     }
 
     #[test]
@@ -1558,6 +1560,13 @@ mod tests {
                     assert!(
                         provider.device_flow.is_none(),
                         "Provider {} with None auth should not have device_flow",
+                        provider.id
+                    );
+                }
+                AuthMethod::OptionalApiKey => {
+                    assert!(
+                        provider.device_flow.is_none(),
+                        "Provider {} with OptionalApiKey auth should not have device_flow",
                         provider.id
                     );
                 }

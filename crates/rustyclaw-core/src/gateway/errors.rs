@@ -317,7 +317,7 @@ pub async fn handle(
                     )
                     .await
                 }
-                crate_providers::AuthMethod::ApiKey | crate_providers::AuthMethod::None => {
+                crate_providers::AuthMethod::ApiKey | crate_providers::AuthMethod::None | crate_providers::AuthMethod::OptionalApiKey => {
                     handle_credential_prompt(
                         writer,
                         resolved,

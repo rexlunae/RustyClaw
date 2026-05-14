@@ -1128,6 +1128,9 @@ impl App {
                                     rustyclaw_core::providers::AuthMethod::None => {
                                         "none".to_string()
                                     }
+                                    rustyclaw_core::providers::AuthMethod::OptionalApiKey => {
+                                        "apikey".to_string()
+                                    }
                                 })
                                 .collect();
                             let _ = gw_tx.send(GwEvent::ShowProviderSelector {
@@ -1383,7 +1386,8 @@ impl App {
                                     }
                                 });
                             }
-                            rustyclaw_core::providers::AuthMethod::ApiKey => {
+                            rustyclaw_core::providers::AuthMethod::ApiKey
+                            | rustyclaw_core::providers::AuthMethod::OptionalApiKey => {
                                 // Check if we already have a key stored
                                 let has_key = def.secret_key.and_then(|sk| {
                                     secrets_manager
