@@ -110,6 +110,12 @@ pub enum GatewayEvent {
 
     /// Info message
     Info { message: String },
+
+    /// DOM query request — evaluate JS in webview
+    DomQuery {
+        id: String,
+        js: String,
+    },
 }
 
 /// Thread info from gateway.
@@ -179,4 +185,12 @@ pub enum GatewayCommand {
     /// Switch to a different provider/model
     #[serde(rename = "model_switch")]
     ModelSwitch { provider: String, model: String },
+
+    /// Respond to a DOM query
+    #[serde(rename = "dom_query_response")]
+    DomQueryResponse {
+        id: String,
+        result: String,
+        is_error: bool,
+    },
 }

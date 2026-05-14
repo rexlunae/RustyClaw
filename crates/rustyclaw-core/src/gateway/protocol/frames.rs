@@ -62,6 +62,8 @@ pub enum ClientFrameType {
     CredentialResponse = 25,
     /// Switch to a different provider/model.
     ModelSwitch = 26,
+    /// Response to a DOM query request.
+    DomQueryResponse = 27,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -144,6 +146,9 @@ pub enum ServerFrameType {
     DeviceFlowStart = 36,
     /// Device flow completed — dismiss the device flow dialog.
     DeviceFlowComplete = 37,
+    /// DOM query — gateway requests the client to evaluate JavaScript
+    /// against the webview DOM and return the result.
+    DomQuery = 38,
 }
 
 /// Status frame sub-types.
@@ -309,6 +314,15 @@ pub enum ClientPayload {
     ModelSwitch {
         provider: String,
         model: String,
+    },
+    /// Response to a DOM query.
+    DomQueryResponse {
+        /// Matches the `id` from the `DomQuery` server frame.
+        id: String,
+        /// The JSON-serialised result of evaluating the JS expression.
+        result: String,
+        /// `true` if the evaluation threw an error.
+        is_error: bool,
     },
 }
 
@@ -487,6 +501,14 @@ pub enum ServerPayload {
     },
     /// Device flow completed — the gateway obtained the token; dismiss the dialog.
     DeviceFlowComplete,
+    /// DOM query — evaluate a JavaScript expression in the webview and
+    /// return the result via `DomQueryResponse`.
+    DomQuery {
+        /// Unique request ID.
+        id: String,
+        /// JavaScript expression to evaluate.
+        js: String,
+    },
 }
 
 /// DTO for task info in updates.
@@ -604,6 +626,7 @@ mod tests {
             assert_eq!(ServerFrameType::CredentialRequest as u8, 35);
             assert_eq!(ServerFrameType::DeviceFlowStart as u8, 36);
             assert_eq!(ServerFrameType::DeviceFlowComplete as u8, 37);
+            assert_eq!(ServerFrameType::DomQuery as u8, 38);
         }
 
         #[test]
@@ -635,6 +658,7 @@ mod tests {
             assert_eq!(ClientFrameType::ThreadRename as u8, 24);
             assert_eq!(ClientFrameType::CredentialResponse as u8, 25);
             assert_eq!(ClientFrameType::ModelSwitch as u8, 26);
+            assert_eq!(ClientFrameType::DomQueryResponse as u8, 27);
         }
 
         #[test]

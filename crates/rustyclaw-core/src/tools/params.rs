@@ -1884,3 +1884,19 @@ pub fn swarm_stop_params() -> Vec<ToolParam> {
 pub fn swarm_templates_params() -> Vec<ToolParam> {
     vec![]
 }
+
+pub fn client_dom_query_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "js".into(),
+        description: "JavaScript expression to evaluate in the desktop client's webview. \
+                      The expression is wrapped in a try/catch and its return value is \
+                      JSON-stringified. Examples: \
+                      'document.querySelector(\".messages\").scrollTop', \
+                      'document.querySelector(\".messages\").scrollHeight', \
+                      'document.querySelector(\".messages\").innerHTML.length', \
+                      'JSON.stringify({scrollTop: el.scrollTop, scrollHeight: el.scrollHeight, clientHeight: el.clientHeight})'"
+            .into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}

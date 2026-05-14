@@ -145,6 +145,13 @@ fn exec_ask_user_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, St
     Err("ask_user must be executed via the gateway".into())
 }
 
+/// Stub executor for the `client_dom_query` tool — never called directly.
+/// Execution is intercepted by the gateway, which forwards the query to
+/// the desktop client's webview and returns the evaluated result.
+fn exec_client_dom_query_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    Err("client_dom_query must be executed via the gateway".into())
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::path::Path;
@@ -299,6 +306,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "secure_delete" => "Securely overwrite & delete files",
         "summarize_file" => "Preview-summarize any file type",
         "ask_user" => "Ask the user structured questions",
+        "client_dom_query" => "Evaluate JavaScript in the desktop client's webview DOM",
         "ollama_manage" => "Administer the Ollama model server",
         "exo_manage" => "Administer the Exo distributed AI cluster (git clone + uv run)",
         "uv_manage" => "Manage Python envs & packages via uv",
@@ -441,6 +449,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &NPM_MANAGE,
         &AGENT_SETUP,
         &ASK_USER,
+        &CLIENT_DOM_QUERY,
         &PDF,
         &SWARM_CREATE,
         &SWARM_LIST,
@@ -1258,6 +1267,24 @@ pub static ASK_USER: ToolDef = ToolDef {
     execute: exec_ask_user_stub,
 };
 
+// ── Client DOM query tool ───────────────────────────────────────────────────
+
+pub static CLIENT_DOM_QUERY: ToolDef = ToolDef {
+    name: "client_dom_query",
+    description: "Evaluate a JavaScript expression inside the desktop client's webview \
+                  and return the result. Use this to inspect the DOM, read element \
+                  properties (scroll positions, dimensions, text content, computed \
+                  styles), or diagnose rendering issues. The expression should \
+                  return a JSON-serialisable value (string, number, boolean, object, \
+                  or array). Example: \
+                  `document.querySelector('.messages').scrollTop` to read scroll \
+                  position, or `document.querySelector('.messages').innerHTML` to \
+                  inspect rendered HTML. Only read-only queries are intended; \
+                  do not modify the DOM.",
+    parameters: vec![],
+    execute: exec_client_dom_query_stub,
+};
+
 // ── PDF tool ────────────────────────────────────────────────────────────────
 
 pub static PDF: ToolDef = ToolDef {
@@ -1432,6 +1459,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "secure_delete" => secure_delete_params(),
         "summarize_file" => summarize_file_params(),
         "ask_user" => ask_user_params(),
+        "client_dom_query" => client_dom_query_params(),
         "pkg_manage" => pkg_manage_params(),
         "net_info" => net_info_params(),
         "net_scan" => net_scan_params(),
@@ -1560,6 +1588,12 @@ pub fn is_skill_tool(name: &str) -> bool {
 /// through the gateway → TUI → user → gateway → tool-result path.
 pub fn is_user_prompt_tool(name: &str) -> bool {
     name == "ask_user"
+}
+
+/// Returns `true` for the DOM query tool that must be routed through
+/// the gateway → desktop client → gateway → tool-result path.
+pub fn is_dom_query_tool(name: &str) -> bool {
+    name == "client_dom_query"
 }
 
 /// Tools that have native async implementations.

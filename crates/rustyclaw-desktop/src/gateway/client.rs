@@ -432,6 +432,18 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::ModelSwitch,
             payload: ClientPayload::ModelSwitch { provider, model },
         },
+        GatewayCommand::DomQueryResponse {
+            id,
+            result,
+            is_error,
+        } => ClientFrame {
+            frame_type: ClientFrameType::DomQueryResponse,
+            payload: ClientPayload::DomQueryResponse {
+                id,
+                result,
+                is_error,
+            },
+        },
     }
 }
 
@@ -547,6 +559,7 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
         }),
         ServerPayload::Error { message, .. } => Some(GatewayEvent::Error { message }),
         ServerPayload::Info { message } => Some(GatewayEvent::Info { message }),
+        ServerPayload::DomQuery { id, js } => Some(GatewayEvent::DomQuery { id, js }),
         _ => None,
     }
 }

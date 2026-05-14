@@ -288,6 +288,11 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
         ServerPayload::DeviceFlowComplete => {
             FrameAction::just_action(Action::DeviceFlowComplete)
         }
+        ServerPayload::DomQuery { .. } => {
+            // DOM queries are only meaningful for the desktop client's
+            // webview.  The TUI cannot evaluate JS, so ignore.
+            FrameAction::none()
+        }
         ServerPayload::Empty => FrameAction::none(),
     }
 }
