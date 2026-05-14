@@ -970,7 +970,7 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
             }
             Err(e) => {
                 if attempts < 3 {
-                    tracing::warn!("DOM eval attempt {} failed: {}, retrying", attempts, e);
+                    tracing::warn!(attempt = attempts, error = %e, "DOM eval failed, retrying");
                     continue;
                 }
                 break (format!("eval error after {} attempts: {}", attempts, e), true);
