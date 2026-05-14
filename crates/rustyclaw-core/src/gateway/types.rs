@@ -164,7 +164,11 @@ impl ModelContext {
                 .to_string()
         });
 
-        if api_key.is_none() && providers::secret_key_for_provider(&provider).is_some() {
+        let auth = providers::provider_by_id(&provider).map(|p| p.auth_method);
+        if api_key.is_none()
+            && providers::secret_key_for_provider(&provider).is_some()
+            && auth != Some(providers::AuthMethod::OptionalApiKey)
+        {
             warn!(
                 provider = %provider,
                 "No API key provided for provider — model calls will likely fail"

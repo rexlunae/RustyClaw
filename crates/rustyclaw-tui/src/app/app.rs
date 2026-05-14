@@ -1396,8 +1396,9 @@ impl App {
                                         .flatten()
                                         .or_else(|| std::env::var(sk).ok())
                                 });
-                                if has_key.is_some() {
-                                    // Key exists — set provider and fetch models
+                                let is_optional = def.auth_method == rustyclaw_core::providers::AuthMethod::OptionalApiKey;
+                                if has_key.is_some() || is_optional {
+                                    // Key exists, or key is optional — set provider and fetch models
                                     let existing_model =
                                         config.model.as_ref().and_then(|m| m.model.clone());
                                     config.model = Some(rustyclaw_core::config::ModelProvider {
