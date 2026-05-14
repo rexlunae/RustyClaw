@@ -166,7 +166,10 @@ pub fn App() -> Element {
                     for entry in entries {
                         match entry {
                             BufferEntry::Event(GatewayEvent::DomQuery { id, js }) => {
-                                handle_dom_query(&client_ui, id, js).await;
+                                let c = client_ui.clone();
+                                spawn(async move {
+                                    handle_dom_query(&c, id, js).await;
+                                });
                             }
                             BufferEntry::Event(event) => {
                                 handle_gateway_event(event, state);
@@ -904,11 +907,11 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
         r#"(function() {{
             try {{
                 var __result = (function() {{ return {js}; }})();
-                if (typeof __result === 'undefined') return 'undefined';
-                if (typeof __result === 'string') return __result;
-                return JSON.stringify(__result);
+                if (typeof __result === 'undefined') return JSON.stringify({{__ok:true,__v:'undefined'}});
+                if (typeof __result === 'string') return JSON.stringify({{__ok:true,__v:__result}});
+                return JSON.stringify({{__ok:true,__v:JSON.stringify(__result)}});
             }} catch(e) {{
-                return 'ERROR: ' + e.message;
+                return JSON.stringify({{__ok:false,__v:e.message}});
             }}
         }})()"#,
     );
@@ -916,14 +919,21 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
     let eval = document::eval(&wrapped);
     let (result, is_error) = match eval.await {
         Ok(val) => {
-            let s = match val {
+            let raw = match val {
                 serde_json::Value::String(s) => s,
                 other => other.to_string(),
             };
-            if s.starts_with("ERROR: ") {
-                (s, true)
-            } else {
-                (s, false)
+            match serde_json::from_str::<serde_json::Value>(&raw) {
+                Ok(obj) => {
+                    let ok = obj.get("__ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                    let v = obj
+                        .get("__v")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    (v, !ok)
+                }
+                Err(_) => (raw, false),
             }
         }
         Err(e) => (format!("eval error: {}", e), true),
