@@ -65,7 +65,6 @@ use runtime::{exec_execute_command, exec_process};
 use web::{exec_web_fetch, exec_web_search};
 
 // Memory operations
-#[cfg(feature = "steel-memory")]
 use memory_tools::exec_add_memory;
 use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
 
@@ -247,7 +246,6 @@ pub fn tool_summary(name: &str) -> &'static str {
         "memory_get" => "Read agent memory files",
         "save_memory" => "Save memories (two-layer consolidation)",
         "search_history" => "Search HISTORY.md for past entries",
-        #[cfg(feature = "steel-memory")]
         "add_memory" => "Add memory to semantic index",
         "cron" => "Manage scheduled jobs",
         "sessions_list" => "List active sessions",
@@ -379,7 +377,6 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &MEMORY_GET,
         &SAVE_MEMORY,
         &SEARCH_HISTORY,
-        #[cfg(feature = "steel-memory")]
         &ADD_MEMORY,
         &CRON,
         &SESSIONS_LIST,
@@ -420,6 +417,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &TASK_INPUT,
         &TASK_DESCRIBE,
         &THREAD_DESCRIBE,
+        &SET_THREAD_CAPTION,
         &MODEL_LIST,
         &MODEL_ENABLE,
         &MODEL_DISABLE,
@@ -608,7 +606,6 @@ pub static SEARCH_HISTORY: ToolDef = ToolDef {
     execute: exec_search_history,
 };
 
-#[cfg(feature = "steel-memory")]
 pub static ADD_MEMORY: ToolDef = ToolDef {
     name: "add_memory",
     description: "Add a memory to the semantic vector index. Use to store important facts, decisions, \
@@ -975,6 +972,34 @@ fn exec_thread_describe(args: &Value, _workspace_dir: &Path) -> Result<String, S
     let update = json!({
         "action": "set_description",
         "description": description,
+    });
+
+    Ok(format!("{}{}", THREAD_UPDATE_MARKER, update))
+}
+
+pub static SET_THREAD_CAPTION: ToolDef = ToolDef {
+    name: "set_thread_caption",
+    description: "Set a short caption for the current conversation thread. \
+                  The caption is the thread title shown in the sidebar. \
+                  Call this once at the start of a new conversation to give the thread a meaningful name.",
+    parameters: vec![],
+    execute: exec_set_thread_caption,
+};
+
+fn exec_set_thread_caption(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+    let caption = args
+        .get("caption")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing required parameter: caption")?;
+
+    let trimmed = caption.trim();
+    if trimmed.is_empty() {
+        return Err("Caption cannot be empty.".to_string());
+    }
+
+    let update = json!({
+        "action": "set_caption",
+        "caption": trimmed,
     });
 
     Ok(format!("{}{}", THREAD_UPDATE_MARKER, update))
@@ -1400,7 +1425,6 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "memory_get" => memory_get_params(),
         "save_memory" => save_memory_params(),
         "search_history" => search_history_params(),
-        #[cfg(feature = "steel-memory")]
         "add_memory" => add_memory_params(),
         "cron" => cron_params(),
         "sessions_list" => sessions_list_params(),
@@ -1441,6 +1465,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "task_input" => task_tools::task_input_params(),
         "task_describe" => task_tools::task_describe_params(),
         "thread_describe" => thread_describe_params(),
+        "set_thread_caption" => set_thread_caption_params(),
         "model_list" => model_tools::model_list_params(),
         "model_enable" => model_tools::model_id_param(),
         "model_disable" => model_tools::model_id_param(),

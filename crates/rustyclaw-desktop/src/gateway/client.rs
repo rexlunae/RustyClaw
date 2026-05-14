@@ -452,6 +452,20 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::SecretsStore,
             payload: ClientPayload::SecretsStore { key, value },
         },
+        GatewayCommand::ThreadRename {
+            thread_id,
+            new_label,
+        } => ClientFrame {
+            frame_type: ClientFrameType::ThreadRename,
+            payload: ClientPayload::ThreadRename {
+                thread_id,
+                new_label,
+            },
+        },
+        GatewayCommand::ThreadClose { thread_id } => ClientFrame {
+            frame_type: ClientFrameType::ThreadClose,
+            payload: ClientPayload::ThreadClose { thread_id },
+        },
     }
 }
 

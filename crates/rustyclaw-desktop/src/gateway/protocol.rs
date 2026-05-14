@@ -201,4 +201,12 @@ pub enum GatewayCommand {
     /// Store a secret (API key) in the gateway vault
     #[serde(rename = "secrets_store")]
     SecretsStore { key: String, value: String },
+
+    /// Rename a thread
+    #[serde(rename = "thread_rename")]
+    ThreadRename { thread_id: u64, new_label: String },
+
+    /// Close/delete a thread
+    #[serde(rename = "thread_close")]
+    ThreadClose { thread_id: u64 },
 }

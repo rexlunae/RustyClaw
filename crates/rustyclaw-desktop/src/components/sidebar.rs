@@ -27,6 +27,8 @@ pub struct SidebarProps {
     pub on_toggle_collapse: EventHandler<()>,
     pub on_new_thread: EventHandler<()>,
     pub on_switch_thread: EventHandler<u64>,
+    pub on_rename_thread: EventHandler<(u64, String)>,
+    pub on_delete_thread: EventHandler<u64>,
     pub on_pair: EventHandler<()>,
     pub on_settings: EventHandler<()>,
 }
@@ -63,6 +65,8 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 collapsed: collapsed,
                 on_new_thread: props.on_new_thread,
                 on_switch_thread: props.on_switch_thread,
+                on_rename_thread: props.on_rename_thread,
+                on_delete_thread: props.on_delete_thread,
             }
 
             FooterActions {
@@ -204,6 +208,8 @@ struct SessionsListProps {
     collapsed: bool,
     on_new_thread: EventHandler<()>,
     on_switch_thread: EventHandler<u64>,
+    on_rename_thread: EventHandler<(u64, String)>,
+    on_delete_thread: EventHandler<u64>,
 }
 
 /// "New session" button and scrollable thread list.
@@ -237,7 +243,13 @@ fn SessionsList(props: SessionsListProps) -> Element {
                             let id = thread.id;
                             let cb = props.on_switch_thread;
                             move |_| cb.call(id)
-                        }
+                        },
+                        on_rename: props.on_rename_thread,
+                        on_delete: {
+                            let id = thread.id;
+                            let cb = props.on_delete_thread;
+                            move |_| cb.call(id)
+                        },
                     }
                 }
             }
@@ -253,9 +265,12 @@ struct SessionRowProps {
     active: bool,
     collapsed: bool,
     on_click: EventHandler<()>,
+    on_rename: EventHandler<(u64, String)>,
+    on_delete: EventHandler<()>,
 }
 
-/// A single thread entry: icon, label, optional description, message count.
+/// A single thread entry: icon, label, optional description, message count,
+/// with double-click-to-rename and a delete button on hover.
 #[component]
 fn SessionRow(props: SessionRowProps) -> Element {
     let class = if props.active {
@@ -276,21 +291,81 @@ fn SessionRow(props: SessionRowProps) -> Element {
         label.clone()
     };
 
+    let mut editing = use_signal(|| false);
+    let mut edit_value = use_signal(|| String::new());
+    let thread_id = props.thread.id;
+
     rsx! {
         div {
             class: "{class}",
             title: "{title_text}",
-            onclick: move |_| props.on_click.call(()),
+            onclick: move |_| {
+                if !*editing.read() {
+                    props.on_click.call(());
+                }
+            },
+            ondoubleclick: move |evt| {
+                if !props.collapsed {
+                    evt.stop_propagation();
+                    edit_value.set(label.clone());
+                    editing.set(true);
+                }
+            },
             span { class: "session-icon", "💬" }
             if !props.collapsed {
-                div { class: "session-text",
-                    span { class: "session-label", "{label}" }
-                    if let Some(desc) = description.as_deref() {
-                        span { class: "session-description", "{desc}" }
+                if *editing.read() {
+                    input {
+                        class: "session-rename-input",
+                        r#type: "text",
+                        value: "{edit_value}",
+                        autofocus: true,
+                        oninput: move |evt| {
+                            edit_value.set(evt.value());
+                        },
+                        onkeydown: {
+                            let on_rename = props.on_rename;
+                            move |evt: KeyboardEvent| {
+                                if evt.key() == Key::Enter {
+                                    let val = edit_value.read().trim().to_string();
+                                    if !val.is_empty() {
+                                        on_rename.call((thread_id, val));
+                                    }
+                                    editing.set(false);
+                                } else if evt.key() == Key::Escape {
+                                    editing.set(false);
+                                }
+                            }
+                        },
+                        onfocusout: {
+                            let on_rename = props.on_rename;
+                            move |_| {
+                                let val = edit_value.read().trim().to_string();
+                                if !val.is_empty() {
+                                    on_rename.call((thread_id, val));
+                                }
+                                editing.set(false);
+                            }
+                        },
                     }
-                }
-                if count > 0 {
-                    span { class: "session-count", "{count}" }
+                } else {
+                    div { class: "session-text",
+                        span { class: "session-label", "{label}" }
+                        if let Some(desc) = description.as_deref() {
+                            span { class: "session-description", "{desc}" }
+                        }
+                    }
+                    if count > 0 {
+                        span { class: "session-count", "{count}" }
+                    }
+                    button {
+                        class: "session-delete-btn",
+                        title: "Delete thread",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            props.on_delete.call(());
+                        },
+                        "✕"
+                    }
                 }
             }
         }

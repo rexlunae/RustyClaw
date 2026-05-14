@@ -28,7 +28,6 @@ pub mod memory;
 pub mod memory_consolidation;
 pub mod memory_flush;
 pub mod messengers;
-pub mod mnemo;
 pub mod models;
 pub mod observability;
 pub mod pairing;
@@ -45,7 +44,6 @@ pub mod security;
 pub mod sessions;
 pub mod skills;
 pub mod soul;
-#[cfg(feature = "steel-memory")]
 pub mod steel_memory;
 pub mod swarm;
 pub mod streaming;

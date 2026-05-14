@@ -72,7 +72,6 @@ aho-corasick.workspace = true
 oxidized-agentic-audit.workspace = true
 ipnetwork.workspace = true
 uuid.workspace = true
-rusqlite.workspace = true
 httpdate.workspace = true
 colored.workspace = true
 indicatif.workspace = true
