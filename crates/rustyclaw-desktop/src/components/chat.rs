@@ -63,30 +63,26 @@ pub fn Chat(props: ChatProps) -> Element {
         });
     }
 
-    // Auto-scroll via MutationObserver: installed once, watches the
-    // `.messages` container for DOM changes (childList + subtree +
-    // characterData).  When the user is near the bottom (within 80 px),
-    // it scrolls to the very end.  This is independent of Dioxus
-    // re-render timing and works even for streaming chunks.
+    // Auto-scroll via MutationObserver: observes the stable `.chat`
+    // container (always in the DOM) and re-queries `.messages` in each
+    // callback.  This survives thread switches that destroy/recreate the
+    // `.messages` div.
     use_effect(move || {
         document::eval(
             r#"
             (function() {
                 if (window.__rcAutoScroll) return;
-                function tryInstall() {
-                    var el = document.querySelector('.messages');
-                    if (!el) { setTimeout(tryInstall, 100); return; }
-                    var ob = new MutationObserver(function() {
-                        var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-                        if (nearBottom) {
-                            el.scrollTop = el.scrollHeight;
-                        }
-                    });
-                    ob.observe(el, { childList: true, subtree: true, characterData: true });
-                    // Initial scroll to bottom.
-                    el.scrollTop = el.scrollHeight;
-                }
-                tryInstall();
+                var chat = document.querySelector('.chat');
+                if (!chat) return;
+                var ob = new MutationObserver(function() {
+                    var el = chat.querySelector('.messages');
+                    if (!el) return;
+                    var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                    if (nearBottom) {
+                        el.scrollTop = el.scrollHeight;
+                    }
+                });
+                ob.observe(chat, { childList: true, subtree: true, characterData: true });
                 window.__rcAutoScroll = true;
             })();
         "#,
