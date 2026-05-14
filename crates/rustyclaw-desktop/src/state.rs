@@ -1,6 +1,6 @@
 //! Application state management.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use rustyclaw_core::user_prompt_types::UserPrompt;
 
@@ -83,8 +83,11 @@ pub struct AppState {
     /// Gateway URL
     pub gateway_url: String,
 
-    /// Chat messages
+    /// Chat messages for the current thread
     pub messages: VecDeque<ChatMessage>,
+
+    /// Per-thread message history (thread_id → messages)
+    thread_messages: HashMap<u64, VecDeque<ChatMessage>>,
 
     /// Current input text
     pub input: String,
@@ -154,6 +157,7 @@ impl Default for AppState {
             gateway_url: crate::configured_gateway_url()
                 .unwrap_or_else(|| "ssh://127.0.0.1:2222".to_string()),
             messages: VecDeque::new(),
+            thread_messages: HashMap::new(),
             input: String::new(),
             is_processing: false,
             is_streaming: false,
@@ -257,8 +261,38 @@ impl AppState {
         }
     }
 
-    /// Clear all messages.
-    pub fn clear_messages(&mut self) {
-        self.messages.clear();
+    /// Save messages for a specific thread.
+    pub fn save_thread_messages(
+        &mut self,
+        thread_id: u64,
+        messages: VecDeque<ChatMessage>,
+    ) {
+        self.thread_messages.insert(thread_id, messages);
+    }
+
+    /// Switch to a different thread, saving current messages and
+    /// restoring the target thread's history.
+    pub fn switch_thread(&mut self, target_id: u64) {
+        // Save current thread's messages
+        if let Some(current_id) = self.foreground_thread_id {
+            if !self.messages.is_empty() {
+                self.thread_messages
+                    .insert(current_id, self.messages.clone());
+            }
+        }
+
+        // Restore target thread's messages (or start empty)
+        self.messages = self
+            .thread_messages
+            .get(&target_id)
+            .cloned()
+            .unwrap_or_default();
+
+        // Reset streaming state
+        self.is_processing = false;
+        self.is_streaming = false;
+        self.is_thinking = false;
+        self.streaming_chunks = 0;
+        self.streaming_bytes = 0;
     }
 }

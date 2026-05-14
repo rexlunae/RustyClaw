@@ -248,6 +248,16 @@ pub fn App() -> Element {
                     .await;
             });
         }
+        // Save current thread's messages and start with empty chat.
+        // The gateway will assign a new foreground via ThreadsUpdate.
+        let mut s = state.write();
+        if let Some(current_id) = s.foreground_thread_id {
+            if !s.messages.is_empty() {
+                let msgs = s.messages.clone();
+                s.save_thread_messages(current_id, msgs);
+            }
+        }
+        s.messages.clear();
     };
 
     let on_switch_thread = move |thread_id: u64| {
@@ -259,7 +269,7 @@ pub fn App() -> Element {
                     .await;
             });
         }
-        state.write().clear_messages();
+        state.write().switch_thread(thread_id);
     };
 
     let on_cancel = move |_| {
