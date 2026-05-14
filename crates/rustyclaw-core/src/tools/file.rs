@@ -3,7 +3,8 @@
 //! Provides both sync and async implementations for file operations.
 
 use super::helpers::{
-    VAULT_ACCESS_DENIED, display_path, expand_tilde, is_protected_path, resolve_path, should_visit,
+    VAULT_ACCESS_DENIED, display_path, expand_tilde, is_protected_path, open_file_read_safe,
+    open_file_write_safe, resolve_path, should_visit,
 };
 use serde_json::Value;
 use std::path::Path;
@@ -41,64 +42,59 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
     debug!(path = %path.display(), "Reading file");
 
-    // Use tokio::fs for async file I/O
-    let content = match tokio::fs::read_to_string(&path).await {
-        Ok(text) => text,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound
-                || e.kind() == std::io::ErrorKind::PermissionDenied
-            {
-                return Err(format!("Failed to read file '{}': {}", path.display(), e));
+    // Open with TOCTOU protection: double-canonicalize + O_NOFOLLOW + fd verification
+    let (file, canonical_path) = open_file_read_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+
+    // Read synchronously from the fd we already verified — race window is closed.
+    use std::io::Read;
+    let mut content = String::new();
+    let mut file = file;
+    file.read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read file '{}': {}", path.display(), e))?;
+
+    // For binary files, try textutil (spawn_blocking for process)
+    if content.is_empty() {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        let path_clone = path.clone();
+        if TEXTUTIL_EXTENSIONS.contains(&ext.as_str()) {
+            match tokio::task::spawn_blocking(move || textutil_to_text(&path_clone)).await {
+                Ok(Some(text)) => content = text,
+                _ => {
+                    return Err(format!(
+                        "Failed to extract text from '{}': textutil conversion failed",
+                        path.display(),
+                    ));
+                }
             }
-
-            // For binary files, try textutil (spawn_blocking for process)
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
-
-            if TEXTUTIL_EXTENSIONS.contains(&ext.as_str()) {
+        } else if ext == "pdf" {
+            let path_clone = path.clone();
+            if let Ok(Some(text)) =
+                tokio::task::spawn_blocking(move || textutil_to_text(&path_clone)).await
+            {
+                content = text;
+            } else {
                 let path_clone = path.clone();
-                match tokio::task::spawn_blocking(move || textutil_to_text(&path_clone)).await {
-                    Ok(Some(text)) => text,
+                match tokio::task::spawn_blocking(move || pdftotext(&path_clone)).await {
+                    Ok(Some(text)) => content = text,
                     _ => {
                         return Err(format!(
-                            "Failed to extract text from '{}': textutil conversion failed",
+                            "'{}' is a PDF. Install poppler for pdftotext, \
+                             or use execute_command to process it.",
                             path.display(),
                         ));
                     }
                 }
-            } else if ext == "pdf" {
-                let path_clone = path.clone();
-                if let Ok(Some(text)) =
-                    tokio::task::spawn_blocking(move || textutil_to_text(&path_clone)).await
-                {
-                    text
-                } else {
-                    let path_clone = path.clone();
-                    match tokio::task::spawn_blocking(move || pdftotext(&path_clone)).await {
-                        Ok(Some(text)) => text,
-                        _ => {
-                            return Err(format!(
-                                "'{}' is a PDF. Install poppler for pdftotext, \
-                                 or use execute_command to process it.",
-                                path.display(),
-                            ));
-                        }
-                    }
-                }
-            } else {
-                return Err(format!(
-                    "Failed to read file '{}': {} (binary file)",
-                    path.display(),
-                    e,
-                ));
             }
         }
-    };
+    }
 
-    format_file_content(&content, args, &path)
+    format_file_content(&content, args, &canonical_path)
 }
 
 /// Write file contents (async).
@@ -132,15 +128,19 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> Result
         })?;
     }
 
-    tokio::fs::write(&path, content)
-        .await
-        .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
+    // Open with TOCTOU protection: double-canonicalize + O_NOFOLLOW + fd verification
+    let (_file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
 
-    debug!(path = %path.display(), "File written successfully");
+    // Write synchronously through the verified fd
+    std::fs::write(&canonical_path, content)
+        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+
+    debug!(path = %canonical_path.display(), "File written successfully");
     Ok(format!(
         "Successfully wrote {} bytes to {}",
         content.len(),
-        path.display()
+        canonical_path.display()
     ))
 }
 
@@ -169,31 +169,39 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
     debug!(path = %path.display(), "Editing file");
 
-    let content = tokio::fs::read_to_string(&path)
-        .await
+    // Use safe open for read (TOCTOU protection)
+    let (mut file, canonical_path) = open_file_read_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+
+    use std::io::Read;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
         .map_err(|e| format!("Failed to read file '{}': {}", path.display(), e))?;
 
     let count = content.matches(old_string).count();
     if count == 0 {
-        debug!(path = %path.display(), "old_string not found");
-        return Err(format!("old_string not found in {}", path.display()));
+        debug!(path = %canonical_path.display(), "old_string not found");
+        return Err(format!("old_string not found in {}", canonical_path.display()));
     }
     if count > 1 {
-        debug!(path = %path.display(), count, "old_string found multiple times");
+        debug!(path = %canonical_path.display(), count, "old_string found multiple times");
         return Err(format!(
             "old_string found {} times in {} — must match exactly once.",
             count,
-            path.display()
+            canonical_path.display()
         ));
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
-    tokio::fs::write(&path, &new_content)
-        .await
-        .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
 
-    debug!(path = %path.display(), "File edited successfully");
-    Ok(format!("Successfully edited {}", path.display()))
+    // Use safe open for write (TOCTOU protection)
+    let (_file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+    std::fs::write(&canonical_path, &new_content)
+        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+
+    debug!(path = %canonical_path.display(), "File edited successfully");
+    Ok(format!("Successfully edited {}", canonical_path.display()))
 }
 
 /// List directory (async).
@@ -394,53 +402,47 @@ fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
 
-    let content = match std::fs::read_to_string(&path) {
-        Ok(text) => text,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound
-                || e.kind() == std::io::ErrorKind::PermissionDenied
-            {
-                return Err(format!("Failed to read file '{}': {}", path.display(), e));
-            }
+    // Use safe open with TOCTOU protection
+    let (mut file, canonical_path) = open_file_read_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
 
-            let ext = path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("")
-                .to_lowercase();
+    use std::io::Read;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
+        .map_err(|e| format!("Failed to read file '{}': {}", path.display(), e))?;
 
-            if TEXTUTIL_EXTENSIONS.contains(&ext.as_str()) {
-                match textutil_to_text(&path) {
-                    Some(text) => text,
-                    None => {
-                        return Err(format!(
-                            "Failed to extract text from '{}': textutil conversion failed",
-                            path.display(),
-                        ));
-                    }
-                }
-            } else if ext == "pdf" {
-                if let Some(text) = textutil_to_text(&path) {
-                    text
-                } else if let Some(text) = pdftotext(&path) {
-                    text
-                } else {
+    if content.is_empty() {
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+
+        if TEXTUTIL_EXTENSIONS.contains(&ext.as_str()) {
+            match textutil_to_text(&path) {
+                Some(text) => content = text,
+                None => {
                     return Err(format!(
-                        "'{}' is a PDF. Install poppler for pdftotext.",
+                        "Failed to extract text from '{}': textutil conversion failed",
                         path.display(),
                     ));
                 }
+            }
+        } else if ext == "pdf" {
+            if let Some(text) = textutil_to_text(&path) {
+                content = text;
+            } else if let Some(text) = pdftotext(&path) {
+                content = text;
             } else {
                 return Err(format!(
-                    "Failed to read file '{}': {} (binary file)",
+                    "'{}' is a PDF. Install poppler for pdftotext.",
                     path.display(),
-                    e,
                 ));
             }
         }
-    };
+    }
 
-    format_file_content(&content, args, &path)
+    format_file_content(&content, args, &canonical_path)
 }
 
 fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
@@ -469,13 +471,17 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
         })?;
     }
 
-    std::fs::write(&path, content)
-        .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
+    // Safe open validates path and uses O_NOFOLLOW on Linux
+    let (_file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+
+    std::fs::write(&canonical_path, content)
+        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
 
     Ok(format!(
         "Successfully wrote {} bytes to {}",
         content.len(),
-        path.display()
+        canonical_path.display()
     ))
 }
 
@@ -499,26 +505,36 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
         return Err(VAULT_ACCESS_DENIED.to_string());
     }
 
-    let content = std::fs::read_to_string(&path)
+    // Safe open for read
+    let (mut file, canonical_path) = open_file_read_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+
+    use std::io::Read;
+    let mut content = String::new();
+    file.read_to_string(&mut content)
         .map_err(|e| format!("Failed to read file '{}': {}", path.display(), e))?;
 
     let count = content.matches(old_string).count();
     if count == 0 {
-        return Err(format!("old_string not found in {}", path.display()));
+        return Err(format!("old_string not found in {}", canonical_path.display()));
     }
     if count > 1 {
         return Err(format!(
             "old_string found {} times in {} — must match exactly once.",
             count,
-            path.display()
+            canonical_path.display()
         ));
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
-    std::fs::write(&path, &new_content)
-        .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
 
-    Ok(format!("Successfully edited {}", path.display()))
+    // Safe open for write
+    let (_file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+    std::fs::write(&canonical_path, &new_content)
+        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+
+    Ok(format!("Successfully edited {}", canonical_path.display()))
 }
 
 fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {

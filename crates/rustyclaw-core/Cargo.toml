@@ -58,6 +58,7 @@ sysinfo.workspace = true
 which.workspace = true
 glob.workspace = true
 walkdir.workspace = true
+zeroize.workspace = true
 urlencoding.workspace = true
 pulldown-cmark.workspace = true
 chrono.workspace = true

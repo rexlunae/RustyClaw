@@ -5,11 +5,93 @@
 
 use crate::tools;
 use serde_json::Value;
+use std::collections::VecDeque;
 use std::path::Path;
+use std::sync::Mutex;
+use std::time::Instant;
 
 use super::secrets_handler;
 use super::skills_handler;
 use super::{SharedSkillManager, SharedVault};
+
+// ── Rate limiting ───────────────────────────────────────────────────────────
+
+/// Simple sliding-window rate limiter for tool execution.
+///
+/// Tracks calls per tool name within a configurable window.  When the
+/// limit is exceeded the tool is rejected with an error message, preventing
+/// runaway tool loops or abuse through repeated expensive calls.
+///
+/// The limiter is **global** (all sessions share one instance) and uses
+/// a coarse-grained mutex — contention is negligible given tool calls
+/// are serialised by the model anyway.
+pub struct ToolRateLimiter {
+    window_ms: u64,
+    max_calls: usize,
+    buckets: VecDeque<(String, Instant)>,
+}
+
+impl ToolRateLimiter {
+    /// Create a new limiter.
+    ///
+    /// `window_ms` — sliding window duration.
+    /// `max_calls`  — maximum tool invocations in the window **per tool name**.
+    pub fn new(window_ms: u64, max_calls: usize) -> Self {
+        Self {
+            window_ms,
+            max_calls,
+            buckets: VecDeque::new(),
+        }
+    }
+
+    /// Check whether a tool call of `name` is allowed.
+    /// If denied, returns an error message.
+    pub fn check(&mut self, name: &str) -> Result<(), String> {
+        let now = Instant::now();
+        let cutoff = now - std::time::Duration::from_millis(self.window_ms);
+
+        // Drop stale entries
+        while let Some(front) = self.buckets.front() {
+            if front.1 < cutoff {
+                self.buckets.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        // Count current-call-name entries in the window
+        let count = self.buckets.iter().filter(|(n, _)| n == name).count();
+        if count >= self.max_calls {
+            return Err(format!(
+                "Rate limit exceeded: '{}' called {} times in {}ms window",
+                name, count + 1, self.window_ms,
+            ));
+        }
+
+        self.buckets.push_back((name.to_string(), now));
+        Ok(())
+    }
+}
+
+/// Global rate limiter instance (initialised lazily on first use).
+fn rate_limiter() -> &'static Mutex<ToolRateLimiter> {
+    static LIMITER: std::sync::OnceLock<Mutex<ToolRateLimiter>> = std::sync::OnceLock::new();
+    LIMITER.get_or_init(|| {
+        let cfg = std::env::var("RUSTYCLAW_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .unwrap_or(60);
+        Mutex::new(ToolRateLimiter::new(30_000, cfg))
+    })
+}
+
+/// Check the rate limiter for a tool call.  If denied, return the error text.
+pub fn check_rate_limit(name: &str) -> Result<(), String> {
+    rate_limiter()
+        .lock()
+        .map_err(|e| format!("Rate limiter poisoned: {}", e))
+        .and_then(|mut limiter| limiter.check(name))
+}
 
 /// Execute a tool by name, routing to the appropriate handler.
 ///
@@ -21,6 +103,12 @@ pub async fn execute_tool_by_type(
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
 ) -> (String, bool) {
+    // Apply rate limiting before executing any tool.
+    if let Err(err) = check_rate_limit(name) {
+        tracing::warn!(tool = name, "Rate limit hit");
+        return (err, true);
+    }
+
     if tools::is_secrets_tool(name) {
         match secrets_handler::execute_secrets_tool(name, arguments, vault).await {
             Ok(text) => (text, false),

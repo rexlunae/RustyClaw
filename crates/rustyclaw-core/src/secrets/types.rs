@@ -1,6 +1,112 @@
 //! Type definitions for the secrets module.
 
 use serde::{Deserialize, Serialize};
+use zeroize::Zeroize;
+
+/// A [`String`] wrapper that zeroes its contents on drop.
+///
+/// Protects secret material (API keys, passwords, tokens) from being
+/// recovered from process memory after the value is no longer needed.
+///
+/// This does **not** guarantee the memory is zeroed (the allocator may
+/// leave copies, the OS may swap pages to disk, etc.), but it prevents
+/// the easy case — a later allocation reading the same physical memory
+/// and recovering the secret from the old `String`'s backing buffer.
+///
+/// Common patterns:
+/// - [`SecretEntry`] values returned by vault reads
+/// - Temporary credential values during agent tool execution
+/// - Provider API keys held in memory during a request
+#[derive(Clone, Zeroize)]
+#[zeroize(drop)]
+pub struct SecretString(String);
+
+impl SecretString {
+    /// Create a new `SecretString` from a [`String`], consuming it.
+    pub fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    /// Expose the inner value for read access.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Consume the `SecretString` and return the inner [`String`].
+    ///
+    /// **Warning:** The returned [`String`] is NOT zeroed on drop.
+    /// Only use this when the value will immediately be consumed
+    /// (e.g. passed to a function that takes ownership).
+    pub fn into_inner(self) -> String {
+        let s = std::mem::ManuallyDrop::new(self);
+        // SAFETY: We own `s` and prevent its Drop, so moving the inner String is sound.
+        unsafe { std::ptr::read(&s.0) }
+    }
+
+    /// Convert to a `String` without consuming (clones the inner value).
+    pub fn to_string_unsecured(&self) -> String {
+        self.0.clone()
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("SecretString").field(&"[REDACTED]").finish()
+    }
+}
+
+impl std::fmt::Display for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "[REDACTED]")
+    }
+}
+
+impl From<String> for SecretString {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<SecretString> for String {
+    fn from(s: SecretString) -> Self {
+        // Use ManuallyDrop to avoid running SecretString's Drop (which would zero the value)
+        // at the same time we destructure to move the inner String out.
+        let s = std::mem::ManuallyDrop::new(s);
+        // SAFETY: We own `s` and prevent its Drop, so moving the inner String is sound.
+        // The caller takes ownership of the String and is responsible for its lifecycle.
+        unsafe { std::ptr::read(&s.0) }
+    }
+}
+
+impl std::ops::Deref for SecretString {
+    type Target = str;
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+// ── Comparisons (needed by tests and display code) ─────────────────────────
+
+impl PartialEq<&str> for SecretString {
+    fn eq(&self, other: &&str) -> bool {
+        self.0.as_str() == *other
+    }
+}
+
+impl PartialEq<SecretString> for &str {
+    fn eq(&self, other: &SecretString) -> bool {
+        *self == other.0.as_str()
+    }
+}
+
+impl PartialEq for SecretString {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+}
+
+impl Eq for SecretString {}
+
 use std::collections::BTreeMap;
 
 // ── Credential types ────────────────────────────────────────────────────────
@@ -137,29 +243,61 @@ pub struct SecretEntry {
 
 /// The result of reading a credential — includes the metadata envelope
 /// plus the decrypted value(s).
-#[derive(Debug, Clone)]
+///
+/// Sensitive string fields use [`SecretString`] for automatic zeroing on drop.
+#[derive(Clone)]
 pub enum CredentialValue {
     /// A single opaque string (ApiKey, Token, HttpPasskey, Other).
-    Single(String),
+    Single(SecretString),
     /// Username + password pair.
-    UserPass { username: String, password: String },
+    UserPass {
+        username: SecretString,
+        password: SecretString,
+    },
     /// SSH keypair — private key in OpenSSH PEM format, public key in
     /// `ssh-ed25519 AAAA…` format.
     SshKeyPair {
-        private_key: String,
-        public_key: String,
+        private_key: SecretString,
+        public_key: SecretString,
     },
     /// Arbitrary key/value pairs (form autofill fields).
     FormFields(BTreeMap<String, String>),
     /// Payment card details.
     PaymentCard {
-        cardholder: String,
-        number: String,
-        expiry: String,
-        cvv: String,
+        cardholder: SecretString,
+        number: SecretString,
+        expiry: SecretString,
+        cvv: SecretString,
         /// Optional billing-address / notes fields.
         extra: BTreeMap<String, String>,
     },
+}
+
+impl std::fmt::Debug for CredentialValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Single(_) => f.debug_tuple("Single").field(&"[REDACTED]").finish(),
+            Self::UserPass { .. } => f
+                .debug_struct("UserPass")
+                .field("username", &"[REDACTED]")
+                .field("password", &"[REDACTED]")
+                .finish(),
+            Self::SshKeyPair { .. } => f
+                .debug_struct("SshKeyPair")
+                .field("private_key", &"[REDACTED]")
+                .field("public_key", &"[REDACTED]")
+                .finish(),
+            Self::FormFields(fields) => f.debug_struct("FormFields").field("fields", fields).finish(),
+            Self::PaymentCard { .. } => f
+                .debug_struct("PaymentCard")
+                .field("cardholder", &"[REDACTED]")
+                .field("number", &"[REDACTED]")
+                .field("expiry", &"[REDACTED]")
+                .field("cvv", &"[REDACTED]")
+                .field("extra", &"[REDACTED]")
+                .finish(),
+        }
+    }
 }
 
 /// Context supplied by the caller when requesting access to a

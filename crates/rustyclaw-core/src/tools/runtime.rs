@@ -4,7 +4,7 @@
 
 use super::helpers::{
     VAULT_ACCESS_DENIED, command_references_credentials, is_protected_path, process_manager,
-    resolve_path, run_sandboxed_command,
+    resolve_path, run_sandboxed_command, validate_command_safe,
 };
 use crate::process_manager::SessionStatus;
 use serde_json::{Value, json};
@@ -52,6 +52,9 @@ pub async fn exec_execute_command_async(
     debug!(cwd = %cwd.display(), timeout_secs, background, yield_ms, "Executing command");
 
     // Block commands that reference the credentials directory.
+    // Validate command safety (null byte rejection, length, exfiltration patterns).
+    validate_command_safe(command)?;
+
     if command_references_credentials(command) {
         warn!("Command references credentials directory");
         return Err(VAULT_ACCESS_DENIED.to_string());
@@ -310,6 +313,9 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
         Some(p) => resolve_path(workspace_dir, p),
         None => workspace_dir.to_path_buf(),
     };
+
+    // Validate command safety (null byte rejection, length, exfiltration patterns).
+    validate_command_safe(command)?;
 
     if command_references_credentials(command) {
         return Err(VAULT_ACCESS_DENIED.to_string());

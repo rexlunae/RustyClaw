@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 pub use types::{
     AccessContext, AccessPolicy, BrowserStore, Cookie, CredentialValue, Secret, SecretEntry,
-    SecretKind, WebStorage,
+    SecretKind, SecretString, WebStorage,
 };
 
 /// Secrets manager backed by an encrypted SecureStore vault.

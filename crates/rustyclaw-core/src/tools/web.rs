@@ -72,6 +72,10 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
 
     if let Some(auth) = authorization {
         request = request.header("Authorization", auth);
+        warn!(
+            url = %url,
+            "web_fetch: Authorization header provided — value NOT logged (security sensitive)"
+        );
     }
 
     if let Some(headers) = custom_headers {
@@ -384,6 +388,10 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
     if let Some(auth) = authorization {
         request = request.header("Authorization", auth);
+        warn!(
+            url = %url,
+            "web_fetch: Authorization header provided — value NOT logged (security sensitive)"
+        );
     }
 
     if let Some(headers) = custom_headers {

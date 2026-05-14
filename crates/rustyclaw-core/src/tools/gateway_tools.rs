@@ -124,6 +124,13 @@ pub async fn exec_gateway_async(args: &Value, workspace_dir: &Path) -> Result<St
                 serde_json::json!({})
             };
 
+            // Block modifications to security-sensitive config keys.
+            // This prevents a compromised model from disabling sandboxing,
+            // authentication, or other critical protections via config.patch.
+            if let Err(e) = check_protected_config(&patch, "") {
+                return Err(e);
+            }
+
             let merged = merge_json(existing, patch);
 
             let output = serde_json::to_string_pretty(&merged)
@@ -712,6 +719,43 @@ async fn call_google_vision_async(
 // ── Sync implementations ────────────────────────────────────────────────────
 
 /// Recursively merge two JSON values (patch semantics).
+/// Config key paths that must NOT be modified via `config.patch`.
+const PROTECTED_CONFIG_PATHS: &[&str] = &[
+    "sandbox.mode",
+    "sandbox.enabled",
+    "auth.enabled",
+    "auth.method",
+    "ssh.enabled",
+    "webhook.token",
+    "secrets.require_auth_for_all",
+    "secrets.default_policy",
+    "agent.safety",
+    "gateway.listen",
+];
+
+/// Recursively check if a JSON value tries to modify any protected config key.
+pub(crate) fn check_protected_config(value: &serde_json::Value, path: &str) -> Result<(), String> {
+    if let serde_json::Value::Object(map) = value {
+        for (k, v) in map {
+            let sub = if path.is_empty() {
+                k.to_string()
+            } else {
+                format!("{}.{}", path, k)
+            };
+            if PROTECTED_CONFIG_PATHS.contains(&sub.as_str()) {
+                return Err(format!(
+                    "Cannot modify protected config key '{}' via config.patch",
+                    sub
+                ));
+            }
+            if let serde_json::Value::Object(_) = v {
+                check_protected_config(v, &sub)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 fn merge_json(base: Value, patch: Value) -> Value {
     match (base, patch) {
         (Value::Object(mut base_map), Value::Object(patch_map)) => {
@@ -838,6 +882,10 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> Result<String, String
             } else {
                 serde_json::json!({})
             };
+
+            if let Err(e) = check_protected_config(&patch, "") {
+                return Err(e);
+            }
 
             let merged = merge_json(existing, patch);
 

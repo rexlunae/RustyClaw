@@ -6,6 +6,27 @@
 //!
 //! All webhook requests require a bearer token for authentication.
 
+/// Constant-time byte-string comparison to prevent timing side-channel attacks
+/// on webhook auth tokens.
+///
+/// Returns `true` iff both byte slices have the same length and identical
+/// contents.  The function takes the same amount of time regardless of how
+/// many bytes match, protecting the token value from statistical timing
+/// analysis over the network.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    // If lengths differ, we still XOR them to avoid leaking the length
+    // via early return.  Accumulate a mismatch bit for every byte.
+    let len_match = a.len() == b.len();
+    let min_len = a.len().min(b.len());
+    let mut result = (a.len() ^ b.len()) as u8;  // 0 iff lengths equal
+    for i in 0..min_len {
+        result |= a[i] ^ b[i];
+    }
+    // If lengths differ, result is non-zero (length XOR != 0).
+    // If lengths match, result is 0 iff every byte matches.
+    result == 0 && len_match
+}
+
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::sync::Arc;
@@ -165,7 +186,7 @@ pub async fn handle_webhook_request(
             .and_then(|h| h.strip_prefix("Bearer "))
             .unwrap_or("");
 
-        if provided != expected_token {
+        if !constant_time_eq(provided.as_bytes(), expected_token.as_bytes()) {
             warn!("Webhook auth failed for {}", path);
             return (
                 "401 Unauthorized".to_string(),

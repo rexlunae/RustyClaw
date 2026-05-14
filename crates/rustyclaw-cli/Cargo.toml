@@ -17,6 +17,7 @@ workspace = true
 
 [features]
 default = ["tui", "desktop"]
+matrix = ["rustyclaw-core/matrix"]
 tui = ["dep:rustyclaw-tui"]
 desktop = ["dep:rustyclaw-desktop"]
 

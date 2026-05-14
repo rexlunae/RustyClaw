@@ -5,7 +5,7 @@ use securestore::KeySource;
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
 use super::SecretsManager;
-use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
+use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString};
 
 impl SecretsManager {
     /// Ensure the vault is loaded (or created if it doesn't exist yet).
@@ -304,17 +304,22 @@ impl SecretsManager {
         }
 
         // ── Load value(s) ──────────────────────────────────────────
+        //
+        // NOTE: Values are wrapped in SecretString to zero memory on drop.
+        // The earlier `get_secret` returns raw String for backward compatibility;
+        // we intentionally convert to SecretString here as the single chokepoint
+        // where credential values enter the process.
         let value = match entry.kind {
             SecretKind::UsernamePassword => {
-                let password = self.get_secret(&val_key, true)?.unwrap_or_default();
+                let password = SecretString::new(self.get_secret(&val_key, true)?.unwrap_or_default());
                 let user_key = format!("val:{}:user", name);
-                let username = self.get_secret(&user_key, true)?.unwrap_or_default();
+                let username = SecretString::new(self.get_secret(&user_key, true)?.unwrap_or_default());
                 CredentialValue::UserPass { username, password }
             }
             SecretKind::SshKey => {
-                let private_key = self.get_secret(&val_key, true)?.unwrap_or_default();
+                let private_key = SecretString::new(self.get_secret(&val_key, true)?.unwrap_or_default());
                 let pub_key = format!("val:{}:pub", name);
-                let public_key = self.get_secret(&pub_key, true)?.unwrap_or_default();
+                let public_key = SecretString::new(self.get_secret(&pub_key, true)?.unwrap_or_default());
                 CredentialValue::SshKeyPair {
                     private_key,
                     public_key,
@@ -358,16 +363,16 @@ impl SecretsManager {
                     };
 
                 CredentialValue::PaymentCard {
-                    cardholder: card.cardholder,
-                    number: card.number,
-                    expiry: card.expiry,
-                    cvv: card.cvv,
+                    cardholder: SecretString::new(card.cardholder),
+                    number: SecretString::new(card.number),
+                    expiry: SecretString::new(card.expiry),
+                    cvv: SecretString::new(card.cvv),
                     extra,
                 }
             }
             _ => {
                 let v = self.get_secret(&val_key, true)?.unwrap_or_default();
-                CredentialValue::Single(v)
+                CredentialValue::Single(SecretString::new(v))
             }
         };
 

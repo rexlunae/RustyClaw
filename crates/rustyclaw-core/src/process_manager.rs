@@ -74,6 +74,9 @@ pub struct ExecSession {
     child: Option<Child>,
     /// Exit code (set when process exits).
     exit_code: Option<i32>,
+    /// Optional caller identity that owns this process session.
+    /// Used for access control — only the owning session can poll/write/kill.
+    owner_id: Option<String>,
 }
 
 impl ExecSession {
@@ -83,6 +86,17 @@ impl ExecSession {
         working_dir: String,
         timeout: Option<Duration>,
         child: Child,
+    ) -> Self {
+        Self::with_owner(command, working_dir, timeout, child, None)
+    }
+
+    /// Create a new session with an owner identity for access control.
+    pub fn with_owner(
+        command: String,
+        working_dir: String,
+        timeout: Option<Duration>,
+        child: Child,
+        owner_id: Option<String>,
     ) -> Self {
         Self {
             id: generate_session_id(),
@@ -97,6 +111,7 @@ impl ExecSession {
             last_read_pos: 0,
             child: Some(child),
             exit_code: None,
+            owner_id,
         }
     }
 
@@ -469,6 +484,17 @@ impl ProcessManager {
         working_dir: &str,
         timeout_secs: Option<u64>,
     ) -> Result<SessionId, String> {
+        self.spawn_with_owner(command, working_dir, timeout_secs, None)
+    }
+
+    /// Spawn a background process with an optional owner identity.
+    pub fn spawn_with_owner(
+        &mut self,
+        command: &str,
+        working_dir: &str,
+        timeout_secs: Option<u64>,
+        owner_id: Option<String>,
+    ) -> Result<SessionId, String> {
         let timeout = timeout_secs.map(Duration::from_secs);
 
         // Use platform-appropriate shell
@@ -506,7 +532,7 @@ impl ProcessManager {
             .map_err(|e| format!("Failed to spawn process: {}", e))?;
 
         let session =
-            ExecSession::new(command.to_string(), working_dir.to_string(), timeout, child);
+            ExecSession::with_owner(command.to_string(), working_dir.to_string(), timeout, child, owner_id);
 
         let id = session.id.clone();
         self.sessions.insert(id.clone(), session);
@@ -524,6 +550,20 @@ impl ProcessManager {
     /// Get a session by ID.
     pub fn get(&self, id: &str) -> Option<&ExecSession> {
         self.sessions.get(id)
+    }
+
+    /// Get a session by ID, verifying the caller owns it (if owner tracking is enabled).
+    /// Returns `None` if the session doesn't exist or ownership check fails.
+    pub fn get_owned(&self, id: &str, caller_id: Option<&str>) -> Option<&ExecSession> {
+        let session = self.sessions.get(id)?;
+        if let Some(owner) = &session.owner_id {
+            if let Some(caller) = caller_id {
+                if owner != caller {
+                    return None;
+                }
+            }
+        }
+        Some(session)
     }
 
     /// Get a mutable session by ID.
@@ -614,6 +654,7 @@ mod tests {
             last_read_pos: 0,
             child: None,
             exit_code: None,
+            owner_id: None,
         };
 
         // Get last 2 lines

@@ -1107,7 +1107,12 @@ pub async fn call_openai_with_tools(
         })
         .collect();
 
-    let tool_defs = tools::tools_openai();
+    // Skip tool definitions when SKIP_TOOLS env var is set (reduces prompt size)
+    let tool_defs = if std::env::var("RUSTYCLAW_SKIP_TOOLS").is_ok() {
+        vec![]
+    } else {
+        tools::tools_openai()
+    };
 
     let mut body = json!({
         "model": req.model,
@@ -1271,7 +1276,12 @@ pub async fn call_anthropic_with_tools(
         })
         .collect();
 
-    let tool_defs = tools::tools_anthropic();
+    // Skip tool definitions when SKIP_TOOLS env var is set (reduces prompt size)
+    let tool_defs = if std::env::var("RUSTYCLAW_SKIP_TOOLS").is_ok() {
+        vec![]
+    } else {
+        tools::tools_anthropic()
+    };
 
     // Use streaming when we have a writer to forward chunks to
     let use_streaming = writer.is_some();
@@ -1581,7 +1591,12 @@ pub async fn call_google_with_tools(
         })
         .collect();
 
-    let tool_defs = tools::tools_google();
+    // Skip tool definitions when SKIP_TOOLS env var is set (reduces prompt size)
+    let tool_defs = if std::env::var("RUSTYCLAW_SKIP_TOOLS").is_ok() {
+        vec![]
+    } else {
+        tools::tools_google()
+    };
 
     let mut body = json!({ "contents": contents });
     if !system.is_empty() {

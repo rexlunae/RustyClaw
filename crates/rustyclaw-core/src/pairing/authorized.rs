@@ -119,8 +119,37 @@ pub fn default_authorized_clients_path() -> PathBuf {
     super::rustyclaw_dir().join("authorized_clients")
 }
 
+/// Check that the authorized_clients file has safe permissions.
+///
+/// The file should be readable only by the owner (mode & 077 ≤ 0700).
+/// On non-Unix platforms this is a no-op (behind a cfg guard).
+fn check_file_permissions(path: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let metadata = std::fs::metadata(path)
+            .with_context(|| format!("Failed to stat authorized_clients: {}", path.display()))?;
+        let mode = metadata.permissions().mode();
+        // Warn if file is group- or world-readable/writable (anything beyond 0700).
+        // Permissions beyond owner-read/write for sensitive auth material are dangerous.
+        const PERMISSIVE_BITS: u32 = 0o077;  // group+other rwx bits
+        if mode & PERMISSIVE_BITS != 0 {
+            warn!(
+                path = %path.display(),
+                mode = format!("{:o}", mode),
+                "authorized_clients has permissive permissions — consider `chmod 600 {}" ,
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Load authorized clients from a file.
 pub fn load_authorized_clients(path: &Path) -> Result<AuthorizedClients> {
+    // Warn on overly-permissive file permissions before reading secrets.
+    check_file_permissions(path)?;
+
     let mut clients = AuthorizedClients::new(path.to_path_buf());
 
     if !path.exists() {
