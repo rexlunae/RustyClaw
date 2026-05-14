@@ -1370,7 +1370,8 @@ async fn handle_connection(
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
                                         // Auto-label the thread from the first user message
                                         let should_label = thread.message_count() == 0
-                                            && (thread.label.starts_with("Session #")
+                                            && (thread.label.is_empty()
+                                                || thread.label.starts_with("Session #")
                                                 || thread.label == "Main");
                                         thread.add_message(
                                             crate::threads::MessageRole::User,
@@ -1385,6 +1386,7 @@ async fn handle_connection(
                                 }
                                 if did_auto_label {
                                     send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                                    let _ = thread_mgr.save_to_file(&threads_path);
                                 }
 
                                 // Re-read model_ctx from shared state for each dispatch
@@ -1498,6 +1500,11 @@ async fn handle_connection(
                                 send_frame(&mut *writer, &frame).await?;
                             }
                             ClientPayload::ThreadCreate { label } => {
+                                let label = if label.is_empty() {
+                                    format!("Session #{}", thread_mgr.list().len() + 1)
+                                } else {
+                                    label
+                                };
                                 debug!("Thread create request: {}", label);
                                 let thread_id = thread_mgr.create_thread(&label);
                                 let frame = ServerFrame {
