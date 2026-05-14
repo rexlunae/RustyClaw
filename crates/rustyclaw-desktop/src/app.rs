@@ -146,6 +146,7 @@ pub fn App() -> Element {
             // suspend — the virtualdom stops polling us and can
             // render.  When the worker signals new data, the
             // waker fires and we drain the buffer in one shot.
+            let client_ui = client.clone();
             spawn(async move {
                 loop {
                     notify.notified().await;
@@ -164,6 +165,9 @@ pub fn App() -> Element {
                     // is preserved.
                     for entry in entries {
                         match entry {
+                            BufferEntry::Event(GatewayEvent::DomQuery { id, js }) => {
+                                handle_dom_query(&client_ui, id, js).await;
+                            }
                             BufferEntry::Event(event) => {
                                 handle_gateway_event(event, state);
                             }
@@ -885,7 +889,53 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
         GatewayEvent::Info { message } => {
             state.write().status_message = Some(message);
         }
+        GatewayEvent::DomQuery { .. } => {
+            // Handled directly in the UI updater task via handle_dom_query.
+        }
     }
+}
+
+// ── DOM query handler ───────────────────────────────────────────────────────
+
+/// Execute a JavaScript expression in the webview and send the result
+/// back to the gateway as a `DomQueryResponse`.
+async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
+    let wrapped = format!(
+        r#"(function() {{
+            try {{
+                var __result = (function() {{ return {js}; }})();
+                if (typeof __result === 'undefined') return 'undefined';
+                if (typeof __result === 'string') return __result;
+                return JSON.stringify(__result);
+            }} catch(e) {{
+                return 'ERROR: ' + e.message;
+            }}
+        }})()"#,
+    );
+
+    let eval = document::eval(&wrapped);
+    let (result, is_error) = match eval.await {
+        Ok(val) => {
+            let s = match val {
+                serde_json::Value::String(s) => s,
+                other => other.to_string(),
+            };
+            if s.starts_with("ERROR: ") {
+                (s, true)
+            } else {
+                (s, false)
+            }
+        }
+        Err(e) => (format!("eval error: {}", e), true),
+    };
+
+    let _ = client
+        .send(GatewayCommand::DomQueryResponse {
+            id,
+            result,
+            is_error,
+        })
+        .await;
 }
 
 // ── Swarm helpers ───────────────────────────────────────────────────────────

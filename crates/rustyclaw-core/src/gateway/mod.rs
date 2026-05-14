@@ -1017,6 +1017,11 @@ async fn handle_connection(
         tokio::sync::mpsc::channel::<(String, bool, Option<String>)>(4);
     let credential_rx = Arc::new(Mutex::new(credential_rx));
 
+    // Channel for DOM query responses (used by the client_dom_query tool).
+    let (dom_query_tx, dom_query_rx) =
+        tokio::sync::mpsc::channel::<(String, String, bool)>(4);
+    let dom_query_rx = Arc::new(Mutex::new(dom_query_rx));
+
     // Channel for model task responses (concurrent execution).
     let (_model_task_tx, mut model_task_rx) = concurrent::channel();
 
@@ -1055,6 +1060,12 @@ async fn handle_connection(
                             if frame.frame_type == ClientFrameType::CredentialResponse {
                                 if let ClientPayload::CredentialResponse { id, dismissed, value } = frame.payload {
                                     let _ = credential_tx.send((id, dismissed, value)).await;
+                                    continue;
+                                }
+                            }
+                            if frame.frame_type == ClientFrameType::DomQueryResponse {
+                                if let ClientPayload::DomQueryResponse { id, result, is_error } = frame.payload {
+                                    let _ = dom_query_tx.send((id, result, is_error)).await;
                                     continue;
                                 }
                             }
@@ -1435,6 +1446,7 @@ async fn handle_connection(
                                     &approval_rx,
                                     &user_prompt_rx,
                                     &credential_rx,
+                                    &dom_query_rx,
                                     &mut thread_mgr,
                                 )
                                 .await
@@ -1696,11 +1708,12 @@ async fn handle_connection(
                                     &detail,
                                 ).await?;
                             }
-                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } => {
+                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.
                                 // UserPromptResponse handled by the reader task.
                                 // CredentialResponse handled by the reader task.
+                                // DomQueryResponse handled by the reader task.
                             }
                         }
             }
@@ -1968,6 +1981,40 @@ async fn execute_user_prompt(
     }
 }
 
+/// Execute the `client_dom_query` tool by sending a DOM query to the
+/// desktop client and waiting for the response on the dom_query channel.
+async fn execute_dom_query(
+    writer: &mut dyn transport::TransportWriter,
+    call_id: &str,
+    arguments: &serde_json::Value,
+    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
+) -> (String, bool) {
+    let js = arguments
+        .get("js")
+        .and_then(|v| v.as_str())
+        .unwrap_or("document.title");
+
+    if let Err(e) = protocol::server::send_dom_query(writer, call_id, js).await {
+        return (format!("Failed to send DOM query: {}", e), true);
+    }
+
+    // Wait for the client's response (30 second timeout).
+    let rx_result = {
+        let mut rx = dom_query_rx.lock().await;
+        tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await
+    };
+
+    match rx_result {
+        Ok(Some((id, result, is_error))) if id == call_id => (result, is_error),
+        Ok(Some(_)) => ("Mismatched DOM query response ID.".to_string(), true),
+        Ok(None) => ("DOM query channel closed.".to_string(), true),
+        Err(_) => (
+            "DOM query timed out after 30 seconds. The client may not support DOM queries.".to_string(),
+            true,
+        ),
+    }
+}
+
 /// Route an incoming text frame to the appropriate handler.
 ///
 /// Implements an agentic tool loop: the model is called, and if it
@@ -2033,6 +2080,7 @@ async fn dispatch_text_message(
         >,
     >,
     credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
+    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
     thread_mgr: &mut crate::threads::ThreadManager,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
@@ -2454,6 +2502,8 @@ async fn dispatch_text_message(
 
                         if tools::is_user_prompt_tool(&tc.name) {
                             execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
+                        } else if tools::is_dom_query_tool(&tc.name) {
+                            execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
                         } else {
                             tool_executor::execute_tool_by_type(
                                 &tc.name,
@@ -2473,6 +2523,8 @@ async fn dispatch_text_message(
                     // Execute the tool.
                     if tools::is_user_prompt_tool(&tc.name) {
                         execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
+                    } else if tools::is_dom_query_tool(&tc.name) {
+                        execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
                     } else {
                         tool_executor::execute_tool_by_type(
                             &tc.name,

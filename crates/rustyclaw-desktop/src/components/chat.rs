@@ -63,31 +63,31 @@ pub fn Chat(props: ChatProps) -> Element {
         });
     }
 
-    // Auto-scroll: when the user is near the bottom of the messages
-    // container, scroll to the very bottom as new content arrives.
-    // Dioxus use_effect only re-runs when Signal reads change, so we
-    // mirror the relevant prop values into local signals.
-    let mut scroll_msg_count = use_signal(|| props.messages.len());
-    let mut scroll_chunk_count = use_signal(|| props.streaming_chunks);
-    let mut scroll_streaming = use_signal(|| props.is_streaming);
-    scroll_msg_count.set(props.messages.len());
-    scroll_chunk_count.set(props.streaming_chunks);
-    scroll_streaming.set(props.is_streaming);
+    // Auto-scroll via MutationObserver: installed once, watches the
+    // `.messages` container for DOM changes (childList + subtree +
+    // characterData).  When the user is near the bottom (within 80 px),
+    // it scrolls to the very end.  This is independent of Dioxus
+    // re-render timing and works even for streaming chunks.
     use_effect(move || {
-        let _ = (
-            *scroll_msg_count.read(),
-            *scroll_chunk_count.read(),
-            *scroll_streaming.read(),
-        );
         document::eval(
             r#"
             (function() {
-                var el = document.querySelector('.messages');
-                if (!el) return;
-                var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-                if (nearBottom) {
+                if (window.__rcAutoScroll) return;
+                function tryInstall() {
+                    var el = document.querySelector('.messages');
+                    if (!el) { setTimeout(tryInstall, 100); return; }
+                    var ob = new MutationObserver(function() {
+                        var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+                        if (nearBottom) {
+                            el.scrollTop = el.scrollHeight;
+                        }
+                    });
+                    ob.observe(el, { childList: true, subtree: true, characterData: true });
+                    // Initial scroll to bottom.
                     el.scrollTop = el.scrollHeight;
                 }
+                tryInstall();
+                window.__rcAutoScroll = true;
             })();
         "#,
         );
