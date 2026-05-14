@@ -402,7 +402,6 @@ pub fn search_history_params() -> Vec<ToolParam> {
     ]
 }
 
-#[cfg(feature = "steel-memory")]
 pub fn add_memory_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
@@ -1091,6 +1090,15 @@ pub fn thread_describe_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "description".into(),
         description: "Description of what this thread is about or currently doing.".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
+pub fn set_thread_caption_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "caption".into(),
+        description: "Short caption for the thread (2-6 words). Summarises the topic.".into(),
         param_type: "string".into(),
         required: true,
     }]

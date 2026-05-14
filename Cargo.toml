@@ -18,7 +18,7 @@ repository = "https://github.com/rexlunae/RustyClaw"
 rust-version = "1.86"
 
 [workspace.lints.rust]
-unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal", "steel-memory"))'] }
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("signal"))'] }
 unsafe_op_in_unsafe_fn = "deny"
 
 [workspace.lints.clippy]
@@ -128,9 +128,6 @@ regex = "1.10"
 aho-corasick = "1.1"
 ipnetwork = "0.21"
 oxidized-agentic-audit = "0.5"
-
-# SQLite with FTS5 for mnemo memory coprocessor
-rusqlite = { version = "0.37", features = ["bundled-full"] }
 
 # HTTP date parsing (for Set-Cookie expires)
 httpdate = "1.0"

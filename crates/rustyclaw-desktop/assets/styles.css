@@ -354,6 +354,33 @@ p { margin: 0; }
 }
 .session-row.is-active .session-count { color: var(--rc-primary); border-color: rgba(240,111,58,0.35); background: transparent; }
 
+.session-rename-input {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    padding: 2px 6px;
+    border: 1px solid var(--rc-primary);
+    border-radius: 4px;
+    background: var(--rc-bg);
+    color: var(--rc-text);
+    outline: none;
+}
+
+.session-delete-btn {
+    display: none;
+    flex: 0 0 auto;
+    background: none;
+    border: none;
+    color: var(--rc-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+    border-radius: 4px;
+    line-height: 1;
+}
+.session-delete-btn:hover { color: var(--rc-danger, #e74c3c); background: var(--rc-bg-hover); }
+.session-row:hover .session-delete-btn { display: flex; }
+
 .sidebar-empty-sessions {
     padding: 14px;
     margin: 0 10px;
