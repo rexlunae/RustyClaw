@@ -166,10 +166,7 @@ pub fn App() -> Element {
                     for entry in entries {
                         match entry {
                             BufferEntry::Event(GatewayEvent::DomQuery { id, js }) => {
-                                let c = client_ui.clone();
-                                spawn(async move {
-                                    handle_dom_query(&c, id, js).await;
-                                });
+                                handle_dom_query(&client_ui, id, js).await;
                             }
                             BufferEntry::Event(event) => {
                                 handle_gateway_event(event, state);
@@ -924,27 +921,40 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
         }})()"#,
     );
 
-    let eval = document::eval(&wrapped);
-    let (result, is_error) = match eval.await {
-        Ok(val) => {
-            let raw = match val {
-                serde_json::Value::String(s) => s,
-                other => other.to_string(),
-            };
-            match serde_json::from_str::<serde_json::Value>(&raw) {
-                Ok(obj) => {
-                    let ok = obj.get("__ok").and_then(|v| v.as_bool()).unwrap_or(false);
-                    let v = obj
-                        .get("__v")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-                    (v, !ok)
+    // Retry up to 3 times to work around Dioxus EvalError::Finished
+    // bug (https://github.com/DioxusLabs/dioxus/issues/3084) where
+    // eval sometimes reports "already ran" spuriously.
+    let mut attempts = 0;
+    let (result, is_error) = loop {
+        attempts += 1;
+        let eval = document::eval(&wrapped);
+        match eval.await {
+            Ok(val) => {
+                let raw = match val {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                };
+                break match serde_json::from_str::<serde_json::Value>(&raw) {
+                    Ok(obj) => {
+                        let ok = obj.get("__ok").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let v = obj
+                            .get("__v")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        (v, !ok)
+                    }
+                    Err(_) => (raw, false),
+                };
+            }
+            Err(e) => {
+                if attempts < 3 {
+                    tracing::warn!("DOM eval attempt {} failed: {}, retrying", attempts, e);
+                    continue;
                 }
-                Err(_) => (raw, false),
+                break (format!("eval error after {} attempts: {}", attempts, e), true);
             }
         }
-        Err(e) => (format!("eval error: {}", e), true),
     };
 
     let _ = client
