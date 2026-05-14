@@ -888,7 +888,10 @@ async fn handle_connection(
                 )
                 .await
                 .context("Failed to send credentials_loaded status")?;
-            } else if crate_providers::secret_key_for_provider(&ctx.provider).is_some() {
+            } else if crate_providers::secret_key_for_provider(&ctx.provider).is_some()
+                && crate_providers::provider_by_id(&ctx.provider)
+                    .map(|p| p.auth_method) != Some(crate_providers::AuthMethod::OptionalApiKey)
+            {
                 protocol::server::send_status(
                     &mut *writer,
                     StatusType::CredentialsMissing,
@@ -1361,6 +1364,7 @@ async fn handle_connection(
                                 }
 
                                 // Add user message to current thread's history
+                                let mut did_auto_label = false;
                                 if let Some(thread) = thread_mgr.foreground_mut() {
                                     // Find the last user message (typically the new one)
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
@@ -1375,8 +1379,12 @@ async fn handle_connection(
                                         if should_label {
                                             let label = auto_thread_label(&last_user.content);
                                             thread.label = label;
+                                            did_auto_label = true;
                                         }
                                     }
+                                }
+                                if did_auto_label {
+                                    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
                                 }
 
                                 // Re-read model_ctx from shared state for each dispatch
