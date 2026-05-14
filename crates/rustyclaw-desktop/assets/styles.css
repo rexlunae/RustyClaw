@@ -319,12 +319,28 @@ p { margin: 0; }
 .session-icon { color: var(--rc-text-muted); flex: 0 0 auto; font-size: 13px; width: 14px; text-align: center; }
 .session-row.is-active .session-icon { color: var(--rc-primary); }
 
-.session-label {
+.session-text {
     flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+
+.session-label {
     font-size: 13px;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.session-description {
+    font-size: 11px;
+    color: var(--rc-text-faint);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.2;
 }
 
 .session-count {
@@ -361,7 +377,9 @@ p { margin: 0; }
 .sidebar.is-collapsed .brand-text,
 .sidebar.is-collapsed .sidebar-status,
 .sidebar.is-collapsed .sidebar-section-label,
+.sidebar.is-collapsed .session-text,
 .sidebar.is-collapsed .session-label,
+.sidebar.is-collapsed .session-description,
 .sidebar.is-collapsed .session-count,
 .sidebar.is-collapsed .sidebar-empty-sessions,
 .sidebar.is-collapsed .sidebar-action span:not(.icon-only) {

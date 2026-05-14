@@ -227,14 +227,26 @@ fn SessionRow(props: SessionRowProps) -> Element {
         .unwrap_or_else(|| format!("Session #{}", props.thread.id));
     let count = props.thread.message_count;
 
+    let description = props.thread.description.clone();
+    let title_text = if let Some(desc) = description.as_deref() {
+        format!("{label}\n{desc}")
+    } else {
+        label.clone()
+    };
+
     rsx! {
         div {
             class: "{class}",
-            title: "{label}",
+            title: "{title_text}",
             onclick: move |_| props.on_click.call(()),
             span { class: "session-icon", "💬" }
             if !props.collapsed {
-                span { class: "session-label", "{label}" }
+                div { class: "session-text",
+                    span { class: "session-label", "{label}" }
+                    if let Some(desc) = description.as_deref() {
+                        span { class: "session-description", "{desc}" }
+                    }
+                }
                 if count > 0 {
                     span { class: "session-count", "{count}" }
                 }
