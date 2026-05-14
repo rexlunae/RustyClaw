@@ -444,6 +444,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
                 is_error,
             },
         },
+        GatewayCommand::SetAgentName { name } => ClientFrame {
+            frame_type: ClientFrameType::SetAgentName,
+            payload: ClientPayload::SetAgentName { name },
+        },
     }
 }
 

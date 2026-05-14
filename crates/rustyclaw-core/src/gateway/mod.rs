@@ -847,7 +847,7 @@ async fn handle_connection(
     // ── Send hello ──────────────────────────────────────────────────
     protocol::server::send_hello(
         &mut *writer,
-        "rustyclaw",
+        &config.agent_name,
         &config.settings_dir.to_string_lossy(),
         vault_is_locked,
         model_ctx.as_ref().map(|c| c.provider.as_str()),
@@ -1707,6 +1707,14 @@ async fn handle_connection(
                                     StatusType::ModelConfigured,
                                     &detail,
                                 ).await?;
+                            }
+                            ClientPayload::SetAgentName { name } => {
+                                debug!("Agent name change: {}", name);
+                                {
+                                    let mut cfg = shared_config.write().await;
+                                    cfg.agent_name = name;
+                                    let _ = cfg.save(None);
+                                }
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.

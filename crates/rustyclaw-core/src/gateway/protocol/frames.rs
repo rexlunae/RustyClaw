@@ -64,6 +64,8 @@ pub enum ClientFrameType {
     ModelSwitch = 26,
     /// Response to a DOM query request.
     DomQueryResponse = 27,
+    /// Set the agent display name (persisted to config).
+    SetAgentName = 28,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -323,6 +325,10 @@ pub enum ClientPayload {
         result: String,
         /// `true` if the evaluation threw an error.
         is_error: bool,
+    },
+    /// Set the agent display name (persisted to config).
+    SetAgentName {
+        name: String,
     },
 }
 
@@ -659,6 +665,7 @@ mod tests {
             assert_eq!(ClientFrameType::CredentialResponse as u8, 25);
             assert_eq!(ClientFrameType::ModelSwitch as u8, 26);
             assert_eq!(ClientFrameType::DomQueryResponse as u8, 27);
+            assert_eq!(ClientFrameType::SetAgentName as u8, 28);
         }
 
         #[test]

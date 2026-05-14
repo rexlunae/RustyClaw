@@ -193,4 +193,8 @@ pub enum GatewayCommand {
         result: String,
         is_error: bool,
     },
+
+    /// Set the agent display name (persisted to gateway config)
+    #[serde(rename = "set_agent_name")]
+    SetAgentName { name: String },
 }

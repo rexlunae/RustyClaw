@@ -386,8 +386,16 @@ pub fn App() -> Element {
                     if let Some(personality) = result.personality.clone() {
                         state.write().status_message = Some(format!("Personality set: {}", personality));
                     }
+                    let name = result.name.clone();
                     state.write().agent_name = Some(result.name);
                     show_hatching.set(false);
+                    // Persist the name to the gateway config.
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::SetAgentName { name }).await;
+                        });
+                    }
                 },
                 on_cancel: move |_| show_hatching.set(false),
             }
