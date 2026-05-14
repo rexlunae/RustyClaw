@@ -197,4 +197,8 @@ pub enum GatewayCommand {
     /// Set the agent display name (persisted to gateway config)
     #[serde(rename = "set_agent_name")]
     SetAgentName { name: String },
+
+    /// Store a secret (API key) in the gateway vault
+    #[serde(rename = "secrets_store")]
+    SecretsStore { key: String, value: String },
 }

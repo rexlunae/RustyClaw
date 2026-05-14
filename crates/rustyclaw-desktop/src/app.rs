@@ -447,6 +447,26 @@ pub fn App() -> Element {
                 on_theme_change: move |t: Theme| state.write().theme = t,
                 on_gateway_url_change: move |v: String| state.write().gateway_url = v,
                 on_reconnect: move |_| do_reconnect(),
+                on_credential_save: move |(provider_id, api_key): (String, String)| {
+                    let secret_key = rustyclaw_core::providers::secret_key_for_provider(&provider_id)
+                        .unwrap_or(&provider_id)
+                        .to_string();
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client.send(GatewayCommand::SecretsStore {
+                                key: secret_key,
+                                value: api_key,
+                            }).await {
+                                tracing::error!("Failed to store credential: {}", e);
+                            }
+                        });
+                    }
+                    state.write().status_message = Some(format!(
+                        "API key saved for {}",
+                        rustyclaw_core::providers::display_name_for_provider(&provider_id)
+                    ));
+                },
                 on_close: move |_| show_settings.set(false),
             }
 

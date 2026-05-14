@@ -850,6 +850,31 @@ p { margin: 0; }
     font-family: var(--rc-font-mono);
 }
 
+/* ---- Provider credential rows in Settings ---- */
+
+.provider-cred-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 0;
+}
+.provider-cred-info {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+}
+.provider-cred-edit {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex: 1;
+}
+.provider-cred-edit input {
+    flex: 1;
+    min-width: 0;
+}
+
 /* ---- Model bar (provider / model selector above composer) ---- */
 
 .model-bar {
