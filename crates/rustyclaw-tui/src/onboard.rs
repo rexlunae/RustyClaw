@@ -555,6 +555,7 @@ pub fn run_onboard_wizard(
                             &format!("{} ", t::accent("Enter API key (or leave blank to remove):")),
                         )?;
                         if key.trim().is_empty() {
+                            secrets.delete_secret(secret_key)?;
                             println!(
                                 "  {}",
                                 t::icon_ok("Key removed — will connect without authentication.")
