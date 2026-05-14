@@ -1403,13 +1403,55 @@ async fn handle_connection(
                                 // that SOUL.md, IDENTITY.md, etc. are
                                 // included.
                                 let mut messages = messages;
-                                if messages.is_empty() || messages[0].role != "system" {
+                                let client_sent_history = !messages.is_empty() && messages[0].role == "system";
+                                if !client_sent_history {
                                     let sys = system_prompt::build_system_prompt(
                                         &config,
                                         &task_mgr,
                                         &skill_mgr,
                                     ).await;
                                     messages.insert(0, ChatMessage::text("system", &sys));
+
+                                    // Inject conversation history from the
+                                    // thread. The desktop client only sends
+                                    // the current user message; we need to
+                                    // include prior turns so the model has
+                                    // context of the conversation.
+                                    if let Some(thread) = thread_mgr.foreground() {
+                                        let history = &thread.messages;
+                                        // history includes the message we just
+                                        // added — skip it (last element) to
+                                        // avoid duplication with the client's
+                                        // user message already in `messages`.
+                                        let prior_count = history.len().saturating_sub(1);
+                                        if prior_count > 0 {
+                                            // Optionally include compact summary as context
+                                            if let Some(summary) = &thread.compact_summary {
+                                                messages.insert(1, ChatMessage::text(
+                                                    "system",
+                                                    &format!("# Previous conversation summary\n\n{}", summary),
+                                                ));
+                                            }
+                                            let insert_pos = if thread.compact_summary.is_some() { 2 } else { 1 };
+                                            let history_msgs: Vec<ChatMessage> = history
+                                                .iter()
+                                                .take(prior_count)
+                                                .map(|m| {
+                                                    let role = match m.role {
+                                                        crate::threads::MessageRole::User => "user",
+                                                        crate::threads::MessageRole::Assistant => "assistant",
+                                                        crate::threads::MessageRole::System => "system",
+                                                        crate::threads::MessageRole::Tool => "tool",
+                                                    };
+                                                    ChatMessage::text(role, &m.content)
+                                                })
+                                                .collect();
+                                            // Insert history between system prompt and current user message
+                                            let tail = messages.split_off(insert_pos);
+                                            messages.extend(history_msgs);
+                                            messages.extend(tail);
+                                        }
+                                    }
                                 }
 
                                 // Inject thread context into system prompt if available
