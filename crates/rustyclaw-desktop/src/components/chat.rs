@@ -1,4 +1,12 @@
 //! Chat surface: message list with empty state, composer, thinking indicator.
+//!
+//! Sub-components:
+//!   - [`EmptyState`] — starter prompts when no messages exist
+//!   - [`ThinkingIndicator`] — animated "Thinking…" row
+//!   - [`ProcessingIndicator`] — hourglass shown before streaming starts
+//!   - [`Composer`] — model selector bar + textarea + send/cancel button
+//!   - [`ModelBar`] — provider/model dropdowns above the input
+//!   - [`StreamingProgress`] — live chunk/byte counter during streaming
 
 use dioxus::prelude::*;
 use rustyclaw_core::providers;
@@ -166,21 +174,8 @@ pub fn Chat(props: ChatProps) -> Element {
                         }
 
                         if props.is_thinking {
-                            div { class: "msg-row is-assistant",
-                                div { class: "msg-avatar", "🦞" }
-                                div { class: "msg-body",
-                                    div { class: "msg-header",
-                                        span { class: "msg-name",
-                                            {props.agent_name.as_deref().unwrap_or("Assistant")}
-                                        }
-                                    }
-                                    div { class: "thinking",
-                                        span { "Thinking" }
-                                        span { class: "thinking-dots",
-                                            span {} span {} span {}
-                                        }
-                                    }
-                                }
+                            ThinkingIndicator {
+                                agent_name: props.agent_name.clone(),
                             }
                         }
 
@@ -190,60 +185,25 @@ pub fn Chat(props: ChatProps) -> Element {
                                 bytes: props.streaming_bytes,
                             }
                         } else if props.is_processing {
-                            div { class: "streaming-progress",
-                                span { class: "streaming-progress-icon", "⏳" }
-                                span { class: "streaming-progress-text", "Processing…" }
-                            }
+                            ProcessingIndicator {}
                         }
                     }
                 }
             }
 
-            // Composer with model selector
-            div { class: "composer-wrap",
-                ModelBar {
-                    current_provider: props.current_provider.clone(),
-                    current_model: props.current_model.clone(),
-                    on_model_change: props.on_model_change,
-                    on_add_provider: props.on_add_provider,
-                }
-                div { class: "composer",
-                    textarea {
-                        placeholder: "Message RustyClaw…",
-                        rows: "1",
-                        value: "{input_ref}",
-                        disabled: is_processing,
-                        onkeydown: move |evt: KeyboardEvent| {
-                            if evt.key() == Key::Enter && !evt.modifiers().shift() {
-                                evt.prevent_default();
-                                let mut s = send_now;
-                                s();
-                            }
-                        },
-                        oninput: move |evt| {
-                            let value = evt.value();
-                            input_ref.set(value.clone());
-                            props.on_input_change.call(value);
-                        }
-                    }
-                    button {
-                        class: "composer-send",
-                        title: if is_processing { "Cancel request" } else { "Send (Enter)" },
-                        disabled: !is_processing && input_ref.read().trim().is_empty(),
-                        onclick: move |_| {
-                            if is_processing {
-                                props.on_cancel.call(());
-                            } else {
-                                let mut s = send_now;
-                                s();
-                            }
-                        },
-                        if is_processing { "×" } else { "↑" }
-                    }
-                }
-                div { class: "composer-hint",
-                    "Press Enter to send · Shift + Enter for newline"
-                }
+            Composer {
+                input: input_ref,
+                is_processing: is_processing,
+                current_provider: props.current_provider.clone(),
+                current_model: props.current_model.clone(),
+                on_send: move |_| {
+                    let mut s = send_now;
+                    s();
+                },
+                on_cancel: props.on_cancel,
+                on_input_change: props.on_input_change,
+                on_model_change: props.on_model_change,
+                on_add_provider: props.on_add_provider,
             }
         }
     }
@@ -286,6 +246,118 @@ fn EmptyState(props: EmptyStateProps) -> Element {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+// ── Thinking indicator ──────────────────────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct ThinkingIndicatorProps {
+    agent_name: Option<String>,
+}
+
+/// Animated "Thinking..." row shown while the model is processing.
+#[component]
+fn ThinkingIndicator(props: ThinkingIndicatorProps) -> Element {
+    rsx! {
+        div { class: "msg-row is-assistant",
+            div { class: "msg-avatar", "🦞" }
+            div { class: "msg-body",
+                div { class: "msg-header",
+                    span { class: "msg-name",
+                        {props.agent_name.as_deref().unwrap_or("Assistant")}
+                    }
+                }
+                div { class: "thinking",
+                    span { "Thinking" }
+                    span { class: "thinking-dots",
+                        span {} span {} span {}
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Processing indicator ───────────────────────────────────────────────────
+
+/// Simple "Processing…" indicator shown after submit but before streaming.
+#[component]
+fn ProcessingIndicator() -> Element {
+    rsx! {
+        div { class: "streaming-progress",
+            span { class: "streaming-progress-icon", "⏳" }
+            span { class: "streaming-progress-text", "Processing…" }
+        }
+    }
+}
+
+// ── Composer ───────────────────────────────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct ComposerProps {
+    input: Signal<String>,
+    is_processing: bool,
+    current_provider: Option<String>,
+    current_model: Option<String>,
+    on_send: EventHandler<()>,
+    on_cancel: EventHandler<()>,
+    on_input_change: EventHandler<String>,
+    on_model_change: EventHandler<ModelSelection>,
+    on_add_provider: EventHandler<()>,
+}
+
+/// Model selector bar + message input area with send/cancel button.
+#[component]
+fn Composer(props: ComposerProps) -> Element {
+    let mut input_ref = props.input;
+    let is_processing = props.is_processing;
+    let on_send = props.on_send;
+
+    rsx! {
+        div { class: "composer-wrap",
+            ModelBar {
+                current_provider: props.current_provider.clone(),
+                current_model: props.current_model.clone(),
+                on_model_change: props.on_model_change,
+                on_add_provider: props.on_add_provider,
+            }
+            div { class: "composer",
+                textarea {
+                    placeholder: "Message RustyClaw…",
+                    rows: "1",
+                    value: "{input_ref}",
+                    disabled: is_processing,
+                    onkeydown: move |evt: KeyboardEvent| {
+                        if evt.key() == Key::Enter && !evt.modifiers().shift() {
+                            evt.prevent_default();
+                            on_send.call(());
+                        }
+                    },
+                    oninput: move |evt| {
+                        let value = evt.value();
+                        input_ref.set(value.clone());
+                        props.on_input_change.call(value);
+                    }
+                }
+                button {
+                    class: "composer-send",
+                    title: if is_processing { "Cancel request" } else { "Send (Enter)" },
+                    disabled: !is_processing && input_ref.read().trim().is_empty(),
+                    onclick: move |_| {
+                        if is_processing {
+                            props.on_cancel.call(());
+                        } else {
+                            on_send.call(());
+                        }
+                    },
+                    if is_processing { "×" } else { "↑" }
+                }
+            }
+            div { class: "composer-hint",
+                "Press Enter to send · Shift + Enter for newline"
             }
         }
     }
