@@ -850,6 +850,31 @@ p { margin: 0; }
     font-family: var(--rc-font-mono);
 }
 
+/* ---- Model bar (provider / model selector above composer) ---- */
+
+.model-bar {
+    max-width: 800px;
+    margin: 0 auto 6px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+.model-bar-select {
+    background: var(--rc-input-bg);
+    border: 1px solid var(--rc-input-border);
+    border-radius: var(--rc-radius);
+    padding: 4px 8px;
+    color: var(--rc-text);
+    font-size: 12px;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.12s ease;
+}
+.model-bar-select:focus {
+    border-color: var(--rc-input-border-focus);
+    box-shadow: 0 0 0 2px var(--rc-primary-soft);
+}
+
 /* ---- Composer / input ---- */
 
 .composer-wrap {

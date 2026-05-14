@@ -370,9 +370,29 @@ pub fn App() -> Element {
                     streaming_chunks: state.read().streaming_chunks,
                     streaming_bytes: state.read().streaming_bytes,
                     agent_name: state.read().agent_name.clone(),
+                    current_provider: state.read().provider.clone(),
+                    current_model: state.read().model.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
                     on_input_change: move |value| state.write().input = value,
+                    on_model_change: move |(provider, model): (String, String)| {
+                        let prov_clone = provider.clone();
+                        let model_clone = model.clone();
+                        let gw = gateway.read().clone();
+                        if let Some(client) = gw {
+                            spawn(async move {
+                                if let Err(e) = client.send(GatewayCommand::ModelSwitch {
+                                    provider: prov_clone,
+                                    model: model_clone,
+                                }).await {
+                                    tracing::error!("Failed to send model switch: {}", e);
+                                }
+                            });
+                        }
+                        state.write().provider = Some(provider);
+                        state.write().model = Some(model);
+                    },
+                    on_add_provider: move |_| show_settings.set(true),
                 }
             }
 
@@ -424,28 +444,9 @@ pub fn App() -> Element {
                 visible: *show_settings.read(),
                 theme: state.read().theme,
                 gateway_url: state.read().gateway_url.clone(),
-                current_provider: state.read().provider.clone(),
-                current_model: state.read().model.clone(),
                 on_theme_change: move |t: Theme| state.write().theme = t,
                 on_gateway_url_change: move |v: String| state.write().gateway_url = v,
                 on_reconnect: move |_| do_reconnect(),
-                on_model_change: move |(provider, model): (String, String)| {
-                    let prov_clone = provider.clone();
-                    let model_clone = model.clone();
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            if let Err(e) = client.send(GatewayCommand::ModelSwitch {
-                                provider: prov_clone,
-                                model: model_clone,
-                            }).await {
-                                tracing::error!("Failed to send model switch: {}", e);
-                            }
-                        });
-                    }
-                    state.write().provider = Some(provider);
-                    state.write().model = Some(model);
-                },
                 on_close: move |_| show_settings.set(false),
             }
 

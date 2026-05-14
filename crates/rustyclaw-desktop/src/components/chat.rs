@@ -1,11 +1,15 @@
 //! Chat surface: message list with empty state, composer, thinking indicator.
 
 use dioxus::prelude::*;
+use rustyclaw_core::providers;
 
 use crate::state::ChatMessage;
 
 use super::message::MessageBubble;
 use super::tool_call::ToolCallPanel;
+
+/// (provider_id, model_id) pair emitted when the user changes model.
+pub type ModelSelection = (String, String);
 
 /// Suggested starter prompts shown on the empty state.
 const STARTERS: &[(&str, &str, &str)] = &[
@@ -42,9 +46,13 @@ pub struct ChatProps {
     pub streaming_chunks: u32,
     pub streaming_bytes: usize,
     pub agent_name: Option<String>,
+    pub current_provider: Option<String>,
+    pub current_model: Option<String>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
     pub on_input_change: EventHandler<String>,
+    pub on_model_change: EventHandler<ModelSelection>,
+    pub on_add_provider: EventHandler<()>,
 }
 
 #[component]
@@ -191,8 +199,14 @@ pub fn Chat(props: ChatProps) -> Element {
                 }
             }
 
-            // Composer
+            // Composer with model selector
             div { class: "composer-wrap",
+                ModelBar {
+                    current_provider: props.current_provider.clone(),
+                    current_model: props.current_model.clone(),
+                    on_model_change: props.on_model_change,
+                    on_add_provider: props.on_add_provider,
+                }
                 div { class: "composer",
                     textarea {
                         placeholder: "Message RustyClaw…",
@@ -278,6 +292,112 @@ fn EmptyState(props: EmptyStateProps) -> Element {
 }
 
 // ── Streaming progress indicator ───────────────────────────────────────────
+
+// ── Model bar (provider / model selector above composer) ─────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct ModelBarProps {
+    current_provider: Option<String>,
+    current_model: Option<String>,
+    on_model_change: EventHandler<ModelSelection>,
+    on_add_provider: EventHandler<()>,
+}
+
+/// Sentinel value used for the "Add provider…" menu entry.
+const ADD_PROVIDER_SENTINEL: &str = "__add_provider__";
+
+#[component]
+fn ModelBar(props: ModelBarProps) -> Element {
+    let mut selected_provider =
+        use_signal(|| props.current_provider.clone().unwrap_or_default());
+    let mut selected_model =
+        use_signal(|| props.current_model.clone().unwrap_or_default());
+
+    // Keep signals in sync when parent props change (e.g. gateway reports
+    // the active provider/model after reconnection).
+    {
+        let pp = props.current_provider.clone();
+        let pm = props.current_model.clone();
+        use_effect(move || {
+            if let Some(ref p) = pp {
+                if *selected_provider.read() != *p {
+                    selected_provider.set(p.clone());
+                }
+            }
+            if let Some(ref m) = pm {
+                if *selected_model.read() != *m {
+                    selected_model.set(m.clone());
+                }
+            }
+        });
+    }
+
+    let provider_list = providers::provider_ids();
+    let current_provider_id = selected_provider.read().clone();
+    let models_for_current = providers::models_for_provider(&current_provider_id);
+
+    rsx! {
+        div { class: "model-bar",
+            select {
+                class: "model-bar-select",
+                value: "{selected_provider}",
+                onchange: {
+                    let on_model_change = props.on_model_change;
+                    let on_add_provider = props.on_add_provider;
+                    move |evt: Event<FormData>| {
+                        let prov = evt.value();
+                        if prov == ADD_PROVIDER_SENTINEL {
+                            on_add_provider.call(());
+                            return;
+                        }
+                        selected_provider.set(prov.clone());
+                        let models = providers::models_for_provider(&prov);
+                        let first_model =
+                            models.first().copied().unwrap_or("").to_string();
+                        selected_model.set(first_model.clone());
+                        on_model_change.call((prov, first_model));
+                    }
+                },
+                for pid in provider_list.iter() {
+                    option {
+                        value: "{pid}",
+                        selected: *pid == current_provider_id.as_str(),
+                        "{providers::display_name_for_provider(pid)}"
+                    }
+                }
+                option { disabled: true, "─────────────" }
+                option {
+                    value: "{ADD_PROVIDER_SENTINEL}",
+                    "Add provider\u{2026}"
+                }
+            }
+
+            select {
+                class: "model-bar-select",
+                value: "{selected_model}",
+                onchange: {
+                    let on_model_change = props.on_model_change;
+                    let provider_signal = selected_provider;
+                    move |evt: Event<FormData>| {
+                        let mdl = evt.value();
+                        selected_model.set(mdl.clone());
+                        let prov = provider_signal.read().clone();
+                        on_model_change.call((prov, mdl));
+                    }
+                },
+                for mid in models_for_current.iter() {
+                    option {
+                        value: "{mid}",
+                        selected: *mid == selected_model.read().as_str(),
+                        "{mid}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Streaming progress ──────────────────────────────────────────────
 
 #[derive(Props, Clone, PartialEq)]
 struct StreamingProgressProps {
