@@ -1379,11 +1379,12 @@ async fn handle_connection(
 
                                 // Add user message to current thread's history
                                 let mut did_auto_label = false;
+                                let mut needs_caption = false;
                                 if let Some(thread) = thread_mgr.foreground_mut() {
                                     // Find the last user message (typically the new one)
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-                                        // Auto-label the thread from the first user message
-                                        let should_label = thread.message_count() == 0
+                                        // Check if this is the first message in a new thread
+                                        let is_first_message = thread.message_count() == 0
                                             && (thread.label.is_empty()
                                                 || thread.label.starts_with("Session #")
                                                 || thread.label == "Main");
@@ -1391,16 +1392,30 @@ async fn handle_connection(
                                             crate::threads::MessageRole::User,
                                             &last_user.content,
                                         );
-                                        if should_label {
+                                        if is_first_message {
+                                            // Set a temporary auto-label as fallback
                                             let label = auto_thread_label(&last_user.content);
                                             thread.label = label;
                                             did_auto_label = true;
+                                            // Flag for agent captioning
+                                            needs_caption = true;
                                         }
                                     }
                                 }
                                 if did_auto_label {
                                     send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
                                     let _ = thread_mgr.save_to_file(&threads_path);
+                                }
+
+                                // Auto-ingest user message into Steel Memory
+                                if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+                                    let ws = config.workspace_dir().to_path_buf();
+                                    let text = last_user.content.clone();
+                                    tokio::spawn(async move {
+                                        if let Ok(mem) = crate::steel_memory::SteelMemory::new(&ws) {
+                                            let _ = mem.add_memory(&text, "conversations", "user", None).await;
+                                        }
+                                    });
                                 }
 
                                 // Re-read model_ctx from shared state for each dispatch
@@ -1469,7 +1484,7 @@ async fn handle_connection(
                                 }
 
                                 // Inject thread context into system prompt if available
-                                let messages_with_context = {
+                                let mut messages_with_context = {
                                     let global_ctx = thread_mgr.build_global_context();
                                     if !global_ctx.is_empty() && !messages.is_empty() && messages[0].role == "system" {
                                         let mut msgs = messages.clone();
@@ -1483,6 +1498,44 @@ async fn handle_connection(
                                         messages
                                     }
                                 };
+
+                                // Inject captioning instruction for new threads
+                                if needs_caption && !messages_with_context.is_empty() && messages_with_context[0].role == "system" {
+                                    messages_with_context[0].content = format!(
+                                        "{}\n\n## Thread Captioning\n\
+                                        This is the first message in a new conversation thread. \
+                                        After responding, call `set_thread_caption` with a short \
+                                        2-6 word caption that summarises the topic of this conversation.",
+                                        messages_with_context[0].content
+                                    );
+                                }
+
+                                // Inject relevant memory context from Steel Memory
+                                if !messages_with_context.is_empty() && messages_with_context[0].role == "system" {
+                                    if let Some(last_user) = messages_with_context.iter().rev().find(|m| m.role == "user") {
+                                        let query = last_user.content.clone();
+                                        let ws = config.workspace_dir().to_path_buf();
+                                        if let Ok(mem) = crate::steel_memory::SteelMemory::new(&ws) {
+                                            if let Ok(results) = mem.search(&query, 3, Some(0.4)).await {
+                                                if !results.is_empty() {
+                                                    let mut ctx = String::from("\n\n## Relevant Memories\n");
+                                                    for r in &results {
+                                                        let snippet = if r.content.len() > 300 {
+                                                            format!("{}…", &r.content[..300])
+                                                        } else {
+                                                            r.content.clone()
+                                                        };
+                                                        ctx.push_str(&format!(
+                                                            "- (similarity {:.2}) {}\n",
+                                                            r.similarity, snippet
+                                                        ));
+                                                    }
+                                                    messages_with_context[0].content.push_str(&ctx);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
 
                                 // Build a ChatRequest from the messages
                                 let chat_request = ChatRequest {
@@ -1514,6 +1567,7 @@ async fn handle_connection(
                                     &credential_rx,
                                     &dom_query_rx,
                                     &mut thread_mgr,
+                                    &threads_path,
                                 )
                                 .await
                                 {
@@ -2161,6 +2215,7 @@ async fn dispatch_text_message(
     credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
     dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
     thread_mgr: &mut crate::threads::ThreadManager,
+    threads_path: &std::path::Path,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
@@ -2478,6 +2533,14 @@ async fn dispatch_text_message(
                         thread
                             .add_message(crate::threads::MessageRole::Assistant, &model_resp.text);
                     }
+                    // Auto-ingest assistant response into Steel Memory
+                    let ws = workspace_dir.to_path_buf();
+                    let text = model_resp.text.clone();
+                    tokio::spawn(async move {
+                        if let Ok(mem) = crate::steel_memory::SteelMemory::new(&ws) {
+                            let _ = mem.add_memory(&text, "conversations", "assistant", None).await;
+                        }
+                    });
                 }
                 providers::send_response_done(writer).await?;
                 return Ok(());
@@ -2624,11 +2687,28 @@ async fn dispatch_text_message(
             if output.starts_with(tools::THREAD_UPDATE_MARKER) {
                 let json_str = &output[tools::THREAD_UPDATE_MARKER.len()..];
                 if let Ok(update) = serde_json::from_str::<serde_json::Value>(json_str) {
-                    if let Some(description) = update.get("description").and_then(|v| v.as_str()) {
-                        thread_mgr.set_foreground_description(description);
-                        output = format!("Thread description set to: {}", description);
-                        // Send updated thread list to client
-                        send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                    let action = update.get("action").and_then(|v| v.as_str()).unwrap_or("");
+                    match action {
+                        "set_description" => {
+                            if let Some(description) = update.get("description").and_then(|v| v.as_str()) {
+                                thread_mgr.set_foreground_description(description);
+                                output = format!("Thread description set to: {}", description);
+                                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                            }
+                        }
+                        "set_caption" => {
+                            if let Some(caption) = update.get("caption").and_then(|v| v.as_str()) {
+                                if let Some(fg_id) = thread_mgr.foreground_id() {
+                                    thread_mgr.rename(fg_id, caption);
+                                    output = format!("Thread caption set to: {}", caption);
+                                    send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                                    let _ = thread_mgr.save_to_file(threads_path);
+                                } else {
+                                    output = "No active thread to caption.".to_string();
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

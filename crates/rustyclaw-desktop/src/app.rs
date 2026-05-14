@@ -290,6 +290,31 @@ pub fn App() -> Element {
         state.write().switch_thread(thread_id);
     };
 
+    let on_rename_thread = move |(thread_id, new_label): (u64, String)| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::ThreadRename {
+                        thread_id,
+                        new_label,
+                    })
+                    .await;
+            });
+        }
+    };
+
+    let on_delete_thread = move |thread_id: u64| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::ThreadClose { thread_id })
+                    .await;
+            });
+        }
+    };
+
     let on_cancel = move |_| {
         state.write().status_message = Some("Cancellation requested…".to_string());
         let gw = gateway.read().clone();
@@ -362,6 +387,12 @@ pub fn App() -> Element {
                     let v = state.read().sidebar_collapsed;
                     state.write().sidebar_collapsed = !v;
                 },
+                on_new_thread: on_new_thread,
+                on_switch_thread: on_switch_thread,
+                on_rename_thread: on_rename_thread,
+                on_delete_thread: on_delete_thread,
+                threads: state.read().threads.clone(),
+                foreground_id: state.read().foreground_thread_id,
                 on_pair: move |_| show_pairing.set(true),
                 on_secrets: move |_| {
                     show_secrets.set(true);

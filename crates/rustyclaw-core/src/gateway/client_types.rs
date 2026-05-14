@@ -210,6 +210,10 @@ pub enum GatewayCommand {
     #[serde(rename = "thread_close")]
     ThreadClose { thread_id: u64 },
 
+    /// Rename a thread
+    #[serde(rename = "thread_rename")]
+    ThreadRename { thread_id: u64, new_label: String },
+
     /// List secrets
     #[serde(rename = "secrets_list")]
     SecretsList,

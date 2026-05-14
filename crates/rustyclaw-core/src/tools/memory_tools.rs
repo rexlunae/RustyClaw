@@ -1,23 +1,12 @@
-//! Memory tools: memory_search, memory_get, and save_memory.
+//! Memory tools: memory_search, memory_get, add_memory, and save_memory.
 //!
-//! When the `steel-memory` feature is enabled, memory_search uses semantic
-//! vector search with embeddings. Otherwise, it falls back to BM25 keyword search.
+//! Uses Steel Memory for semantic vector search with embeddings.
 
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
 
-/// Default half-life for temporal decay in days (BM25 fallback).
-#[cfg(not(feature = "steel-memory"))]
-const DEFAULT_HALF_LIFE_DAYS: f64 = 30.0;
-
-/// Search memory files for relevant content.
-///
-/// With `steel-memory` feature: Uses semantic vector search with embeddings
-/// for better natural language understanding and recall.
-///
-/// Without: Uses BM25-style keyword matching with optional recency decay.
-#[cfg(feature = "steel-memory")]
+/// Search memory using Steel Memory semantic vector search.
 #[instrument(skip(args, workspace_dir), fields(query))]
 pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let query = args
@@ -85,89 +74,6 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     })
 }
 
-/// BM25 fallback when steel-memory is not enabled.
-#[cfg(not(feature = "steel-memory"))]
-#[instrument(skip(args, workspace_dir), fields(query))]
-pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| "Missing required parameter: query".to_string())?;
-
-    tracing::Span::current().record("query", query);
-
-    let max_results = args.get("maxResults").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
-    let min_score = args.get("minScore").and_then(|v| v.as_f64()).unwrap_or(0.1);
-
-    let use_recency = args
-        .get("recencyBoost")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let half_life_days = args
-        .get("halfLifeDays")
-        .and_then(|v| v.as_f64())
-        .unwrap_or(DEFAULT_HALF_LIFE_DAYS);
-
-    debug!(
-        max_results,
-        min_score, use_recency, half_life_days, "Searching memory (BM25)"
-    );
-
-    let index = crate::memory::MemoryIndex::index_workspace(workspace_dir)?;
-
-    let results = if use_recency {
-        index.search_with_decay(query, max_results, half_life_days)
-    } else {
-        index.search(query, max_results)
-    };
-
-    if results.is_empty() {
-        return Ok("No matching memories found.".to_string());
-    }
-
-    let mut output = String::new();
-    output.push_str(&format!("Memory search results for: {}\n", query));
-    if use_recency {
-        output.push_str(&format!(
-            "(recency boost enabled, half-life: {} days)\n",
-            half_life_days
-        ));
-    }
-    output.push('\n');
-
-    let mut count = 0;
-    for result in results {
-        if result.score < min_score {
-            continue;
-        }
-        count += 1;
-
-        let snippet = if result.chunk.text.len() > 700 {
-            format!("{}...", &result.chunk.text[..700])
-        } else {
-            result.chunk.text.clone()
-        };
-
-        output.push_str(&format!(
-            "{}. **{}** (lines {}-{}, score: {:.2})\n",
-            count, result.chunk.path, result.chunk.start_line, result.chunk.end_line, result.score
-        ));
-        output.push_str(&format!("{}\n\n", snippet));
-        output.push_str(&format!(
-            "Source: {}#L{}-L{}\n\n",
-            result.chunk.path, result.chunk.start_line, result.chunk.end_line
-        ));
-    }
-
-    if count == 0 {
-        debug!("No results above minimum score threshold");
-        return Ok("No matching memories found above the minimum score threshold.".to_string());
-    }
-
-    debug!(result_count = count, "Memory search complete");
-    Ok(output)
-}
 
 /// Read content from a memory file.
 #[instrument(skip(args, workspace_dir))]
@@ -192,8 +98,7 @@ pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, Str
     crate::memory::read_memory_file(workspace_dir, path, from_line, num_lines)
 }
 
-/// Add a memory to the semantic index (steel-memory only).
-#[cfg(feature = "steel-memory")]
+/// Add a memory to the semantic index.
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let content = args

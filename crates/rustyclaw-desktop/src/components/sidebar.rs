@@ -1,11 +1,11 @@
-//! Sidebar component: brand, connection chip, footer actions.
+//! Sidebar component: brand, connection chip, session list, footer actions.
 //!
-//! Thread switching moved to the top tab bar.  The sidebar now
-//! serves as a compact brand + status + action panel.
+//! The sidebar shows brand info, connection status, the list of chat sessions
+//! with rename/delete UI, and footer action buttons.
 
 use dioxus::prelude::*;
 
-use rustyclaw_core::ui::ConnectionStatus;
+use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 
 // ── Public top-level component ──────────────────────────────────────────────
 
@@ -18,9 +18,15 @@ pub struct SidebarProps {
     pub provider: Option<String>,
     pub collapsed: bool,
     pub on_toggle_collapse: EventHandler<()>,
+    pub on_new_thread: EventHandler<()>,
+    pub on_switch_thread: EventHandler<u64>,
+    pub on_rename_thread: EventHandler<(u64, String)>,
+    pub on_delete_thread: EventHandler<u64>,
     pub on_pair: EventHandler<()>,
     pub on_secrets: EventHandler<()>,
     pub on_settings: EventHandler<()>,
+    pub threads: Vec<ThreadInfo>,
+    pub foreground_id: Option<u64>,
 }
 
 /// Sidebar component.
@@ -47,6 +53,16 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                     model: props.model.clone(),
                     provider: props.provider.clone(),
                 }
+            }
+
+            SessionsList {
+                threads: props.threads.clone(),
+                foreground_id: props.foreground_id,
+                collapsed: collapsed,
+                on_new_thread: props.on_new_thread,
+                on_switch_thread: props.on_switch_thread,
+                on_rename_thread: props.on_rename_thread,
+                on_delete_thread: props.on_delete_thread,
             }
 
             FooterActions {
@@ -150,6 +166,179 @@ fn StatusChips(props: StatusChipsProps) -> Element {
                         "{provider} · {model}"
                     } else {
                         "{model}"
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Sessions list ───────────────────────────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct SessionsListProps {
+    threads: Vec<ThreadInfo>,
+    foreground_id: Option<u64>,
+    collapsed: bool,
+    on_new_thread: EventHandler<()>,
+    on_switch_thread: EventHandler<u64>,
+    on_rename_thread: EventHandler<(u64, String)>,
+    on_delete_thread: EventHandler<u64>,
+}
+
+/// "New session" button and scrollable thread list.
+#[component]
+fn SessionsList(props: SessionsListProps) -> Element {
+    rsx! {
+        div { class: "sidebar-section-label", "Sessions" }
+        button {
+            class: "sidebar-action is-primary",
+            onclick: move |_| props.on_new_thread.call(()),
+            title: "New session",
+            span { class: "icon-only", "＋" }
+            if !props.collapsed { span { "New session" } }
+        }
+
+        div { class: "sessions-list",
+            if props.threads.is_empty() {
+                if !props.collapsed {
+                    div { class: "sidebar-empty-sessions",
+                        "No sessions yet — start one to begin chatting."
+                    }
+                }
+            } else {
+                for thread in props.threads.iter() {
+                    SessionRow {
+                        key: "{thread.id}",
+                        thread: thread.clone(),
+                        active: props.foreground_id == Some(thread.id),
+                        collapsed: props.collapsed,
+                        on_click: {
+                            let id = thread.id;
+                            let cb = props.on_switch_thread;
+                            move |_| cb.call(id)
+                        },
+                        on_rename: props.on_rename_thread,
+                        on_delete: {
+                            let id = thread.id;
+                            let cb = props.on_delete_thread;
+                            move |_| cb.call(id)
+                        },
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Session row ─────────────────────────────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct SessionRowProps {
+    thread: ThreadInfo,
+    active: bool,
+    collapsed: bool,
+    on_click: EventHandler<()>,
+    on_rename: EventHandler<(u64, String)>,
+    on_delete: EventHandler<()>,
+}
+
+/// A single thread entry: icon, label, optional description, message count,
+/// with double-click-to-rename and a delete button on hover.
+#[component]
+fn SessionRow(props: SessionRowProps) -> Element {
+    let class = if props.active {
+        "session-row is-active"
+    } else {
+        "session-row"
+    };
+    let label = props
+        .thread
+        .label
+        .clone()
+        .unwrap_or_else(|| format!("Session #{}", props.thread.id));
+    let count = props.thread.message_count;
+    let description = props.thread.description.clone();
+    let title_text = if let Some(desc) = description.as_deref() {
+        format!("{label}\n{desc}")
+    } else {
+        label.clone()
+    };
+
+    let mut editing = use_signal(|| false);
+    let mut edit_value = use_signal(|| String::new());
+    let thread_id = props.thread.id;
+
+    rsx! {
+        div {
+            class: "{class}",
+            title: "{title_text}",
+            onclick: move |_| {
+                if !*editing.read() {
+                    props.on_click.call(());
+                }
+            },
+            ondoubleclick: move |evt| {
+                if !props.collapsed {
+                    evt.stop_propagation();
+                    edit_value.set(label.clone());
+                    editing.set(true);
+                }
+            },
+            span { class: "session-icon", "💬" }
+            if !props.collapsed {
+                if *editing.read() {
+                    input {
+                        class: "session-rename-input",
+                        r#type: "text",
+                        value: "{edit_value}",
+                        autofocus: true,
+                        oninput: move |evt| {
+                            edit_value.set(evt.value());
+                        },
+                        onkeydown: {
+                            let on_rename = props.on_rename;
+                            move |evt: KeyboardEvent| {
+                                if evt.key() == Key::Enter {
+                                    let val = edit_value.read().trim().to_string();
+                                    if !val.is_empty() {
+                                        on_rename.call((thread_id, val));
+                                    }
+                                    editing.set(false);
+                                } else if evt.key() == Key::Escape {
+                                    editing.set(false);
+                                }
+                            }
+                        },
+                        onfocusout: {
+                            let on_rename = props.on_rename;
+                            move |_| {
+                                let val = edit_value.read().trim().to_string();
+                                if !val.is_empty() {
+                                    on_rename.call((thread_id, val));
+                                }
+                                editing.set(false);
+                            }
+                        },
+                    }
+                } else {
+                    div { class: "session-text",
+                        span { class: "session-label", "{label}" }
+                        if let Some(desc) = description.as_deref() {
+                            span { class: "session-description", "{desc}" }
+                        }
+                    }
+                    if count > 0 {
+                        span { class: "session-count", "{count}" }
+                    }
+                    button {
+                        class: "session-delete-btn",
+                        title: "Delete thread",
+                        onclick: move |evt| {
+                            evt.stop_propagation();
+                            props.on_delete.call(());
+                        },
+                        "✕"
                     }
                 }
             }
