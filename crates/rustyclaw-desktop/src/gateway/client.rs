@@ -448,6 +448,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::SetAgentName,
             payload: ClientPayload::SetAgentName { name },
         },
+        GatewayCommand::SecretsStore { key, value } => ClientFrame {
+            frame_type: ClientFrameType::SecretsStore,
+            payload: ClientPayload::SecretsStore { key, value },
+        },
     }
 }
 
