@@ -63,26 +63,45 @@ pub fn Chat(props: ChatProps) -> Element {
         });
     }
 
-    // Auto-scroll via MutationObserver: observes the stable `.chat`
-    // container (always in the DOM) and re-queries `.messages` in each
-    // callback.  This survives thread switches that destroy/recreate the
-    // `.messages` div.
+    // Auto-scroll: a "sticky to bottom" approach.  A MutationObserver on
+    // the stable `.chat` parent scrolls `.messages` to the end whenever
+    // new content arrives — but only if the user hasn't scrolled away.
+    // A scroll-event listener on `.messages` re-evaluates the sticky
+    // flag so the user can disengage (scroll up) and re-engage (scroll
+    // back to the bottom).
     use_effect(move || {
         document::eval(
             r#"
             (function() {
                 if (window.__rcAutoScroll) return;
+                window.__rcStick = true;
+                var currentEl = null;
+
+                function attach(el) {
+                    if (el === currentEl) return;
+                    if (currentEl) currentEl.removeEventListener('scroll', onScroll);
+                    currentEl = el;
+                    if (!el) return;
+                    el.addEventListener('scroll', onScroll, { passive: true });
+                    el.scrollTop = el.scrollHeight;
+                }
+
+                function onScroll() {
+                    if (!currentEl) return;
+                    var gap = currentEl.scrollHeight - currentEl.scrollTop - currentEl.clientHeight;
+                    window.__rcStick = gap < 80;
+                }
+
                 var chat = document.querySelector('.chat');
                 if (!chat) return;
-                var ob = new MutationObserver(function() {
+                new MutationObserver(function() {
                     var el = chat.querySelector('.messages');
-                    if (!el) return;
-                    var nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
-                    if (nearBottom) {
+                    attach(el);
+                    if (el && window.__rcStick) {
                         el.scrollTop = el.scrollHeight;
                     }
-                });
-                ob.observe(chat, { childList: true, subtree: true, characterData: true });
+                }).observe(chat, { childList: true, subtree: true, characterData: true });
+
                 window.__rcAutoScroll = true;
             })();
         "#,
