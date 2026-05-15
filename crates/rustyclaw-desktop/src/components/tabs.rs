@@ -14,76 +14,72 @@ pub struct TabBarProps {
     pub on_close: EventHandler<u64>,
 }
 
-/// Pre-computed row — avoids lifetime issues with closures inside RSX for loops.
-struct TabRow {
-    key: u64,
-    is_active: bool,
-    label: String,
-    count_str: String,
-    closeable: bool,
-}
-
 #[component]
 pub fn TabBar(props: TabBarProps) -> Element {
     let total = props.data.tabs.len();
     let fg_id = props.data.foreground_id;
 
-    // Pre-compute rows outside the rsx! macro
-    let rows: Vec<TabRow> = props.data.tabs.iter().map(|tab| {
-        TabRow {
-            key: tab.id,
-            is_active: tab.id == fg_id,
-            label: tab.truncated_label(24).into_owned(),
-            count_str: format!("({})", tab.message_count),
-            closeable: tab.closeable(total),
-        }
-    }).collect();
-
-    // Extract handlers to owned scope so closures in RSX don't fight over props
+    // Extract handlers to owned scope so closures don't fight over props
     let on_switch = props.on_switch;
     let on_close = props.on_close;
     let on_new = props.on_new;
 
+    // Build tab elements OUTSIDE the rsx macro in plain Rust,
+    // avoiding the for-loop closure-capture bug in Dioxus 0.7 RSX.
+    let mut tab_nodes: Vec<VNode> = Vec::with_capacity(total);
+
+    for tab in &props.data.tabs {
+        let cls = if tab.id == fg_id {
+            "tab-bar-tab is-active"
+        } else {
+            "tab-bar-tab"
+        };
+        let label = tab.truncated_label(24).into_owned();
+        let count_str = format!("({})", tab.message_count);
+        let show_close = tab.closeable(total);
+        let tab_id = tab.id;
+
+        // Each rsx! call gets its own immutable copy of tab_id (u64) and
+        // a clone of the event handler — no shared mutable reference.
+        let node = rsx! {
+            div {
+                class: "{cls}",
+                key: "{tab_id}",
+                onclick: move |_| on_switch.call(tab_id),
+                span { class: "tab-bar-label", "{label}" }
+                span { class: "tab-bar-count", "{count_str}" }
+                if show_close {
+                    button {
+                        class: "tab-bar-close",
+                        title: "Close session",
+                        onclick: move |evt: MouseEvent| {
+                            evt.stop_propagation();
+                            on_close.call(tab_id);
+                        },
+                        "\u{2715}"
+                    }
+                }
+            }
+        };
+        // In Dioxus 0.7, rsx!() returns Result<VNode, RenderError>.
+        // We unwrap here because the template is static — no dynamic
+        // runtime rendering errors are possible.
+        tab_nodes.push(node.unwrap());
+    }
+
+    // Show "No sessions" placeholder when there are no threads at all.
+    if tab_nodes.is_empty() {
+        tab_nodes.push(rsx! {
+            div { class: "tab-bar-empty",
+                span { "No sessions" }
+            }
+        }.unwrap());
+    }
+
     rsx! {
         div { class: "tab-bar",
             div { class: "tab-bar-tabs",
-                for row in &rows {
-                    div {
-                        class: if row.is_active {
-                            "tab-bar-tab is-active"
-                        } else {
-                            "tab-bar-tab"
-                        },
-                        key: "{row.key}",
-                        onclick: {
-                            let id = row.key;
-                            move |_| on_switch.call(id)
-                        },
-                        span { class: "tab-bar-label", "{row.label}" }
-                        span { class: "tab-bar-count", "{row.count_str}" }
-                        if row.closeable {
-                            button {
-                                class: "tab-bar-close",
-                                title: "Close session",
-                                onclick: {
-                                    let id = row.key;
-                                    move |evt: MouseEvent| {
-                                        evt.stop_propagation();
-                                        on_close.call(id);
-                                    }
-                                },
-                                "\u{2715}"
-                            }
-                        }
-                    }
-                }
-
-                // Empty state placeholder when no threads yet
-                if rows.is_empty() {
-                    div { class: "tab-bar-empty",
-                        span { "No sessions" }
-                    }
-                }
+                {tab_nodes.into_iter()}
             }
 
             button {
