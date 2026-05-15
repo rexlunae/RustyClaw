@@ -1039,6 +1039,10 @@ async fn handle_connection(
     // Track active model tasks per thread.
     let mut active_tasks = concurrent::ActiveTasks::new();
 
+    // ── Send initial thread list ───────────────────────────────────
+    // Freshly-connected clients need to know the current thread state.
+    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+
     let reader_cancel = cancel.clone();
     let reader_tool_cancel = tool_cancel.clone();
     let reader_handle = tokio::spawn(async move {
