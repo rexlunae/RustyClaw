@@ -25,6 +25,7 @@ path = "src/main.rs"
 [dependencies]
 # Core library
 rustyclaw-core = { path = "../rustyclaw-core", default-features = false }
+rustyclaw-view.workspace = true
 
 # Dioxus framework
 # Note: "desktop" feature requires GTK dev libraries (libgtk-3-dev on Debian/Ubuntu)

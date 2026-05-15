@@ -1,0 +1,17 @@
+[package]
+name = "rustyclaw-view"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Shared component-oriented view types for RustyClaw clients"
+
+[dependencies]
+# Internal
+rustyclaw-core.workspace = true
+
+# Time
+chrono.workspace = true

@@ -153,11 +153,10 @@ pub fn Chat(props: ChatProps) -> Element {
                         for msg in props.messages.iter() {
                             div { key: "{msg.id}",
                                 MessageBubble {
-                                    role: msg.role.clone(),
-                                    content: msg.content.clone(),
-                                    timestamp: msg.timestamp,
-                                    is_streaming: msg.is_streaming,
-                                    agent_name: props.agent_name.clone(),
+                                    data: rustyclaw_view::MessageBubbleData::from_chat_message(
+                                        msg,
+                                        props.agent_name.clone(),
+                                    ),
                                 }
                                 for tool in msg.tool_calls.iter() {
                                     ToolCallPanel {

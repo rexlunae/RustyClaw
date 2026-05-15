@@ -1,6 +1,5 @@
 //! Single chat message row (avatar + role header + content).
 
-use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
 use crate::markdown;
@@ -8,23 +7,24 @@ use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::format_chat_timestamp;
 
 /// Props for [`MessageBubble`].
+///
+/// Wraps [`MessageBubbleData`] from `rustyclaw-view` with the Dioxus-specific
+/// event handlers that this component needs.
 #[derive(Props, Clone, PartialEq)]
 pub struct MessageBubbleProps {
-    pub role: MessageRole,
-    pub content: String,
-    pub timestamp: DateTime<Utc>,
-    #[props(default = false)]
-    pub is_streaming: bool,
-    /// Display name for the agent (shown on assistant messages).
-    pub agent_name: Option<String>,
+    /// Shared component data (role, content, timestamp, streaming, agent name).
+    pub data: rustyclaw_view::MessageBubbleData,
+    /// Optional callback when the user clicks on the message.
+    pub onclick: Option<EventHandler<()>>,
 }
 
 #[component]
 pub fn MessageBubble(props: MessageBubbleProps) -> Element {
-    let (row_class, name, avatar) = match props.role {
+    let (row_class, name, avatar) = match props.data.role {
         MessageRole::User => ("msg-row is-user", "You".to_string(), "🧑"),
         MessageRole::Assistant => {
             let label = props
+                .data
                 .agent_name
                 .as_deref()
                 .filter(|n| !n.is_empty())
@@ -39,17 +39,17 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
         _ => ("msg-row is-system", "System".to_string(), "ℹ️"),
     };
 
-    let time_str = format_chat_timestamp(&props.timestamp);
-    let time_full = props.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
+    let time_str = format_chat_timestamp(&props.data.timestamp);
+    let time_full = props.data.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
 
-    let render_markdown = matches!(props.role, MessageRole::Assistant)
+    let render_markdown = matches!(props.data.role, MessageRole::Assistant)
         // Plaintext while streaming: markdown re-parsing on every chunk
         // (100+ per second) overwhelms the webview and backs up the event
         // channel.  Markdown renders once when ResponseDone arrives.
-        && !props.is_streaming;
+        && !props.data.is_streaming;
 
     let content_html = if render_markdown {
-        Some(markdown::render(&props.content))
+        Some(markdown::render(&props.data.content))
     } else {
         None
     };
@@ -70,8 +70,8 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                     }
                 } else {
                     div { class: "msg-content is-plain",
-                        "{props.content}"
-                        if props.is_streaming {
+                        "{props.data.content}"
+                        if props.data.is_streaming {
                             span { class: "streaming-cursor" }
                         }
                     }
