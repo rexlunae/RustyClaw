@@ -250,22 +250,10 @@ pub enum Action {
 }
 
 /// Thread/task info for TUI display (unified).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ThreadInfo {
-    pub id: u64,
-    pub label: String,
-    /// Description (for spawned tasks)
-    pub description: Option<String>,
-    /// Task status (None = simple thread, Some = spawned task)
-    pub status: Option<String>,
-    /// Icon for the thread kind (e.g. chat, sub-agent, background, task)
-    pub kind_icon: Option<String>,
-    /// Icon for the thread status (e.g. running, completed, failed)
-    pub status_icon: Option<String>,
-    pub is_foreground: bool,
-    pub message_count: usize,
-    pub has_summary: bool,
-}
+///
+/// Reuses the server-frame `ThreadInfoDto` from `rustyclaw-core` since the
+/// TUI directly consumes gateway server frames.
+pub type ThreadInfo = rustyclaw_core::gateway::protocol::ThreadInfoDto;
 
 /// Alias for backward compatibility
 pub type TaskInfo = ThreadInfo;

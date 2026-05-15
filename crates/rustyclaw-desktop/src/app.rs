@@ -9,7 +9,8 @@ use crate::components::{
     ToolApprovalDialog, UserPromptDialog, VaultUnlockDialog, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
-use crate::state::{AppState, ConnectionStatus, Theme, ThreadInfo};
+use crate::state::{AppState, Theme};
+use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate

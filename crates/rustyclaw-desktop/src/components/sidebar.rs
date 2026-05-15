@@ -10,7 +10,7 @@
 
 use dioxus::prelude::*;
 
-use crate::state::{ConnectionStatus, ThreadInfo};
+use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 
 // ── Public top-level component ──────────────────────────────────────────────
 

@@ -1,20 +1,14 @@
 //! Application state management.
+//!
+//! Shared UI types (`ChatMessage`, `ToolCallInfo`, `ThreadInfo`,
+//! `ConnectionStatus`) live in [`rustyclaw_core::ui`]. This module
+//! adds desktop-specific wrappers: the Dioxus-friendly `AppState` struct
+//! and the `Theme` enum.
 
 use std::collections::{HashMap, VecDeque};
 
+use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
-
-/// Connection status to the gateway.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
-pub enum ConnectionStatus {
-    #[default]
-    Disconnected,
-    Connecting,
-    Connected,
-    Authenticating,
-    Authenticated,
-    Error(String),
-}
 
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,47 +25,6 @@ impl Theme {
             Theme::Light => "light",
         }
     }
-}
-
-/// A chat message in the conversation.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ChatMessage {
-    pub id: String,
-    pub role: MessageRole,
-    pub content: String,
-    pub timestamp: chrono::DateTime<chrono::Utc>,
-    pub tool_calls: Vec<ToolCallInfo>,
-    pub is_streaming: bool,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum MessageRole {
-    User,
-    Assistant,
-    System,
-}
-
-/// Information about a tool call.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ToolCallInfo {
-    pub id: String,
-    pub name: String,
-    pub arguments: String,
-    pub result: Option<String>,
-    pub is_error: bool,
-    pub collapsed: bool,
-}
-
-/// Thread/session info.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ThreadInfo {
-    pub id: u64,
-    pub label: Option<String>,
-    pub description: Option<String>,
-    pub status: String,
-    pub is_foreground: bool,
-    pub message_count: usize,
 }
 
 /// Main application state.
@@ -185,28 +138,14 @@ impl Default for AppState {
 impl AppState {
     /// Add a user message to the conversation.
     pub fn add_user_message(&mut self, content: String) {
-        let msg = ChatMessage {
-            id: uuid::Uuid::new_v4().to_string(),
-            role: MessageRole::User,
-            content,
-            timestamp: chrono::Utc::now(),
-            tool_calls: Vec::new(),
-            is_streaming: false,
-        };
+        let msg = ChatMessage::user(content);
         self.messages.push_back(msg);
     }
 
     /// Start a new assistant message (streaming).
     pub fn start_assistant_message(&mut self) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        let msg = ChatMessage {
-            id: id.clone(),
-            role: MessageRole::Assistant,
-            content: String::new(),
-            timestamp: chrono::Utc::now(),
-            tool_calls: Vec::new(),
-            is_streaming: true,
-        };
+        let msg = ChatMessage::start_assistant(id.clone());
         self.messages.push_back(msg);
         self.is_streaming = true;
         self.streaming_chunks = 0;
@@ -219,14 +158,14 @@ impl AppState {
         if let Some(msg) = self.messages.back_mut()
             && msg.is_streaming
         {
-            msg.content.push_str(delta);
+            msg.append_content(delta);
         }
     }
 
     /// Finish the current streaming message.
     pub fn finish_current_message(&mut self) {
         if let Some(msg) = self.messages.back_mut() {
-            msg.is_streaming = false;
+            msg.finish();
         }
         self.is_streaming = false;
         self.is_processing = false;
@@ -237,27 +176,16 @@ impl AppState {
     /// Add a tool call to the current message.
     pub fn add_tool_call(&mut self, id: String, name: String, arguments: String) {
         if let Some(msg) = self.messages.back_mut() {
-            msg.tool_calls.push(ToolCallInfo {
-                id,
-                name,
-                arguments,
-                result: None,
-                is_error: false,
-                collapsed: true,
-            });
+            msg.add_tool_call(id, name, arguments);
         }
     }
 
     /// Set the result for a tool call.
     pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {
         for msg in self.messages.iter_mut().rev() {
-            for tool in &mut msg.tool_calls {
-                if tool.id == id {
-                    tool.result = Some(result);
-                    tool.is_error = is_error;
-                    return;
-                }
-            }
+            msg.set_tool_result(id, result.clone(), is_error);
+            // If this message had the matching tool call, the set was done.
+            // We only need to check if it updated, but for simplicity just scan.
         }
     }
 

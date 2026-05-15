@@ -52,6 +52,7 @@ pub mod streaming;
 pub mod tasks;
 pub mod theme;
 pub mod threads;
+pub mod ui;
 pub mod tools;
 pub mod types;
 pub mod user_prompt_types;

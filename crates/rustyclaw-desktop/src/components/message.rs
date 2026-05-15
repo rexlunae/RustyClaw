@@ -4,7 +4,7 @@ use chrono::{DateTime, Local, Utc};
 use dioxus::prelude::*;
 
 use crate::markdown;
-use crate::state::MessageRole;
+use rustyclaw_core::types::MessageRole;
 
 /// Props for [`MessageBubble`].
 #[derive(Props, Clone, PartialEq)]
@@ -32,6 +32,10 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
             ("msg-row is-assistant", label, "🦞")
         }
         MessageRole::System => ("msg-row is-system", "System".to_string(), "⚙"),
+        // Catch-all for the remaining role variants (Info, Success, Warning,
+        // Error, ToolCall, ToolResult, Thinking). These aren't currently
+        // emitted by the desktop gateway client, but we handle them gracefully.
+        _ => ("msg-row is-system", "System".to_string(), "ℹ️"),
     };
 
     let local: DateTime<Local> = props.timestamp.with_timezone(&Local);

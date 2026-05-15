@@ -11,7 +11,7 @@
 use dioxus::prelude::*;
 use rustyclaw_core::providers;
 
-use crate::state::ChatMessage;
+use rustyclaw_core::ui::ChatMessage;
 
 use super::message::MessageBubble;
 use super::tool_call::ToolCallPanel;
