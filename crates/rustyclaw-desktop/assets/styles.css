@@ -1505,3 +1505,113 @@ p { margin: 0; }
     justify-content: space-between;
     gap: 0.5rem;
 }
+
+/* ═══ Tab Bar ═══════════════════════════════════════════════════ */
+
+.tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 0;
+    padding: 0.35rem 0.75rem 0;
+    background: var(--rc-bg);
+    border-bottom: 1px solid var(--rc-border);
+    min-height: 36px;
+    flex-shrink: 0;
+}
+
+.tab-bar-tabs {
+    display: flex;
+    align-items: stretch;
+    gap: 0;
+    flex: 1;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.tab-bar-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.4rem 0.75rem;
+    font-size: 0.82rem;
+    color: var(--rc-text-muted);
+    cursor: pointer;
+    border: 1px solid transparent;
+    border-bottom: none;
+    border-radius: 6px 6px 0 0;
+    margin-right: 2px;
+    white-space: nowrap;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.tab-bar-tab:hover {
+    background: var(--rc-hover-bg, rgba(255,255,255,0.04));
+    color: var(--rc-text);
+}
+
+.tab-bar-tab.is-active {
+    color: var(--rc-text);
+    background: var(--rc-contrast-bg, rgba(255,255,255,0.07));
+    border-color: var(--rc-border);
+    font-weight: 600;
+}
+
+.tab-bar-label {
+    max-width: 140px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.tab-bar-count {
+    font-size: 0.75rem;
+    color: var(--rc-text-faint);
+    min-width: 1.2em;
+    text-align: center;
+}
+
+.tab-bar-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    background: transparent;
+    color: var(--rc-text-faint);
+    font-size: 0.72rem;
+    border-radius: 3px;
+    cursor: pointer;
+    line-height: 1;
+    transition: background 0.1s, color 0.1s;
+}
+
+.tab-bar-close:hover {
+    background: var(--rc-danger-bg, rgba(255, 70, 70, 0.15));
+    color: var(--rc-danger, #ff4646);
+}
+
+.tab-bar-new {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px dashed var(--rc-border);
+    background: transparent;
+    color: var(--rc-text-faint);
+    font-size: 1rem;
+    font-weight: 700;
+    border-radius: 6px;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: auto;
+    transition: background 0.1s, border-color 0.1s, color 0.1s;
+}
+
+.tab-bar-new:hover {
+    border-color: var(--rc-accent, #4f8cff);
+    color: var(--rc-accent, #4f8cff);
+    background: var(--rc-accent-bg, rgba(79, 140, 255, 0.08));
+}

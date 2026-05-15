@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use crate::components::{
     Chat, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
     PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar,
-    SwarmAgentInfo, SwarmInfo, SwarmPanel, ToolApprovalDialog, UserPromptDialog,
+    SwarmAgentInfo, SwarmInfo, SwarmPanel, TabBar, ToolApprovalDialog, UserPromptDialog,
     VaultUnlockDialog, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
@@ -345,15 +345,11 @@ pub fn App() -> Element {
                 agent_name: state.read().agent_name.clone(),
                 model: state.read().model.clone(),
                 provider: state.read().provider.clone(),
-                threads: state.read().threads.clone(),
-                foreground_id: state.read().foreground_thread_id,
                 collapsed: sidebar_collapsed,
                 on_toggle_collapse: move |_| {
                     let v = state.read().sidebar_collapsed;
                     state.write().sidebar_collapsed = !v;
                 },
-                on_new_thread: on_new_thread,
-                on_switch_thread: on_switch_thread,
                 on_pair: move |_| show_pairing.set(true),
                 on_secrets: move |_| {
                     show_secrets.set(true);
@@ -426,6 +422,31 @@ pub fn App() -> Element {
                             }
                         }
                     }
+                }
+
+                // Thread tab bar
+                TabBar {
+                    data: rustyclaw_view::TabBarData::from_threads(
+                        &state.read().threads,
+                    ),
+                    on_switch: on_switch_thread,
+                    on_new: on_new_thread,
+                    on_close: move |id| {
+                        // Close is a UX hint — switch to the previous tab.
+                        // Proper thread deletion needs protocol support.
+                        let thread_ids: Vec<u64> = state.read().threads.iter()
+                            .filter(|t| t.id != id)
+                            .map(|t| t.id)
+                            .collect();
+                        if let Some(prev_id) = thread_ids.last().copied() {
+                            let gw = gateway.read().clone();
+                            if let Some(client) = gw {
+                                spawn(async move {
+                                    let _ = client.send(GatewayCommand::ThreadSwitch { thread_id: prev_id }).await;
+                                });
+                            }
+                        }
+                    },
                 }
 
                 Chat {

@@ -4,6 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use crate::components::root::Root;
+use rustyclaw_view;
 use crate::theme;
 use crate::types::DisplayMessage;
 
@@ -159,8 +160,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
 
     // ── Thread state (unified tasks + threads) ───────────────────────
     let mut threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
-    let mut sidebar_focused = hooks.use_state(|| false);
-    let mut sidebar_selected = hooks.use_state(|| 0usize);
+    let mut tab_focused = hooks.use_state(|| false);
+    let mut tab_selected = hooks.use_state(|| 0usize);
 
     // ── Command menu (slash-command completions) ────────────────────
     let mut command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -580,10 +581,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     foreground_id: _,
                                 } => {
                                     threads.set(thread_list);
-                                    // Update sidebar_selected to stay in bounds
+                                    // Update tab_selected to stay in bounds
                                     let count = threads.read().len();
-                                    if count > 0 && sidebar_selected.get() >= count {
-                                        sidebar_selected.set(count - 1);
+                                    if count > 0 && tab_selected.get() >= count {
+                                        tab_selected.set(count - 1);
                                     }
                                 }
                                 GwEvent::ThreadSwitched {
@@ -604,8 +605,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                         )));
                                     }
                                     messages.set(m);
-                                    // Unfocus sidebar after switch
-                                    sidebar_focused.set(false);
+                                    // Unfocus tab after switch
+                                    tab_focused.set(false);
                                 }
                                 GwEvent::HatchingResponse(_identity) => {
                                     // Hatching response is handled via ResponseDone
@@ -1780,9 +1781,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         command_completions.set(Vec::new());
                         command_selected.set(None);
                     }
-                    KeyCode::Enter if sidebar_focused.get() => {
+                    KeyCode::Enter if tab_focused.get() => {
                         let thread_list = threads.read().clone();
-                        if let Some(thread) = thread_list.get(sidebar_selected.get()) {
+                        if let Some(thread) = thread_list.get(tab_selected.get()) {
                             // Send thread switch request
                             if let Ok(guard) = tx_for_keys.lock() {
                                 if let Some(ref tx) = *guard {
@@ -1790,8 +1791,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 }
                             }
                         }
-                        // Return focus to input after selection
-                        sidebar_focused.set(false);
+                        // Return focus to input after tab selection
+                        tab_focused.set(false);
                     }
                     KeyCode::Enter => {
                         let val = input_value.to_string();
@@ -1823,28 +1824,28 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             }
                         }
                     }
-                    // Tab toggles sidebar focus when command menu is not open
+                    // Tab toggles tab bar focus when command menu is not open
                     KeyCode::Tab if !menu_open => {
-                        sidebar_focused.set(!sidebar_focused.get());
+                        tab_focused.set(!tab_focused.get());
                     }
-                    // Sidebar navigation when focused
-                    KeyCode::Up if sidebar_focused.get() => {
+                    // Tab navigation when focused
+                    KeyCode::Left if tab_focused.get() => {
                         let thread_count = threads.read().len();
                         if thread_count > 0 {
-                            let current = sidebar_selected.get();
-                            sidebar_selected.set(current.saturating_sub(1));
+                            let current = tab_selected.get();
+                            tab_selected.set(current.saturating_sub(1));
                         }
                     }
-                    KeyCode::Down if sidebar_focused.get() => {
+                    KeyCode::Right if tab_focused.get() => {
                         let thread_count = threads.read().len();
                         if thread_count > 0 {
-                            let current = sidebar_selected.get();
-                            sidebar_selected.set((current + 1).min(thread_count - 1));
+                            let current = tab_selected.get();
+                            tab_selected.set((current + 1).min(thread_count - 1));
                         }
                     }
-                    KeyCode::Esc if sidebar_focused.get() => {
+                    KeyCode::Esc if tab_focused.get() => {
                         // Escape returns focus to input
-                        sidebar_focused.set(false);
+                        tab_focused.set(false);
                     }
                     KeyCode::Up => {
                         scroll_offset.set(scroll_offset.get() + 1);
@@ -1978,7 +1979,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_device_flow.get()
                 && !show_model_selector.get()
                 && !show_pairing.get()
-                && !sidebar_focused.get(),
+                && !tab_focused.get(),
             on_change: move |new_val: String| {
                 input_value.set(new_val.clone());
                 // Update slash-command completions
@@ -2032,9 +2033,22 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             task_text: if streaming.get() { "Streaming…".to_string() } else { "Idle".to_string() },
             streaming: streaming.get(),
             elapsed: elapsed.to_string(),
-            threads: threads.read().clone(),
-            sidebar_focused: sidebar_focused.get(),
-            sidebar_selected: sidebar_selected.get(),
+            tab_data: {
+                            let thread_refs = threads.read();
+                            let tabs: Vec<rustyclaw_view::TabItemData> = thread_refs
+                                .iter()
+                                .map(|t| rustyclaw_view::TabItemData {
+                                    id: t.id,
+                                    label: Some(t.label.clone()),
+                                    is_foreground: false,
+                                    message_count: 0,
+                                })
+                                .collect();
+                            let fg_id = tabs.first().map(|t| t.id).unwrap_or(0);
+                            rustyclaw_view::TabBarData { tabs, foreground_id: fg_id }
+                        },
+            tab_focused: tab_focused.get(),
+            tab_selected: tab_selected.get(),
             hint: prop_hint.clone(),
             spinner_tick: spinner_tick.get(),
             show_auth_dialog: show_auth_dialog.get(),

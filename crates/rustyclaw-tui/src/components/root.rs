@@ -18,8 +18,9 @@ use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
 use crate::components::secrets_dialog::SecretsDialog;
-use rustyclaw_view::{SecretInfoData, SecretsDialogData};
+use rustyclaw_view::{SecretInfoData, SecretsDialogData, TabBarData};
 use crate::components::sidebar::Sidebar;
+use crate::components::thread_tabs::ThreadTabs;
 use crate::components::skills_dialog::{SkillInfo, SkillsDialog};
 use crate::components::status_bar::StatusBar;
 use crate::components::tool_approval_dialog::ToolApprovalDialog;
@@ -62,9 +63,9 @@ pub struct RootProps {
     pub task_text: String,
     pub streaming: bool,
     pub elapsed: String,
-    pub threads: Vec<crate::action::ThreadInfo>,
-    pub sidebar_focused: bool,
-    pub sidebar_selected: usize,
+    pub tab_data: TabBarData,
+    pub tab_focused: bool,
+    pub tab_selected: usize,
 
     // status bar
     pub hint: String,
@@ -263,11 +264,17 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 flex_direction: FlexDirection::Row,
                 width: 100pct,
             ) {
-                // Chat area: messages + input
+                // Chat area: tabs + messages + input
                 View(
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Column,
                 ) {
+                    // Thread tabs (horizontal bar at top of chat area)
+                    ThreadTabs(
+                        data: props.tab_data.clone(),
+                        focused: props.tab_focused,
+                        selected: props.tab_selected,
+                    )
                     Messages(
                         messages: props.messages.clone(),
                         scroll_offset: props.scroll_offset,
@@ -294,16 +301,13 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         has_focus: props.input_has_focus,
                     )
                 }
-                // Sidebar
+                // Sidebar (simplified: no thread list)
                 Sidebar(
                     gateway_label: props.gateway_label.clone(),
                     task_text: props.task_text.clone(),
                     streaming: props.streaming,
                     elapsed: props.elapsed.clone(),
                     spinner_tick: props.spinner_tick,
-                    threads: props.threads.clone(),
-                    focused: props.sidebar_focused,
-                    selected: props.sidebar_selected,
                 )
             }
 

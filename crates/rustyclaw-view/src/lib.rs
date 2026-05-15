@@ -41,6 +41,7 @@ pub mod dialogs;
 pub mod message;
 pub mod sidebar;
 pub mod status;
+pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use composer::ComposerData;
@@ -52,3 +53,4 @@ pub use dialogs::{
 pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData};
 pub use sidebar::SidebarItemData;
 pub use status::StatusBarData;
+pub use tabs::{TabBarData, TabItemData};
