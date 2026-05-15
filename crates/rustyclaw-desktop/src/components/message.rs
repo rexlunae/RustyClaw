@@ -20,24 +20,16 @@ pub struct MessageBubbleProps {
 
 #[component]
 pub fn MessageBubble(props: MessageBubbleProps) -> Element {
-    let (row_class, name, avatar) = match props.data.role {
-        MessageRole::User => ("msg-row is-user", "You".to_string(), "🧑"),
-        MessageRole::Assistant => {
-            let label = props
-                .data
-                .agent_name
-                .as_deref()
-                .filter(|n| !n.is_empty())
-                .unwrap_or("Assistant")
-                .to_string();
-            ("msg-row is-assistant", label, "🦞")
-        }
-        MessageRole::System => ("msg-row is-system", "System".to_string(), "⚙"),
-        _ => ("msg-row is-system", "System".to_string(), "ℹ️"),
+    // CSS class and avatar emoji are desktop-specific.  The display name,
+    // markdown decision, and content transformations come from shared methods.
+    let (row_class, avatar) = match props.data.role {
+        MessageRole::User => ("msg-row is-user", "🧑"),
+        MessageRole::Assistant => ("msg-row is-assistant", "🦞"),
+        MessageRole::System => ("msg-row is-system", "⚙"),
+        _ => ("msg-row is-system", "ℹ️"),
     };
+    let name = props.data.display_name().to_string();
 
-    // Timestamp is optional in MessageBubbleData. The desktop always sets it
-    // (via from_chat_message), but we still handle None gracefully.
     let time_str = props
         .data
         .timestamp
@@ -51,14 +43,14 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
         .map(|ts| ts.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_default();
 
-    let render_markdown = matches!(props.data.role, MessageRole::Assistant)
-        && !props.data.is_streaming;
-
-    let content_html = if render_markdown {
+    // Shared markdown decision.  Display content already accounts for
+    // thinking-truncation; markdown rendering is renderer-specific.
+    let rendered = if props.data.should_render_markdown() {
         Some(markdown::render(&props.data.content))
     } else {
         None
     };
+    let display = props.data.display_content();
 
     rsx! {
         div { class: "{row_class}",
@@ -69,14 +61,14 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                     span { class: "msg-time", title: "{time_full}", "{time_str}" }
                 }
 
-                if let Some(html) = content_html {
+                if let Some(html) = rendered {
                     div {
                         class: "msg-content",
                         dangerous_inner_html: "{html}",
                     }
                 } else {
                     div { class: "msg-content is-plain",
-                        "{props.data.content}"
+                        "{display}"
                         if props.data.is_streaming {
                             span { class: "streaming-cursor" }
                         }

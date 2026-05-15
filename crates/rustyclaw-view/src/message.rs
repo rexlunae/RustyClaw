@@ -10,6 +10,8 @@
 //! intermediate state, no back-reference to the canonical message.
 //! Tool calls are a separate [`ToolCallData`] component rendered alongside.
 
+use std::borrow::Cow;
+
 use chrono::{DateTime, Utc};
 use rustyclaw_core::types::MessageRole;
 
@@ -21,6 +23,10 @@ use rustyclaw_core::types::MessageRole;
 /// (iocraft `MessageBubble`) as the single source of truth for
 /// rendering data.  Event handlers (click, long-press, etc.) are
 /// provided by the framework-specific wrapper.
+///
+/// Methods on this struct centralise display logic so that both
+/// clients derive the same labels, icons, and content transformations
+/// without duplicating match arms.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MessageBubbleData {
     /// Who sent this message (User, Assistant, System, etc.).
@@ -75,6 +81,74 @@ impl MessageBubbleData {
             has_details: false,
         }
     }
+
+    // ── Shared display logic ────────────────────────────────────────────
+
+    /// The human-readable label for this message's role.
+    ///
+    /// Common values: "You", "Assistant", "System", "Thinking", etc.
+    /// For assistant messages, [`agent_name`](Self::agent_name) takes
+    /// precedence (with `"Assistant"` as fallback).
+    pub fn display_name(&self) -> Cow<'_, str> {
+        match self.role {
+            MessageRole::User => "You".into(),
+            MessageRole::Assistant => self
+                .agent_name
+                .as_deref()
+                .filter(|n| !n.is_empty())
+                .map(Cow::Borrowed)
+                .unwrap_or(Cow::Borrowed("Assistant")),
+            MessageRole::Info => "Info".into(),
+            MessageRole::Success => "Success".into(),
+            MessageRole::Warning => "Warning".into(),
+            MessageRole::Error => "Error".into(),
+            MessageRole::System => "System".into(),
+            MessageRole::ToolCall => "Tool Call".into(),
+            MessageRole::ToolResult => "Tool Result".into(),
+            MessageRole::Thinking => "Thinking".into(),
+        }
+    }
+
+    /// The icon/emoji associated with this message's role.
+    ///
+    /// Delegates to [`MessageRole::icon()`] which both clients already
+    /// depend on.  Provided here for convenience so that a single method
+    /// call replaces the manual match in each client.
+    pub fn icon(&self) -> &'static str {
+        self.role.icon()
+    }
+
+    /// Whether this message should be rendered as markdown.
+    ///
+    /// Assistant messages that aren't still streaming get markdown
+    /// rendering.  All other roles (User, System, Error, etc.)
+    /// display as plain text.
+    pub fn should_render_markdown(&self) -> bool {
+        self.role == MessageRole::Assistant && !self.is_streaming
+    }
+
+    /// The text to display, with role-specific transformations.
+    ///
+    /// - **Thinking** messages are truncated at `max_chars` (default 120)
+    ///   to avoid overwhelming the chat area with raw reasoning.
+    /// - All other roles return the raw content unchanged.
+    ///
+    /// Markdown rendering is **not** applied here — that's renderer-
+    /// specific (the desktop renders HTML, the TUI renders ANSI).
+    /// This method only applies plain-text transformations.
+    pub fn display_content(&self) -> Cow<'_, str> {
+        self.display_content_truncated(120)
+    }
+
+    /// Like [`display_content`](Self::display_content) but with a
+    /// custom truncation limit for thinking messages.
+    pub fn display_content_truncated(&self, thinking_max_chars: usize) -> Cow<'_, str> {
+        if self.role == MessageRole::Thinking && self.content.len() > thinking_max_chars {
+            format!("{}…", &self.content[..thinking_max_chars]).into()
+        } else {
+            self.content.as_str().into()
+        }
+    }
 }
 
 // ── Tool call panel ─────────────────────────────────────────────────────────
@@ -103,6 +177,27 @@ pub struct ToolCallData {
 
     /// Whether the panel starts collapsed.
     pub collapsed: bool,
+}
+
+impl ToolCallData {
+    /// A short summary line for this tool call.
+    ///
+    /// e.g. `"🔧 web_search"` or `"🔧 write_file (error)"`
+    pub fn summary(&self) -> String {
+        if self.is_error {
+            format!("🔧 {} (error)", self.name)
+        } else {
+            format!("🔧 {}", self.name)
+        }
+    }
+
+    /// The arguments string, truncated for display.
+    ///
+    /// Uses `rustyclaw_core::ui::truncate_content` to limit both
+    /// character count and line count.
+    pub fn arguments_preview(&self, max_chars: usize, max_lines: usize) -> String {
+        rustyclaw_core::ui::truncate_content(&self.arguments, max_chars, max_lines)
+    }
 }
 
 impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {

@@ -5,7 +5,7 @@
 
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ChatMessage, ThreadInfo, ToolCallInfo};
-use rustyclaw_view::{MessageBubbleData, SidebarItemData, ToolCallData};
+use rustyclaw_view::{AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState, HatchingDialogData, MessageBubbleData, PairingDialogData, PairingField, PairingStep, SecretInfoData, SidebarItemData, SkillInfoData, StatusBarData, ToolApprovalData, ToolCallData, ToolPermInfoData, UserPromptData, VaultUnlockData};
 
 // ── MessageBubbleData ────────────────────────────────────────────────
 
@@ -232,4 +232,277 @@ fn from_chat_message_preserves_timestamp() {
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
     assert_eq!(data.timestamp, Some(now));
+}
+
+// ── MessageBubbleData shared display methods ────────────────────────
+
+#[test]
+fn display_name_for_user() {
+    let data = MessageBubbleData {
+        role: MessageRole::User,
+        content: "hi".into(),
+        ..Default::default()
+    };
+    assert_eq!(data.display_name(), "You");
+}
+
+#[test]
+fn display_name_for_assistant_with_agent_name() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "hello".into(),
+        agent_name: Some("Nemik".into()),
+        ..Default::default()
+    };
+    assert_eq!(data.display_name(), "Nemik");
+}
+
+#[test]
+fn display_name_for_assistant_without_agent_name() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "hello".into(),
+        agent_name: None,
+        ..Default::default()
+    };
+    assert_eq!(data.display_name(), "Assistant");
+}
+
+#[test]
+fn display_name_for_assistant_with_empty_agent_name() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "hello".into(),
+        agent_name: Some("".into()),
+        ..Default::default()
+    };
+    assert_eq!(data.display_name(), "Assistant");
+}
+
+#[test]
+fn should_render_markdown_for_assistant_not_streaming() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "# hi".into(),
+        is_streaming: false,
+        ..Default::default()
+    };
+    assert!(data.should_render_markdown());
+}
+
+#[test]
+fn should_not_render_markdown_for_assistant_streaming() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "# hi".into(),
+        is_streaming: true,
+        ..Default::default()
+    };
+    assert!(!data.should_render_markdown());
+}
+
+#[test]
+fn should_not_render_markdown_for_user() {
+    let data = MessageBubbleData {
+        role: MessageRole::User,
+        ..Default::default()
+    };
+    assert!(!data.should_render_markdown());
+}
+
+#[test]
+fn display_content_truncates_long_thinking() {
+    let data = MessageBubbleData {
+        role: MessageRole::Thinking,
+        content: "a".repeat(200),
+        ..Default::default()
+    };
+    let displayed = data.display_content();
+    assert!(displayed.len() < 200);
+    assert!(displayed.ends_with("…"));
+}
+
+#[test]
+fn display_content_passes_short_thinking_through() {
+    let data = MessageBubbleData {
+        role: MessageRole::Thinking,
+        content: "short".into(),
+        ..Default::default()
+    };
+    assert_eq!(data.display_content(), "short");
+}
+
+#[test]
+fn display_content_passes_other_roles_through() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "# long markdown content".into(),
+        ..Default::default()
+    };
+    // display_content only truncates Thinking; assistant passes through
+    assert_eq!(data.display_content(), "# long markdown content");
+}
+
+// ── SidebarItemData shared display methods ──────────────────────────
+
+#[test]
+fn sidebar_display_label_falls_back_to_session_number() {
+    let item = SidebarItemData {
+        id: 7,
+        label: None,
+        ..Default::default()
+    };
+    assert_eq!(item.display_label(), "Session #7");
+}
+
+#[test]
+fn sidebar_display_label_uses_user_label() {
+    let item = SidebarItemData {
+        id: 7,
+        label: Some("World build".into()),
+        ..Default::default()
+    };
+    assert_eq!(item.display_label(), "World build");
+}
+
+#[test]
+fn sidebar_truncated_label_keeps_short_labels() {
+    let item = SidebarItemData {
+        label: Some("Hi".into()),
+        ..Default::default()
+    };
+    assert_eq!(item.truncated_label(10), "Hi");
+}
+
+#[test]
+fn sidebar_truncated_label_shortens_long_labels() {
+    let item = SidebarItemData {
+        label: Some("A very long label here".into()),
+        ..Default::default()
+    };
+    let truncated = item.truncated_label(10);
+    assert!(truncated.len() < 22);
+    assert!(truncated.ends_with("…"));
+}
+
+// ── ToolApprovalData shared display methods ─────────────────────────
+
+#[test]
+fn tool_approval_summary() {
+    let ta = ToolApprovalData {
+        id: "tc1".into(),
+        name: "web_search".into(),
+        arguments: r#"{"q":"hello"}"#.into(),
+        selected_allow: true,
+    };
+    assert_eq!(ta.summary(), "🔧 web_search");
+}
+
+#[test]
+fn tool_approval_arguments_preview_truncates() {
+    let ta = ToolApprovalData {
+        id: "tc1".into(),
+        name: "test".into(),
+        arguments: "a".repeat(500),
+        selected_allow: true,
+    };
+    let preview = ta.arguments_preview(50, 5);
+    assert!(preview.len() <= 55);
+}
+
+// ── AuthDialogData shared display methods ───────────────────────────
+
+#[test]
+fn auth_is_complete_with_6_digits() {
+    let ad = AuthDialogData {
+        code: "123456".into(),
+        ..Default::default()
+    };
+    assert!(ad.is_complete());
+}
+
+#[test]
+fn auth_masked_code_shows_entered_and_remaining() {
+    let ad = AuthDialogData {
+        code: "12".into(),
+        ..Default::default()
+    };
+    let masked = ad.masked_code();
+    assert_eq!(masked, "● ● ○ ○ ○ ○");
+}
+
+// ── CredentialRequestData shared display methods ────────────────────
+
+#[test]
+fn credential_summary() {
+    let cr = CredentialRequestData {
+        provider: "anthropic".into(),
+        secret_name: "API key".into(),
+        message: "need key".into(),
+        input_len: 0,
+    };
+    assert_eq!(cr.summary(), "🔑 API key — anthropic");
+}
+
+#[test]
+fn credential_masked_input() {
+    let cr = CredentialRequestData {
+        input_len: 3,
+        ..default_credential()
+    };
+    assert_eq!(cr.masked_input(), "•••");
+    assert!(cr.has_input());
+}
+
+fn default_credential() -> CredentialRequestData {
+    CredentialRequestData {
+        provider: String::new(),
+        secret_name: String::new(),
+        message: String::new(),
+        input_len: 0,
+    }
+}
+
+// ── StatusBarData shared display methods ────────────────────────────
+
+#[test]
+fn status_bar_connection_labels() {
+    use rustyclaw_core::ui::ConnectionStatus;
+    let mut sb = StatusBarData::default();
+    assert_eq!(sb.connection_label(), "Disconnected");
+    sb.connection = ConnectionStatus::Connected;
+    assert_eq!(sb.connection_label(), "Connected");
+    sb.connection = ConnectionStatus::Error("broken".into());
+    assert_eq!(sb.connection_label(), "Error");
+}
+
+#[test]
+fn status_bar_connection_error() {
+    use rustyclaw_core::ui::ConnectionStatus;
+    let mut sb = StatusBarData::default();
+    assert!(sb.connection_error().is_none());
+    sb.connection = ConnectionStatus::Error("fail".into());
+    assert_eq!(sb.connection_error(), Some("fail"));
+}
+
+// ── VaultUnlockData shared display methods ──────────────────────────
+
+#[test]
+fn vault_unlock_masked_password() {
+    let vu = VaultUnlockData {
+        password_len: 5,
+        ..Default::default()
+    };
+    assert_eq!(vu.masked_password(), "•••••");
+    assert!(vu.has_input());
+}
+
+// ── PairingStep shared display methods ──────────────────────────────
+
+#[test]
+fn pairing_step_labels() {
+    assert_eq!(PairingStep::ShowKey.label(), "Show public key");
+    assert_eq!(PairingStep::Complete.label(), "Pairing complete");
+    assert!(PairingStep::Connecting.is_progress());
+    assert!(PairingStep::Complete.is_complete());
 }
