@@ -34,6 +34,7 @@ pub mod system_prompt;
 pub mod task_handler;
 pub mod thinking_clock;
 mod tool_executor;
+pub mod ssh_connection;
 pub mod transport;
 mod types;
 pub mod webhooks;
@@ -42,6 +43,9 @@ pub mod ssh;
 
 // Re-export client-facing types
 pub use client_types::{GatewayCommand, GatewayEvent, ThreadInfoDto};
+
+// Re-export SSH connection transport (client-side)
+pub use ssh_connection::{SshConnection, SshReader, SshWriter};
 
 // Re-export protocol types
 pub use protocol::{

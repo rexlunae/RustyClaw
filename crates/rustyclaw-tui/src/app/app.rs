@@ -17,8 +17,8 @@ use std::sync::mpsc as sync_mpsc;
 use rustyclaw_core::commands::{CommandAction, CommandContext, CommandResponse, handle_command};
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
-    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame, WireFrame,
-    deserialize_frame, deserialize_wire_frame, serialize_wire_frame,
+    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, WireFrame,
+    serialize_wire_frame,
 };
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
@@ -38,11 +38,6 @@ fn serialize_client_frame(
     stream_id: u64,
 ) -> std::result::Result<Vec<u8>, String> {
     serialize_wire_frame(&WireFrame::new(stream_id, frame.clone()))
-}
-
-fn deserialize_server_frame(data: &[u8]) -> std::result::Result<WireFrame<ServerFrame>, String> {
-    deserialize_wire_frame::<ServerFrame>(data)
-        .or_else(|_| deserialize_frame::<ServerFrame>(data).map(WireFrame::control))
 }
 
 // ── Channel message types ───────────────────────────────────────────────────
@@ -432,227 +427,74 @@ impl App {
                 (String::new(), "2222".to_string())
             };
 
-        // ── Connect to gateway ──────────────────────────────────────────
+        // ── Connect via shared SSH transport ────────────────────────────
         let gw_tx_conn = gw_tx.clone();
-        let gateway_url_clone = gateway_url.clone();
-
-        // ── Gateway sink abstraction ────────────────────────────────────
-        //
-        // SSH-only transport: the TUI spawns `ssh user@host
-        // rustyclaw-gateway run --ssh-stdio` and communicates over the
-        // subprocess's stdin/stdout using length-prefixed binary frames.
-
-        enum GatewaySink {
-            Ssh(tokio::process::ChildStdin),
-        }
-
-        impl GatewaySink {
-            async fn send_binary(&mut self, data: Vec<u8>) -> Result<()> {
-                match self {
-                    GatewaySink::Ssh(stdin) => {
-                        use tokio::io::AsyncWriteExt;
-                        let len = data.len() as u32;
-                        stdin.write_all(&len.to_be_bytes()).await?;
-                        stdin.write_all(&data).await?;
-                        stdin.flush().await?;
-                        Ok(())
-                    }
-                }
-            }
-        }
-
-        let (sink_tx, sink_rx) = tokio::sync::oneshot::channel::<GatewaySink>();
-
-        // ── SSH transport ───────────────────────────────────────────
-        //
-        // Parse ssh://[user@]host[:port] and spawn the system SSH client.
-        // The gateway runs in --ssh-stdio mode on the remote end.
-        let gw_tx_ssh = gw_tx_conn.clone();
-        let _reader_handle = tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-
-            let parsed = match url::Url::parse(&gateway_url_clone) {
-                Ok(u) => u,
+        let (_ssh_connection, ssh_writer_raw, mut ssh_reader) =
+            match rustyclaw_core::gateway::SshConnection::connect(&gateway_url).await {
+                Ok(triple) => triple,
                 Err(e) => {
-                    let _ = gw_tx_ssh.send(GwEvent::error(format!("Invalid SSH URL: {}", e)));
-                    let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
-                    return;
+                    let _ = gw_tx.send(GwEvent::error(format!("SSH connection failed: {}", e)));
+                    let _ = gw_tx.send(GwEvent::Disconnected(format!(
+                        "Failed to connect: {}",
+                        e
+                    )));
+                    return Ok(());
                 }
             };
 
-            let host = parsed.host_str().unwrap_or("localhost").to_string();
-            let port = if parsed.port().is_some() {
-                parsed.port()
-            } else {
-                None
-            };
-            let user = if parsed.username().is_empty() {
-                None
-            } else {
-                Some(parsed.username().to_string())
-            };
+        // Wrap writer in Option for compatibility with the gateways event loop
+        // that expects an optional sink (may be None if connection failed).
+        let mut gw_writer: Option<rustyclaw_core::gateway::SshWriter> = Some(ssh_writer_raw);
 
-            // Ensure we have a RustyClaw client identity and use it for SSH auth.
-            // This aligns runtime connection auth with the pairing key used by the gateway.
-            let client_key_path =
-                match rustyclaw_core::pairing::ClientKeyPair::load_or_generate(None) {
-                    Ok(_) => rustyclaw_core::pairing::default_client_key_path(),
-                    Err(e) => {
-                        let _ = gw_tx_ssh.send(GwEvent::error(format!(
-                            "Failed to load/generate client key: {}",
-                            e
-                        )));
-                        let _ =
-                            gw_tx_ssh.send(GwEvent::Disconnected("SSH auth setup failed".into()));
-                        return;
-                    }
-                };
-
-            // Build the SSH command
-            let mut cmd = tokio::process::Command::new("ssh");
-            cmd.arg("-T"); // no pseudo-terminal
-            cmd.arg("-o").arg("PreferredAuthentications=publickey");
-            cmd.arg("-o").arg("IdentitiesOnly=yes");
-            cmd.arg("-i").arg(&client_key_path);
-            // Use a dedicated known-hosts file so we don't pollute ~/.ssh/known_hosts
-            // and can manage gateway fingerprints independently.
-            let known_hosts_path = dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join("rustyclaw")
-                .join("known_hosts");
-            cmd.arg("-o")
-                .arg(format!("UserKnownHostsFile={}", known_hosts_path.display()));
-            // Accept new host keys on first connect; reject changed keys.
-            // This matches the pairing model: pair once, trust forever.
-            cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
-            // Never prompt for anything — fail fast instead of blocking the TUI.
-            cmd.arg("-o").arg("BatchMode=yes");
-            if let Some(p) = port {
-                cmd.arg("-p").arg(p.to_string());
-            }
-            let target = if let Some(u) = &user {
-                format!("{}@{}", u, host)
-            } else {
-                host.clone()
-            };
-            cmd.arg(&target);
-            cmd.arg("rustyclaw-gateway").arg("run").arg("--ssh-stdio");
-
-            cmd.stdin(std::process::Stdio::piped());
-            cmd.stdout(std::process::Stdio::piped());
-            cmd.stderr(std::process::Stdio::piped());
-
-            match cmd.spawn() {
-                Ok(mut child) => {
-                    let stdin = child.stdin.take().unwrap();
-                    let mut stdout = child.stdout.take().unwrap();
-                    let mut stderr = child.stderr.take().unwrap();
-
-                    // Send the write-half to the main loop
-                    let _ = sink_tx.send(GatewaySink::Ssh(stdin));
-
-                    // Read length-prefixed frames from stdout
-                    let mut len_buf = [0u8; 4];
-                    loop {
-                        match stdout.read_exact(&mut len_buf).await {
-                            Ok(_) => {
-                                let len = u32::from_be_bytes(len_buf) as usize;
-                                if len > 16 * 1024 * 1024 {
-                                    let _ = gw_tx_ssh.send(GwEvent::error("SSH frame too large"));
-                                    break;
-                                }
-                                let mut frame_buf = vec![0u8; len];
-                                if stdout.read_exact(&mut frame_buf).await.is_err() {
-                                    let _ = gw_tx_ssh
-                                        .send(GwEvent::Disconnected("SSH read error".into()));
-                                    break;
-                                }
-                                match deserialize_server_frame(&frame_buf) {
-                                    Ok(envelope) => {
-                                        let frame = envelope.frame;
-                                        let is_model_ready = matches!(
-                                            &frame.payload,
-                                            rustyclaw_core::gateway::ServerPayload::Status {
-                                                status:
-                                                    rustyclaw_core::gateway::StatusType::ModelReady,
-                                                ..
-                                            }
-                                        );
-                                        if is_model_ready {
-                                            if let rustyclaw_core::gateway::ServerPayload::Status { detail, .. } = &frame.payload {
-                                                let _ = gw_tx_ssh.send(GwEvent::ModelReady(detail.clone()));
-                                            }
-                                        } else {
-                                            let fa = gateway_client::server_frame_to_action(&frame);
-                                            if let Some(action) = fa.action {
-                                                let ev = action_to_gw_event(&action);
-                                                if let Some(ev) = ev {
-                                                    let _ = gw_tx_ssh.send(ev);
-                                                }
-                                            }
-                                        }
-                                    }
-                                    Err(e) => {
-                                        let _ = gw_tx_ssh
-                                            .send(GwEvent::error(format!("Protocol error: {}", e)));
-                                    }
-                                }
+        // Reader task: receives frames from gateway and converts to UI events.
+        let _reader_handle = tokio::spawn(async move {
+            loop {
+                match ssh_reader.recv_wire().await {
+                    Ok(Some(envelope)) => {
+                        let frame = envelope.frame;
+                        let is_model_ready = matches!(
+                            &frame.payload,
+                            rustyclaw_core::gateway::ServerPayload::Status {
+                                status:
+                                    rustyclaw_core::gateway::StatusType::ModelReady,
+                                ..
                             }
-                            Err(_) => {
-                                // Drain stderr to surface the real SSH error message.
-                                use tokio::io::AsyncReadExt as _;
-                                let mut stderr_buf = Vec::new();
-                                let _ = stderr.read_to_end(&mut stderr_buf).await;
-                                let ssh_err = String::from_utf8_lossy(&stderr_buf);
-                                let msg = if let Some(line) = ssh_err
-                                    .lines()
-                                    .map(str::trim)
-                                    .filter(|l| !l.is_empty())
-                                    .filter(|l| !l.starts_with("**"))
-                                    .find(|l| {
-                                        l.contains("Permission denied")
-                                            || l.contains("Host key verification failed")
-                                            || l.contains("Connection refused")
-                                            || l.contains("Connection timed out")
-                                            || l.contains("No route to host")
-                                            || l.contains("Could not resolve hostname")
-                                            || l.contains("kex_exchange_identification")
-                                    })
-                                    .or_else(|| {
-                                        ssh_err
-                                            .lines()
-                                            .map(str::trim)
-                                            .rfind(|l| !l.is_empty() && !l.starts_with("**"))
-                                    }) {
-                                    if line.contains("Permission denied") {
-                                        "SSH authentication failed: this client key is not authorized on the gateway. Press Ctrl+P to pair, then retry.".to_string()
-                                    } else if line.contains("Host key verification failed") {
-                                        "Host key verification failed: the gateway host key changed. Re-pair or update ~/.config/rustyclaw/known_hosts.".to_string()
-                                    } else {
-                                        line.to_string()
-                                    }
-                                } else {
-                                    "SSH connection closed".to_string()
-                                };
-                                let _ = gw_tx_ssh.send(GwEvent::Disconnected(msg));
-                                break;
+                        );
+                        if is_model_ready {
+                            if let rustyclaw_core::gateway::ServerPayload::Status {
+                                detail,
+                                ..
+                            } = &frame.payload
+                            {
+                                let _ = gw_tx_conn
+                                    .send(GwEvent::ModelReady(detail.clone()));
+                            }
+                        } else {
+                            let fa =
+                                gateway_client::server_frame_to_action(&frame);
+                            if let Some(action) = fa.action {
+                                let ev = action_to_gw_event(&action);
+                                if let Some(ev) = ev {
+                                    let _ = gw_tx_conn.send(ev);
+                                }
                             }
                         }
                     }
-
-                    // Wait for the child process to exit
-                    let _ = child.wait().await;
-                }
-                Err(e) => {
-                    drop(sink_tx);
-                    let _ = gw_tx_ssh.send(GwEvent::error(format!("Failed to spawn ssh: {}", e)));
-                    let _ = gw_tx_ssh.send(GwEvent::Disconnected(e.to_string()));
+                    Ok(None) => {
+                        // EOF — drain stderr for diagnostic info
+                        let ssh_err_text = ssh_reader.drain_stderr().await;
+                        let msg = extract_ssh_error(&ssh_err_text);
+                        let _ = gw_tx_conn.send(GwEvent::Disconnected(msg));
+                        break;
+                    }
+                    Err(e) => {
+                        let _ = gw_tx_conn
+                            .send(GwEvent::error(format!("Protocol error: {}", e)));
+                        break;
+                    }
                 }
             }
         });
-
-        // Try to get the write-half.
-        let mut gw_sink: Option<GatewaySink> = sink_rx.await.ok();
 
         // ── Spawn the iocraft render on a blocking thread ───────────────
         // Stash the channels in statics so the component can grab them on
@@ -694,7 +536,7 @@ impl App {
                     next_stream_id = next_stream_id.saturating_add(2);
                     active_stream_id = stream_id;
                     conversation.push(ChatMessage::text("user", &text));
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Chat,
                             payload: ClientPayload::Chat {
@@ -702,42 +544,42 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_client_frame(&frame, stream_id) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::AuthResponse(code)) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::AuthResponse,
                             payload: ClientPayload::AuthResponse { code },
                         };
                         if let Ok(data) = serialize_client_frame(&frame, active_stream_id) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::ToolApprovalResponse { id, approved }) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ToolApprovalResponse,
                             payload: ClientPayload::ToolApprovalResponse { id, approved },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::VaultUnlock(password)) => {
                     // Unlock locally so /secrets can read the vault
                     secrets_manager.set_password(password.clone());
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::UnlockVault,
                             payload: ClientPayload::UnlockVault { password },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
@@ -746,7 +588,7 @@ impl App {
                     dismissed,
                     value,
                 }) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::UserPromptResponse,
                             payload: ClientPayload::UserPromptResponse {
@@ -756,7 +598,7 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
@@ -765,7 +607,7 @@ impl App {
                     dismissed,
                     value,
                 }) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::CredentialResponse,
                             payload: ClientPayload::CredentialResponse {
@@ -775,18 +617,18 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::CancelCurrentRequest) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Cancel,
                             payload: ClientPayload::Empty,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
@@ -846,13 +688,13 @@ impl App {
                         CommandAction::ShowSecrets => {
                             // Request secrets list from the gateway daemon
                             // (secrets live in the gateway's vault, not locally).
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::SecretsList,
                                     payload: ClientPayload::SecretsList,
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                             }
                         }
@@ -892,13 +734,13 @@ impl App {
                         }
                         CommandAction::ThreadNew(label) => {
                             // Send thread create to gateway
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadCreate,
                                     payload: ClientPayload::ThreadCreate { label },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                             }
                         }
@@ -910,19 +752,19 @@ impl App {
                         }
                         CommandAction::ThreadClose(id) => {
                             // Send thread close to gateway
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadClose,
                                     payload: ClientPayload::ThreadClose { thread_id: id },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                             }
                         }
                         CommandAction::ThreadRename(id, new_label) => {
                             // Send thread rename to gateway
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadRename,
                                     payload: ClientPayload::ThreadRename {
@@ -931,20 +773,20 @@ impl App {
                                     },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                             }
                         }
                         CommandAction::ThreadBackground => {
                             // Background the current foreground thread by switching
                             // to thread_id 0 (sentinel: no foreground thread).
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadSwitch,
                                     payload: ClientPayload::ThreadSwitch { thread_id: 0 },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                                 let _ = gw_tx.send(GwEvent::Info(
                                     "Current thread backgrounded. Use /thread fg <id> or sidebar to switch.".to_string(),
@@ -953,13 +795,13 @@ impl App {
                         }
                         CommandAction::ThreadForeground(id) => {
                             // Foreground a thread by ID — reuse ThreadSwitch
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::ThreadSwitch,
                                     payload: ClientPayload::ThreadSwitch { thread_id: id },
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                             }
                         }
@@ -994,13 +836,13 @@ impl App {
                                     model_name
                                 )));
                                 // Send Reload frame so the gateway picks up the new config
-                                if let Some(ref mut sink) = gw_sink {
+                                if let Some(ref mut sink) = gw_writer {
                                     let frame = ClientFrame {
                                         frame_type: ClientFrameType::Reload,
                                         payload: ClientPayload::Reload,
                                     };
                                     if let Ok(data) = serialize_frame(&frame) {
-                                        let _ = sink.send_binary(data).await;
+                                        let _ = sink.send_raw(&data).await;
                                     }
                                 }
                             }
@@ -1024,26 +866,26 @@ impl App {
                                     "Provider set to {}. Reloading gateway…",
                                     provider_name
                                 )));
-                                if let Some(ref mut sink) = gw_sink {
+                                if let Some(ref mut sink) = gw_writer {
                                     let frame = ClientFrame {
                                         frame_type: ClientFrameType::Reload,
                                         payload: ClientPayload::Reload,
                                     };
                                     if let Ok(data) = serialize_frame(&frame) {
-                                        let _ = sink.send_binary(data).await;
+                                        let _ = sink.send_raw(&data).await;
                                     }
                                 }
                             }
                         }
                         CommandAction::GatewayReload => {
                             // Send Reload frame to the gateway
-                            if let Some(ref mut sink) = gw_sink {
+                            if let Some(ref mut sink) = gw_writer {
                                 let frame = ClientFrame {
                                     frame_type: ClientFrameType::Reload,
                                     payload: ClientPayload::Reload,
                                 };
                                 if let Ok(data) = serialize_frame(&frame) {
-                                    let _ = sink.send_binary(data).await;
+                                    let _ = sink.send_raw(&data).await;
                                 }
                             }
                         }
@@ -1202,7 +1044,7 @@ impl App {
                         "SKILL" => "always",
                         _ => "ask",
                     };
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsSetPolicy,
                             payload: ClientPayload::SecretsSetPolicy {
@@ -1212,90 +1054,90 @@ impl App {
                             },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::DeleteSecret { name }) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsDeleteCredential,
                             payload: ClientPayload::SecretsDeleteCredential { name },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::AddSecret { name, value }) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsStore,
                             payload: ClientPayload::SecretsStore { key: name, value },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::RefreshSecrets) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::SecretsList,
                             payload: ClientPayload::SecretsList,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::RefreshTasks) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::TasksRequest,
                             payload: ClientPayload::TasksRequest { session: None },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::ThreadSwitch(thread_id)) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadSwitch,
                             payload: ClientPayload::ThreadSwitch { thread_id },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::RefreshThreads) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadList,
                             payload: ClientPayload::ThreadList,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::ThreadCreate(label)) => {
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadCreate,
                             payload: ClientPayload::ThreadCreate { label },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
                 Ok(UserInput::HatchingRequest) => {
                     // Send hatching prompt to gateway as a special chat
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let hatching_prompt = crate::components::hatching_dialog::HATCHING_PROMPT;
                         let messages = vec![
                             ChatMessage::text("system", hatching_prompt),
@@ -1306,7 +1148,7 @@ impl App {
                             payload: ClientPayload::Chat { messages },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                 }
@@ -1340,13 +1182,13 @@ impl App {
                                 });
                                 let _ = config.save(None);
                                 // Reload gateway
-                                if let Some(ref mut sink) = gw_sink {
+                                if let Some(ref mut sink) = gw_writer {
                                     let frame = ClientFrame {
                                         frame_type: ClientFrameType::Reload,
                                         payload: ClientPayload::Reload,
                                     };
                                     if let Ok(data) = serialize_frame(&frame) {
-                                        let _ = sink.send_binary(data).await;
+                                        let _ = sink.send_raw(&data).await;
                                     }
                                 }
                                 // Trigger model selector (show loading)
@@ -1410,13 +1252,13 @@ impl App {
                                             .and_then(|m| m.base_url.clone()),
                                     });
                                     let _ = config.save(None);
-                                    if let Some(ref mut sink) = gw_sink {
+                                    if let Some(ref mut sink) = gw_writer {
                                         let frame = ClientFrame {
                                             frame_type: ClientFrameType::Reload,
                                             payload: ClientPayload::Reload,
                                         };
                                         if let Ok(data) = serialize_frame(&frame) {
-                                            let _ = sink.send_binary(data).await;
+                                            let _ = sink.send_raw(&data).await;
                                         }
                                     }
                                     let display = def.display.to_string();
@@ -1484,13 +1326,13 @@ impl App {
                                             .and_then(|m| m.base_url.clone()),
                                     });
                                     let _ = config.save(None);
-                                    if let Some(ref mut sink) = gw_sink {
+                                    if let Some(ref mut sink) = gw_writer {
                                         let frame = ClientFrame {
                                             frame_type: ClientFrameType::Reload,
                                             payload: ClientPayload::Reload,
                                         };
                                         if let Ok(data) = serialize_frame(&frame) {
-                                            let _ = sink.send_binary(data).await;
+                                            let _ = sink.send_raw(&data).await;
                                         }
                                     }
                                     let display = def.display.to_string();
@@ -1643,13 +1485,13 @@ impl App {
                     });
                     let _ = config.save(None);
                     // Reload gateway
-                    if let Some(ref mut sink) = gw_sink {
+                    if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Reload,
                             payload: ClientPayload::Reload,
                         };
                         if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_binary(data).await;
+                            let _ = sink.send_raw(&data).await;
                         }
                     }
                     // Now fetch models
@@ -1704,13 +1546,13 @@ impl App {
                             display, model,
                         )));
                         // Reload gateway so the new provider + model take effect
-                        if let Some(ref mut sink) = gw_sink {
+                        if let Some(ref mut sink) = gw_writer {
                             let frame = ClientFrame {
                                 frame_type: ClientFrameType::Reload,
                                 payload: ClientPayload::Reload,
                             };
                             if let Ok(data) = serialize_frame(&frame) {
-                                let _ = sink.send_binary(data).await;
+                                let _ = sink.send_raw(&data).await;
                             }
                         }
                     }
@@ -2001,5 +1843,40 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         // Any action not explicitly handled above is shown as a warning
         // so the user always knows something happened.
         other => Some(GwEvent::warning(format!("Unhandled event: {}", other))),
+    }
+}
+
+/// Extract a human-readable SSH error message from stderr output.
+fn extract_ssh_error(ssh_err: &str) -> String {
+    if let Some(line) = ssh_err
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .filter(|l| !l.starts_with("**"))
+        .find(|l| {
+            l.contains("Permission denied")
+                || l.contains("Host key verification failed")
+                || l.contains("Connection refused")
+                || l.contains("Connection timed out")
+                || l.contains("No route to host")
+                || l.contains("Could not resolve hostname")
+                || l.contains("kex_exchange_identification")
+        })
+        .or_else(|| {
+            ssh_err
+                .lines()
+                .map(str::trim)
+                .rfind(|l| !l.is_empty() && !l.starts_with("**"))
+        })
+    {
+        if line.contains("Permission denied") {
+            "SSH authentication failed: this client key is not authorized on the gateway. Press Ctrl+P to pair, then retry.".to_string()
+        } else if line.contains("Host key verification failed") {
+            "Host key verification failed: the gateway host key changed. Re-pair or update ~/.config/rustyclaw/known_hosts.".to_string()
+        } else {
+            line.to_string()
+        }
+    } else {
+        "SSH connection closed".to_string()
     }
 }

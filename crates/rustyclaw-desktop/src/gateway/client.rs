@@ -2,17 +2,15 @@
 
 use anyhow::{Context, Result, anyhow};
 use rustyclaw_core::gateway::{
-    ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, StatusType,
-    WireFrame, deserialize_frame, deserialize_wire_frame, serialize_wire_frame,
+    ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, SshConnection,
+    StatusType,
 };
 use rustyclaw_core::gateway::protocol::event_log::{
     Direction, ProtocolEventLog, default_log_path,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::{Mutex, mpsc};
-use url::Url;
 
 use super::protocol::{GatewayCommand, GatewayEvent, ThreadInfoDto};
 
@@ -29,21 +27,9 @@ pub struct GatewayClient {
 impl GatewayClient {
     /// Connect to a gateway at the given URL.
     pub async fn connect(url: &str) -> Result<Self> {
-        let url = Url::parse(url)?;
-        if url.scheme() != "ssh" {
-            anyhow::bail!(
-                "Unsupported gateway URL scheme '{}'; expected ssh://",
-                url.scheme()
-            );
-        }
-
-        let host = url.host_str().unwrap_or("localhost").to_string();
-        let port = url.port();
-        let user = if url.username().is_empty() {
-            None
-        } else {
-            Some(url.username().to_string())
-        };
+        // ── Use shared SSH transport from rustyclaw_core ────────────────
+        let (_connection, mut writer, mut reader) =
+            SshConnection::connect(url).await.context("Failed to establish SSH transport")?;
 
         // Channels for communication
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
@@ -54,63 +40,19 @@ impl GatewayClient {
         let next_stream_id = Arc::new(AtomicU64::new(1));
         let active_stream_id = Arc::new(AtomicU64::new(0));
 
-        let client_key_path = rustyclaw_core::pairing::ClientKeyPair::load_or_generate(None)
-            .map(|_| rustyclaw_core::pairing::default_client_key_path())
-            .context("Failed to load/generate client key")?;
-
-        let mut cmd = tokio::process::Command::new("ssh");
-        cmd.arg("-T");
-        cmd.arg("-o").arg("PreferredAuthentications=publickey");
-        cmd.arg("-o").arg("IdentitiesOnly=yes");
-        cmd.arg("-i").arg(&client_key_path);
-
-        let known_hosts_path = dirs::config_dir()
-            .unwrap_or_else(|| std::path::PathBuf::from("."))
-            .join("rustyclaw")
-            .join("known_hosts");
-        cmd.arg("-o")
-            .arg(format!("UserKnownHostsFile={}", known_hosts_path.display()));
-        cmd.arg("-o").arg("StrictHostKeyChecking=accept-new");
-        cmd.arg("-o").arg("BatchMode=yes");
-        if let Some(port) = port {
-            cmd.arg("-p").arg(port.to_string());
-        }
-        let target = if let Some(user) = &user {
-            format!("{}@{}", user, host)
-        } else {
-            host.clone()
-        };
-        cmd.arg(&target);
-        cmd.arg("rustyclaw-gateway").arg("run").arg("--ssh-stdio");
-        cmd.stdin(std::process::Stdio::piped());
-        cmd.stdout(std::process::Stdio::piped());
-        cmd.stderr(std::process::Stdio::piped());
-
-        let mut child = cmd.spawn().context("Failed to spawn ssh")?;
-        let mut stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| anyhow!("SSH stdin unavailable"))?;
-        let mut stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| anyhow!("SSH stdout unavailable"))?;
-        let mut stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| anyhow!("SSH stderr unavailable"))?;
-
         // Create protocol event log
         let event_log = default_log_path()
             .map(ProtocolEventLog::new)
             .unwrap_or_else(ProtocolEventLog::noop);
-        event_log.log(rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::Connection {
-            message: format!("connecting to {}", target),
-        });
+        event_log.log(
+            rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::Connection {
+                message: format!("connecting to {}", url),
+            },
+        );
         let event_log_tx = event_log.clone();
         let event_log_rx = event_log.clone();
 
-        // Spawn task to handle outgoing commands
+        // ── Spawn task to handle outgoing commands ─────────────────────
         let event_tx_clone = event_tx.clone();
         let next_stream_id_tx = next_stream_id.clone();
         let active_stream_id_tx = active_stream_id.clone();
@@ -125,38 +67,23 @@ impl GatewayClient {
                     GatewayCommand::Cancel => active_stream_id_tx.load(Ordering::Relaxed),
                     _ => 0,
                 };
+
                 let frame = command_to_frame(cmd);
                 let frame_type_name = format!("{:?}", frame.frame_type);
-                let data = match serialize_wire_frame(&WireFrame::new(stream_id, frame)) {
-                    Ok(data) => data,
-                    Err(err) => {
-                        event_log_tx.log(rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::EncodeError {
+
+                // Log before sending
+                event_log_tx.log_frame(Direction::Sent, &frame_type_name, stream_id, 0);
+
+                if let Err(err) = writer.send_frame(stream_id, &frame).await {
+                    event_log_tx.log(
+                        rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::EncodeError {
                             frame_type: frame_type_name.clone(),
-                            error: err.clone(),
-                        });
-                        let _ = event_tx_clone
-                            .send(GatewayEvent::Error {
-                                message: format!("Failed to encode frame: {}", err),
-                            })
-                            .await;
-                        break;
-                    }
-                };
-                event_log_tx.log_frame(Direction::Sent, &frame_type_name, stream_id, data.len());
-
-                let len = data.len() as u32;
-                let write_result: Result<(), std::io::Error> = async {
-                    stdin.write_all(&len.to_be_bytes()).await?;
-                    stdin.write_all(&data).await?;
-                    stdin.flush().await?;
-                    Ok(())
-                }
-                .await;
-
-                if write_result.is_err() {
+                            error: err.to_string(),
+                        },
+                    );
                     let _ = event_tx_clone
                         .send(GatewayEvent::Disconnected {
-                            reason: Some("Send failed".into()),
+                            reason: Some(err.to_string()),
                         })
                         .await;
                     break;
@@ -164,99 +91,64 @@ impl GatewayClient {
             }
         });
 
-        // Spawn task to handle incoming messages
+        // ── Spawn task to handle incoming messages ─────────────────────
         let active_stream_id_rx = active_stream_id.clone();
         tokio::spawn(async move {
-            let mut len_buf = [0u8; 4];
             // Streaming stats for the event log.
             let mut stream_chunk_count: u32 = 0;
             let mut stream_total_bytes: usize = 0;
+
             loop {
-                match stdout.read_exact(&mut len_buf).await {
-                    Ok(_) => {
-                        let len = u32::from_be_bytes(len_buf) as usize;
-                        if len > 16 * 1024 * 1024 {
-                            let _ = event_tx
-                                .send(GatewayEvent::Error {
-                                    message: "SSH frame too large".into(),
-                                })
-                                .await;
-                            break;
-                        }
+                match reader.recv_wire().await {
+                    Ok(Some(envelope)) => {
+                        let len = 0; // wire already consumed, len not available here
+                        let frame_type_name = format!("{:?}", envelope.frame.frame_type);
+                        event_log_rx.log_frame(
+                            Direction::Received,
+                            &frame_type_name,
+                            envelope.stream_id,
+                            len,
+                        );
 
-                        let mut frame_buf = vec![0u8; len];
-                        let read_result: Result<(), std::io::Error> = async {
-                            stdout.read_exact(&mut frame_buf).await?;
-                            Ok(())
-                        }
-                        .await;
-                        if read_result.is_err() {
-                            let _ = event_tx
-                                .send(GatewayEvent::Disconnected {
-                                    reason: Some("SSH read error".into()),
-                                })
-                                .await;
-                            break;
-                        }
-
-                        match decode_server_wire_frame(&frame_buf) {
-                            Ok(envelope) => {
-                                let frame_type_name = format!("{:?}", envelope.frame.frame_type);
-                                event_log_rx.log_frame(
-                                    Direction::Received,
-                                    &frame_type_name,
-                                    envelope.stream_id,
-                                    len,
-                                );
-                                // Track streaming progress.
-                                match &envelope.frame.payload {
-                                    ServerPayload::StreamStart => {
-                                        stream_chunk_count = 0;
-                                        stream_total_bytes = 0;
-                                        event_log_rx.log_streaming("started");
-                                    }
-                                    ServerPayload::Chunk { delta } => {
-                                        stream_chunk_count += 1;
-                                        stream_total_bytes += delta.len();
-                                    }
-                                    ServerPayload::ResponseDone { .. } => {
-                                        event_log_rx.log_streaming(&format!(
-                                            "done chunks={} chars={}",
-                                            stream_chunk_count, stream_total_bytes,
-                                        ));
-                                    }
-                                    _ => {}
-                                }
-                                if matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. }) {
-                                    let active = active_stream_id_rx.load(Ordering::Relaxed);
-                                    if active == envelope.stream_id {
-                                        active_stream_id_rx.store(0, Ordering::Relaxed);
-                                    }
-                                }
-                                if let Some(event) = frame_to_event(envelope.frame)
-                                    && event_tx.send(event).await.is_err()
-                                {
-                                    break;
-                                }
+                        // Track streaming progress.
+                        match &envelope.frame.payload {
+                            ServerPayload::StreamStart => {
+                                stream_chunk_count = 0;
+                                stream_total_bytes = 0;
+                                event_log_rx.log_streaming("started");
                             }
-                            Err(err) => {
-                                event_log_rx.log_decode_error(
-                                    Direction::Received,
-                                    len,
-                                    &err,
-                                );
-                                let _ = event_tx
-                                    .send(GatewayEvent::Error {
-                                        message: format!("Protocol error: {}", err),
-                                    })
-                                    .await;
+                            ServerPayload::Chunk { delta } => {
+                                stream_chunk_count += 1;
+                                stream_total_bytes += delta.len();
+                            }
+                            ServerPayload::ResponseDone { .. } => {
+                                event_log_rx.log_streaming(&format!(
+                                    "done chunks={} chars={}",
+                                    stream_chunk_count, stream_total_bytes,
+                                ));
+                            }
+                            _ => {}
+                        }
+
+                        if matches!(
+                            envelope.frame.payload,
+                            ServerPayload::ResponseDone { .. }
+                        ) {
+                            let active = active_stream_id_rx.load(Ordering::Relaxed);
+                            if active == envelope.stream_id {
+                                active_stream_id_rx.store(0, Ordering::Relaxed);
+                            }
+                        }
+
+                        if let Some(event) = frame_to_event(envelope.frame) {
+                            if event_tx.send(event).await.is_err() {
+                                break;
                             }
                         }
                     }
-                    Err(_) => {
-                        let mut stderr_buf = Vec::new();
-                        let _ = stderr.read_to_end(&mut stderr_buf).await;
-                        let ssh_err = String::from_utf8_lossy(&stderr_buf);
+                    Ok(None) => {
+                        // EOF — drain stderr for diagnostic info
+                        let ssh_err = reader.drain_stderr().await;
                         let reason = ssh_err
                             .lines()
                             .map(str::trim)
@@ -286,10 +178,18 @@ impl GatewayClient {
                             .await;
                         break;
                     }
+                    Err(err) => {
+                        event_log_rx.log_decode_error(Direction::Received, 0, &err.to_string());
+                        let _ = event_tx
+                            .send(GatewayEvent::Error {
+                                message: format!("Protocol error: {}", err),
+                            })
+                            .await;
+                        break;
+                    }
                 }
             }
 
-            let _ = child.wait().await;
             connected_clone.store(false, std::sync::atomic::Ordering::SeqCst);
         });
 
@@ -315,10 +215,6 @@ impl GatewayClient {
     }
 
     /// Drain all currently-buffered events without blocking.
-    ///
-    /// The caller must already hold the lock (obtained via `recv`).
-    /// This is used to batch rapidly-arriving chunk events so the UI
-    /// doesn't re-render on every single token.
     pub async fn drain_available(&self) -> Vec<GatewayEvent> {
         let mut rx = self.event_rx.lock().await;
         let mut events = Vec::new();
@@ -356,11 +252,6 @@ impl GatewayClient {
         self.send(GatewayCommand::ToolApprove { id, approved })
             .await
     }
-}
-
-fn decode_server_wire_frame(data: &[u8]) -> std::result::Result<WireFrame<ServerFrame>, String> {
-    deserialize_wire_frame::<ServerFrame>(data)
-        .or_else(|_| deserialize_frame::<ServerFrame>(data).map(WireFrame::control))
 }
 
 /// Convert a gateway command to a client frame.
