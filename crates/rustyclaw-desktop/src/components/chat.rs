@@ -11,7 +11,7 @@
 use dioxus::prelude::*;
 use rustyclaw_core::providers;
 
-use rustyclaw_core::ui::ChatMessage;
+use rustyclaw_core::ui::{ChatMessage, StreamingState};
 
 use super::message::MessageBubble;
 use super::tool_call::ToolCallPanel;
@@ -479,20 +479,14 @@ struct StreamingProgressProps {
 
 #[component]
 fn StreamingProgress(props: StreamingProgressProps) -> Element {
-    let label = if props.bytes >= 1024 {
-        format!(
-            "Streaming\u{2026} {} chunks, {:.1} KB",
-            props.chunks,
-            props.bytes as f64 / 1024.0,
-        )
-    } else if props.chunks > 0 {
-        format!(
-            "Streaming\u{2026} {} chunks, {} B",
-            props.chunks, props.bytes,
-        )
-    } else {
-        "Streaming\u{2026}".to_string()
+    let state = StreamingState {
+        is_streaming: true,
+        is_thinking: false,
+        chunks: props.chunks,
+        bytes: props.bytes,
+        start_time: None,
     };
+    let label = state.progress_summary();
 
     rsx! {
         div { class: "streaming-progress",

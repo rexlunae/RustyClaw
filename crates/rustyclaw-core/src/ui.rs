@@ -192,3 +192,208 @@ impl DialogState {
         }
     }
 }
+
+// ── Content formatting helpers ──────────────────────────────────────────────
+
+/// Pretty-print a JSON string for display (tool call arguments, results).
+///
+/// Falls back to the raw string if JSON deserialisation fails.
+pub fn pretty_print_json(input: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(input)
+        .ok()
+        .and_then(|v| serde_json::to_string_pretty(&v).ok())
+        .unwrap_or_else(|| input.to_string())
+}
+
+/// Truncate content to fit within display constraints.
+///
+/// - `max_chars`: hard character limit (applies before `max_lines`)
+/// - `max_lines`: maximum number of lines to show (beyond this, `…` is appended)
+///
+/// When both limits apply, the shorter one wins.
+pub fn truncate_content(content: &str, max_chars: usize, max_lines: usize) -> String {
+    let mut result = String::with_capacity(content.len().min(max_chars));
+    let mut line_count = 0usize;
+    let mut char_count = 0usize;
+
+    for ch in content.chars() {
+        if char_count >= max_chars {
+            result.push('…');
+            break;
+        }
+        if ch == '\n' {
+            line_count += 1;
+            if line_count >= max_lines {
+                result.push('…');
+                result.push('\n');
+                break;
+            }
+        }
+        result.push(ch);
+        char_count += 1;
+    }
+
+    result
+}
+
+/// Format a tool call name and arguments into a human-readable label.
+///
+/// Uses [`pretty_print_json`] on the arguments and truncates long content.
+pub fn format_tool_call(name: &str, arguments: &str) -> String {
+    let pretty = pretty_print_json(arguments);
+    if pretty.len() > 200 {
+        format!("🔧 {}\n{}\n…", name, truncate_content(&pretty, 200, 8))
+    } else {
+        format!("🔧 {}\n{}", name, pretty)
+    }
+}
+
+/// Format a tool result for display.
+///
+/// Truncates long results and marks errors.
+pub fn format_tool_result(result: &str, is_error: bool) -> String {
+    let preview = if result.len() > 500 {
+        truncate_content(&pretty_print_json(result), 500, 15)
+    } else if result.len() > 100 {
+        truncate_content(&pretty_print_json(result), 500, 15)
+    } else {
+        result.to_string()
+    };
+
+    if is_error {
+        format!("✕ Error:\n{}", preview)
+    } else {
+        format!("✓ Result:\n{}", preview)
+    }
+}
+
+/// Format a UTC timestamp as a relative human-readable string.
+///
+/// "Just now" (< 10s ago), "12m ago", "2h ago", "3d ago", or the
+/// date ("Jan 15") for older timestamps.
+pub fn format_relative_time(timestamp: &chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let duration = now.signed_duration_since(*timestamp);
+
+    let secs = duration.num_seconds();
+    if secs < 10 {
+        "Just now".to_string()
+    } else if secs < 60 {
+        format!("{}s ago", secs)
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86400 {
+        format!("{}h ago", secs / 3600)
+    } else if secs < 604800 {
+        format!("{}d ago", secs / 86400)
+    } else {
+        timestamp.format("%b %d").to_string()
+    }
+}
+
+/// Format a timestamp as a short time string for chat bubbles
+/// (e.g. "14:32" or "Yesterday 14:32").
+pub fn format_chat_timestamp(timestamp: &chrono::DateTime<chrono::Utc>) -> String {
+    let now = chrono::Utc::now();
+    let duration = now.signed_duration_since(*timestamp);
+
+    if duration.num_seconds() < 10 {
+        "Just now".to_string()
+    } else if duration.num_hours() < 24 {
+        timestamp.format("%H:%M").to_string()
+    } else if duration.num_hours() < 48 {
+        format!("Yesterday {}", timestamp.format("%H:%M"))
+    } else {
+        timestamp.format("%b %d %H:%M").to_string()
+    }
+}
+
+// ── Streaming state ─────────────────────────────────────────────────────────
+
+use std::time::Instant;
+
+/// Tracks the progress of an active streaming response.
+///
+/// Both the TUI and desktop clients need to track similar streaming
+/// metrics. This struct consolidates that tracking in one place.
+#[derive(Clone, Debug)]
+pub struct StreamingState {
+    /// Whether we are currently receiving a streaming response.
+    pub is_streaming: bool,
+
+    /// Whether the model is currently in "thinking" mode.
+    pub is_thinking: bool,
+
+    /// Number of streaming chunks received so far.
+    pub chunks: u32,
+
+    /// Total bytes received across all chunks.
+    pub bytes: usize,
+
+    /// When the current stream started.
+    pub start_time: Option<Instant>,
+}
+
+impl Default for StreamingState {
+    fn default() -> Self {
+        Self {
+            is_streaming: false,
+            is_thinking: false,
+            chunks: 0,
+            bytes: 0,
+            start_time: None,
+        }
+    }
+}
+
+impl StreamingState {
+    /// Start tracking a new streaming response.
+    pub fn start_streaming(&mut self) {
+        self.is_streaming = true;
+        self.is_thinking = false;
+        self.chunks = 0;
+        self.bytes = 0;
+        self.start_time = Some(Instant::now());
+    }
+
+    /// Start thinking mode (extended thinking models).
+    pub fn start_thinking(&mut self) {
+        self.is_thinking = true;
+        self.is_streaming = false;
+    }
+
+    /// End thinking mode and begin actual streaming.
+    pub fn end_thinking(&mut self) {
+        self.is_thinking = false;
+        self.is_streaming = true;
+        self.start_time = Some(Instant::now());
+    }
+
+    /// Record one chunk of streaming data.
+    pub fn record_chunk(&mut self, data: &str) {
+        self.chunks += 1;
+        self.bytes += data.len();
+    }
+
+    /// Finish the streaming response.
+    pub fn finish(&mut self) {
+        self.is_streaming = false;
+        self.is_thinking = false;
+        self.start_time = None;
+    }
+
+    /// Human-readable progress summary (e.g. "42 chunks, 12.3 KB").
+    pub fn progress_summary(&self) -> String {
+        if self.bytes >= 1024 {
+            format!(
+                "{} chunks, {:.1} KB",
+                self.chunks,
+                self.bytes as f64 / 1024.0,
+            )
+        } else if self.chunks > 0 {
+            format!("{} chunks, {} B", self.chunks, self.bytes)
+        } else {
+            "Streaming…".to_string()
+        }
+    }
+}

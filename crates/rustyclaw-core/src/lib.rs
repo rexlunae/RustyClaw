@@ -23,6 +23,7 @@ pub mod error;
 pub mod error_details;
 pub mod gateway;
 pub mod logging;
+pub mod markdown;
 pub mod mcp;
 pub mod memory;
 pub mod memory_consolidation;

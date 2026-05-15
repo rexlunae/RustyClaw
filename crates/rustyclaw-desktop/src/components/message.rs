@@ -1,10 +1,11 @@
 //! Single chat message row (avatar + role header + content).
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 use dioxus::prelude::*;
 
 use crate::markdown;
 use rustyclaw_core::types::MessageRole;
+use rustyclaw_core::ui::format_chat_timestamp;
 
 /// Props for [`MessageBubble`].
 #[derive(Props, Clone, PartialEq)]
@@ -38,9 +39,8 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
         _ => ("msg-row is-system", "System".to_string(), "ℹ️"),
     };
 
-    let local: DateTime<Local> = props.timestamp.with_timezone(&Local);
-    let time_str = local.format("%H:%M").to_string();
-    let time_full = local.format("%Y-%m-%d %H:%M:%S").to_string();
+    let time_str = format_chat_timestamp(&props.timestamp);
+    let time_full = props.timestamp.format("%Y-%m-%d %H:%M:%S").to_string();
 
     let render_markdown = matches!(props.role, MessageRole::Assistant)
         // Plaintext while streaming: markdown re-parsing on every chunk

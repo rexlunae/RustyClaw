@@ -2,6 +2,8 @@
 
 use dioxus::prelude::*;
 
+use rustyclaw_core::ui::pretty_print_json;
+
 /// Props for [`ToolCallPanel`].
 #[derive(Props, Clone, PartialEq)]
 pub struct ToolCallPanelProps {
@@ -36,10 +38,7 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
     );
     let panel_class = panel_class.trim().to_string();
 
-    let pretty_args = serde_json::from_str::<serde_json::Value>(&props.arguments)
-        .ok()
-        .and_then(|v| serde_json::to_string_pretty(&v).ok())
-        .unwrap_or_else(|| props.arguments.clone());
+    let pretty_args = pretty_print_json(&props.arguments);
 
     let chip_class = format!(
         "chip {}",
