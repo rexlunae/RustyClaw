@@ -8,58 +8,29 @@ use rustyclaw_view::MessageBubbleData;
 
 #[derive(Default, Props)]
 pub struct MessageBubbleProps {
-    /// Shared component data from rustyclaw-view.
+    /// Shared component data from `rustyclaw-view`.
     ///
-    /// Provides role, content, streaming status and agent name
-    /// from a single source of truth shared by all clients.
-    pub data: Option<MessageBubbleData>,
-
-    /// Legacy: fallback content when data is not provided.
-    /// Kept to ease incremental migration in call sites.
-    pub content: String,
-
-    /// Legacy: fallback role.
-    pub role: Option<MessageRole>,
-
-    /// Legacy: fallback agent display name for assistant messages.
-    pub assistant_name: Option<String>,
-
-    /// True when this message has extended structured details that
-    /// can be opened with Ctrl-D.  When set, a small hint is shown
-    /// after the content.
-    pub has_details: bool,
+    /// This is the single source of truth — role, content, streaming
+    /// status, agent name, and details flag all come from here.
+    pub data: MessageBubbleData,
 }
 
 #[component]
 pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static>> {
-    // Resolve role, content, and agent name from shared data (preferred)
-    // or fall back to legacy individual props for incremental migration.
-    let role = props
-        .data
-        .as_ref()
-        .map(|d| &d.role)
-        .copied()
-        .or(props.role)
-        .unwrap_or(MessageRole::System);
-    let content = props
-        .data
-        .as_ref()
-        .map(|d| d.content.as_str())
-        .unwrap_or(&props.content);
-    let assistant_name = props
-        .data
-        .as_ref()
-        .and_then(|d| d.agent_name.as_deref())
-        .map(|s| s.to_string())
-        .or_else(|| props.assistant_name.clone());
-    let fg = theme::role_color(&role);
-    let bg = theme::role_bg(&role);
-    let border = theme::role_border(&role);
+    let role = &props.data.role;
+    let content = &props.data.content;
+    let fg = theme::role_color(role);
+    let bg = theme::role_bg(role);
+    let border = theme::role_border(role);
 
     let icon = role.icon();
     let label = match role {
         MessageRole::User => "You".to_string(),
-        MessageRole::Assistant => assistant_name
+        MessageRole::Assistant => props
+            .data
+            .agent_name
+            .clone()
+            .filter(|n| !n.is_empty())
             .unwrap_or_else(|| "Assistant".to_string()),
         MessageRole::Info => "Info".to_string(),
         MessageRole::Success => "Success".to_string(),
@@ -72,12 +43,12 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
     };
 
     // Render markdown for assistant messages, plain text for others
-    let display = if role == MessageRole::Thinking && content.len() > 120 {
+    let display = if *role == MessageRole::Thinking && content.len() > 120 {
         format!("{}…", &content[..120])
-    } else if role == MessageRole::Assistant {
+    } else if *role == MessageRole::Assistant {
         markdown::render_ansi(content)
     } else {
-        content.to_string()
+        content.clone()
     };
 
     element! {
@@ -94,7 +65,7 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
         ) {
             Text(content: format!("{} {}", icon, label), color: border, weight: Weight::Bold)
             Text(content: display, color: fg, wrap: TextWrap::Wrap)
-            #(if props.has_details {
+            #(if props.data.has_details {
                 element! {
                     Text(
                         content: "↵ press Ctrl-D for details".to_string(),

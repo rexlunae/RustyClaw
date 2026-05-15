@@ -30,7 +30,9 @@ pub struct MessageBubbleData {
     pub content: String,
 
     /// When the message was created.
-    pub timestamp: DateTime<Utc>,
+    ///
+    /// Optional — the TUI does not track per-message timestamps.
+    pub timestamp: Option<DateTime<Utc>>,
 
     /// Whether this message is still being streamed.
     pub is_streaming: bool,
@@ -44,8 +46,21 @@ pub struct MessageBubbleData {
     pub has_details: bool,
 }
 
+impl Default for MessageBubbleData {
+    fn default() -> Self {
+        Self {
+            role: MessageRole::System,
+            content: String::new(),
+            timestamp: None,
+            is_streaming: false,
+            agent_name: None,
+            has_details: false,
+        }
+    }
+}
+
 impl MessageBubbleData {
-    /// Build from a canonical `rustyclaw_core::ui::ChatMessage`.
+    /// Build from a canonical [`rustyclaw_core::ui::ChatMessage`].
     ///
     /// Preserves role, content, timestamp, and streaming state.
     /// `agent_name` must be set by the caller (it depends on external
@@ -54,7 +69,7 @@ impl MessageBubbleData {
         Self {
             role: msg.role.clone(),
             content: msg.content.clone(),
-            timestamp: msg.timestamp,
+            timestamp: Some(msg.timestamp),
             is_streaming: msg.is_streaming,
             agent_name,
             has_details: false,

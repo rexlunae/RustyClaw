@@ -197,3 +197,39 @@ fn invalid_json_args_are_passed_through() {
     // pretty_print_json falls back to raw string
     assert_eq!(data.arguments, "not valid json at all");
 }
+
+// ── Direct construction (no ChatMessage) ────────────────────────────
+
+#[test]
+fn direct_construction_no_timestamp() {
+    let data = MessageBubbleData {
+        role: MessageRole::Assistant,
+        content: "Hello".into(),
+        timestamp: None,
+        is_streaming: false,
+        agent_name: Some("Luthen".into()),
+        has_details: true,
+    };
+
+    assert_eq!(data.role, MessageRole::Assistant);
+    assert_eq!(data.content, "Hello");
+    assert!(data.timestamp.is_none());
+    assert!(data.agent_name.is_some());
+    assert!(data.has_details);
+}
+
+#[test]
+fn from_chat_message_preserves_timestamp() {
+    let now = chrono::Utc::now();
+    let msg = ChatMessage {
+        id: "ts-test".into(),
+        role: MessageRole::User,
+        content: "time check".into(),
+        timestamp: now,
+        tool_calls: vec![],
+        is_streaming: false,
+    };
+
+    let data = MessageBubbleData::from_chat_message(&msg, None);
+    assert_eq!(data.timestamp, Some(now));
+}

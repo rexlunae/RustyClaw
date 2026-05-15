@@ -11,6 +11,7 @@ use crate::components::message_bubble::MessageBubble;
 use crate::theme;
 use crate::types::DisplayMessage;
 use iocraft::prelude::*;
+use rustyclaw_view::MessageBubbleData;
 
 /// Braille spinner frames for smooth animation.
 const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
@@ -68,13 +69,18 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                 #(props.messages.iter().enumerate().map(|(i, msg)| {
                     let name = assistant_name.clone();
                     let has_details = latest_details_idx == Some(i);
+                    let bubble_data = MessageBubbleData {
+                        role: msg.role,
+                        content: msg.content.clone(),
+                        timestamp: None,
+                        is_streaming: false,
+                        agent_name: name,
+                        has_details,
+                    };
                     element! {
                         MessageBubble(
                             key: i as u64,
-                            role: msg.role,
-                            content: msg.content.clone(),
-                            assistant_name: name,
-                            has_details: has_details,
+                            data: bubble_data,
                         )
                     }
                 }))
