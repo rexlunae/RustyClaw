@@ -1041,7 +1041,9 @@ async fn handle_connection(
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
-    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+    if let Err(e) = send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await {
+        warn!(error = %e, "Failed to send initial thread list");
+    }
 
     let reader_cancel = cancel.clone();
     let reader_tool_cancel = tool_cancel.clone();

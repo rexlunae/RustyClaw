@@ -982,6 +982,8 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             threads,
             foreground_id,
         } => {
+            let count = threads.len();
+            tracing::info!(count, foreground_id = ?foreground_id, "ThreadsUpdate received");
             state.write().threads = threads
                 .into_iter()
                 .map(|t| ThreadInfo {
