@@ -9,6 +9,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::user_prompt_types::UserPrompt;
 
+// ── Re-export ────────────────────────────────────────────────────────────────
+
+pub use crate::gateway::protocol::SecretEntryDto;
+
 // ── Events (server → client) ────────────────────────────────────────────────
 
 /// Events received from the gateway.
@@ -125,6 +129,30 @@ pub enum GatewayEvent {
         id: String,
         js: String,
     },
+
+    /// Secrets list result from gateway vault
+    SecretsListResult {
+        ok: bool,
+        entries: Vec<SecretEntryInfo>,
+    },
+
+    /// Secrets store result
+    SecretsStoreResult {
+        ok: bool,
+        message: String,
+    },
+
+    /// Secrets delete result
+    SecretsDeleteResult {
+        ok: bool,
+        message: Option<String>,
+    },
+
+    /// Secrets set policy result
+    SecretsSetPolicyResult {
+        ok: bool,
+        message: Option<String>,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -201,9 +229,48 @@ pub enum GatewayCommand {
     /// Store a secret (API key) in the gateway vault
     #[serde(rename = "secrets_store")]
     SecretsStore { key: String, value: String },
+
+    /// Delete a secret from the gateway vault
+    #[serde(rename = "secrets_delete")]
+    SecretsDelete { key: String },
+
+    /// Set access policy for a secret
+    #[serde(rename = "secrets_set_policy")]
+    SecretsSetPolicy {
+        name: String,
+        policy: String,
+        skills: Vec<String>,
+    },
 }
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────
+
+/// A single secret entry as presented to clients.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SecretEntryInfo {
+    /// Secret name/key.
+    pub name: String,
+    /// Human-readable label.
+    pub label: String,
+    /// Kind/category (api_key, token, username_password, etc.).
+    pub kind: String,
+    /// Access policy (OPEN, ASK, AUTH, SKILL, DISABLED).
+    pub policy: String,
+    /// Whether the secret is disabled.
+    pub disabled: bool,
+}
+
+impl From<SecretEntryDto> for SecretEntryInfo {
+    fn from(dto: SecretEntryDto) -> Self {
+        Self {
+            name: dto.name,
+            label: dto.label,
+            kind: dto.kind,
+            policy: dto.policy,
+            disabled: dto.disabled,
+        }
+    }
+}
 
 /// Thread info from gateway (client-facing, simplified view).
 #[derive(Clone, Debug, Serialize, Deserialize)]

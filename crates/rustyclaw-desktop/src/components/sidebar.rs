@@ -29,6 +29,7 @@ pub struct SidebarProps {
     pub on_new_thread: EventHandler<()>,
     pub on_switch_thread: EventHandler<u64>,
     pub on_pair: EventHandler<()>,
+    pub on_secrets: EventHandler<()>,
     pub on_settings: EventHandler<()>,
 }
 
@@ -69,6 +70,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
             FooterActions {
                 collapsed: collapsed,
                 on_pair: props.on_pair,
+                on_secrets: props.on_secrets,
                 on_settings: props.on_settings,
             }
         }
@@ -273,6 +275,7 @@ fn SessionRow(props: SessionRowProps) -> Element {
 struct FooterActionsProps {
     collapsed: bool,
     on_pair: EventHandler<()>,
+    on_secrets: EventHandler<()>,
     on_settings: EventHandler<()>,
 }
 
@@ -287,6 +290,13 @@ fn FooterActions(props: FooterActionsProps) -> Element {
                 title: "Pair with gateway",
                 span { class: "icon-only", "🔗" }
                 if !props.collapsed { span { "Pair gateway" } }
+            }
+            button {
+                class: "sidebar-action",
+                onclick: move |_| props.on_secrets.call(()),
+                title: "Secrets Vault",
+                span { class: "icon-only", "🔑" }
+                if !props.collapsed { span { "Secrets" } }
             }
             button {
                 class: "sidebar-action",

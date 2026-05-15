@@ -5,13 +5,15 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{
     Chat, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
-    PairingDialog, SettingsDialog, Sidebar, SwarmAgentInfo, SwarmInfo, SwarmPanel,
-    ToolApprovalDialog, UserPromptDialog, VaultUnlockDialog, generate_qr_code,
+    PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar,
+    SwarmAgentInfo, SwarmInfo, SwarmPanel, ToolApprovalDialog, UserPromptDialog,
+    VaultUnlockDialog, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
 use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
+use rustyclaw_view::{SecretInfoData, SecretsDialogData};
 
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
@@ -59,6 +61,9 @@ pub fn App() -> Element {
     // QR code for pairing
     let mut qr_code_url = use_signal(|| None::<String>);
     let mut public_key = use_signal(|| None::<String>);
+
+    // Secrets management state
+    let mut show_secrets = use_signal(|| false);
 
     // Auto-connect on mount
     use_effect(move || {
@@ -285,6 +290,39 @@ pub fn App() -> Element {
         }
     };
 
+    // Secrets dialog event handler
+    let on_secrets_command = move |cmd: SecretsCommand| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                match cmd {
+                    SecretsCommand::Refresh => {
+                        let _ = client.send(GatewayCommand::SecretsList).await;
+                    }
+                    SecretsCommand::Store { key, value } => {
+                        let _ = client
+                            .send(GatewayCommand::SecretsStore { key, value })
+                            .await;
+                    }
+                    SecretsCommand::Delete { key } => {
+                        let _ = client
+                            .send(GatewayCommand::SecretsDelete { key })
+                            .await;
+                    }
+                    SecretsCommand::SetPolicy { name, policy } => {
+                        let _ = client
+                            .send(GatewayCommand::SecretsSetPolicy {
+                                name,
+                                policy,
+                                skills: Vec::new(),
+                            })
+                            .await;
+                    }
+                }
+            });
+        }
+    };
+
     // Closure used by every "reconnect" entry-point. It only captures `Copy`
     // signals, so it is itself `Copy`; rebinding is therefore cheap.
     let do_reconnect = move || {
@@ -317,6 +355,15 @@ pub fn App() -> Element {
                 on_new_thread: on_new_thread,
                 on_switch_thread: on_switch_thread,
                 on_pair: move |_| show_pairing.set(true),
+                on_secrets: move |_| {
+                    show_secrets.set(true);
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::SecretsList).await;
+                        });
+                    }
+                },
                 on_settings: move |_| show_settings.set(true),
             }
 
@@ -328,6 +375,15 @@ pub fn App() -> Element {
                     provider: state.read().provider.clone(),
                     foreground_id: state.read().foreground_thread_id,
                     threads: state.read().threads.clone(),
+                    on_secrets: move |_| {
+                        show_secrets.set(true);
+                        let gw = gateway.read().clone();
+                        if let Some(client) = gw {
+                            spawn(async move {
+                                let _ = client.send(GatewayCommand::SecretsList).await;
+                            });
+                        }
+                    },
                     on_settings: move |_| show_settings.set(true),
                     on_swarm: move |_| show_swarm.set(true),
                 }
@@ -610,6 +666,13 @@ pub fn App() -> Element {
                 },
             }
 
+            SecretsDialog {
+                visible: *show_secrets.read(),
+                data: state.read().secrets_data.clone(),
+                on_command: on_secrets_command,
+                on_close: move |_| show_secrets.set(false),
+            }
+
             DeviceFlowDialog {
                 visible: state.read().pending_device_flow.is_some(),
                 url: state.read().pending_device_flow.as_ref().map(|(u, _, _)| u.clone()).unwrap_or_default(),
@@ -709,6 +772,7 @@ struct TopBarProps {
     provider: Option<String>,
     foreground_id: Option<u64>,
     threads: Vec<ThreadInfo>,
+    on_secrets: EventHandler<()>,
     on_settings: EventHandler<()>,
     on_swarm: EventHandler<()>,
 }
@@ -746,6 +810,12 @@ fn TopBar(props: TopBarProps) -> Element {
                 }
             }
             div { class: "topbar-right",
+                button {
+                    class: "icon-btn",
+                    title: "Secrets Vault",
+                    onclick: move |_| props.on_secrets.call(()),
+                    "🔑"
+                }
                 button {
                     class: "icon-btn",
                     title: "Swarm Manager",
@@ -921,6 +991,61 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
         }
         GatewayEvent::DeviceFlowComplete => {
             state.write().pending_device_flow = None;
+        }
+        GatewayEvent::SecretsListResult { ok, entries } => {
+            if ok {
+                let data = SecretsDialogData::from_vault(
+                    entries
+                        .into_iter()
+                        .map(|e| SecretInfoData {
+                            key: e.name,
+                            label: e.label,
+                            kind: e.kind,
+                            policy: e.policy,
+                            disabled: e.disabled,
+                        })
+                        .collect(),
+                    state.read().agent_access,
+                    false, // has_totp — would need gateway peek
+                );
+                state.write().secrets_data = data;
+            } else {
+                state.write().status_message =
+                    Some("Failed to list secrets.".to_string());
+            }
+        }
+        GatewayEvent::SecretsStoreResult { ok, message } => {
+            if ok {
+                state.write().status_message =
+                    Some("Secret stored successfully.".to_string());
+                // Trigger refresh to show new secret
+                // (parent doesn't have gateway handle here, so we just update status)
+            } else {
+                state.write().status_message =
+                    Some(format!("Failed to store secret: {}", message));
+            }
+        }
+        GatewayEvent::SecretsDeleteResult { ok, message } => {
+            if ok {
+                state.write().status_message =
+                    Some("Secret deleted.".to_string());
+            } else {
+                state.write().status_message = Some(format!(
+                    "Failed to delete secret: {}",
+                    message.unwrap_or_default()
+                ));
+            }
+        }
+        GatewayEvent::SecretsSetPolicyResult { ok, message } => {
+            if ok {
+                state.write().status_message =
+                    Some("Policy updated.".to_string());
+            } else {
+                state.write().status_message = Some(format!(
+                    "Failed to set policy: {}",
+                    message.unwrap_or_default()
+                ));
+            }
         }
         GatewayEvent::Error { message } => {
             state.write().status_message = Some(message);

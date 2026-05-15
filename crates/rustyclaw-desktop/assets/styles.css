@@ -1351,3 +1351,157 @@ p { margin: 0; }
     justify-content: center;
     padding-top: 0.75rem;
 }
+
+/* ═══ Secrets Dialog ═══════════════════════════════════════════ */
+
+.secrets-dialog {
+    max-width: 680px;
+    max-height: 560px;
+    display: flex;
+    flex-direction: column;
+}
+
+.secrets-status {
+    display: flex;
+    gap: 1.5rem;
+    padding: 0.75rem 0;
+    border-bottom: 1px solid var(--rc-border);
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+}
+
+.secrets-status-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.secrets-status-label {
+    color: var(--rc-text-faint);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.secrets-status-msg {
+    background: var(--rc-warn-bg, #2a2410);
+    color: var(--rc-warn, #d4a72c);
+    padding: 0.4rem 0.6rem;
+    border-radius: 4px;
+    font-size: 0.82rem;
+    margin-bottom: 0.5rem;
+}
+
+/* Legend row */
+.secrets-legend {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding-top: 0.5rem;
+    border-top: 1px solid var(--rc-border);
+    margin-top: 0.75rem;
+}
+
+.secrets-legend-item {
+    display: inline-flex;
+}
+
+.secrets-legend-label {
+    color: var(--rc-text-faint);
+    font-size: 0.75rem;
+    margin-right: 0.6rem;
+}
+
+/* Policy badges */
+.badge-open    { background: #1b5e20; color: #a5d6a7; }
+.badge-ask     { background: #4a148c; color: #ce93d8; }
+.badge-auth    { background: #b71c1c; color: #ef9a9a; }
+.badge-skill   { background: #0d47a1; color: #90caf9; }
+.badge-muted   { background: #424242; color: #bdbdbd; }
+
+/* Secrets list */
+.secrets-list {
+    flex: 1;
+    overflow-y: auto;
+    min-height: 180px;
+    max-height: 300px;
+    margin-bottom: 0.5rem;
+}
+
+.secrets-list-header {
+    display: grid;
+    grid-template-columns: 100px 80px 1fr 1fr 50px;
+    gap: 0.5rem;
+    padding: 0.35rem 0.5rem;
+    font-size: 0.75rem;
+    color: var(--rc-text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    border-bottom: 1px solid var(--rc-border);
+    position: sticky;
+    top: 0;
+    background: var(--rc-bg);
+    z-index: 1;
+}
+
+.secrets-row {
+    display: grid;
+    grid-template-columns: 100px 80px 1fr 1fr 50px;
+    gap: 0.5rem;
+    padding: 0.4rem 0.5rem;
+    font-size: 0.85rem;
+    align-items: center;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.secrets-row:hover {
+    background: var(--rc-hover-bg, rgba(255,255,255,0.04));
+}
+
+.secrets-row.selected {
+    background: var(--rc-accent-bg, rgba(79, 140, 255, 0.12));
+    outline: 1px solid var(--rc-accent, #4f8cff);
+}
+
+.secrets-col-kind    { font-size: 0.82rem; }
+.secrets-col-policy  { }
+.secrets-col-label   { color: var(--rc-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secrets-col-name    { color: var(--rc-text-muted); font-family: monospace; font-size: 0.8rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.secrets-col-actions { display: flex; gap: 0.25rem; justify-content: flex-end; }
+
+.secrets-empty {
+    padding: 2rem 1rem;
+    text-align: center;
+    color: var(--rc-text-faint);
+    font-style: italic;
+}
+
+/* Add secret inline section */
+.secrets-add-section {
+    padding: 0.75rem;
+    border: 1px solid var(--rc-accent, #4f8cff);
+    border-radius: 6px;
+    background: var(--rc-accent-bg, rgba(79, 140, 255, 0.05));
+    margin-bottom: 0.5rem;
+}
+
+.secrets-add-title {
+    font-size: 0.85rem;
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    color: var(--rc-accent, #4f8cff);
+}
+
+.secrets-add-hint {
+    font-size: 0.75rem;
+    color: var(--rc-text-faint);
+    margin-top: 0.35rem;
+}
+
+.secrets-foot {
+    display: flex;
+    justify-content: space-between;
+    gap: 0.5rem;
+}

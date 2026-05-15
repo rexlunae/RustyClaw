@@ -343,6 +343,14 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::SecretsStore,
             payload: ClientPayload::SecretsStore { key, value },
         },
+        GatewayCommand::SecretsDelete { key } => ClientFrame {
+            frame_type: ClientFrameType::SecretsDelete,
+            payload: ClientPayload::SecretsDelete { key },
+        },
+        GatewayCommand::SecretsSetPolicy { name, policy, skills } => ClientFrame {
+            frame_type: ClientFrameType::SecretsSetPolicy,
+            payload: ClientPayload::SecretsSetPolicy { name, policy, skills },
+        },
     }
 }
 
@@ -456,6 +464,21 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
                 .collect(),
             foreground_id,
         }),
+        ServerPayload::SecretsListResult { ok, entries } => {
+            Some(GatewayEvent::SecretsListResult {
+                ok,
+                entries: entries.into_iter().map(Into::into).collect(),
+            })
+        }
+        ServerPayload::SecretsStoreResult { ok, message } => {
+            Some(GatewayEvent::SecretsStoreResult { ok, message })
+        }
+        ServerPayload::SecretsDeleteResult { ok, message } => {
+            Some(GatewayEvent::SecretsDeleteResult { ok, message })
+        }
+        ServerPayload::SecretsSetPolicyResult { ok, message } => {
+            Some(GatewayEvent::SecretsSetPolicyResult { ok, message })
+        }
         ServerPayload::Error { message, .. } => Some(GatewayEvent::Error { message }),
         ServerPayload::Info { message } => Some(GatewayEvent::Info { message }),
         ServerPayload::DomQuery { id, js } => Some(GatewayEvent::DomQuery { id, js }),

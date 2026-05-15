@@ -46,8 +46,8 @@ pub mod status;
 pub use composer::ComposerData;
 pub use dialogs::{
     AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState, HatchingDialogData,
-    PairingDialogData, PairingField, PairingStep, SecretInfoData, SkillInfoData,
-    ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
+    PairingDialogData, PairingField, PairingStep, SecretInfoData, SecretsDialogData,
+    SkillInfoData, ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
 };
 pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData};
 pub use sidebar::SidebarItemData;

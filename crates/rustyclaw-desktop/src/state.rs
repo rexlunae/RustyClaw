@@ -9,6 +9,7 @@ use std::collections::{HashMap, VecDeque};
 
 use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
+use rustyclaw_view::SecretsDialogData;
 
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -101,6 +102,12 @@ pub struct AppState {
 
     /// Total bytes received in the current streaming response.
     pub streaming_bytes: usize,
+
+    /// Whether the agent currently has access to vault secrets.
+    pub agent_access: bool,
+
+    /// Current secrets dialog data.
+    pub secrets_data: SecretsDialogData,
 }
 
 impl Default for AppState {
@@ -131,6 +138,8 @@ impl Default for AppState {
             pending_device_flow: None,
             streaming_chunks: 0,
             streaming_bytes: 0,
+            agent_access: false,
+            secrets_data: SecretsDialogData::from_vault(Vec::new(), false, false),
         }
     }
 }
