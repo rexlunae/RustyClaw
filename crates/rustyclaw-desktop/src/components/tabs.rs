@@ -77,11 +77,18 @@ pub fn TabBar(props: TabBarProps) -> Element {
                         }
                     }
                 }
+
+                // Empty state placeholder when no threads yet
+                if rows.is_empty() {
+                    div { class: "tab-bar-empty",
+                        span { "No sessions" }
+                    }
+                }
             }
 
             button {
                 class: "tab-bar-new",
-                title: "New session",
+                title: "New session (Ctrl+Shift+E)",
                 onclick: move |_| on_new.call(()),
                 "+"
             }
