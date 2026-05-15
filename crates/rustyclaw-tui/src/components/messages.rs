@@ -7,7 +7,7 @@
 // Layout: overflow: Hidden on an outer container, Position::Absolute with
 // `bottom: -(scroll_offset)` on an inner container.
 
-use crate::components::message_bubble::MessageBubble;
+use crate::components::message::MessageBubble;
 use crate::theme;
 use crate::types::DisplayMessage;
 use iocraft::prelude::*;

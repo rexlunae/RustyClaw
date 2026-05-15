@@ -5,7 +5,7 @@
 
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ChatMessage, ThreadInfo, ToolCallInfo};
-use rustyclaw_view::{AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState, HatchingDialogData, MessageBubbleData, PairingDialogData, PairingField, PairingStep, SecretInfoData, SidebarItemData, SkillInfoData, StatusBarData, ToolApprovalData, ToolCallData, ToolPermInfoData, UserPromptData, VaultUnlockData};
+use rustyclaw_view::{AuthDialogData, CredentialRequestData, MessageBubbleData, PairingStep, SidebarItemData, StatusBarData, ToolApprovalData, ToolCallData, VaultUnlockData};
 
 // ── MessageBubbleData ────────────────────────────────────────────────
 
@@ -474,6 +474,76 @@ fn status_bar_connection_labels() {
     assert_eq!(sb.connection_label(), "Connected");
     sb.connection = ConnectionStatus::Error("broken".into());
     assert_eq!(sb.connection_label(), "Error");
+}
+
+#[test]
+fn status_bar_static_methods() {
+    use rustyclaw_core::ui::ConnectionStatus;
+    use ConnectionStatus::*;
+
+    assert_eq!(
+        StatusBarData::connection_label_static(&Disconnected),
+        "Disconnected"
+    );
+    assert_eq!(
+        StatusBarData::connection_class_static(&Connecting),
+        "is-info"
+    );
+    assert_eq!(
+        StatusBarData::connection_class_static(&Connected),
+        "is-success"
+    );
+    assert_eq!(
+        StatusBarData::connection_class_static(&Authenticated),
+        "is-success"
+    );
+    assert_eq!(
+        StatusBarData::connection_class_static(&Error("x".into())),
+        "is-danger"
+    );
+    assert_eq!(
+        StatusBarData::connection_label_static(&Authenticating),
+        "Authenticating…"
+    );
+    assert!(StatusBarData::connection_error_static(&Connecting).is_none());
+    assert_eq!(
+        StatusBarData::connection_error_static(&Error("boom".into())),
+        Some("boom")
+    );
+}
+
+#[test]
+fn status_bar_connection_class() {
+    use rustyclaw_core::ui::ConnectionStatus;
+    let mut sb = StatusBarData::default();
+    assert_eq!(sb.connection_class(), "is-warn");
+    sb.connection = ConnectionStatus::Connected;
+    assert_eq!(sb.connection_class(), "is-success");
+    sb.connection = ConnectionStatus::Error("err".into());
+    assert_eq!(sb.connection_class(), "is-danger");
+}
+
+#[test]
+fn status_bar_model_display() {
+    let mut sb = StatusBarData::default();
+    assert_eq!(sb.model_display(), "(no model)");
+    sb.provider = Some("openrouter".into());
+    assert_eq!(sb.model_display(), "openrouter");
+    sb.model = Some("gpt-4o".into());
+    assert_eq!(sb.model_display(), "openrouter · gpt-4o");
+    sb.provider = None;
+    assert_eq!(sb.model_display(), "gpt-4o");
+}
+
+#[test]
+fn status_bar_is_connected() {
+    use rustyclaw_core::ui::ConnectionStatus;
+    let mut sb = StatusBarData::default();
+    assert!(!sb.is_connected());
+    sb.connection = ConnectionStatus::Connected;
+    assert!(sb.is_connected());
+    sb.connection = ConnectionStatus::Authenticated;
+    assert!(sb.is_connected());
 }
 
 #[test]

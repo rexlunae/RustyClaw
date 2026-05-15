@@ -11,6 +11,7 @@
 use dioxus::prelude::*;
 
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
+use rustyclaw_view::SidebarItemData;
 
 // ── Public top-level component ──────────────────────────────────────────────
 
@@ -129,16 +130,30 @@ struct StatusChipsProps {
 /// Connection state and active model indicators.
 #[component]
 fn StatusChips(props: StatusChipsProps) -> Element {
-    let (conn_info, conn_err) = classify(&props.connection);
-    let conn_chip_class = format!("chip {}", conn_info.cls);
+    let label = rustyclaw_view::StatusBarData::connection_label_static(&props.connection);
+    let base_class = rustyclaw_view::StatusBarData::connection_class_static(&props.connection);
+    // Add the pulse animation for in-progress states.
+    let pulse = matches!(
+        &props.connection,
+        ConnectionStatus::Connecting | ConnectionStatus::Authenticating
+    );
+    let cls = if pulse {
+        format!("chip {} is-pulse", base_class)
+    } else {
+        format!("chip {}", base_class)
+    };
+    let err = match &props.connection {
+        ConnectionStatus::Error(e) => Some(e.clone()),
+        _ => None,
+    };
 
     rsx! {
         div { class: "sidebar-status",
-            span { class: "{conn_chip_class}",
+            span { class: "{cls}",
                 span { class: "dot" }
-                span { "{conn_info.label}" }
+                span { "{label}" }
             }
-            if let Some(err) = conn_err.as_ref() {
+            if let Some(err) = err.as_ref() {
                 span {
                     class: "chip is-danger",
                     title: "{err}",
@@ -156,42 +171,6 @@ fn StatusChips(props: StatusChipsProps) -> Element {
                 }
             }
         }
-    }
-}
-
-/// Connection status classification for chip rendering.
-#[derive(Clone, Copy)]
-struct ConnInfo {
-    label: &'static str,
-    cls: &'static str,
-}
-
-fn classify(status: &ConnectionStatus) -> (ConnInfo, Option<String>) {
-    match status {
-        ConnectionStatus::Disconnected => (
-            ConnInfo { label: "Disconnected", cls: "is-warn" },
-            None,
-        ),
-        ConnectionStatus::Connecting => (
-            ConnInfo { label: "Connecting…", cls: "is-info is-pulse" },
-            None,
-        ),
-        ConnectionStatus::Connected => (
-            ConnInfo { label: "Connected", cls: "is-success" },
-            None,
-        ),
-        ConnectionStatus::Authenticating => (
-            ConnInfo { label: "Authenticating…", cls: "is-info is-pulse" },
-            None,
-        ),
-        ConnectionStatus::Authenticated => (
-            ConnInfo { label: "Ready", cls: "is-success" },
-            None,
-        ),
-        ConnectionStatus::Error(e) => (
-            ConnInfo { label: "Error", cls: "is-danger" },
-            Some(e.clone()),
-        ),
     }
 }
 
@@ -263,18 +242,9 @@ fn SessionRow(props: SessionRowProps) -> Element {
     } else {
         "session-row"
     };
-    let label = props
-        .thread
-        .label
-        .clone()
-        .unwrap_or_else(|| format!("Session #{}", props.thread.id));
-    let count = props.thread.message_count;
-    let description = props.thread.description.clone();
-    let title_text = if let Some(desc) = description.as_deref() {
-        format!("{label}\n{desc}")
-    } else {
-        label.clone()
-    };
+    let data = SidebarItemData::from(&props.thread);
+    let label = data.display_label();
+    let title_text = data.title_text();
 
     rsx! {
         div {
@@ -285,12 +255,12 @@ fn SessionRow(props: SessionRowProps) -> Element {
             if !props.collapsed {
                 div { class: "session-text",
                     span { class: "session-label", "{label}" }
-                    if let Some(desc) = description.as_deref() {
+                    if let Some(desc) = &data.description {
                         span { class: "session-description", "{desc}" }
                     }
                 }
-                if count > 0 {
-                    span { class: "session-count", "{count}" }
+                if data.message_count > 0 {
+                    span { class: "session-count", "{data.message_count}" }
                 }
             }
         }

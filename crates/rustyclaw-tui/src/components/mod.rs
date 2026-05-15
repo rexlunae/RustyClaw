@@ -7,7 +7,7 @@ pub mod device_flow_dialog;
 pub mod dialogs;
 pub mod hatching_dialog;
 pub mod input_bar;
-pub mod message_bubble;
+pub mod message;
 pub mod messages;
 pub mod model_selector_dialog;
 pub mod pairing_dialog;

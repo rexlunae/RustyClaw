@@ -1,10 +1,25 @@
 //! UI components for the desktop client.
+//!
+//! Module structure aligned with the TUI client after Phase D
+//! structural refactoring:
+//!
+//!   - `chat.rs`           — composite of Messages + InputBar
+//!   - `messages.rs`       — message list, empty state, indicators
+//!   - `message.rs`        — individual message bubble
+//!   - `input_bar.rs`      — text input + model bar
+//!   - `sidebar.rs`        — thread sidebar
+//!   - `tool_call.rs`      — tool call panel
+//!   - dialog modules      — credential, device_flow, hatching,
+//!                           pairing, settings, swarm, tool_approval,
+//!                           user_prompt, vault_unlock
 
 mod chat;
 mod credential_request;
 mod device_flow;
 mod hatching;
+mod input_bar;
 mod message;
+mod messages;
 mod pairing;
 mod settings;
 mod sidebar;

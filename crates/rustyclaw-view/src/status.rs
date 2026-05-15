@@ -30,7 +30,27 @@ impl StatusBarData {
     /// Maps each [`ConnectionStatus`] variant to a short string
     /// suitable for display in a status bar or sidebar chip.
     pub fn connection_label(&self) -> &'static str {
+        Self::connection_label_static(&self.connection)
+    }
+
+    /// CSS-like class for the connection chip colouring.
+    ///
+    /// Returns `"is-success"`, `"is-warn"`, `"is-danger"`, or `"is-info"`.
+    pub fn connection_class(&self) -> &'static str {
+        Self::connection_class_static(&self.connection)
+    }
+
+    /// The error message from an error connection state, if any.
+    pub fn connection_error(&self) -> Option<&str> {
         match &self.connection {
+            ConnectionStatus::Error(e) => Some(e.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Static version of [`connection_label`] that takes a reference.
+    pub fn connection_label_static(status: &ConnectionStatus) -> &'static str {
+        match status {
             ConnectionStatus::Disconnected => "Disconnected",
             ConnectionStatus::Connecting => "Connecting…",
             ConnectionStatus::Connected => "Connected",
@@ -40,11 +60,9 @@ impl StatusBarData {
         }
     }
 
-    /// CSS-like class for the connection chip colouring.
-    ///
-    /// Returns `"is-success"`, `"is-warn"`, `"is-danger"`, or `"is-info"`.
-    pub fn connection_class(&self) -> &'static str {
-        match &self.connection {
+    /// Static version of [`connection_class`] that takes a reference.
+    pub fn connection_class_static(status: &ConnectionStatus) -> &'static str {
+        match status {
             ConnectionStatus::Disconnected => "is-warn",
             ConnectionStatus::Connecting => "is-info",
             ConnectionStatus::Connected => "is-success",
@@ -54,9 +72,9 @@ impl StatusBarData {
         }
     }
 
-    /// The error message from an error connection state, if any.
-    pub fn connection_error(&self) -> Option<&str> {
-        match &self.connection {
+    /// Static version of [`connection_error`] that takes a reference.
+    pub fn connection_error_static(status: &ConnectionStatus) -> Option<&str> {
+        match status {
             ConnectionStatus::Error(e) => Some(e.as_str()),
             _ => None,
         }
