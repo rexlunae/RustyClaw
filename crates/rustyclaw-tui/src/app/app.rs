@@ -105,7 +105,7 @@ pub(crate) enum GwEvent {
     VaultUnlocked,
     /// Show secrets info dialog
     ShowSecrets {
-        secrets: Vec<crate::components::secrets_dialog::SecretInfo>,
+        secrets: Vec<rustyclaw_view::SecretInfoData>,
         agent_access: bool,
         has_totp: bool,
     },
@@ -1695,18 +1695,13 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
 
         // ── Secrets results — show as info/success/error messages ───────
         Action::SecretsListResult { entries } => {
-            let secrets: Vec<crate::components::secrets_dialog::SecretInfo> = entries
+            let secret_infos: Vec<rustyclaw_view::SecretInfoData> = entries
                 .iter()
-                .map(|e| crate::components::secrets_dialog::SecretInfo {
-                    name: e.name.clone(),
-                    label: e.label.clone(),
-                    kind: e.kind.clone(),
-                    policy: e.policy.clone(),
-                    disabled: e.disabled,
-                })
+                .cloned()
+                .map(|e| rustyclaw_view::SecretInfoData::from_dto(e))
                 .collect();
             Some(GwEvent::ShowSecrets {
-                secrets,
+                secrets: secret_infos,
                 agent_access: false,
                 has_totp: false,
             })

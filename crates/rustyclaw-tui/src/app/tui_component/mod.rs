@@ -171,7 +171,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
 
     // ── Info dialog state (secrets / skills / tool permissions) ──────
     let mut show_secrets_dialog = hooks.use_state(|| false);
-    let mut secrets_dialog_data: State<Vec<crate::components::secrets_dialog::SecretInfo>> =
+    let mut secrets_dialog_data: State<Vec<rustyclaw_view::SecretInfoData>> =
         hooks.use_state(Vec::new);
     let mut secrets_agent_access = hooks.use_state(|| false);
     let mut secrets_has_totp = hooks.use_state(|| false);
@@ -1665,7 +1665,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             let idx = secrets_selected.get().unwrap_or(0);
                             let data = secrets_dialog_data.read();
                             if let Some(secret) = data.get(idx) {
-                                let name = secret.name.clone();
+                                let name = secret.key.clone();
                                 let policy = secret.policy.clone();
                                 drop(data);
                                 if let Ok(guard) = tx_for_keys.lock() {
@@ -1680,7 +1680,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             let idx = secrets_selected.get().unwrap_or(0);
                             let data = secrets_dialog_data.read();
                             if let Some(secret) = data.get(idx) {
-                                let name = secret.name.clone();
+                                let name = secret.key.clone();
                                 drop(data);
                                 if let Ok(guard) = tx_for_keys.lock() {
                                     if let Some(ref tx) = *guard {

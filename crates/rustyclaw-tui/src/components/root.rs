@@ -17,7 +17,8 @@ use crate::components::messages::Messages;
 use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
-use crate::components::secrets_dialog::{SecretInfo, SecretsDialog};
+use crate::components::secrets_dialog::SecretsDialog;
+use rustyclaw_view::{SecretInfoData, SecretsDialogData};
 use crate::components::sidebar::Sidebar;
 use crate::components::skills_dialog::{SkillInfo, SkillsDialog};
 use crate::components::status_bar::StatusBar;
@@ -101,7 +102,7 @@ pub struct RootProps {
 
     // secrets dialog overlay
     pub show_secrets_dialog: bool,
-    pub secrets_data: Vec<SecretInfo>,
+    pub secrets_data: Vec<SecretInfoData>,
     pub secrets_agent_access: bool,
     pub secrets_has_totp: bool,
     pub secrets_selected: Option<usize>,
@@ -432,14 +433,17 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         SecretsDialog(
-                            secrets: secrets_data,
-                            agent_access: secrets_agent,
-                            has_totp: secrets_totp,
-                            selected: secrets_selected,
-                            scroll_offset: secrets_scroll,
-                            add_step: secrets_add_step,
-                            add_name: secrets_add_name,
-                            add_value: secrets_add_value,
+                            data: SecretsDialogData {
+                                secrets: secrets_data,
+                                agent_access: secrets_agent,
+                                has_totp: secrets_totp,
+                                selected: secrets_selected,
+                                scroll_offset: secrets_scroll,
+                                add_step: secrets_add_step,
+                                add_name: secrets_add_name,
+                                add_value: secrets_add_value,
+                                status: None,
+                            },
                         )
                     }
                 }.into_any()

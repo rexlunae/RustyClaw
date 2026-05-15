@@ -429,7 +429,7 @@ impl HatchingDialogData {
 // ── Secrets dialog ──────────────────────────────────────────────────────────
 
 /// A single secret entry shown in the secrets management dialog.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct SecretInfoData {
     /// The secret key/name.
     pub key: String,
@@ -448,6 +448,28 @@ pub struct SecretInfoData {
 }
 
 impl SecretInfoData {
+    /// Convert from the gateway protocol DTO.
+    pub fn from_entry_info(e: &rustyclaw_core::gateway::client_types::SecretEntryInfo) -> Self {
+        Self {
+            key: e.name.clone(),
+            label: e.label.clone(),
+            kind: e.kind.clone(),
+            policy: e.policy.clone(),
+            disabled: e.disabled,
+        }
+    }
+
+    /// Convert directly from a SecretEntryDto (gateway frame).
+    pub fn from_dto(dto: rustyclaw_core::gateway::client_types::SecretEntryDto) -> Self {
+        Self {
+            key: dto.name,
+            label: dto.label,
+            kind: dto.kind,
+            policy: dto.policy,
+            disabled: dto.disabled,
+        }
+    }
+
     /// Icon/indicator for the secret type.
     pub fn type_icon(&self) -> &'static str {
         match self.kind.as_str() {
@@ -466,7 +488,7 @@ impl SecretInfoData {
 }
 
 /// Full state for the secrets management dialog.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct SecretsDialogData {
     /// All secrets currently in the vault.
     pub secrets: Vec<SecretInfoData>,
