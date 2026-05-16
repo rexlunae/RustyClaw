@@ -65,6 +65,9 @@ pub fn App() -> Element {
     // Secrets management state
     let mut show_secrets = use_signal(|| false);
 
+    // Thread deletion confirmation state
+    let mut pending_thread_delete = use_signal(|| None::<(u64, String)>);
+
     // Auto-connect on mount
     use_effect(move || {
         if *did_auto_connect.read() {
@@ -441,20 +444,14 @@ pub fn App() -> Element {
                     on_switch: on_switch_thread,
                     on_new: on_new_thread,
                     on_close: move |id| {
-                        // Close is a UX hint — switch to the previous tab.
-                        // Proper thread deletion needs protocol support.
-                        let thread_ids: Vec<u64> = state.read().threads.iter()
-                            .filter(|t| t.id != id)
-                            .map(|t| t.id)
-                            .collect();
-                        if let Some(prev_id) = thread_ids.last().copied() {
-                            let gw = gateway.read().clone();
-                            if let Some(client) = gw {
-                                spawn(async move {
-                                    let _ = client.send(GatewayCommand::ThreadSwitch { thread_id: prev_id }).await;
-                                });
-                            }
-                        }
+                        let label = state
+                            .read()
+                            .threads
+                            .iter()
+                            .find(|thread| thread.id == id)
+                            .and_then(|thread| thread.label.clone())
+                            .unwrap_or_else(|| format!("Session #{}", id));
+                        pending_thread_delete.set(Some((id, label)));
                     },
                 }
 
@@ -718,6 +715,67 @@ pub fn App() -> Element {
                         });
                     }
                 },
+            }
+
+            if let Some((thread_id, thread_label)) = pending_thread_delete.read().clone() {
+                div { class: "modal-backdrop",
+                    div { class: "modal modal-confirm",
+                        div { class: "modal-head",
+                            div { class: "modal-title", "Delete thread?" }
+                            button {
+                                class: "modal-close",
+                                onclick: move |_| pending_thread_delete.set(None),
+                                "✕"
+                            }
+                        }
+                        div { class: "modal-body",
+                            p { "This will permanently delete \"{thread_label}\" and its messages." }
+                            p { class: "modal-muted", "This action cannot be undone." }
+                        }
+                        div { class: "modal-foot",
+                            button {
+                                class: "btn btn-ghost",
+                                onclick: move |_| pending_thread_delete.set(None),
+                                "Cancel"
+                            }
+                            button {
+                                class: "btn btn-danger",
+                                onclick: move |_| {
+                                    pending_thread_delete.set(None);
+                                    let fallback_id = {
+                                        let s = state.read();
+                                        if s.foreground_thread_id == Some(thread_id) {
+                                            s.threads
+                                                .iter()
+                                                .filter(|thread| thread.id != thread_id)
+                                                .map(|thread| thread.id)
+                                                .next_back()
+                                        } else {
+                                            None
+                                        }
+                                    };
+                                    if let Some(fallback_id) = fallback_id {
+                                        state.write().switch_thread(fallback_id);
+                                    }
+                                    let gw = gateway.read().clone();
+                                    if let Some(client) = gw {
+                                        spawn(async move {
+                                            if let Some(fallback_id) = fallback_id {
+                                                let _ = client
+                                                    .send(GatewayCommand::ThreadSwitch { thread_id: fallback_id })
+                                                    .await;
+                                            }
+                                            let _ = client
+                                                .send(GatewayCommand::ThreadClose { thread_id })
+                                                .await;
+                                        });
+                                    }
+                                },
+                                "Delete Thread"
+                            }
+                        }
+                    }
+                }
             }
 
             // TOTP authentication modal

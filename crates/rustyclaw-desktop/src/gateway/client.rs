@@ -291,6 +291,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::ThreadList,
             payload: ClientPayload::ThreadList,
         },
+        GatewayCommand::ThreadClose { thread_id } => ClientFrame {
+            frame_type: ClientFrameType::ThreadClose,
+            payload: ClientPayload::ThreadClose { thread_id },
+        },
         GatewayCommand::UserPromptResponse {
             id,
             dismissed,

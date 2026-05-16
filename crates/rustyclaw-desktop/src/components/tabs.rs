@@ -60,7 +60,7 @@ pub fn TabBar(props: TabBarProps) -> Element {
                                 if show_close {
                                     button {
                                         class: "tab-bar-close",
-                                        title: "Close session",
+                                        title: "Delete thread",
                                         onclick: move |evt: MouseEvent| {
                                             evt.stop_propagation();
                                             on_close.call(tab_id);

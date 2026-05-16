@@ -497,6 +497,11 @@ p { margin: 0; }
     border-color: var(--rc-border);
 }
 .btn-subtle:hover:not(:disabled) { background: var(--rc-bg-hover); }
+.btn-danger {
+    background: var(--rc-danger);
+    color: #fff;
+}
+.btn-danger:hover:not(:disabled) { background: #dc2626; }
 .btn-sm { padding: 4px 10px; font-size: 12px; }
 
 /* ============================================================
@@ -1063,6 +1068,11 @@ p { margin: 0; }
     background: var(--rc-bg-elev);
 }
 .modal-foot.is-split { justify-content: space-between; }
+.modal-confirm { max-width: 420px; }
+.modal-muted {
+    margin-top: 10px;
+    color: var(--rc-text-muted);
+}
 
 /* ---- Form fields ---- */
 
