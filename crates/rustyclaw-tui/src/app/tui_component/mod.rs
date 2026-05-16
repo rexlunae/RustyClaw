@@ -242,6 +242,17 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     m.push(DisplayMessage::warning(format!("Disconnected: {}", reason)));
                                     messages.set(m);
                                 }
+                                GwEvent::Connected => {
+                                    gw_status.set(rustyclaw_core::types::GatewayStatus::Connected);
+                                    let mut m = messages.read().clone();
+                                    m.push(DisplayMessage::info("Gateway connected."));
+                                    messages.set(m);
+                                    if let Ok(guard) = tx_for_history.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.send(UserInput::RefreshThreads);
+                                        }
+                                    }
+                                }
                                 GwEvent::Authenticated => {
                                     gw_status.set(rustyclaw_core::types::GatewayStatus::Connected);
                                     show_auth_dialog.set(false);
@@ -2039,12 +2050,20 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 .iter()
                                 .map(|t| rustyclaw_view::TabItemData {
                                     id: t.id,
-                                    label: Some(t.label.clone()),
-                                    is_foreground: false,
-                                    message_count: 0,
+                                    label: if t.label.is_empty() {
+                                        None
+                                    } else {
+                                        Some(t.label.clone())
+                                    },
+                                    is_foreground: t.is_foreground,
+                                    message_count: t.message_count,
                                 })
                                 .collect();
-                            let fg_id = tabs.first().map(|t| t.id).unwrap_or(0);
+                            let fg_id = tabs
+                                .iter()
+                                .find(|t| t.is_foreground)
+                                .map(|t| t.id)
+                                .unwrap_or(0);
                             rustyclaw_view::TabBarData { tabs, foreground_id: fg_id }
                         },
             tab_focused: tab_focused.get(),

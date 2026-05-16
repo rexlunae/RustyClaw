@@ -40,7 +40,7 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
 
     match &frame.payload {
         ServerPayload::Hello { .. } => {
-            FrameAction::just_action(Action::Info("Gateway connected.".into()))
+            FrameAction::update(Action::GatewayConnected)
         }
         ServerPayload::Status { status, detail } => {
             use StatusType::*;
@@ -329,7 +329,7 @@ mod tests {
             };
 
             let result = server_frame_to_action(&frame);
-            assert!(matches!(result.action, Some(Action::Info(_))));
+            assert!(matches!(result.action, Some(Action::GatewayConnected)));
         }
 
         #[test]

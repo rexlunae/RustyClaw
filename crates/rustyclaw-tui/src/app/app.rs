@@ -47,6 +47,7 @@ fn serialize_client_frame(
 #[allow(dead_code)]
 pub(crate) enum GwEvent {
     Disconnected(String),
+    Connected,
     AuthChallenge,
     Authenticated,
     ModelReady(String),
@@ -1605,6 +1606,7 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
     use crate::action::Action;
     match action {
         // ── Gateway lifecycle ───────────────────────────────────────────
+        Action::GatewayConnected => Some(GwEvent::Connected),
         Action::GatewayAuthChallenge => Some(GwEvent::AuthChallenge),
         Action::GatewayAuthenticated => Some(GwEvent::Authenticated),
         Action::GatewayDisconnected(s) => Some(GwEvent::Disconnected(s.clone())),

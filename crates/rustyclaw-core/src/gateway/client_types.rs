@@ -202,6 +202,10 @@ pub enum GatewayCommand {
     #[serde(rename = "thread_create")]
     ThreadCreate { label: Option<String> },
 
+    /// Request the current thread list
+    #[serde(rename = "thread_list")]
+    ThreadList,
+
     /// List secrets
     #[serde(rename = "secrets_list")]
     SecretsList,

@@ -34,6 +34,8 @@ pub enum Action {
     DisconnectGateway,
     /// Request to restart the gateway (stop + start)
     RestartGateway,
+    /// Gateway hello received — connection is ready for initial sync
+    GatewayConnected,
     /// Send a text message to the gateway (prompt from the input bar)
     SendToGateway(String),
     /// The gateway reader detected a connection drop

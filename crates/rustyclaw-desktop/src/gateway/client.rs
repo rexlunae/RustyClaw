@@ -287,6 +287,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
                 label: label.unwrap_or_default(),
             },
         },
+        GatewayCommand::ThreadList => ClientFrame {
+            frame_type: ClientFrameType::ThreadList,
+            payload: ClientPayload::ThreadList,
+        },
         GatewayCommand::UserPromptResponse {
             id,
             dismissed,

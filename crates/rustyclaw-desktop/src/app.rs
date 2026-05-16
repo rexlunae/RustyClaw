@@ -175,7 +175,16 @@ pub fn App() -> Element {
                                 handle_dom_query(&client_ui, id, js).await;
                             }
                             BufferEntry::Event(event) => {
+                                let should_refresh_threads = matches!(
+                                    event,
+                                    GatewayEvent::Connected { .. }
+                                        | GatewayEvent::AuthSuccess
+                                        | GatewayEvent::VaultUnlocked
+                                );
                                 handle_gateway_event(event, state);
+                                if should_refresh_threads {
+                                    let _ = client_ui.send(GatewayCommand::ThreadList).await;
+                                }
                             }
                             BufferEntry::Chunks { text, count, bytes } => {
                                 let mut s = state.write();
