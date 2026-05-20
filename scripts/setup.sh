@@ -391,22 +391,53 @@ if should_install rustyclaw; then
             if has apt-get; then
                 info "Installing Debian/Ubuntu build deps..."
                 sudo apt-get update -qq
-                sudo apt-get install -y -qq build-essential pkg-config libssl-dev 2>/dev/null || true
+                sudo apt-get install -y -qq \
+                    build-essential pkg-config libssl-dev \
+                    libglib2.0-dev libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev \
+                    2>/dev/null || true
                 success "Debian/Ubuntu build deps ready"
             elif has dnf; then
                 info "Installing Fedora/RHEL build deps..."
-                sudo dnf install -y -q gcc pkg-config openssl-devel 2>/dev/null || true
+                sudo dnf install -y -q \
+                    gcc pkg-config openssl-devel \
+                    glib2-devel gtk3-devel webkit2gtk4.1-devel xdotool-devel \
+                    2>/dev/null || true
                 success "Fedora/RHEL build deps ready"
             elif has pacman; then
                 info "Installing Arch build deps..."
-                sudo pacman -Sy --noconfirm --needed base-devel openssl 2>/dev/null || true
+                sudo pacman -Sy --noconfirm --needed \
+                    base-devel openssl pkgconf glib2 gtk3 webkit2gtk xdotool \
+                    2>/dev/null || true
                 success "Arch build deps ready"
             elif has apk; then
                 info "Installing Alpine build deps..."
-                sudo apk add --no-cache build-base openssl-dev pkgconfig 2>/dev/null || true
+                sudo apk add --no-cache \
+                    build-base openssl-dev pkgconfig \
+                    glib-dev gtk+3.0-dev webkit2gtk-dev xdotool-dev \
+                    2>/dev/null || true
                 success "Alpine build deps ready"
             else
-                warn "Unknown distro — you may need to install gcc, pkg-config, libssl-dev manually"
+                warn "Unknown distro — you may need gcc, pkg-config, libssl-dev, glib, gtk3, webkit2gtk, and libxdo development packages"
+            fi
+
+            if has pkg-config; then
+                if pkg-config --exists "glib-2.0 >= 2.70"; then
+                    success "glib-2.0 development package detected"
+                else
+                    warn "glib-2.0.pc not found by pkg-config; install your distro's GLib dev package and set PKG_CONFIG_PATH if needed"
+                fi
+
+                if pkg-config --exists "gdk-3.0 >= 3.22"; then
+                    success "gdk-3.0 development package detected"
+                else
+                    warn "gdk-3.0.pc not found; install your distro's GTK3 development package"
+                fi
+
+                if pkg-config --exists "webkit2gtk-4.1"; then
+                    success "webkit2gtk-4.1 development package detected"
+                else
+                    warn "webkit2gtk-4.1.pc not found; install your distro's WebKitGTK 4.1 development package"
+                fi
             fi
             ;;
     esac
