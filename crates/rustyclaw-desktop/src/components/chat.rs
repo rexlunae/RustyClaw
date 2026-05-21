@@ -18,14 +18,15 @@ pub struct ChatProps {
     pub messages: Vec<ChatMessage>,
     pub input: String,
     pub surface: rustyclaw_view::ChatSurfaceData,
+    pub bottom_bar: rustyclaw_view::BottomBarData,
     pub agent_name: Option<String>,
-    pub current_provider: Option<String>,
-    pub current_model: Option<String>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
     pub on_input_change: EventHandler<String>,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
+    pub on_toggle_directory_selector: EventHandler<()>,
+    pub on_select_directory: EventHandler<String>,
 }
 
 /// Composite of the message list and the input bar.
@@ -115,14 +116,14 @@ pub fn Chat(props: ChatProps) -> Element {
 
             InputBar {
                 input: input_ref,
-                is_processing: is_processing,
-                current_provider: props.current_provider.clone(),
-                current_model: props.current_model.clone(),
+                bottom_bar: props.bottom_bar.clone(),
                 on_send: move |_| send_now(),
                 on_cancel: props.on_cancel,
                 on_input_change: props.on_input_change,
                 on_model_change: props.on_model_change,
                 on_add_provider: props.on_add_provider,
+                on_toggle_directory_selector: props.on_toggle_directory_selector,
+                on_select_directory: props.on_select_directory,
             }
         }
     }

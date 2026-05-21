@@ -108,10 +108,31 @@ pub struct AppState {
 
     /// Current secrets dialog data.
     pub secrets_data: SecretsDialogData,
+
+    /// Current working directory path
+    pub working_directory: Option<String>,
+
+    /// Available directories for selection (favorites/recent)
+    pub available_directories: Vec<rustyclaw_view::DirectoryOption>,
+
+    /// Whether the directory selector is expanded
+    pub directory_selector_expanded: bool,
+
+    /// Error message from directory operations if any
+    pub directory_selector_error: Option<String>,
 }
 
 impl Default for AppState {
     fn default() -> Self {
+        let working_directory = std::env::current_dir()
+            .ok()
+            .map(|p| p.display().to_string());
+        let configured_model = rustyclaw_core::config::Config::load(None)
+            .ok()
+            .and_then(|cfg| cfg.model);
+        let provider = configured_model.as_ref().map(|m| m.provider.clone());
+        let model = configured_model.and_then(|m| m.model);
+
         Self {
             connection: ConnectionStatus::Disconnected,
             gateway_url: crate::configured_gateway_url()
@@ -127,8 +148,8 @@ impl Default for AppState {
             agent_name: None,
             vault_locked: false,
             needs_hatching: false,
-            model: None,
-            provider: None,
+            model,
+            provider,
             status_message: None,
             sidebar_collapsed: false,
             theme: Theme::default(),
@@ -140,6 +161,10 @@ impl Default for AppState {
             streaming_bytes: 0,
             agent_access: false,
             secrets_data: SecretsDialogData::from_vault(Vec::new(), false, false),
+            working_directory,
+            available_directories: Vec::new(),
+            directory_selector_expanded: false,
+            directory_selector_error: None,
         }
     }
 }

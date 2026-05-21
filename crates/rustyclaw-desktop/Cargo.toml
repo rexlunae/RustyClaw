@@ -70,5 +70,8 @@ thiserror = "2"
 # Config directory lookup for SSH known_hosts handling
 dirs.workspace = true
 
+# Native file/folder picker dialogs
+rfd = "0.15"
+
 [features]
 default = []

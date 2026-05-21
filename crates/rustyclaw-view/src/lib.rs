@@ -47,7 +47,7 @@ pub mod swarm;
 pub mod tabs;
 
 // Re-export at crate root for convenience.
-pub use composer::ComposerData;
+pub use composer::{BottomBarData, ComposerData, DirectoryOption, DirectorySelectorState};
 pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use conversation::{
     ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData, TopBarData,

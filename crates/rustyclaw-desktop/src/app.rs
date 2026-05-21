@@ -18,6 +18,8 @@ use rustyclaw_view::{
     SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData, VaultUnlockData,
 };
 
+const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
+
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
 const STYLES: &str = include_str!("../assets/styles.css");
@@ -71,6 +73,9 @@ pub fn App() -> Element {
     // Thread deletion confirmation state
     let mut pending_thread_delete = use_signal(|| None::<(u64, String)>);
 
+    // Initialize directory chooser state once.
+    let mut did_init_directories = use_signal(|| false);
+
     // Auto-connect on mount
     use_effect(move || {
         if *did_auto_connect.read() {
@@ -82,6 +87,25 @@ pub fn App() -> Element {
         spawn(async move {
             connect_to_gateway(&url, state, gateway).await;
         });
+    });
+
+    use_effect(move || {
+        if *did_init_directories.read() {
+            return;
+        }
+        did_init_directories.set(true);
+
+        let current_dir = state
+            .read()
+            .working_directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+        if let Some(path) = current_dir {
+            let options = build_directory_options(&path);
+            let mut s = state.write();
+            s.working_directory = Some(path);
+            s.available_directories = options;
+        }
     });
 
     // Handle gateway events
@@ -508,9 +532,26 @@ pub fn App() -> Element {
                         elapsed: None,
                         spinner_tick: 0,
                     },
+                    bottom_bar: rustyclaw_view::BottomBarData {
+                        composer: rustyclaw_view::ComposerData {
+                            is_processing: state.read().is_processing,
+                            current_provider: state.read().provider.clone(),
+                            current_model: state.read().model.clone(),
+                        },
+                        directory_selector: rustyclaw_view::DirectorySelectorState {
+                            current_path: state.read().working_directory.clone(),
+                            current_display: state
+                                .read()
+                                .working_directory
+                                .clone()
+                                .as_deref()
+                                .map(display_path),
+                            available_directories: state.read().available_directories.clone(),
+                            is_expanded: state.read().directory_selector_expanded,
+                            error: state.read().directory_selector_error.clone(),
+                        },
+                    },
                     agent_name: state.read().agent_name.clone(),
-                    current_provider: state.read().provider.clone(),
-                    current_model: state.read().model.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
                     on_input_change: move |value| state.write().input = value,
@@ -532,6 +573,86 @@ pub fn App() -> Element {
                         state.write().model = Some(model);
                     },
                     on_add_provider: move |_| show_settings.set(true),
+                    on_toggle_directory_selector: move |_| {
+                        let is_expanded = state.read().directory_selector_expanded;
+                        if is_expanded {
+                            state.write().directory_selector_expanded = false;
+                        } else {
+                            let base = state
+                                .read()
+                                .working_directory
+                                .clone()
+                                .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+                            if let Some(path) = base {
+                                let options = build_directory_options(&path);
+                                let mut s = state.write();
+                                s.available_directories = options;
+                                s.directory_selector_expanded = true;
+                                s.directory_selector_error = None;
+                            }
+                        }
+                    },
+                    on_select_directory: move |path: String| {
+                        if path == DIRECTORY_OTHER_SENTINEL {
+                            let start_dir = state
+                                .read()
+                                .working_directory
+                                .clone()
+                                .unwrap_or_else(|| ".".to_string());
+                            let picked = rfd::FileDialog::new()
+                                .set_directory(start_dir)
+                                .pick_folder();
+                            if let Some(folder) = picked {
+                                let selected = folder.display().to_string();
+                                match std::env::set_current_dir(&selected) {
+                                    Ok(()) => {
+                                        let options = build_directory_options(&selected);
+                                        let mut s = state.write();
+                                        s.working_directory = Some(selected.clone());
+                                        s.available_directories = options;
+                                        s.directory_selector_expanded = false;
+                                        s.directory_selector_error = None;
+                                        s.status_message = Some(format!(
+                                            "Working directory set to {}",
+                                            display_path(&selected)
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        let mut s = state.write();
+                                        s.directory_selector_error = Some(format!(
+                                            "Failed to change directory: {}",
+                                            e
+                                        ));
+                                    }
+                                }
+                            } else {
+                                state.write().directory_selector_expanded = false;
+                            }
+                            return;
+                        }
+
+                        match std::env::set_current_dir(&path) {
+                            Ok(()) => {
+                                let options = build_directory_options(&path);
+                                let mut s = state.write();
+                                s.working_directory = Some(path.clone());
+                                s.available_directories = options;
+                                s.directory_selector_expanded = false;
+                                s.directory_selector_error = None;
+                                s.status_message = Some(format!(
+                                    "Working directory set to {}",
+                                    display_path(&path)
+                                ));
+                            }
+                            Err(e) => {
+                                let mut s = state.write();
+                                s.directory_selector_error = Some(format!(
+                                    "Failed to change directory: {}",
+                                    e
+                                ));
+                            }
+                        }
+                    },
                 }
             }
 
@@ -1031,7 +1152,7 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             state.write().connection = ConnectionStatus::Connected;
             state.write().agent_name = agent;
             state.write().vault_locked = vault_locked;
-            state.write().provider = provider;
+            state.write().provider = provider.map(|p| normalize_provider_id(&p).to_string());
             state.write().model = model;
         }
         GatewayEvent::Disconnected { reason } => {
@@ -1210,6 +1331,13 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
     }
 }
 
+fn normalize_provider_id(id: &str) -> &str {
+    match id {
+        "copilot" | "github_copilot" | "githubcopilot" => "github-copilot",
+        other => other,
+    }
+}
+
 // ── DOM query handler ───────────────────────────────────────────────────────
 
 /// Execute a JavaScript expression in the webview and send the result
@@ -1271,6 +1399,70 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
             is_error,
         })
         .await;
+}
+
+pub(crate) fn display_path(path: &str) -> String {
+    if let Ok(home) = std::env::var("HOME")
+        && path.starts_with(&home)
+    {
+        return path.replacen(&home, "~", 1);
+    }
+    path.to_string()
+}
+
+pub(crate) fn build_directory_options(base_path: &str) -> Vec<rustyclaw_view::DirectoryOption> {
+    use std::path::Path;
+
+    let mut options: Vec<rustyclaw_view::DirectoryOption> = Vec::new();
+    let base = Path::new(base_path);
+
+    options.push(rustyclaw_view::DirectoryOption {
+        path: base_path.to_string(),
+        display_name: display_path(base_path),
+        is_selected: true,
+    });
+
+    if let Some(parent) = base.parent() {
+        let parent_str = parent.display().to_string();
+        options.push(rustyclaw_view::DirectoryOption {
+            path: parent_str.clone(),
+            display_name: format!("../ ({})", display_path(&parent_str)),
+            is_selected: false,
+        });
+    }
+
+    if let Ok(home) = std::env::var("HOME")
+        && home != base_path
+    {
+        options.push(rustyclaw_view::DirectoryOption {
+            path: home.clone(),
+            display_name: "Home (~)".to_string(),
+            is_selected: false,
+        });
+    }
+
+    if let Ok(entries) = std::fs::read_dir(base) {
+        for entry in entries.filter_map(Result::ok).take(24) {
+            let Ok(ft) = entry.file_type() else {
+                continue;
+            };
+            if !ft.is_dir() {
+                continue;
+            }
+            let p = entry.path().display().to_string();
+            if p == base_path {
+                continue;
+            }
+            let label = entry.file_name().to_string_lossy().to_string();
+            options.push(rustyclaw_view::DirectoryOption {
+                path: p,
+                display_name: label,
+                is_selected: false,
+            });
+        }
+    }
+
+    options
 }
 
 // ── Swarm helpers ───────────────────────────────────────────────────────────
