@@ -483,6 +483,78 @@ pub(crate) const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
 pub(crate) const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
 const GITHUB_USER_AGENT: &str = "RustyClaw";
 
+/// Curated catalog of GitHub Copilot chat models.
+///
+/// The Copilot `/models` endpoint only returns models the user has
+/// explicitly enabled in their GitHub Copilot model-picker settings.
+/// To surface every known model the way other clients (e.g. OpenClaw
+/// via `@mariozechner/pi-ai`) do, we merge this static catalog with
+/// the live API response: live entries take precedence (they carry
+/// authoritative metadata), and any catalog entry whose id is missing
+/// from the live list is appended so the user can at least *see* it
+/// in the picker.  Selecting a model the account doesn't actually
+/// have access to will fail at chat-request time with the upstream
+/// error message.
+///
+/// Entries: `(id, display_name, context_window_tokens)`.  Pricing is
+/// omitted because Copilot access is subscription-based — showing
+/// "$0/$0 per 1M tok" would be misleading.
+const COPILOT_STATIC_CATALOG: &[(&str, &str, u64)] = &[
+    ("claude-haiku-4.5", "Claude Haiku 4.5", 128_000),
+    ("claude-opus-4.5", "Claude Opus 4.5", 128_000),
+    ("claude-opus-4.6", "Claude Opus 4.6", 128_000),
+    ("claude-sonnet-4", "Claude Sonnet 4", 128_000),
+    ("claude-sonnet-4.5", "Claude Sonnet 4.5", 128_000),
+    ("claude-sonnet-4.6", "Claude Sonnet 4.6", 128_000),
+    ("gemini-2.5-pro", "Gemini 2.5 Pro", 128_000),
+    ("gemini-3-flash-preview", "Gemini 3 Flash", 128_000),
+    ("gemini-3-pro-preview", "Gemini 3 Pro Preview", 128_000),
+    ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", 128_000),
+    ("gpt-4.1", "GPT-4.1", 64_000),
+    ("gpt-4o", "GPT-4o", 64_000),
+    ("gpt-5", "GPT-5", 128_000),
+    ("gpt-5-mini", "GPT-5-mini", 128_000),
+    ("gpt-5.1", "GPT-5.1", 128_000),
+    ("gpt-5.1-codex", "GPT-5.1-Codex", 128_000),
+    ("gpt-5.1-codex-max", "GPT-5.1-Codex-max", 128_000),
+    ("gpt-5.1-codex-mini", "GPT-5.1-Codex-mini", 128_000),
+    ("gpt-5.2", "GPT-5.2", 128_000),
+    ("gpt-5.2-codex", "GPT-5.2-Codex", 272_000),
+    ("grok-code-fast-1", "Grok Code Fast 1", 128_000),
+];
+
+/// Build [`ModelInfo`] entries for the static Copilot catalog.
+fn copilot_static_models() -> Vec<ModelInfo> {
+    COPILOT_STATIC_CATALOG
+        .iter()
+        .map(|(id, name, ctx)| ModelInfo {
+            id: (*id).to_string(),
+            name: Some((*name).to_string()),
+            context_length: Some(*ctx),
+            pricing_prompt: None,
+            pricing_completion: None,
+        })
+        .collect()
+}
+
+/// Merge a live model list with the static Copilot catalog.
+///
+/// Live entries are kept as-is (the API knows the user's current
+/// access state best).  Any catalog id not present in `live` is
+/// appended so newly-released models still appear in the picker.
+fn merge_copilot_models(live: Vec<ModelInfo>) -> Vec<ModelInfo> {
+    use std::collections::HashSet;
+    let live_ids: HashSet<String> = live.iter().map(|m| m.id.clone()).collect();
+    let mut merged = live;
+    for entry in copilot_static_models() {
+        if !live_ids.contains(&entry.id) {
+            merged.push(entry);
+        }
+    }
+    merged.sort_by(|a, b| a.id.cmp(&b.id));
+    merged
+}
+
 /// Check whether a model entry looks like it supports chat completions.
 ///
 /// 1. If the entry has `capabilities.chat` (GitHub Copilot style),
@@ -657,11 +729,13 @@ async fn fetch_github_copilot_models_detailed(
         .context("failed to build HTTP client")?;
     let fallback_url = format!("{}/models", base_url.trim_end_matches('/'));
 
+    // No credentials yet — still return the curated catalog so the
+    // model picker isn't empty before the user finishes signing in.
     let Some(key) = api_key else {
-        return Ok(Vec::new());
+        return Ok(copilot_static_models());
     };
 
-    match exchange_copilot_session(&client, key).await {
+    let live_result: Result<Vec<ModelInfo>> = match exchange_copilot_session(&client, key).await {
         Ok(session) => {
             let endpoints_api = session
                 .endpoints
@@ -677,11 +751,7 @@ async fn fetch_github_copilot_models_detailed(
         }
         // Exchange failed.  The stored secret may already be a session
         // token (e.g. imported manually), so try hitting `/models` with
-        // the supplied token directly as a fallback.  Whatever happens,
-        // never silently drop the exchange error: surface it to the
-        // user — combined with any fallback failure — so they can see
-        // the real cause instead of a misleading "empty model list"
-        // warning from the outer caller.
+        // the supplied token directly as a fallback.
         Err(exchange_err) => match send_copilot_models_request(&client, &fallback_url, key, None)
             .await
         {
@@ -695,6 +765,23 @@ async fn fetch_github_copilot_models_detailed(
                 fallback_err,
             ))),
         },
+    };
+
+    // Always merge with the curated catalog so newer/preview models the
+    // user hasn't opted into yet still appear in the picker.  If the
+    // live fetch failed outright, fall back to the catalog alone — the
+    // exchange/request error was already surfaced as a warning via
+    // `RequestDetails::emit_warning`.
+    match live_result {
+        Ok(live) => Ok(merge_copilot_models(live)),
+        Err(e) => {
+            tracing::warn!(
+                target: "rustyclaw::providers",
+                error = %format!("{:#}", e),
+                "Falling back to static Copilot model catalog after live /models fetch failed"
+            );
+            Ok(copilot_static_models())
+        }
     }
 }
 
