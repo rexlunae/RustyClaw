@@ -101,6 +101,10 @@ sha2 = { version = "0.11.0" }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 genai = "0.5.3"
 
+# AST-grep — structural code search and rewrite via tree-sitter
+ast-grep-core = "0.42.3"
+ast-grep-language = "0.42.3"
+
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
