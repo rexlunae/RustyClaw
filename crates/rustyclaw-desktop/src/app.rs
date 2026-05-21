@@ -391,7 +391,12 @@ pub fn App() -> Element {
                 on_switch_thread: on_switch_thread,
                 on_rename_thread: on_rename_thread,
                 on_delete_thread: on_delete_thread,
-                threads: state.read().threads.clone(),
+                threads: state
+                    .read()
+                    .threads
+                    .iter()
+                    .map(rustyclaw_view::SidebarItemData::from)
+                    .collect(),
                 foreground_id: state.read().foreground_thread_id,
                 on_pair: move |_| show_pairing.set(true),
                 on_secrets: move |_| {

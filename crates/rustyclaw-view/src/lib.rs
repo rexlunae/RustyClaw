@@ -37,6 +37,7 @@
 //! require touching event-processing code.
 
 pub mod composer;
+pub mod conversation;
 pub mod dialogs;
 pub mod message;
 pub mod sidebar;
@@ -45,6 +46,7 @@ pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use composer::ComposerData;
+pub use conversation::{DisplayMessageData, latest_details_index};
 pub use dialogs::{
     AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState, HatchingDialogData,
     PairingDialogData, PairingField, PairingStep, SecretInfoData, SecretsDialogData,

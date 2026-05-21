@@ -81,12 +81,7 @@ pub fn Messages(props: MessagesProps) -> Element {
                             for tool in msg.tool_calls.iter() {
                                 ToolCallPanel {
                                     key: "{tool.id}",
-                                    id: tool.id.clone(),
-                                    name: tool.name.clone(),
-                                    arguments: tool.arguments.clone(),
-                                    result: tool.result.clone(),
-                                    is_error: tool.is_error,
-                                    collapsed: tool.collapsed,
+                                    data: rustyclaw_view::ToolCallData::from(tool),
                                 }
                             }
                         }

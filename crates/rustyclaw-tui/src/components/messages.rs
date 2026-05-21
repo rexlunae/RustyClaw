@@ -11,7 +11,7 @@ use crate::components::message::MessageBubble;
 use crate::theme;
 use crate::types::DisplayMessage;
 use iocraft::prelude::*;
-use rustyclaw_view::MessageBubbleData;
+use rustyclaw_view::latest_details_index;
 
 /// Braille spinner frames for smooth animation.
 const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧'];
@@ -39,19 +39,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
     // extended details, so we can show the "Ctrl-D for details" hint
     // only on that bubble (older ones have already scrolled out of
     // focus and would just be visual noise).
-    let latest_details_idx: Option<usize> = props
-        .messages
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, m)| {
-            matches!(
-                m.role,
-                rustyclaw_core::types::MessageRole::Warning
-                    | rustyclaw_core::types::MessageRole::Error
-            ) && m.details.is_some()
-        })
-        .map(|(i, _)| i);
+    let latest_details_idx: Option<usize> = latest_details_index(&props.messages);
 
     element! {
         View(
@@ -69,14 +57,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                 #(props.messages.iter().enumerate().map(|(i, msg)| {
                     let name = assistant_name.clone();
                     let has_details = latest_details_idx == Some(i);
-                    let bubble_data = MessageBubbleData {
-                        role: msg.role,
-                        content: msg.content.clone(),
-                        timestamp: None,
-                        is_streaming: false,
-                        agent_name: name,
-                        has_details,
-                    };
+                    let bubble_data = msg.to_bubble_data(name, has_details);
                     element! {
                         MessageBubble(
                             key: i as u64,

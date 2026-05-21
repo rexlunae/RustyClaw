@@ -5,7 +5,8 @@
 
 use dioxus::prelude::*;
 
-use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
+use rustyclaw_core::ui::ConnectionStatus;
+use rustyclaw_view::SidebarItemData;
 
 // ── Public top-level component ──────────────────────────────────────────────
 
@@ -25,7 +26,7 @@ pub struct SidebarProps {
     pub on_pair: EventHandler<()>,
     pub on_secrets: EventHandler<()>,
     pub on_settings: EventHandler<()>,
-    pub threads: Vec<ThreadInfo>,
+    pub threads: Vec<SidebarItemData>,
     pub foreground_id: Option<u64>,
 }
 
@@ -177,7 +178,7 @@ fn StatusChips(props: StatusChipsProps) -> Element {
 
 #[derive(Props, Clone, PartialEq)]
 struct SessionsListProps {
-    threads: Vec<ThreadInfo>,
+    threads: Vec<SidebarItemData>,
     foreground_id: Option<u64>,
     collapsed: bool,
     on_new_thread: EventHandler<()>,
@@ -235,7 +236,7 @@ fn SessionsList(props: SessionsListProps) -> Element {
 
 #[derive(Props, Clone, PartialEq)]
 struct SessionRowProps {
-    thread: ThreadInfo,
+    thread: SidebarItemData,
     active: bool,
     collapsed: bool,
     on_click: EventHandler<()>,
@@ -252,18 +253,10 @@ fn SessionRow(props: SessionRowProps) -> Element {
     } else {
         "session-row"
     };
-    let label = props
-        .thread
-        .label
-        .clone()
-        .unwrap_or_else(|| format!("Session #{}", props.thread.id));
+    let label = props.thread.display_label().into_owned();
     let count = props.thread.message_count;
     let description = props.thread.description.clone();
-    let title_text = if let Some(desc) = description.as_deref() {
-        format!("{label}\n{desc}")
-    } else {
-        label.clone()
-    };
+    let title_text = props.thread.title_text();
 
     let mut editing = use_signal(|| false);
     let mut edit_value = use_signal(|| String::new());

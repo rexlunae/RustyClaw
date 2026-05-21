@@ -1,28 +1,20 @@
 //! Collapsible panel showing tool-call arguments and result.
 
 use dioxus::prelude::*;
-
-use rustyclaw_core::ui::pretty_print_json;
+use rustyclaw_view::ToolCallData;
 
 /// Props for [`ToolCallPanel`].
 #[derive(Props, Clone, PartialEq)]
 pub struct ToolCallPanelProps {
-    pub id: String,
-    pub name: String,
-    pub arguments: String,
-    pub result: Option<String>,
-    #[props(default = false)]
-    pub is_error: bool,
-    #[props(default = true)]
-    pub collapsed: bool,
+    pub data: ToolCallData,
 }
 
 #[component]
 pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
-    let mut is_collapsed = use_signal(|| props.collapsed);
+    let mut is_collapsed = use_signal(|| props.data.collapsed);
 
-    let (status_class, status_label, status_icon) = if props.result.is_some() {
-        if props.is_error {
+    let (status_class, status_label, status_icon) = if props.data.result.is_some() {
+        if props.data.is_error {
             ("is-error", "Failed", "✕")
         } else {
             ("is-done", "Done", "✓")
@@ -38,7 +30,7 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
     );
     let panel_class = panel_class.trim().to_string();
 
-    let pretty_args = pretty_print_json(&props.arguments);
+    let pretty_args = props.data.arguments_preview(100_000, 10_000);
 
     let chip_class = format!(
         "chip {}",
@@ -56,7 +48,7 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
                     let v = *is_collapsed.read();
                     is_collapsed.set(!v);
                 },
-                span { class: "tool-name", "🔧 {props.name}" }
+                span { class: "tool-name", "🔧 {props.data.name}" }
                 span { class: "tool-spacer" }
                 span { class: "{chip_class}",
                     span { class: "dot" }
@@ -73,13 +65,13 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
                             code { "{pretty_args}" }
                         }
                     }
-                    if let Some(result) = props.result.as_ref() {
+                    if let Some(result) = props.data.result.as_ref() {
                         div { class: "tool-section",
                             div { class: "tool-section-label",
-                                if props.is_error { "Error" } else { "Result" }
+                                if props.data.is_error { "Error" } else { "Result" }
                             }
                             pre {
-                                class: if props.is_error { "tool-pre is-error" } else { "tool-pre" },
+                                class: if props.data.is_error { "tool-pre is-error" } else { "tool-pre" },
                                 code { "{result}" }
                             }
                         }
