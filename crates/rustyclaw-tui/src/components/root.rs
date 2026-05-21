@@ -57,6 +57,7 @@ pub struct RootProps {
     pub command_selected: Option<usize>,
 
     // input
+    pub composer: rustyclaw_view::ComposerData,
     pub input_value: String,
     pub on_change: HandlerMut<'static, String>,
     pub on_submit: HandlerMut<'static, String>,
@@ -290,6 +291,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         selected: props.command_selected,
                     )
                     InputBar(
+                        composer: props.composer.clone(),
                         value: props.input_value.clone(),
                         on_change: props.on_change.take(),
                         on_submit: props.on_submit.take(),

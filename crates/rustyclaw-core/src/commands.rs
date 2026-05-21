@@ -36,6 +36,12 @@ pub enum CommandAction {
     Download(String, Option<String>),
     /// Create a new thread
     ThreadNew(String),
+    /// Attach a file to the next prompt
+    AttachPromptFile(String),
+    /// Attach a directory to the next prompt
+    AttachPromptDirectory(String),
+    /// Clear prompt attachments
+    ClearPromptAttachments,
     /// List threads (handled in TUI)
     ThreadList,
     /// Close a thread by ID
@@ -67,6 +73,10 @@ fn base_command_names() -> Vec<String> {
         "help".into(),
         "clear".into(),
         "download".into(),
+        "attach".into(),
+        "attach file".into(),
+        "attach dir".into(),
+        "attach clear".into(),
         "enable-access".into(),
         "disable-access".into(),
         "onboard".into(),
@@ -292,6 +302,9 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /help                    - Show this help".to_string(),
                 "  /clear                   - Clear messages and conversation memory".to_string(),
                 "  /download <id> [path]    - Download media attachment to file".to_string(),
+                "  /attach file <path>      - Attach a file to the next prompt".to_string(),
+                "  /attach dir <path>       - Attach a directory to the next prompt".to_string(),
+                "  /attach clear            - Clear prompt attachments".to_string(),
                 "  /enable-access           - Enable agent access to secrets".to_string(),
                 "  /disable-access          - Disable agent access to secrets".to_string(),
                 "  /onboard                 - Run setup wizard (use CLI: rustyclaw onboard)"
@@ -351,6 +364,50 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     messages: vec![format!("Downloading {}...", media_id)],
                     action: CommandAction::Download(media_id, dest_path),
                 }
+            }
+        }
+        "attach" => {
+            match parts.get(1).copied() {
+                Some("file") => {
+                    let path = parts.get(2).copied().unwrap_or_default().to_string();
+                    if path.is_empty() {
+                        CommandResponse {
+                            messages: vec!["Usage: /attach file <path>".to_string()],
+                            action: CommandAction::None,
+                        }
+                    } else {
+                        CommandResponse {
+                            messages: vec![format!("Attached file: {}", path)],
+                            action: CommandAction::AttachPromptFile(path),
+                        }
+                    }
+                }
+                Some("dir") | Some("directory") => {
+                    let path = parts.get(2).copied().unwrap_or_default().to_string();
+                    if path.is_empty() {
+                        CommandResponse {
+                            messages: vec!["Usage: /attach dir <path>".to_string()],
+                            action: CommandAction::None,
+                        }
+                    } else {
+                        CommandResponse {
+                            messages: vec![format!("Attached directory: {}", path)],
+                            action: CommandAction::AttachPromptDirectory(path),
+                        }
+                    }
+                }
+                Some("clear") => CommandResponse {
+                    messages: vec!["Cleared prompt attachments.".to_string()],
+                    action: CommandAction::ClearPromptAttachments,
+                },
+                _ => CommandResponse {
+                    messages: vec![
+                        "Usage: /attach file <path>".to_string(),
+                        "Usage: /attach dir <path>".to_string(),
+                        "Usage: /attach clear".to_string(),
+                    ],
+                    action: CommandAction::None,
+                },
             }
         }
         "enable-access" => {

@@ -9,7 +9,7 @@ use std::collections::{HashMap, VecDeque};
 
 use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
-use rustyclaw_view::SecretsDialogData;
+use rustyclaw_view::{PromptAttachment, SecretsDialogData};
 
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -75,6 +75,9 @@ pub struct AppState {
 
     /// Current provider name
     pub provider: Option<String>,
+
+    /// Files and directories attached to the next prompt.
+    pub prompt_attachments: Vec<PromptAttachment>,
 
     /// Status messages
     pub status_message: Option<String>,
@@ -150,6 +153,7 @@ impl Default for AppState {
             needs_hatching: false,
             model,
             provider,
+            prompt_attachments: Vec::new(),
             status_message: None,
             sidebar_collapsed: false,
             theme: Theme::default(),

@@ -14,8 +14,9 @@ use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 use rustyclaw_view::{
-    CredentialRequestData, DeviceFlowData, PairingDialogData, SecretInfoData, SecretsDialogData,
-    SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData, VaultUnlockData,
+    CredentialRequestData, DeviceFlowData, PairingDialogData, PromptAttachment, SecretInfoData,
+    SecretsDialogData, SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData,
+    VaultUnlockData, build_prompt_with_attachments,
 };
 
 const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
@@ -23,6 +24,22 @@ const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
 const STYLES: &str = include_str!("../assets/styles.css");
+
+fn attachment_display_name(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn prompt_attachment_from_file(path: String) -> PromptAttachment {
+    PromptAttachment::file(path.clone(), attachment_display_name(&path))
+}
+
+fn prompt_attachment_from_directory(path: String) -> PromptAttachment {
+    PromptAttachment::directory(path.clone(), attachment_display_name(&path))
+}
 
 #[component]
 pub fn App() -> Element {
@@ -271,16 +288,79 @@ pub fn App() -> Element {
 
     // Handlers
     let on_submit = move |message: String| {
-        state.write().add_user_message(message.clone());
+        let attachments = state.read().prompt_attachments.clone();
+        let prompt = build_prompt_with_attachments(&message, &attachments);
+        {
+            let mut s = state.write();
+            s.add_user_message(prompt.clone());
+            s.prompt_attachments.clear();
+        }
         state.write().is_processing = true;
 
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                if let Err(e) = client.chat(message).await {
+                if let Err(e) = client.chat(prompt).await {
                     tracing::error!("Failed to send message: {}", e);
                 }
             });
+        }
+    };
+
+    let on_add_file_attachment = move |_| {
+        let start_dir = state
+            .read()
+            .working_directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+        let mut dialog = rfd::FileDialog::new();
+        if let Some(dir) = start_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(file) = dialog.pick_file() {
+            let path = file.display().to_string();
+            let attachment = prompt_attachment_from_file(path.clone());
+            let mut s = state.write();
+            if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+                s.prompt_attachments.push(attachment);
+            }
+            s.status_message = Some(format!("Attached file {}", path));
+        }
+    };
+
+    let on_add_directory_attachment = move |_| {
+        let start_dir = state
+            .read()
+            .working_directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+        let mut dialog = rfd::FileDialog::new();
+        if let Some(dir) = start_dir {
+            dialog = dialog.set_directory(dir);
+        }
+        if let Some(folder) = dialog.pick_folder() {
+            let path = folder.display().to_string();
+            let attachment = prompt_attachment_from_directory(path.clone());
+            let mut s = state.write();
+            if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+                s.prompt_attachments.push(attachment);
+            }
+            s.status_message = Some(format!("Attached directory {}", path));
+        }
+    };
+
+    let on_clear_attachments = move |_| {
+        let mut s = state.write();
+        s.prompt_attachments.clear();
+        s.status_message = Some("Cleared prompt attachments".to_string());
+    };
+
+    let on_remove_attachment = move |path: String| {
+        let mut s = state.write();
+        let before = s.prompt_attachments.len();
+        s.prompt_attachments.retain(|item| item.path != path);
+        if s.prompt_attachments.len() != before {
+            s.status_message = Some(format!("Removed attachment {}", path));
         }
     };
 
@@ -344,12 +424,11 @@ pub fn App() -> Element {
 
     let on_cancel = move |_| {
         state.write().status_message = Some("Cancellation requested…".to_string());
+        state.write().finish_current_message();
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                if let Err(e) = client.send(GatewayCommand::Cancel).await {
-                    tracing::error!("Failed to send cancel: {}", e);
-                }
+                let _ = client.send(GatewayCommand::Cancel).await;
             });
         }
     };
@@ -537,6 +616,7 @@ pub fn App() -> Element {
                             is_processing: state.read().is_processing,
                             current_provider: state.read().provider.clone(),
                             current_model: state.read().model.clone(),
+                            attachments: state.read().prompt_attachments.clone(),
                         },
                         directory_selector: rustyclaw_view::DirectorySelectorState {
                             current_path: state.read().working_directory.clone(),
@@ -573,6 +653,10 @@ pub fn App() -> Element {
                         state.write().model = Some(model);
                     },
                     on_add_provider: move |_| show_settings.set(true),
+                    on_add_file_attachment: on_add_file_attachment,
+                    on_add_directory_attachment: on_add_directory_attachment,
+                    on_clear_attachments: on_clear_attachments,
+                    on_remove_attachment: on_remove_attachment,
                     on_toggle_directory_selector: move |_| {
                         let is_expanded = state.read().directory_selector_expanded;
                         if is_expanded {

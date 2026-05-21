@@ -25,6 +25,10 @@ pub struct ChatProps {
     pub on_input_change: EventHandler<String>,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
+    pub on_add_file_attachment: EventHandler<()>,
+    pub on_add_directory_attachment: EventHandler<()>,
+    pub on_clear_attachments: EventHandler<()>,
+    pub on_remove_attachment: EventHandler<String>,
     pub on_toggle_directory_selector: EventHandler<()>,
     pub on_select_directory: EventHandler<String>,
 }
@@ -122,6 +126,10 @@ pub fn Chat(props: ChatProps) -> Element {
                 on_input_change: props.on_input_change,
                 on_model_change: props.on_model_change,
                 on_add_provider: props.on_add_provider,
+                on_add_file_attachment: props.on_add_file_attachment,
+                on_add_directory_attachment: props.on_add_directory_attachment,
+                on_clear_attachments: props.on_clear_attachments,
+                on_remove_attachment: props.on_remove_attachment,
                 on_toggle_directory_selector: props.on_toggle_directory_selector,
                 on_select_directory: props.on_select_directory,
             }

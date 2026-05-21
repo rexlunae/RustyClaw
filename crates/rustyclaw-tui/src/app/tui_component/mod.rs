@@ -142,6 +142,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut model_completion_provider: State<Option<String>> = hooks.use_state(|| None);
     let mut model_completion_models: State<Vec<String>> = hooks.use_state(Vec::new);
     let mut model_completion_loading: State<Option<String>> = hooks.use_state(|| None);
+    let mut prompt_attachments: State<Vec<rustyclaw_view::PromptAttachment>> =
+        hooks.use_state(Vec::new);
 
     // ── Info dialog state (secrets / skills / tool permissions) ──────
     let mut show_secrets_dialog = hooks.use_state(|| false);
@@ -670,6 +672,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     model_selector_cursor.set(0);
                                     model_selector_loading.set(false);
                                     show_model_selector.set(true);
+                                }
+                                GwEvent::PromptAttachmentsChanged { attachments } => {
+                                    prompt_attachments.set(attachments);
                                 }
                                 GwEvent::ModelCompletionsLoaded { provider, models } => {
                                     model_completion_provider.set(Some(provider.clone()));
@@ -1968,6 +1973,15 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             scroll_offset: scroll_offset.get(),
             command_completions: command_completions.read().clone(),
             command_selected: command_selected.get(),
+            composer: rustyclaw_view::ComposerData {
+                is_processing: streaming.get(),
+                current_provider: dynamic_provider_id
+                    .read()
+                    .clone()
+                    .or_else(|| Some(prop_provider_id.clone())),
+                current_model: dynamic_model_label.read().clone(),
+                attachments: prompt_attachments.read().clone(),
+            },
             input_value: input_value.to_string(),
             input_has_focus: !show_auth_dialog.get()
                 && !show_tool_approval.get()

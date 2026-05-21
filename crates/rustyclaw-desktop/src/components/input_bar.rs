@@ -26,6 +26,10 @@ pub struct InputBarProps {
     pub on_input_change: EventHandler<String>,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
+    pub on_add_file_attachment: EventHandler<()>,
+    pub on_add_directory_attachment: EventHandler<()>,
+    pub on_clear_attachments: EventHandler<()>,
+    pub on_remove_attachment: EventHandler<String>,
     pub on_toggle_directory_selector: EventHandler<()>,
     pub on_select_directory: EventHandler<String>,
 }
@@ -37,6 +41,7 @@ pub fn InputBar(props: InputBarProps) -> Element {
     let bottom_bar = &props.bottom_bar;
     let is_processing = bottom_bar.composer.is_processing;
     let on_send = props.on_send;
+    let attachments = bottom_bar.composer.attachments.clone();
 
     rsx! {
         div { class: "composer-wrap",
@@ -74,11 +79,48 @@ pub fn InputBar(props: InputBarProps) -> Element {
             }
 
             div { class: "composer-bottom-row",
+                if !attachments.is_empty() {
+                    div { class: "composer-attachments",
+                        for attachment in attachments.clone() {
+                            div {
+                                key: "{attachment.path}",
+                                class: "composer-attachment-chip",
+                                title: "{attachment.path}",
+                                span { class: "composer-attachment-icon", "{attachment.kind.icon()}" }
+                                span { class: "composer-attachment-name", "{attachment.display_name}" }
+                                button {
+                                    class: "composer-attachment-remove",
+                                    title: "Remove attachment",
+                                    onclick: move |_| props.on_remove_attachment.call(attachment.path.clone()),
+                                    "⊗"
+                                }
+                            }
+                        }
+                        button {
+                            class: "btn btn-subtle btn-sm",
+                            title: "Clear attached files and directories",
+                            onclick: move |_| props.on_clear_attachments.call(()),
+                            "Clear"
+                        }
+                    }
+                }
                 ModelBar {
                     current_provider: bottom_bar.composer.current_provider.clone(),
                     current_model: bottom_bar.composer.current_model.clone(),
                     on_model_change: props.on_model_change,
                     on_add_provider: props.on_add_provider,
+                }
+                button {
+                    class: "btn btn-subtle btn-sm",
+                    title: "Attach a file to the next prompt",
+                    onclick: move |_| props.on_add_file_attachment.call(()),
+                    "Add file"
+                }
+                button {
+                    class: "btn btn-subtle btn-sm",
+                    title: "Attach a directory to the next prompt",
+                    onclick: move |_| props.on_add_directory_attachment.call(()),
+                    "Add dir"
                 }
                 DirectorySelectorBar {
                     state: bottom_bar.directory_selector.clone(),
@@ -88,7 +130,7 @@ pub fn InputBar(props: InputBarProps) -> Element {
             }
 
             div { class: "composer-hint",
-                "Press Enter to send · Shift + Enter for newline"
+                "Press Enter to send · Shift + Enter for newline · Attachments are included in the next prompt"
             }
         }
     }

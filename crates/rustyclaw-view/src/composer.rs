@@ -5,6 +5,64 @@
 //! provides the shared data types that both clients use to render
 //! the same composer UI.
 
+/// An attachment that should be included with the next prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PromptAttachmentKind {
+    File,
+    Directory,
+}
+
+impl PromptAttachmentKind {
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::File => "File",
+            Self::Directory => "Directory",
+        }
+    }
+
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::File => "📄",
+            Self::Directory => "📁",
+        }
+    }
+}
+
+/// A file or directory attached to the prompt builder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptAttachment {
+    /// Attachment kind.
+    pub kind: PromptAttachmentKind,
+
+    /// Absolute or workspace-relative path.
+    pub path: String,
+
+    /// Short display label for the UI.
+    pub display_name: String,
+}
+
+impl PromptAttachment {
+    pub fn file(path: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            kind: PromptAttachmentKind::File,
+            path: path.into(),
+            display_name: display_name.into(),
+        }
+    }
+
+    pub fn directory(path: impl Into<String>, display_name: impl Into<String>) -> Self {
+        Self {
+            kind: PromptAttachmentKind::Directory,
+            path: path.into(),
+            display_name: display_name.into(),
+        }
+    }
+
+    pub fn prompt_line(&self) -> String {
+        format!("- {} {}: {}", self.kind.icon(), self.kind.label(), self.path)
+    }
+}
+
 /// Everything the composer bar needs to render.
 ///
 /// Does not include the text input's live value — that's owned by
@@ -21,6 +79,19 @@ pub struct ComposerData {
 
     /// Active model identifier (e.g. "gpt-4o").
     pub current_model: Option<String>,
+
+    /// Files/directories the user attached to the next prompt.
+    pub attachments: Vec<PromptAttachment>,
+}
+
+impl ComposerData {
+    pub fn attachment_count(&self) -> usize {
+        self.attachments.len()
+    }
+
+    pub fn has_attachments(&self) -> bool {
+        !self.attachments.is_empty()
+    }
 }
 
 // ── Bottom bar data ─────────────────────────────────────────────────────────
@@ -69,4 +140,26 @@ pub struct BottomBarData {
 
     /// Working directory selector state.
     pub directory_selector: DirectorySelectorState,
+}
+
+/// Build a prompt string that includes attached files/directories as context.
+pub fn build_prompt_with_attachments(
+    message: &str,
+    attachments: &[PromptAttachment],
+) -> String {
+    if attachments.is_empty() {
+        return message.to_string();
+    }
+
+    let attachment_block = attachments
+        .iter()
+        .map(PromptAttachment::prompt_line)
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    format!(
+        "{}\n\n## Attached Context\n{}\n\nUse the attached files/directories as part of your answer. If you need to inspect contents, use the relevant file or directory tools.",
+        message.trim_end(),
+        attachment_block
+    )
 }

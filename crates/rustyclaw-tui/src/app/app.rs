@@ -23,6 +23,7 @@ use rustyclaw_core::gateway::{
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
 use rustyclaw_core::soul::SoulManager;
+use rustyclaw_view::{PromptAttachment, build_prompt_with_attachments};
 
 use crate::gateway_client;
 
@@ -168,6 +169,10 @@ pub(crate) enum GwEvent {
         provider: String,
         provider_display: String,
         models: Vec<String>,
+    },
+    /// Prompt attachment list changed.
+    PromptAttachmentsChanged {
+        attachments: Vec<PromptAttachment>,
     },
     /// Live model IDs loaded for slash-command autocomplete.
     ModelCompletionsLoaded {
@@ -529,6 +534,7 @@ impl App {
         let mut conversation: Vec<ChatMessage> = Vec::new();
         let mut next_stream_id: u64 = 1;
         let mut active_stream_id: u64 = 0;
+        let mut prompt_attachments: Vec<PromptAttachment> = Vec::new();
         let config = &mut self.config;
         let secrets_manager = &mut self.secrets_manager;
         let skill_manager = &mut self.skill_manager;
@@ -540,7 +546,12 @@ impl App {
                     let stream_id = next_stream_id;
                     next_stream_id = next_stream_id.saturating_add(2);
                     active_stream_id = stream_id;
-                    conversation.push(ChatMessage::text("user", &text));
+                    let prompt = build_prompt_with_attachments(&text, &prompt_attachments);
+                    conversation.push(ChatMessage::text("user", &prompt));
+                    prompt_attachments.clear();
+                    let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
+                        attachments: prompt_attachments.clone(),
+                    });
                     if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Chat,
@@ -690,6 +701,42 @@ impl App {
                     }
                     match resp.action {
                         CommandAction::Quit => break,
+                        CommandAction::AttachPromptFile(path) => {
+                            if !prompt_attachments.iter().any(|item| item.path == path) {
+                                prompt_attachments.push(PromptAttachment::file(
+                                    path.clone(),
+                                    std::path::Path::new(&path)
+                                        .file_name()
+                                        .and_then(|name| name.to_str())
+                                        .unwrap_or(&path)
+                                        .to_string(),
+                                ));
+                            }
+                            let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
+                                attachments: prompt_attachments.clone(),
+                            });
+                        }
+                        CommandAction::AttachPromptDirectory(path) => {
+                            if !prompt_attachments.iter().any(|item| item.path == path) {
+                                prompt_attachments.push(PromptAttachment::directory(
+                                    path.clone(),
+                                    std::path::Path::new(&path)
+                                        .file_name()
+                                        .and_then(|name| name.to_str())
+                                        .unwrap_or(&path)
+                                        .to_string(),
+                                ));
+                            }
+                            let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
+                                attachments: prompt_attachments.clone(),
+                            });
+                        }
+                        CommandAction::ClearPromptAttachments => {
+                            prompt_attachments.clear();
+                            let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
+                                attachments: prompt_attachments.clone(),
+                            });
+                        }
                         CommandAction::ShowSecrets => {
                             // Request secrets list from the gateway daemon
                             // (secrets live in the gateway's vault, not locally).
