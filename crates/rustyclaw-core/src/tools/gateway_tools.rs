@@ -294,9 +294,8 @@ pub async fn exec_tts_async(args: &Value, workspace_dir: &Path) -> Result<String
 
     let Some(api_key) = api_key else {
         return Ok(format!(
-            "TTS conversion requested:\n- Text: {} chars\n- Output would be: {}\n\nNote: Set OPENAI_API_KEY or TTS_API_KEY to enable actual TTS.\n\nMEDIA: {}",
+            "TTS conversion requested (mock mode):\n- Text: {} chars\n- Output would be: {}\n\nNote: Set OPENAI_API_KEY or TTS_API_KEY environment variable to enable actual TTS generation.",
             text.len(),
-            output_path.display(),
             output_path.display()
         ));
     };
@@ -1047,9 +1046,8 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 
     let Some(api_key) = api_key else {
         return Ok(format!(
-            "TTS conversion requested:\n- Text: {} chars\n- Output would be: {}\n\nNote: Set OPENAI_API_KEY or TTS_API_KEY to enable actual TTS.\n\nMEDIA: {}",
+            "TTS conversion requested (mock mode):\n- Text: {} chars\n- Output would be: {}\n\nNote: Set OPENAI_API_KEY or TTS_API_KEY environment variable to enable actual TTS generation.",
             text.len(),
-            output_path.display(),
             output_path.display()
         ));
     };
