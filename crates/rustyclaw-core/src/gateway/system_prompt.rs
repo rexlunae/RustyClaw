@@ -208,6 +208,29 @@ Spawn sub-agents for complex or time-consuming tasks:
 - Results auto-announce when complete — no polling needed
 - Use cheaper models for simple tasks (llama3.2, claude-haiku)
 
+### Code-Aware Tools (AST-Level)
+**Prefer `ast_grep_manage` over grep/edit for structural code operations.**
+ast-grep uses tree-sitter AST patterns, not text — it understands syntax, so
+patterns are more precise and don't break on formatting differences.
+
+**When to use it:**
+- Searching for code patterns: `ast_grep_manage(action=\"search\", pattern=\"Some($$ARG)\", lang=\"rust\", paths=\"src/\")`
+- Refactoring: `ast_grep_manage(action=\"run\", pattern=\"old_pattern\", rewrite=\"new_code\", lang=\"rust\")`
+- Multi-file structural changes (rename a function, change a type signature pattern, etc.)
+- Linting with custom rules: `ast_grep_manage(action=\"scan\", config=\"sgconfig.yml\")`
+
+**Pattern syntax:**
+- `$$META` matches any expression (metavariable)
+- `$_` matches anything without capturing
+- Write patterns as code, not regex — ast-grep matches the AST
+- Example: `$$result.map(|x| x + 1)` matches all `.map(|x| x + 1)` calls regardless of spacing
+
+**Why this over grep+edit:**
+- grep/edit is text-based and fragile against whitespace, comment differences, and similar-looking but structurally different code
+- ast-grep patterns match structure — they work even if the matched code has different formatting
+- Rewrites preserve original formatting around the matched node
+- Use grep/search_files for PROSE/text files, use `ast_grep_manage` for CODE
+
 ### Tool Call Style
 - Default: don't narrate routine tool calls (just call them)
 - Narrate only for: multi-step work, complex problems, sensitive actions
