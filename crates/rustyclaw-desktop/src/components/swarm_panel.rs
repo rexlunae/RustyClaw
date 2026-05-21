@@ -4,33 +4,13 @@
 //! controls to create, inspect, and stop swarms.
 
 use dioxus::prelude::*;
-
-/// Summary of an agent within a swarm (view-model for the UI).
-#[derive(Clone, Debug, PartialEq)]
-pub struct SwarmAgentInfo {
-    pub id: String,
-    pub name: String,
-    pub role: String,
-    pub description: String,
-    pub has_session: bool,
-}
-
-/// Summary of a swarm instance (view-model for the UI).
-#[derive(Clone, Debug, PartialEq)]
-pub struct SwarmInfo {
-    pub name: String,
-    pub status: String,
-    pub description: String,
-    pub agents: Vec<SwarmAgentInfo>,
-    pub tasks_routed: u64,
-    pub uptime_secs: u64,
-}
+use rustyclaw_view::SwarmData;
 
 /// Props for [`SwarmPanel`].
 #[derive(Props, Clone, PartialEq)]
 pub struct SwarmPanelProps {
     /// Currently known swarms.
-    pub swarms: Vec<SwarmInfo>,
+    pub swarms: Vec<SwarmData>,
     /// Whether a swarm creation is in progress.
     pub creating: bool,
     /// Callbacks
@@ -128,7 +108,7 @@ pub fn SwarmPanel(props: SwarmPanelProps) -> Element {
 /// Props for a single swarm card.
 #[derive(Props, Clone, PartialEq)]
 struct SwarmCardProps {
-    info: SwarmInfo,
+    info: SwarmData,
     on_stop: EventHandler<()>,
 }
 
@@ -136,13 +116,7 @@ struct SwarmCardProps {
 #[component]
 fn SwarmCard(props: SwarmCardProps) -> Element {
     let info = &props.info;
-    let status_class = match info.status.as_str() {
-        "Running" => "chip is-success",
-        "Idle" => "chip is-info",
-        "Paused" => "chip is-warn",
-        "Stopped" => "chip is-muted",
-        _ => "chip is-danger",
-    };
+    let status_class = format!("chip {}", info.status_class());
 
     rsx! {
         div { class: "swarm-card",
@@ -170,17 +144,7 @@ fn SwarmCard(props: SwarmCardProps) -> Element {
                         class: if agent.has_session { "swarm-agent is-active" } else { "swarm-agent" },
                         div { class: "swarm-agent-name",
                             span { class: "agent-role-icon",
-                                match agent.role.as_str() {
-                                    "Orchestrator" => "🎯",
-                                    "Virtual Assistant" => "💼",
-                                    "Deep Research" => "🔬",
-                                    "Data Analyst" => "📊",
-                                    "Slides" => "📽",
-                                    "Docs" => "📄",
-                                    "Image Generation" => "🎨",
-                                    "Video Generation" => "🎬",
-                                    _ => "🤖",
-                                }
+                                "{agent.role_icon()}"
                             }
                             span { "{agent.name}" }
                         }
@@ -189,7 +153,7 @@ fn SwarmCard(props: SwarmCardProps) -> Element {
                 }
             }
 
-            if info.status == "Running" || info.status == "Idle" || info.status == "Paused" {
+            if info.is_stoppable() {
                 div { class: "swarm-card-footer",
                     button {
                         class: "btn btn-danger btn-sm",

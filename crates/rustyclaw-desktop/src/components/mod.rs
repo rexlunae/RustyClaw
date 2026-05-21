@@ -40,7 +40,7 @@ pub use secrets::{SecretsCommand, SecretsDialog};
 pub use settings::SettingsDialog;
 pub use sidebar::Sidebar;
 pub use tabs::TabBar;
-pub use swarm_panel::{SwarmAgentInfo, SwarmInfo, SwarmPanel};
+pub use swarm_panel::SwarmPanel;
 pub use tool_approval::ToolApprovalDialog;
 pub use user_prompt::UserPromptDialog;
 pub use vault_unlock::VaultUnlockDialog;

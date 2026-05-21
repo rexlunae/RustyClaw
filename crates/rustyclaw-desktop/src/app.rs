@@ -5,15 +5,15 @@ use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{
     Chat, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
-    PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar,
-    SwarmAgentInfo, SwarmInfo, SwarmPanel, TabBar, ToolApprovalDialog, UserPromptDialog,
+    PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar, SwarmPanel, TabBar,
+    ToolApprovalDialog, UserPromptDialog,
     VaultUnlockDialog, generate_qr_code,
 };
 use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
 use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
-use rustyclaw_view::{SecretInfoData, SecretsDialogData};
+use rustyclaw_view::{SecretInfoData, SecretsDialogData, SwarmAgentData, SwarmData};
 
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
@@ -1233,7 +1233,7 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
 // ── Swarm helpers ───────────────────────────────────────────────────────────
 
 /// Build the current list of swarm infos from the global swarm manager.
-fn get_swarm_infos() -> Vec<SwarmInfo> {
+fn get_swarm_infos() -> Vec<SwarmData> {
     use rustyclaw_core::swarm::swarm_manager;
 
     let mgr = match swarm_manager().lock() {
@@ -1243,7 +1243,7 @@ fn get_swarm_infos() -> Vec<SwarmInfo> {
 
     mgr.list()
         .into_iter()
-        .map(|inst| SwarmInfo {
+        .map(|inst| SwarmData {
             name: inst.config.name.clone(),
             status: inst.status.to_string(),
             description: inst.config.description.clone(),
@@ -1253,7 +1253,7 @@ fn get_swarm_infos() -> Vec<SwarmInfo> {
                 .config
                 .agents
                 .iter()
-                .map(|a| SwarmAgentInfo {
+                .map(|a| SwarmAgentData {
                     id: a.id.clone(),
                     name: a.name.clone(),
                     role: a.role.to_string(),
