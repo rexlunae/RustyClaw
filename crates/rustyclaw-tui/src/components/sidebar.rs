@@ -12,15 +12,12 @@ const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 #[derive(Default, Props)]
 pub struct SidebarProps {
     pub gateway_label: String,
-    pub task_text: String,
-    pub streaming: bool,
-    pub elapsed: String,
-    pub spinner_tick: usize,
+    pub surface: rustyclaw_view::ChatSurfaceData,
 }
 
 #[component]
 pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
-    let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
+    let spinner = SPINNER_FRAMES[props.surface.spinner_tick % SPINNER_FRAMES.len()];
 
     element! {
         View(
@@ -38,13 +35,22 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
             View(margin_top: 1) {
                 Text(content: format!("Status: {}", props.gateway_label), color: theme::TEXT_DIM)
             }
+            View(margin_top: 1) {
+                Text(content: format!("Task: {}", props.surface.task_label()), color: theme::TEXT_DIM)
+            }
 
             // Streaming indicator
-            #(if props.streaming {
+            #(if props.surface.is_streaming || props.surface.is_thinking {
                 element! {
                     View(margin_top: 1, flex_direction: FlexDirection::Row) {
                         Text(content: format!("{} ", spinner), color: theme::ACCENT)
-                        Text(content: format!("Streaming {}", props.elapsed), color: theme::TEXT_DIM)
+                        Text(
+                            content: format!(
+                                "Streaming {}",
+                                props.surface.elapsed.as_deref().unwrap_or("")
+                            ),
+                            color: theme::TEXT_DIM,
+                        )
                     }
                 }.into_any()
             } else {

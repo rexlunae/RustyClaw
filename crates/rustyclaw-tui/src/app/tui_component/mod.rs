@@ -2041,9 +2041,15 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             on_submit: move |_val: String| {
                 // Submit handled by Enter key above
             },
-            task_text: if streaming.get() { "Streaming…".to_string() } else { "Idle".to_string() },
-            streaming: streaming.get(),
-            elapsed: elapsed.to_string(),
+            surface: rustyclaw_view::ChatSurfaceData {
+                is_processing: false,
+                is_thinking: false,
+                is_streaming: streaming.get(),
+                streaming_chunks: 0,
+                streaming_bytes: 0,
+                elapsed: Some(elapsed.to_string()),
+                spinner_tick: spinner_tick.get(),
+            },
             tab_data: {
                             let thread_refs = threads.read();
                             let tabs: Vec<rustyclaw_view::TabItemData> = thread_refs
@@ -2069,7 +2075,6 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             tab_focused: tab_focused.get(),
             tab_selected: tab_selected.get(),
             hint: prop_hint.clone(),
-            spinner_tick: spinner_tick.get(),
             show_auth_dialog: show_auth_dialog.get(),
             auth_code: auth_code.read().clone(),
             auth_error: auth_error.read().clone(),

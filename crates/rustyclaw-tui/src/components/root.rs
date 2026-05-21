@@ -60,16 +60,13 @@ pub struct RootProps {
     pub input_has_focus: bool,
 
     // sidebar
-    pub task_text: String,
-    pub streaming: bool,
-    pub elapsed: String,
+    pub surface: rustyclaw_view::ChatSurfaceData,
     pub tab_data: TabBarData,
     pub tab_focused: bool,
     pub tab_selected: usize,
 
     // status bar
     pub hint: String,
-    pub spinner_tick: usize,
 
     // auth dialog overlay
     pub show_auth_dialog: bool,
@@ -278,9 +275,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     Messages(
                         messages: props.messages.clone(),
                         scroll_offset: props.scroll_offset,
-                        streaming: props.streaming,
-                        spinner_tick: props.spinner_tick,
-                        elapsed: props.elapsed.clone(),
+                        surface: props.surface.clone(),
                         assistant_name: if props.soul_name.is_empty() {
                             None
                         } else {
@@ -304,19 +299,14 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 // Sidebar (simplified: no thread list)
                 Sidebar(
                     gateway_label: props.gateway_label.clone(),
-                    task_text: props.task_text.clone(),
-                    streaming: props.streaming,
-                    elapsed: props.elapsed.clone(),
-                    spinner_tick: props.spinner_tick,
+                    surface: props.surface.clone(),
                 )
             }
 
             // ── Status bar (1 row) ──────────────────────────────────────
             StatusBar(
                 hint: props.hint.clone(),
-                streaming: props.streaming,
-                elapsed: props.elapsed.clone(),
-                spinner_tick: props.spinner_tick,
+                surface: props.surface.clone(),
                 soul_name: props.soul_name.clone(),
                 model_label: props.model_label.clone(),
             )

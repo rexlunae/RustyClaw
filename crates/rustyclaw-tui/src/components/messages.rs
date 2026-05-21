@@ -20,19 +20,14 @@ const SPINNER_FRAMES: [char; 8] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '�
 pub struct MessagesProps {
     pub messages: Vec<DisplayMessage>,
     pub scroll_offset: i32,
-    /// Whether the model is currently streaming/thinking.
-    pub streaming: bool,
-    /// Tick counter for spinner animation.
-    pub spinner_tick: usize,
-    /// Elapsed time string (e.g., "2.3s").
-    pub elapsed: String,
+    pub surface: rustyclaw_view::ChatSurfaceData,
     /// Custom name to display for assistant messages.
     pub assistant_name: Option<String>,
 }
 
 #[component]
 pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
-    let spinner = SPINNER_FRAMES[props.spinner_tick % SPINNER_FRAMES.len()];
+    let spinner = SPINNER_FRAMES[props.surface.spinner_tick % SPINNER_FRAMES.len()];
     let assistant_name = props.assistant_name.clone();
 
     // Find the index of the most recent warning/error that carries
@@ -67,7 +62,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                 }))
 
                 // Streaming indicator at the bottom
-                #(if props.streaming {
+                #(if props.surface.is_streaming || props.surface.is_thinking {
                     element! {
                         View(
                             flex_direction: FlexDirection::Row,
@@ -79,7 +74,10 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                                 color: theme::ACCENT,
                             )
                             Text(
-                                content: format!("Thinking… {}", props.elapsed),
+                                content: format!(
+                                    "Thinking… {}",
+                                    props.surface.elapsed.as_deref().unwrap_or("")
+                                ),
                                 color: theme::MUTED,
                             )
                         }

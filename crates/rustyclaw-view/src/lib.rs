@@ -46,7 +46,10 @@ pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use composer::ComposerData;
-pub use conversation::{DisplayMessageData, latest_details_index};
+pub use conversation::{
+    ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData, TopBarData,
+    latest_details_index, starter_prompts,
+};
 pub use dialogs::{
     AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState, HatchingDialogData,
     PairingDialogData, PairingField, PairingStep, SecretInfoData, SecretsDialogData,

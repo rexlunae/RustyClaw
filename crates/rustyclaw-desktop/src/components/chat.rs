@@ -17,11 +17,7 @@ use super::messages::{Messages, ModelSelection};
 pub struct ChatProps {
     pub messages: Vec<ChatMessage>,
     pub input: String,
-    pub is_processing: bool,
-    pub is_thinking: bool,
-    pub is_streaming: bool,
-    pub streaming_chunks: u32,
-    pub streaming_bytes: usize,
+    pub surface: rustyclaw_view::ChatSurfaceData,
     pub agent_name: Option<String>,
     pub current_provider: Option<String>,
     pub current_model: Option<String>,
@@ -92,7 +88,7 @@ pub fn Chat(props: ChatProps) -> Element {
     });
 
     let on_submit = props.on_submit;
-    let is_processing = props.is_processing;
+    let is_processing = props.surface.is_processing;
 
     let mut send_now = move || {
         let text = input_ref.read().trim().to_string();
@@ -106,11 +102,7 @@ pub fn Chat(props: ChatProps) -> Element {
         div { class: "chat",
             Messages {
                 messages: props.messages.clone(),
-                is_processing: props.is_processing,
-                is_thinking: props.is_thinking,
-                is_streaming: props.is_streaming,
-                streaming_chunks: props.streaming_chunks,
-                streaming_bytes: props.streaming_bytes,
+                surface: props.surface.clone(),
                 agent_name: props.agent_name.clone(),
                 on_starter_pick: {
                     let on_input_change = props.on_input_change;

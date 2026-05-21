@@ -6,25 +6,21 @@ use iocraft::prelude::*;
 #[derive(Default, Props)]
 pub struct StatusBarProps {
     pub hint: String,
-    pub streaming: bool,
-    pub elapsed: String,
-    pub spinner_tick: usize,
+    pub surface: rustyclaw_view::ChatSurfaceData,
     pub soul_name: String,
     pub model_label: String,
 }
 
 #[component]
 pub fn StatusBar(props: &StatusBarProps) -> impl Into<AnyElement<'static>> {
-    let right_text = if props.streaming {
-        let ch = theme::SPINNER[props.spinner_tick % theme::SPINNER.len()];
-        format!("{} Streaming response {}", ch, props.elapsed)
-    } else if props.hint.is_empty() {
-        "Ctrl+C quit · /help commands · ↑↓ scroll".to_string()
+    let right_text = if props.surface.is_streaming || props.surface.is_thinking {
+        let ch = theme::SPINNER[props.surface.spinner_tick % theme::SPINNER.len()];
+        format!("{} {}", ch, props.surface.status_hint_text(&props.hint))
     } else {
-        props.hint.clone()
+        props.surface.status_hint_text(&props.hint)
     };
 
-    let right_color = if props.streaming {
+    let right_color = if props.surface.is_streaming || props.surface.is_thinking {
         theme::ACCENT
     } else {
         theme::MUTED

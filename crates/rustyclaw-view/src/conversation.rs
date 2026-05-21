@@ -1,6 +1,7 @@
 //! Shared conversation display models used by UI renderers.
 
 use rustyclaw_core::types::MessageRole;
+use rustyclaw_core::ui::{StreamingState, ThreadInfo};
 
 use crate::MessageBubbleData;
 
@@ -96,4 +97,160 @@ pub fn latest_details_index(messages: &[DisplayMessageData]) -> Option<usize> {
             matches!(m.role, MessageRole::Warning | MessageRole::Error) && m.details.is_some()
         })
         .map(|(idx, _)| idx)
+}
+
+/// A suggested starter prompt shown in empty-chat states.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StarterPromptData {
+    pub icon: &'static str,
+    pub title: &'static str,
+    pub prompt: &'static str,
+}
+
+const STARTER_PROMPTS: [StarterPromptData; 4] = [
+    StarterPromptData {
+        icon: "🔍",
+        title: "Explore the system",
+        prompt: "What can you do? List your available tools and capabilities.",
+    },
+    StarterPromptData {
+        icon: "📚",
+        title: "Summarise a topic",
+        prompt: "Give me a concise overview of how RustyClaw secures agent runtimes.",
+    },
+    StarterPromptData {
+        icon: "🛠️",
+        title: "Run a quick task",
+        prompt: "Help me draft a TOML config for connecting to a local Ollama provider.",
+    },
+    StarterPromptData {
+        icon: "🧠",
+        title: "Think out loud",
+        prompt: "Walk me through how you'd debug a failing tool call step by step.",
+    },
+];
+
+/// Shared empty-state copy and starter prompts.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct EmptyStateData {
+    pub agent_name: Option<String>,
+}
+
+impl EmptyStateData {
+    pub fn greeting(&self) -> String {
+        match self.agent_name.as_deref() {
+            Some(name) if !name.is_empty() => format!("How can {name} help you today?"),
+            _ => "How can I help you today?".to_string(),
+        }
+    }
+
+    pub fn subtitle(&self) -> &'static str {
+        "Pick a starter or just type below to begin."
+    }
+
+    pub fn starters(&self) -> &'static [StarterPromptData] {
+        starter_prompts()
+    }
+}
+
+pub fn starter_prompts() -> &'static [StarterPromptData] {
+    &STARTER_PROMPTS
+}
+
+/// Shared chat-surface progress state used by message panes and status areas.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ChatSurfaceData {
+    pub is_processing: bool,
+    pub is_thinking: bool,
+    pub is_streaming: bool,
+    pub streaming_chunks: u32,
+    pub streaming_bytes: usize,
+    pub elapsed: Option<String>,
+    pub spinner_tick: usize,
+}
+
+impl ChatSurfaceData {
+    pub fn task_label(&self) -> &'static str {
+        if self.is_streaming || self.is_thinking {
+            "Streaming…"
+        } else if self.is_processing {
+            "Processing…"
+        } else {
+            "Idle"
+        }
+    }
+
+    pub fn progress_summary(&self) -> Option<String> {
+        if self.is_streaming {
+            Some(
+                StreamingState {
+                    is_streaming: true,
+                    is_thinking: self.is_thinking,
+                    chunks: self.streaming_chunks,
+                    bytes: self.streaming_bytes,
+                    start_time: None,
+                }
+                .progress_summary(),
+            )
+        } else if self.is_processing {
+            Some("Processing…".to_string())
+        } else {
+            None
+        }
+    }
+
+    pub fn status_hint_text(&self, hint: &str) -> String {
+        if self.is_streaming || self.is_thinking {
+            let elapsed = self.elapsed.as_deref().unwrap_or("");
+            if elapsed.is_empty() {
+                "Streaming response".to_string()
+            } else {
+                format!("Streaming response {elapsed}")
+            }
+        } else if hint.is_empty() {
+            "Ctrl+C quit · /help commands · ↑↓ scroll".to_string()
+        } else {
+            hint.to_string()
+        }
+    }
+}
+
+/// Shared title/subtitle modelling for the desktop top bar.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TopBarData {
+    pub title: String,
+    pub subtitle: String,
+}
+
+impl TopBarData {
+    pub fn from_threads(
+        foreground_id: Option<u64>,
+        threads: &[ThreadInfo],
+        agent_name: Option<String>,
+        provider: Option<String>,
+        model: Option<String>,
+    ) -> Self {
+        let title = foreground_id
+            .and_then(|id| threads.iter().find(|t| t.id == id).cloned())
+            .and_then(|t| t.label.clone().or(Some(format!("Session #{}", t.id))))
+            .unwrap_or_else(|| "New conversation".to_string());
+
+        let sub_parts: Vec<String> = [
+            agent_name,
+            match (provider.as_ref(), model.as_ref()) {
+                (Some(p), Some(m)) => Some(format!("{p} · {m}")),
+                (None, Some(m)) => Some(m.clone()),
+                (Some(p), None) => Some(p.clone()),
+                _ => None,
+            },
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        Self {
+            title,
+            subtitle: sub_parts.join(" — "),
+        }
+    }
 }

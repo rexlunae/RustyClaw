@@ -11,7 +11,7 @@
 //!   - [`StreamingProgress`] — live chunk/byte counter during streaming
 
 use dioxus::prelude::*;
-use rustyclaw_core::ui::{ChatMessage, StreamingState};
+use rustyclaw_core::ui::ChatMessage;
 
 use super::message::MessageBubble;
 use super::tool_call::ToolCallPanel;
@@ -19,39 +19,11 @@ use super::tool_call::ToolCallPanel;
 /// (provider_id, model_id) pair emitted when the user changes model.
 pub type ModelSelection = (String, String);
 
-/// Suggested starter prompts shown on the empty state.
-const STARTERS: &[(&str, &str, &str)] = &[
-    (
-        "🔍",
-        "Explore the system",
-        "What can you do? List your available tools and capabilities.",
-    ),
-    (
-        "📚",
-        "Summarise a topic",
-        "Give me a concise overview of how RustyClaw secures agent runtimes.",
-    ),
-    (
-        "🛠️",
-        "Run a quick task",
-        "Help me draft a TOML config for connecting to a local Ollama provider.",
-    ),
-    (
-        "🧠",
-        "Think out loud",
-        "Walk me through how you'd debug a failing tool call step by step.",
-    ),
-];
-
 /// Props for [`Messages`].
 #[derive(Props, Clone, PartialEq)]
 pub struct MessagesProps {
     pub messages: Vec<ChatMessage>,
-    pub is_processing: bool,
-    pub is_thinking: bool,
-    pub is_streaming: bool,
-    pub streaming_chunks: u32,
-    pub streaming_bytes: usize,
+    pub surface: rustyclaw_view::ChatSurfaceData,
     pub agent_name: Option<String>,
     pub on_starter_pick: EventHandler<String>,
 }
@@ -62,7 +34,7 @@ pub fn Messages(props: MessagesProps) -> Element {
     let has_messages = !props.messages.is_empty();
 
     rsx! {
-        if !has_messages && !props.is_thinking {
+        if !has_messages && !props.surface.is_thinking {
             EmptyState {
                 agent_name: props.agent_name.clone(),
                 on_pick: props.on_starter_pick,
@@ -87,18 +59,17 @@ pub fn Messages(props: MessagesProps) -> Element {
                         }
                     }
 
-                    if props.is_thinking {
+                    if props.surface.is_thinking {
                         ThinkingIndicator {
                             agent_name: props.agent_name.clone(),
                         }
                     }
 
-                    if props.is_streaming {
+                    if props.surface.is_streaming {
                         StreamingProgress {
-                            chunks: props.streaming_chunks,
-                            bytes: props.streaming_bytes,
+                            surface: props.surface.clone(),
                         }
-                    } else if props.is_processing {
+                    } else if props.surface.is_processing {
                         ProcessingIndicator {}
                     }
                 }
@@ -117,32 +88,31 @@ struct EmptyStateProps {
 
 #[component]
 fn EmptyState(props: EmptyStateProps) -> Element {
-    let greeting = match props.agent_name.as_deref() {
-        Some(name) if !name.is_empty() => format!("How can {name} help you today?"),
-        _ => "How can I help you today?".to_string(),
+    let data = rustyclaw_view::EmptyStateData {
+        agent_name: props.agent_name,
     };
 
     rsx! {
         div { class: "empty-state",
             div { class: "empty-state-card",
                 div { class: "empty-state-mark", "🦞" }
-                h2 { "{greeting}" }
-                p { "Pick a starter or just type below to begin." }
+                h2 { "{data.greeting()}" }
+                p { "{data.subtitle()}" }
                 div { class: "starter-grid",
-                    for (icon, title, prompt) in STARTERS.iter() {
+                    for starter in data.starters().iter() {
                         button {
-                            key: "{title}",
+                            key: "{starter.title}",
                             class: "starter-card",
                             onclick: {
-                                let p = (*prompt).to_string();
+                                let p = starter.prompt.to_string();
                                 let cb = props.on_pick;
                                 move |_| cb.call(p.clone())
                             },
                             div { class: "starter-title",
-                                span { "{icon}" }
-                                span { "{title}" }
+                                span { "{starter.icon}" }
+                                span { "{starter.title}" }
                             }
-                            div { class: "starter-sub", "{prompt}" }
+                            div { class: "starter-sub", "{starter.prompt}" }
                         }
                     }
                 }
@@ -196,20 +166,15 @@ fn ProcessingIndicator() -> Element {
 
 #[derive(Props, Clone, PartialEq)]
 struct StreamingProgressProps {
-    chunks: u32,
-    bytes: usize,
+    surface: rustyclaw_view::ChatSurfaceData,
 }
 
 #[component]
 fn StreamingProgress(props: StreamingProgressProps) -> Element {
-    let state = StreamingState {
-        is_streaming: true,
-        is_thinking: false,
-        chunks: props.chunks,
-        bytes: props.bytes,
-        start_time: None,
-    };
-    let label = state.progress_summary();
+    let label = props
+        .surface
+        .progress_summary()
+        .unwrap_or_else(|| "Processing…".to_string());
 
     rsx! {
         div { class: "streaming-progress",

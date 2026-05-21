@@ -414,11 +414,13 @@ pub fn App() -> Element {
             div { class: "main",
                 // Top bar with current thread / model summary
                 TopBar {
-                    agent_name: state.read().agent_name.clone(),
-                    model: state.read().model.clone(),
-                    provider: state.read().provider.clone(),
-                    foreground_id: state.read().foreground_thread_id,
-                    threads: state.read().threads.clone(),
+                    data: rustyclaw_view::TopBarData::from_threads(
+                        state.read().foreground_thread_id,
+                        &state.read().threads,
+                        state.read().agent_name.clone(),
+                        state.read().provider.clone(),
+                        state.read().model.clone(),
+                    ),
                     on_secrets: move |_| {
                         show_secrets.set(true);
                         let gw = gateway.read().clone();
@@ -494,11 +496,15 @@ pub fn App() -> Element {
                 Chat {
                     messages: state.read().messages.iter().cloned().collect::<Vec<_>>(),
                     input: state.read().input.clone(),
-                    is_processing: state.read().is_processing,
-                    is_thinking: state.read().is_thinking,
-                    is_streaming: state.read().is_streaming,
-                    streaming_chunks: state.read().streaming_chunks,
-                    streaming_bytes: state.read().streaming_bytes,
+                    surface: rustyclaw_view::ChatSurfaceData {
+                        is_processing: state.read().is_processing,
+                        is_thinking: state.read().is_thinking,
+                        is_streaming: state.read().is_streaming,
+                        streaming_chunks: state.read().streaming_chunks,
+                        streaming_bytes: state.read().streaming_bytes,
+                        elapsed: None,
+                        spinner_tick: 0,
+                    },
                     agent_name: state.read().agent_name.clone(),
                     current_provider: state.read().provider.clone(),
                     current_model: state.read().model.clone(),
@@ -891,11 +897,7 @@ pub fn App() -> Element {
 
 #[derive(Props, Clone, PartialEq)]
 struct TopBarProps {
-    agent_name: Option<String>,
-    model: Option<String>,
-    provider: Option<String>,
-    foreground_id: Option<u64>,
-    threads: Vec<ThreadInfo>,
+    data: rustyclaw_view::TopBarData,
     on_secrets: EventHandler<()>,
     on_settings: EventHandler<()>,
     on_swarm: EventHandler<()>,
@@ -903,34 +905,13 @@ struct TopBarProps {
 
 #[component]
 fn TopBar(props: TopBarProps) -> Element {
-    let title = props
-        .foreground_id
-        .and_then(|id| props.threads.iter().find(|t| t.id == id).cloned())
-        .and_then(|t| t.label.clone().or(Some(format!("Session #{}", t.id))))
-        .unwrap_or_else(|| "New conversation".to_string());
-
-    let sub_parts: Vec<String> = [
-        props.agent_name.clone(),
-        match (props.provider.as_ref(), props.model.as_ref()) {
-            (Some(p), Some(m)) => Some(format!("{p} · {m}")),
-            (None, Some(m)) => Some(m.clone()),
-            (Some(p), None) => Some(p.clone()),
-            _ => None,
-        },
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
-
-    let sub_text = sub_parts.join(" — ");
-
     rsx! {
         div { class: "topbar",
             div {
                 style: "display: flex; flex-direction: column; min-width: 0;",
-                span { class: "topbar-title", "{title}" }
-                if !sub_text.is_empty() {
-                    span { class: "topbar-sub", "{sub_text}" }
+                span { class: "topbar-title", "{props.data.title}" }
+                if !props.data.subtitle.is_empty() {
+                    span { class: "topbar-sub", "{props.data.subtitle}" }
                 }
             }
             div { class: "topbar-right",
