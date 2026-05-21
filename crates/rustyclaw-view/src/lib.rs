@@ -37,6 +37,7 @@
 //! require touching event-processing code.
 
 pub mod composer;
+pub mod command_menu;
 pub mod conversation;
 pub mod dialogs;
 pub mod message;
@@ -46,6 +47,7 @@ pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use composer::ComposerData;
+pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use conversation::{
     ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData, TopBarData,
     latest_details_index, starter_prompts,

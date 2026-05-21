@@ -29,33 +29,6 @@ pub struct TuiRootProps {
 pub(super) static CHANNEL_RX: StdMutex<Option<sync_mpsc::Receiver<GwEvent>>> = StdMutex::new(None);
 pub(super) static CHANNEL_TX: StdMutex<Option<sync_mpsc::Sender<UserInput>>> = StdMutex::new(None);
 
-/// Build the slash-command autocomplete list for a `/{partial}` input.
-///
-/// Merges the static command names for `provider` with any live-fetched
-/// model IDs (deduplicating in case the live list overlaps the static
-/// fallback), then filters by the user's partial.  When `live_models` is
-/// `None`, only the static list is used.
-fn build_slash_completions(
-    provider: &str,
-    live_models: Option<&[String]>,
-    partial: &str,
-) -> Vec<String> {
-    let mut names = rustyclaw_core::commands::command_names_for_provider(provider);
-    if let Some(live) = live_models {
-        let mut seen: std::collections::HashSet<String> = names.iter().cloned().collect();
-        for model in live {
-            let entry = format!("model {}", model);
-            if seen.insert(entry.clone()) {
-                names.push(entry);
-            }
-        }
-    }
-    names
-        .into_iter()
-        .filter(|c| c.starts_with(partial))
-        .collect()
-}
-
 #[component]
 pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'static>> {
     let (width, height) = hooks.use_terminal_size();
@@ -701,7 +674,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     let current_input = input_value.read().clone();
                                     if let Some(partial) = current_input.strip_prefix('/') {
                                         if partial.starts_with("model") {
-                                            let filtered = build_slash_completions(
+                                            let filtered = rustyclaw_view::build_slash_completions(
                                                 &provider,
                                                 Some(&models),
                                                 partial,
@@ -1713,7 +1686,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 }
 
                 // Command menu intercepts when visible
-                let menu_open = !command_completions.read().is_empty();
+                let menu_open = rustyclaw_view::CommandMenuData {
+                    completions: command_completions.read().clone(),
+                    selected: command_selected.get(),
+                }
+                .is_open();
 
                 match code {
                     KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1739,58 +1716,57 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         }
                     }
                     KeyCode::Tab if menu_open => {
-                        // Cycle forward through completions
-                        let completions = command_completions.read().clone();
-                        let new_idx = match command_selected.get() {
-                            Some(i) => (i + 1) % completions.len(),
-                            None => 0,
+                        let mut menu = rustyclaw_view::CommandMenuData {
+                            completions: command_completions.read().clone(),
+                            selected: command_selected.get(),
                         };
-                        command_selected.set(Some(new_idx));
-                        // Apply the selected completion into the input
-                        if let Some(cmd) = completions.get(new_idx) {
-                            input_value.set(format!("/{}", cmd));
+                        if let Some(input) = menu.select_next_input_value() {
+                            input_value.set(input);
                         }
+                        command_completions.set(menu.completions);
+                        command_selected.set(menu.selected);
                     }
                     KeyCode::BackTab if menu_open => {
-                        // Cycle backward through completions
-                        let completions = command_completions.read().clone();
-                        let new_idx = match command_selected.get() {
-                            Some(0) | None => completions.len().saturating_sub(1),
-                            Some(i) => i - 1,
+                        let mut menu = rustyclaw_view::CommandMenuData {
+                            completions: command_completions.read().clone(),
+                            selected: command_selected.get(),
                         };
-                        command_selected.set(Some(new_idx));
-                        if let Some(cmd) = completions.get(new_idx) {
-                            input_value.set(format!("/{}", cmd));
+                        if let Some(input) = menu.select_prev_input_value() {
+                            input_value.set(input);
                         }
+                        command_completions.set(menu.completions);
+                        command_selected.set(menu.selected);
                     }
                     KeyCode::Up if menu_open => {
-                        // Navigate up through completions
-                        let completions = command_completions.read().clone();
-                        let new_idx = match command_selected.get() {
-                            Some(0) | None => completions.len().saturating_sub(1),
-                            Some(i) => i - 1,
+                        let mut menu = rustyclaw_view::CommandMenuData {
+                            completions: command_completions.read().clone(),
+                            selected: command_selected.get(),
                         };
-                        command_selected.set(Some(new_idx));
-                        if let Some(cmd) = completions.get(new_idx) {
-                            input_value.set(format!("/{}", cmd));
+                        if let Some(input) = menu.select_prev_input_value() {
+                            input_value.set(input);
                         }
+                        command_completions.set(menu.completions);
+                        command_selected.set(menu.selected);
                     }
                     KeyCode::Down if menu_open => {
-                        // Navigate down through completions
-                        let completions = command_completions.read().clone();
-                        let new_idx = match command_selected.get() {
-                            Some(i) => (i + 1) % completions.len(),
-                            None => 0,
+                        let mut menu = rustyclaw_view::CommandMenuData {
+                            completions: command_completions.read().clone(),
+                            selected: command_selected.get(),
                         };
-                        command_selected.set(Some(new_idx));
-                        if let Some(cmd) = completions.get(new_idx) {
-                            input_value.set(format!("/{}", cmd));
+                        if let Some(input) = menu.select_next_input_value() {
+                            input_value.set(input);
                         }
+                        command_completions.set(menu.completions);
+                        command_selected.set(menu.selected);
                     }
                     KeyCode::Esc if menu_open => {
-                        // Close the command menu
-                        command_completions.set(Vec::new());
-                        command_selected.set(None);
+                        let mut menu = rustyclaw_view::CommandMenuData {
+                            completions: command_completions.read().clone(),
+                            selected: command_selected.get(),
+                        };
+                        menu.clear();
+                        command_completions.set(menu.completions);
+                        command_selected.set(menu.selected);
                     }
                     KeyCode::Enter if tab_focused.get() => {
                         let thread_list = threads.read().clone();
@@ -1809,9 +1785,13 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         let val = input_value.to_string();
                         if !val.is_empty() {
                             input_value.set(String::new());
-                            // Close command menu
-                            command_completions.set(Vec::new());
-                            command_selected.set(None);
+                            let mut menu = rustyclaw_view::CommandMenuData {
+                                completions: command_completions.read().clone(),
+                                selected: command_selected.get(),
+                            };
+                            menu.clear();
+                            command_completions.set(menu.completions);
+                            command_selected.set(menu.selected);
                             // Snap to bottom so user sees their message + response
                             scroll_offset.set(0);
                             if let Ok(guard) = tx_for_keys.lock() {
@@ -2021,7 +2001,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                     let live_models = model_completion_models.read().clone();
                     let live_provider_matches =
                         model_completion_provider.read().as_deref() == Some(current_pid.as_str());
-                    let filtered = build_slash_completions(
+                    let filtered = rustyclaw_view::build_slash_completions(
                         &current_pid,
                         if live_provider_matches { Some(live_models.as_slice()) } else { None },
                         partial,
@@ -2052,25 +2032,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             },
             tab_data: {
                             let thread_refs = threads.read();
-                            let tabs: Vec<rustyclaw_view::TabItemData> = thread_refs
-                                .iter()
-                                .map(|t| rustyclaw_view::TabItemData {
-                                    id: t.id,
-                                    label: if t.label.is_empty() {
-                                        None
-                                    } else {
-                                        Some(t.label.clone())
-                                    },
-                                    is_foreground: t.is_foreground,
-                                    message_count: t.message_count,
-                                })
-                                .collect();
-                            let fg_id = tabs
-                                .iter()
-                                .find(|t| t.is_foreground)
-                                .map(|t| t.id)
-                                .unwrap_or(0);
-                            rustyclaw_view::TabBarData { tabs, foreground_id: fg_id }
+                            rustyclaw_view::TabBarData::from_gateway_threads(&thread_refs)
                         },
             tab_focused: tab_focused.get(),
             tab_selected: tab_selected.get(),

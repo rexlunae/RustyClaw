@@ -21,21 +21,11 @@ pub fn CommandMenu(props: &CommandMenuProps) -> impl Into<AnyElement<'static>> {
     }
 
     let max_visible = 12usize;
-    let total = props.completions.len();
-    let selected = props.selected.unwrap_or(0).min(total.saturating_sub(1));
-    let start = if total <= max_visible {
-        0
-    } else {
-        let half = max_visible / 2;
-        let start = selected.saturating_sub(half);
-        let end = (start + max_visible).min(total);
-        if end == total {
-            total.saturating_sub(max_visible)
-        } else {
-            start
-        }
+    let data = rustyclaw_view::CommandMenuData {
+        completions: props.completions.clone(),
+        selected: props.selected,
     };
-    let end = (start + max_visible).min(total);
+    let (start, end, selected) = data.visible_window(max_visible);
     let max_rows = (end - start) as u32;
 
     element! {
@@ -47,9 +37,9 @@ pub fn CommandMenu(props: &CommandMenuProps) -> impl Into<AnyElement<'static>> {
             border_color: theme::ACCENT,
             background_color: theme::BG_SURFACE,
         ) {
-            #(props.completions[start..end].iter().enumerate().map(|(offset, cmd)| {
+            #(data.completions[start..end].iter().enumerate().map(|(offset, cmd)| {
                 let i = start + offset;
-                let is_selected = props.selected == Some(i);
+                let is_selected = selected == i;
                 let bg = if is_selected { theme::ACCENT_DIM } else { theme::BG_SURFACE };
                 let fg = if is_selected { theme::ACCENT_BRIGHT } else { theme::TEXT };
                 element! {
