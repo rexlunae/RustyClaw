@@ -704,7 +704,7 @@ async fn handle_connection(
 
     // Snapshot config and model context for this connection.
     // Reload updates the shared state; new connections pick up changes.
-    let config = shared_config.read().await.clone();
+    let mut config = shared_config.read().await.clone();
     let model_ctx = shared_model_ctx.read().await.clone();
 
     // Thread manager for multi-task conversations.
@@ -1837,9 +1837,24 @@ async fn handle_connection(
                                 debug!("Agent name change: {}", name);
                                 {
                                     let mut cfg = shared_config.write().await;
-                                    cfg.agent_name = name;
+                                    cfg.agent_name = name.clone();
                                     let _ = cfg.save(None);
                                 }
+                                config.agent_name = name;
+                            }
+                            ClientPayload::SetWorkingDirectory { path } => {
+                                debug!("Working directory change: {}", path);
+                                let new_dir = std::path::PathBuf::from(&path);
+                                config.workspace_dir = Some(new_dir.clone());
+                                // Re-register sandbox with the new workspace dir so tool
+                                // access controls apply to the new location.
+                                let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
+                                tools::init_sandbox(
+                                    sandbox_mode,
+                                    new_dir,
+                                    config.credentials_dir(),
+                                    config.sandbox.deny_paths.clone(),
+                                );
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.

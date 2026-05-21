@@ -115,7 +115,17 @@ pub struct DiaryEntry {
 
 // Helper functions for spawn_blocking with explicit return types
 fn load_embedding_model() -> Result<TextEmbedding, String> {
-    TextEmbedding::try_new(InitOptions::new(EmbeddingModel::AllMiniLML6V2))
+    // Pin the model cache under RustyClaw's settings directory so it stays
+    // alongside the rest of the app state instead of landing in the current
+    // process working directory.
+    let cache_dir = dirs::home_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".rustyclaw")
+        .join("cache")
+        .join("fastembed");
+    let _ = std::fs::create_dir_all(&cache_dir);
+    let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir);
+    TextEmbedding::try_new(opts)
         .map_err(|e| format!("Failed to load embedding model: {}", e))
 }
 

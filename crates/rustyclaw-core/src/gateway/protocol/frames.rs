@@ -66,6 +66,8 @@ pub enum ClientFrameType {
     DomQueryResponse = 27,
     /// Set the agent display name (persisted to config).
     SetAgentName = 28,
+    /// Set the working directory for tool execution.
+    SetWorkingDirectory = 29,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -329,6 +331,10 @@ pub enum ClientPayload {
     /// Set the agent display name (persisted to config).
     SetAgentName {
         name: String,
+    },
+    /// Set the working directory for all tool execution.
+    SetWorkingDirectory {
+        path: String,
     },
 }
 

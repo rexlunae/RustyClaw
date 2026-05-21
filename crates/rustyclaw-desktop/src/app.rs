@@ -616,6 +616,16 @@ pub fn App() -> Element {
                                             "Working directory set to {}",
                                             display_path(&selected)
                                         ));
+                                        // Tell the gateway so agent tools use the new dir.
+                                        let gw = gateway.read().clone();
+                                        if let Some(client) = gw {
+                                            let path = selected.clone();
+                                            spawn(async move {
+                                                let _ = client
+                                                    .send(GatewayCommand::SetWorkingDirectory { path })
+                                                    .await;
+                                            });
+                                        }
                                     }
                                     Err(e) => {
                                         let mut s = state.write();
@@ -643,6 +653,16 @@ pub fn App() -> Element {
                                     "Working directory set to {}",
                                     display_path(&path)
                                 ));
+                                // Tell the gateway so agent tools use the new dir.
+                                let gw = gateway.read().clone();
+                                if let Some(client) = gw {
+                                    let p = path.clone();
+                                    spawn(async move {
+                                        let _ = client
+                                            .send(GatewayCommand::SetWorkingDirectory { path: p })
+                                            .await;
+                                    });
+                                }
                             }
                             Err(e) => {
                                 let mut s = state.write();

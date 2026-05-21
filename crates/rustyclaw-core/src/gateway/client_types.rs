@@ -238,6 +238,10 @@ pub enum GatewayCommand {
     #[serde(rename = "set_agent_name")]
     SetAgentName { name: String },
 
+    /// Set the working directory for tool execution
+    #[serde(rename = "set_working_directory")]
+    SetWorkingDirectory { path: String },
+
     /// Store a secret (API key) in the gateway vault
     #[serde(rename = "secrets_store")]
     SecretsStore { key: String, value: String },
