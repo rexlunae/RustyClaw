@@ -172,6 +172,18 @@ pub struct ThreadMessage {
     pub role: MessageRole,
     pub content: String,
     pub timestamp: SystemTime,
+    /// Tool calls requested by an assistant turn (normalized form:
+    /// `Vec<{id, name, arguments}>`). Stored verbatim so any client can
+    /// faithfully replay the activity for this turn. Optional and
+    /// skipped on serialize when absent for backward compatibility with
+    /// existing `threads.json` files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
+    /// For role == Tool: the id of the tool call this message is the
+    /// result of. Used by clients to associate results with the call
+    /// that produced them.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_call_id: Option<String>,
 }
 
 /// Message role.
@@ -374,6 +386,42 @@ impl AgentThread {
             role,
             content: content.into(),
             timestamp: SystemTime::now(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        self.last_activity = SystemTime::now();
+    }
+
+    /// Add an assistant turn that issued tool calls. `text` may be empty
+    /// when the model produced only tool calls. `tool_calls` is the
+    /// normalized JSON form (`Vec<{id, name, arguments}>`).
+    pub fn add_assistant_with_tool_calls(
+        &mut self,
+        text: impl Into<String>,
+        tool_calls: serde_json::Value,
+    ) {
+        self.messages.push_back(ThreadMessage {
+            role: MessageRole::Assistant,
+            content: text.into(),
+            timestamp: SystemTime::now(),
+            tool_calls: Some(tool_calls),
+            tool_call_id: None,
+        });
+        self.last_activity = SystemTime::now();
+    }
+
+    /// Add a tool-result message linked to the originating call's id.
+    pub fn add_tool_result(
+        &mut self,
+        tool_call_id: impl Into<String>,
+        output: impl Into<String>,
+    ) {
+        self.messages.push_back(ThreadMessage {
+            role: MessageRole::Tool,
+            content: output.into(),
+            timestamp: SystemTime::now(),
+            tool_calls: None,
+            tool_call_id: Some(tool_call_id.into()),
         });
         self.last_activity = SystemTime::now();
     }

@@ -243,6 +243,13 @@ pub enum Action {
         thread_id: u64,
         context_summary: Option<String>,
     },
+    /// Gateway delivered a thread's persisted history.
+    ThreadHistory {
+        thread_id: u64,
+        ok: bool,
+        messages: Vec<rustyclaw_core::gateway::protocol::types::ChatMessage>,
+        error: Option<String>,
+    },
     /// A long-running slash-command tool finished (msg, is_error)
     ToolCommandDone {
         message: String,

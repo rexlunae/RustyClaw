@@ -675,6 +675,16 @@ async fn send_threads_update(
         }
     }
 
+    info!(
+        total_threads = threads.len(),
+        foreground_id = ?foreground_id,
+        captions = ?threads
+            .iter()
+            .map(|t| format!("{}:{}", t.id, t.label))
+            .collect::<Vec<_>>(),
+        "Sending ThreadsUpdate"
+    );
+
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThreadsUpdate,
         payload: ServerPayload::ThreadsUpdate {
@@ -1380,6 +1390,7 @@ async fn handle_connection(
                                 // Add user message to current thread's history
                                 let mut did_auto_label = false;
                                 let mut needs_caption = false;
+                                let mut did_append_user_message = false;
                                 if let Some(thread) = thread_mgr.foreground_mut() {
                                     // Find the last user message (typically the new one)
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
@@ -1392,6 +1403,7 @@ async fn handle_connection(
                                             crate::threads::MessageRole::User,
                                             &last_user.content,
                                         );
+                                        did_append_user_message = true;
                                         if is_first_message {
                                             // Set a temporary auto-label as fallback
                                             let label = auto_thread_label(&last_user.content);
@@ -1402,9 +1414,13 @@ async fn handle_connection(
                                         }
                                     }
                                 }
+                                if did_append_user_message
+                                    && let Err(e) = thread_mgr.save_to_file(&threads_path)
+                                {
+                                    warn!(error = %e, path = ?threads_path, "Failed to persist user message to thread history");
+                                }
                                 if did_auto_label {
                                     send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                    let _ = thread_mgr.save_to_file(&threads_path);
                                 }
 
                                 // Auto-ingest user message into Steel Memory
@@ -1742,6 +1758,56 @@ async fn handle_connection(
                             ClientPayload::ThreadList => {
                                 debug!("Thread list request");
                                 send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                            }
+                            ClientPayload::ThreadHistoryRequest { thread_id } => {
+                                debug!("Thread history request: {}", thread_id);
+                                let target_id = crate::threads::ThreadId(thread_id);
+                                let (ok, messages, error) = match thread_mgr.get(target_id) {
+                                    Some(thread) => {
+                                        let wire: Vec<ChatMessage> = thread
+                                            .messages
+                                            .iter()
+                                            .map(|m| {
+                                                let role = match m.role {
+                                                    crate::threads::MessageRole::User => "user",
+                                                    crate::threads::MessageRole::Assistant => "assistant",
+                                                    crate::threads::MessageRole::System => "system",
+                                                    crate::threads::MessageRole::Tool => "tool",
+                                                };
+                                                ChatMessage {
+                                                    role: role.to_string(),
+                                                    content: m.content.clone(),
+                                                    tool_calls: m.tool_calls.clone(),
+                                                    tool_call_id: m.tool_call_id.clone(),
+                                                    media: None,
+                                                }
+                                            })
+                                            .collect();
+                                        info!(
+                                            thread_id,
+                                            caption = %thread.label,
+                                            message_count = wire.len(),
+                                            "Gateway loaded thread history"
+                                        );
+                                        (true, wire, None)
+                                    }
+                                    None => (
+                                        false,
+                                        Vec::new(),
+                                        Some(format!("Thread {} not found", thread_id)),
+                                    ),
+                                };
+                                let frame = ServerFrame {
+                                    frame_type: ServerFrameType::ThreadHistoryReply,
+                                    payload: ServerPayload::ThreadHistoryReply {
+                                        thread_id,
+                                        ok,
+                                        messages,
+                                        error,
+                                    },
+                                };
+                                debug!(thread_id, ok, "Sending ThreadHistoryReply");
+                                send_frame(&mut *writer, &frame).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 debug!("Thread close request: {}", thread_id);
@@ -2548,6 +2614,9 @@ async fn dispatch_text_message(
                         thread
                             .add_message(crate::threads::MessageRole::Assistant, &model_resp.text);
                     }
+                    // Persist the final assistant turn so reconnecting
+                    // clients see it via ThreadHistoryRequest.
+                    let _ = thread_mgr.save_to_file(threads_path);
                     // Auto-ingest assistant response into Steel Memory
                     let ws = workspace_dir.to_path_buf();
                     let text = model_resp.text.clone();
@@ -2763,6 +2832,32 @@ async fn dispatch_text_message(
             &model_resp,
             &tool_results,
         );
+
+        // ── Persist this turn to the foreground thread's history ──
+        // We store a normalized form (Vec<{id,name,arguments}>) so any
+        // client can faithfully replay this round regardless of which
+        // provider produced it.
+        if let Some(thread) = thread_mgr.foreground_mut() {
+            let normalized: Vec<serde_json::Value> = model_resp
+                .tool_calls
+                .iter()
+                .map(|tc| {
+                    serde_json::json!({
+                        "id": tc.id,
+                        "name": tc.name,
+                        "arguments": tc.arguments,
+                    })
+                })
+                .collect();
+            thread.add_assistant_with_tool_calls(
+                model_resp.text.clone(),
+                serde_json::Value::Array(normalized),
+            );
+            for tr in &tool_results {
+                thread.add_tool_result(tr.id.clone(), tr.output.clone());
+            }
+        }
+        let _ = thread_mgr.save_to_file(threads_path);
     }
 
     // If we exhausted all rounds, send what we have and stop.

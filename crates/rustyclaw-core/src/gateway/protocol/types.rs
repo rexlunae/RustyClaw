@@ -16,7 +16,7 @@ static COUNTER: AtomicU64 = AtomicU64::new(1);
 /// - Downloaded from the original URL (may expire)
 /// - Retrieved from the local cache path
 /// - Requested via the gateway's media endpoint
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MediaRef {
     /// Unique ID for referencing this media (e.g., "img_001")
     pub id: String,
@@ -79,7 +79,7 @@ fn format_size(bytes: usize) -> String {
 }
 
 /// A single message in a chat conversation.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     #[serde(default)]

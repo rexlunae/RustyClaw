@@ -236,6 +236,20 @@ impl AppState {
         self.thread_messages.insert(thread_id, messages);
     }
 
+    /// Replace the cached messages for a thread with an authoritative
+    /// history from the gateway. If the thread is currently in the
+    /// foreground, also refresh the live view.
+    pub fn apply_thread_history(
+        &mut self,
+        thread_id: u64,
+        messages: VecDeque<ChatMessage>,
+    ) {
+        self.thread_messages.insert(thread_id, messages.clone());
+        if self.foreground_thread_id == Some(thread_id) {
+            self.messages = messages;
+        }
+    }
+
     /// Switch to a different thread, saving current messages and
     /// restoring the target thread's history.
     pub fn switch_thread(&mut self, target_id: u64) {

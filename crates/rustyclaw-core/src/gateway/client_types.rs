@@ -118,6 +118,14 @@ pub enum GatewayEvent {
         foreground_id: Option<u64>,
     },
 
+    /// Authoritative, cross-session conversation history for a thread.
+    ThreadHistory {
+        thread_id: u64,
+        ok: bool,
+        messages: Vec<crate::gateway::protocol::types::ChatMessage>,
+        error: Option<String>,
+    },
+
     /// Error from gateway
     Error { message: String },
 
@@ -205,6 +213,10 @@ pub enum GatewayCommand {
     /// Request the current thread list
     #[serde(rename = "thread_list")]
     ThreadList,
+
+    /// Request the gateway-persisted history for a thread
+    #[serde(rename = "thread_history_request")]
+    ThreadHistoryRequest { thread_id: u64 },
 
     /// Close/delete a thread
     #[serde(rename = "thread_close")]

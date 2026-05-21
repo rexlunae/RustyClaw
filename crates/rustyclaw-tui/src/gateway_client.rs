@@ -255,6 +255,17 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
                 context_summary: context_summary.clone(),
             })
         }
+        ServerPayload::ThreadHistoryReply {
+            thread_id,
+            ok,
+            messages,
+            error,
+        } => FrameAction::just_action(Action::ThreadHistory {
+            thread_id: *thread_id,
+            ok: *ok,
+            messages: messages.clone(),
+            error: error.clone(),
+        }),
         ServerPayload::CredentialRequest {
             id,
             provider,

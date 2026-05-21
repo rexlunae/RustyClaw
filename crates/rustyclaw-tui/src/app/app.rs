@@ -101,6 +101,8 @@ pub(crate) enum UserInput {
     RefreshThreads,
     /// Switch to a different thread
     ThreadSwitch(u64),
+    /// Request the gateway-persisted history for a thread (cross-session/client).
+    RequestThreadHistory(u64),
     /// Request identity generation for hatching
     HatchingRequest,
     /// Hatching response received - save to SOUL.md
@@ -964,6 +966,17 @@ impl App {
                         }
                     }
                 }
+                Ok(UserInput::RequestThreadHistory(thread_id)) => {
+                    if let Some(ref mut sink) = gw_writer {
+                        let frame = ClientFrame {
+                            frame_type: ClientFrameType::ThreadHistoryRequest,
+                            payload: ClientPayload::ThreadHistoryRequest { thread_id },
+                        };
+                        if let Ok(data) = serialize_frame(&frame) {
+                            let _ = sink.send_raw(&data).await;
+                        }
+                    }
+                }
                 Ok(UserInput::RefreshThreads) => {
                     if let Some(ref mut sink) = gw_writer {
                         let frame = ClientFrame {
@@ -1536,7 +1549,17 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
             thread_id: *thread_id,
             context_summary: context_summary.clone(),
         }),
-
+        Action::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
+        } => Some(GwEvent::ThreadHistory {
+            thread_id: *thread_id,
+            ok: *ok,
+            messages: messages.clone(),
+            error: error.clone(),
+        }),
         // ── Generic messages ────────────────────────────────────────────
         Action::Info(s) => Some(GwEvent::Info(s.clone())),
         Action::Success(s) => Some(GwEvent::Success(s.clone())),

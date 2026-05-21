@@ -291,6 +291,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::ThreadList,
             payload: ClientPayload::ThreadList,
         },
+        GatewayCommand::ThreadHistoryRequest { thread_id } => ClientFrame {
+            frame_type: ClientFrameType::ThreadHistoryRequest,
+            payload: ClientPayload::ThreadHistoryRequest { thread_id },
+        },
         GatewayCommand::ThreadClose { thread_id } => ClientFrame {
             frame_type: ClientFrameType::ThreadClose,
             payload: ClientPayload::ThreadClose { thread_id },
@@ -485,6 +489,17 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
                 })
                 .collect(),
             foreground_id,
+        }),
+        ServerPayload::ThreadHistoryReply {
+            thread_id,
+            ok,
+            messages,
+            error,
+        } => Some(GatewayEvent::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
         }),
         ServerPayload::SecretsListResult { ok, entries } => {
             Some(GatewayEvent::SecretsListResult {

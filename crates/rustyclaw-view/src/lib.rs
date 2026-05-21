@@ -53,7 +53,8 @@ pub use composer::{
 };
 pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use conversation::{
-    ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData, TopBarData,
+    convert_history, ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData,
+    TopBarData,
     latest_details_index, starter_prompts,
 };
 pub use dialogs::{

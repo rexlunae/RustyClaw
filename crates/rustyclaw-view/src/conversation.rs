@@ -111,6 +111,75 @@ impl DisplayMessageData {
             has_details,
         }
     }
+
+    /// Convert a wire `ChatMessage` (as carried in `ThreadHistoryReply`) into a
+    /// renderer-facing `DisplayMessageData`. Unknown roles fall back to
+    /// `MessageRole::System` so the message is still surfaced.
+    pub fn from_chat_message(
+        msg: &rustyclaw_core::gateway::protocol::types::ChatMessage,
+    ) -> Self {
+        let role = match msg.role.as_str() {
+            "user" => MessageRole::User,
+            "assistant" => MessageRole::Assistant,
+            "tool" => MessageRole::ToolResult,
+            "system" => MessageRole::System,
+            _ => MessageRole::System,
+        };
+        let mut data = Self::new(role, msg.content.clone());
+        // Surface tool calls embedded in an assistant turn so the
+        // history view shows the same activity that was visible live.
+        // We accept the normalized form `[{id, name, arguments}, ...]`
+        // emitted by the gateway when persisting tool rounds.
+        if let Some(tcs) = &msg.tool_calls {
+            if let Some(arr) = tcs.as_array() {
+                for tc in arr {
+                    let id = tc
+                        .get("id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let name = tc
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let arguments = tc
+                        .get("arguments")
+                        .map(|v| v.to_string())
+                        .unwrap_or_default();
+                    data.add_tool_call(id, name, arguments);
+                }
+            }
+        }
+        data
+    }
+}
+
+/// Convert a contiguous slice of wire `ChatMessage`s into renderer-facing
+/// `DisplayMessageData`. Tool-result messages (role == \"tool\") are
+/// folded into the preceding assistant turn's matching tool call by id
+/// rather than emitted as a separate bubble — matching how the live
+/// stream rendered them. Tool results without a matching call are kept
+/// as standalone `ToolResult` messages.
+pub fn convert_history(
+    msgs: &[rustyclaw_core::gateway::protocol::types::ChatMessage],
+) -> Vec<DisplayMessageData> {
+    let mut out: Vec<DisplayMessageData> = Vec::with_capacity(msgs.len());
+    for m in msgs {
+        if m.role == "tool" {
+            if let Some(call_id) = &m.tool_call_id {
+                if let Some(prev) = out.iter_mut().rev().find(|d| {
+                    d.role == MessageRole::Assistant
+                        && d.tool_calls.iter().any(|tc| &tc.id == call_id)
+                }) {
+                    prev.set_tool_result(call_id, m.content.clone(), false);
+                    continue;
+                }
+            }
+        }
+        out.push(DisplayMessageData::from_chat_message(m));
+    }
+    out
 }
 
 /// Find the newest warning/error message that carries extended details.

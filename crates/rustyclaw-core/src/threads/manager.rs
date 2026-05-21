@@ -445,6 +445,9 @@ impl ThreadManager {
 
     /// Save threads to a file.
     pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         let state = PersistentState {
             threads: self.threads.values().cloned().collect(),
             foreground_id: self.foreground_id,
@@ -486,6 +489,12 @@ impl ThreadManager {
                 debug!("Creating new thread manager (load failed: {})", e);
                 let mut mgr = Self::new();
                 mgr.create_chat("Main");
+                if let Err(save_err) = mgr.save_to_file(path) {
+                    debug!(
+                        "Failed to persist default thread manager to {:?}: {}",
+                        path, save_err
+                    );
+                }
                 mgr
             }
         }

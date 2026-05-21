@@ -1,4 +1,5 @@
 use iocraft::prelude::*;
+use std::collections::HashMap;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
@@ -137,6 +138,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
     let mut tab_focused = hooks.use_state(|| false);
     let mut tab_selected = hooks.use_state(|| 0usize);
+    // Per-thread message cache so switching tabs restores prior
+    // scrollback instead of clearing the chat (matches desktop client).
+    let mut thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>> =
+        hooks.use_state(HashMap::new);
+    let mut foreground_thread_id: State<Option<u64>> = hooks.use_state(|| None);
 
     // ── Command menu (slash-command completions) ────────────────────
     let mut command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -584,12 +590,42 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     threads: mut thread_list,
                                     foreground_id,
                                 } => {
+                                    let previous_foreground = foreground_thread_id.get();
+                                    tracing::info!(
+                                        total_threads = thread_list.len(),
+                                        foreground_id = ?foreground_id,
+                                        captions = ?thread_list
+                                            .iter()
+                                            .map(|t| format!("{}:{}", t.id, t.label))
+                                            .collect::<Vec<_>>(),
+                                        "TUI ThreadsUpdate received"
+                                    );
                                     if let Some(active_id) = foreground_id {
                                         for thread in &mut thread_list {
                                             thread.is_foreground = thread.id == active_id;
                                         }
                                     }
                                     threads.set(thread_list);
+                                    // Keep local foreground in sync and request
+                                    // authoritative history when gateway picks
+                                    // a new foreground (including initial load).
+                                    if foreground_id != previous_foreground {
+                                        foreground_thread_id.set(foreground_id);
+                                        if let Some(thread_id) = foreground_id {
+                                            tracing::info!(
+                                                thread_id,
+                                                previous_foreground = ?previous_foreground,
+                                                "TUI requesting thread history after ThreadsUpdate"
+                                            );
+                                            if let Ok(guard) = tx_for_history.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.send(
+                                                        UserInput::RequestThreadHistory(thread_id),
+                                                    );
+                                                }
+                                            }
+                                        }
+                                    }
                                     // Update tab_selected to stay in bounds
                                     let count = threads.read().len();
                                     if count > 0 && tab_selected.get() >= count {
@@ -600,22 +636,119 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     thread_id,
                                     context_summary,
                                 } => {
-                                    // Clear messages for the new thread
-                                    let mut m = Vec::new();
-                                    m.push(DisplayMessage::info(format!(
-                                        "Switched to thread (id: {})",
-                                        thread_id
-                                    )));
-                                    // Show context summary if available
-                                    if let Some(summary) = context_summary {
-                                        m.push(DisplayMessage::assistant(format!(
-                                            "[Previous context]\n\n{}",
-                                            summary
-                                        )));
+                                    // Save the outgoing thread's scrollback
+                                    // before swapping so we can restore it on
+                                    // a future switch back.
+                                    let previous_id = foreground_thread_id.get();
+                                    let current_messages = messages.read().clone();
+                                    if let Some(prev) = previous_id {
+                                        if prev != thread_id {
+                                            let mut cache =
+                                                thread_messages_cache.read().clone();
+                                            if current_messages.is_empty() {
+                                                cache.remove(&prev);
+                                            } else {
+                                                cache.insert(prev, current_messages);
+                                            }
+                                            thread_messages_cache.set(cache);
+                                        }
                                     }
-                                    messages.set(m);
+
+                                    // Restore cached scrollback for the new
+                                    // thread, or fall back to the gateway's
+                                    // context summary if no cache exists.
+                                    let cached = thread_messages_cache
+                                        .read()
+                                        .get(&thread_id)
+                                        .cloned();
+                                    let mut m = match cached {
+                                        Some(prior) if !prior.is_empty() => prior,
+                                        _ => {
+                                            let mut seed = Vec::new();
+                                            seed.push(DisplayMessage::info(format!(
+                                                "Switched to thread (id: {})",
+                                                thread_id
+                                            )));
+                                            if let Some(summary) = context_summary {
+                                                seed.push(DisplayMessage::assistant(
+                                                    format!(
+                                                        "[Previous context]\n\n{}",
+                                                        summary
+                                                    ),
+                                                ));
+                                            }
+                                            seed
+                                        }
+                                    };
+                                    messages.set(std::mem::take(&mut m));
+                                    foreground_thread_id.set(Some(thread_id));
+                                    // Ask the gateway for the authoritative,
+                                    // cross-session history for this thread so
+                                    // the local cache stays consistent with
+                                    // what the gateway has persisted.
+                                    if let Ok(guard) = tx_for_history.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.send(
+                                                UserInput::RequestThreadHistory(thread_id),
+                                            );
+                                        }
+                                    }
                                     // Unfocus tab after switch
                                     tab_focused.set(false);
+                                }
+                                GwEvent::ThreadHistory {
+                                    thread_id,
+                                    ok,
+                                    messages: history,
+                                    error,
+                                } => {
+                                    if !ok {
+                                        if let Some(err) = error {
+                                            tracing::warn!(
+                                                thread_id,
+                                                error = %err,
+                                                "TUI thread history request failed"
+                                            );
+                                            let mut m = messages.read().clone();
+                                            m.push(DisplayMessage::warning(format!(
+                                                "Could not load history for thread {}: {}",
+                                                thread_id, err
+                                            )));
+                                            messages.set(m);
+                                        }
+                                    } else {
+                                        tracing::info!(
+                                            thread_id,
+                                            incoming_messages = history.len(),
+                                            foreground = ?foreground_thread_id.get(),
+                                            "TUI thread history reply received"
+                                        );
+                                        let converted: Vec<DisplayMessage> =
+                                            rustyclaw_view::convert_history(&history);
+                                        tracing::info!(
+                                            thread_id,
+                                            converted_messages = converted.len(),
+                                            "TUI thread history converted"
+                                        );
+                                        // Update the cache so a future
+                                        // switch-back is also authoritative.
+                                        let mut cache =
+                                            thread_messages_cache.read().clone();
+                                        if converted.is_empty() {
+                                            cache.remove(&thread_id);
+                                        } else {
+                                            cache.insert(thread_id, converted.clone());
+                                        }
+                                        thread_messages_cache.set(cache);
+                                        // Only replace the live view if this
+                                        // reply is for the thread the user is
+                                        // currently looking at.
+                                        if foreground_thread_id.get()
+                                            == Some(thread_id)
+                                        {
+                                            messages.set(converted);
+                                        }
+                                    }
                                 }
                                 GwEvent::ShowProviderSelector { providers, provider_ids, auth_hints } => {
                                     provider_selector_items.set(providers);

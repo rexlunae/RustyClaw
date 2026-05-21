@@ -93,6 +93,13 @@ pub(crate) enum GwEvent {
         thread_id: u64,
         context_summary: Option<String>,
     },
+    /// Authoritative thread history from the gateway, in chronological order.
+    ThreadHistory {
+        thread_id: u64,
+        ok: bool,
+        messages: Vec<rustyclaw_core::gateway::protocol::types::ChatMessage>,
+        error: Option<String>,
+    },
     /// Open the provider selector dialog.
     ShowProviderSelector {
         providers: Vec<String>,

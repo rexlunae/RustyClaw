@@ -68,6 +68,8 @@ pub enum ClientFrameType {
     SetAgentName = 28,
     /// Set the working directory for tool execution.
     SetWorkingDirectory = 29,
+    /// Request the persisted conversation history for a thread.
+    ThreadHistoryRequest = 30,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -153,6 +155,8 @@ pub enum ServerFrameType {
     /// DOM query — gateway requests the client to evaluate JavaScript
     /// against the webview DOM and return the result.
     DomQuery = 38,
+    /// Reply carrying a thread's persisted conversation history.
+    ThreadHistoryReply = 39,
 }
 
 /// Status frame sub-types.
@@ -335,6 +339,10 @@ pub enum ClientPayload {
     /// Set the working directory for all tool execution.
     SetWorkingDirectory {
         path: String,
+    },
+    /// Request the gateway-persisted conversation history for a thread.
+    ThreadHistoryRequest {
+        thread_id: u64,
     },
 }
 
@@ -521,6 +529,15 @@ pub enum ServerPayload {
         /// JavaScript expression to evaluate.
         js: String,
     },
+    /// Reply to a `ThreadHistoryRequest` — the full persisted message
+    /// log for a thread, in chronological order, in the wire `ChatMessage`
+    /// shape suitable for re-display by any client.
+    ThreadHistoryReply {
+        thread_id: u64,
+        ok: bool,
+        messages: Vec<super::types::ChatMessage>,
+        error: Option<String>,
+    },
 }
 
 /// DTO for task info in updates.
@@ -652,6 +669,7 @@ mod tests {
             assert_eq!(ServerFrameType::DeviceFlowStart as u8, 36);
             assert_eq!(ServerFrameType::DeviceFlowComplete as u8, 37);
             assert_eq!(ServerFrameType::DomQuery as u8, 38);
+            assert_eq!(ServerFrameType::ThreadHistoryReply as u8, 39);
         }
 
         #[test]
@@ -685,6 +703,8 @@ mod tests {
             assert_eq!(ClientFrameType::ModelSwitch as u8, 26);
             assert_eq!(ClientFrameType::DomQueryResponse as u8, 27);
             assert_eq!(ClientFrameType::SetAgentName as u8, 28);
+            assert_eq!(ClientFrameType::SetWorkingDirectory as u8, 29);
+            assert_eq!(ClientFrameType::ThreadHistoryRequest as u8, 30);
         }
 
         #[test]

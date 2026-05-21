@@ -185,6 +185,7 @@ pub fn App() -> Element {
             // waker fires and we drain the buffer in one shot.
             let client_ui = client.clone();
             spawn(async move {
+                let mut last_foreground_history_request: Option<u64> = None;
                 loop {
                     notify.notified().await;
 
@@ -212,9 +213,29 @@ pub fn App() -> Element {
                                         | GatewayEvent::AuthSuccess
                                         | GatewayEvent::VaultUnlocked
                                 );
+                                let history_target = match &event {
+                                    GatewayEvent::ThreadsUpdate {
+                                        foreground_id: Some(thread_id),
+                                        ..
+                                    } => Some(*thread_id),
+                                    _ => None,
+                                };
                                 handle_gateway_event(event, state);
                                 if should_refresh_threads {
                                     let _ = client_ui.send(GatewayCommand::ThreadList).await;
+                                }
+                                if let Some(thread_id) = history_target
+                                    && last_foreground_history_request != Some(thread_id)
+                                {
+                                    tracing::info!(
+                                        thread_id,
+                                        previous = ?last_foreground_history_request,
+                                        "Desktop requesting thread history after ThreadsUpdate"
+                                    );
+                                    let _ = client_ui
+                                        .send(GatewayCommand::ThreadHistoryRequest { thread_id })
+                                        .await;
+                                    last_foreground_history_request = Some(thread_id);
                                 }
                             }
                             BufferEntry::Chunks { text, count, bytes } => {
@@ -375,6 +396,12 @@ pub fn App() -> Element {
             spawn(async move {
                 let _ = client
                     .send(GatewayCommand::ThreadSwitch { thread_id })
+                    .await;
+                // Pull authoritative history from the gateway so this
+                // client reflects work done from any other session.
+                tracing::info!(thread_id, "Desktop requesting thread history after ThreadSwitch");
+                let _ = client
+                    .send(GatewayCommand::ThreadHistoryRequest { thread_id })
                     .await;
             });
         }
@@ -1319,7 +1346,16 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             foreground_id,
         } => {
             let count = threads.len();
-            tracing::info!(count, foreground_id = ?foreground_id, "ThreadsUpdate received");
+            let captions = threads
+                .iter()
+                .map(|t| format!("{}:{}", t.id, t.label.as_deref().unwrap_or("")))
+                .collect::<Vec<_>>();
+            tracing::info!(
+                count,
+                foreground_id = ?foreground_id,
+                captions = ?captions,
+                "ThreadsUpdate received"
+            );
             state.write().threads = threads
                 .into_iter()
                 .map(|t| ThreadInfo {
@@ -1332,6 +1368,98 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
                 })
                 .collect();
             state.write().foreground_thread_id = foreground_id;
+        }
+        GatewayEvent::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
+        } => {
+            if !ok {
+                if let Some(err) = error {
+                    tracing::warn!(
+                        thread_id,
+                        error = %err,
+                        "ThreadHistory request failed"
+                    );
+                }
+            } else {
+                tracing::info!(
+                    thread_id,
+                    incoming_messages = messages.len(),
+                    foreground = ?state.read().foreground_thread_id,
+                    "Desktop thread history reply received"
+                );
+                use rustyclaw_core::types::MessageRole;
+                use rustyclaw_core::ui::{ChatMessage as UiChatMessage, ToolCallInfo};
+                use std::collections::VecDeque;
+                let mut converted: VecDeque<UiChatMessage> = VecDeque::with_capacity(messages.len());
+                for m in messages.into_iter() {
+                    // Tool result: fold into the previous assistant turn's
+                    // matching tool call rather than emit a standalone bubble.
+                    if m.role == "tool" {
+                        if let Some(call_id) = m.tool_call_id.as_deref() {
+                            if let Some(prev) = converted.iter_mut().rev().find(|c| {
+                                c.role == MessageRole::Assistant
+                                    && c.tool_calls.iter().any(|tc| tc.id == call_id)
+                            }) {
+                                if let Some(tc) =
+                                    prev.tool_calls.iter_mut().find(|tc| tc.id == call_id)
+                                {
+                                    tc.result = Some(m.content.clone());
+                                    tc.is_error = false;
+                                }
+                                continue;
+                            }
+                        }
+                    }
+                    let role = match m.role.as_str() {
+                        "user" => MessageRole::User,
+                        "assistant" => MessageRole::Assistant,
+                        "tool" => MessageRole::ToolResult,
+                        "system" => MessageRole::System,
+                        _ => MessageRole::System,
+                    };
+                    let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
+                    if let Some(tcs) = m.tool_calls.as_ref().and_then(|v| v.as_array()) {
+                        for tc in tcs {
+                            tool_calls.push(ToolCallInfo {
+                                id: tc
+                                    .get("id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                name: tc
+                                    .get("name")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                arguments: tc
+                                    .get("arguments")
+                                    .map(|v| v.to_string())
+                                    .unwrap_or_default(),
+                                result: None,
+                                is_error: false,
+                                collapsed: true,
+                            });
+                        }
+                    }
+                    converted.push_back(UiChatMessage {
+                        id: uuid::Uuid::new_v4().to_string(),
+                        role,
+                        content: m.content,
+                        timestamp: chrono::Utc::now(),
+                        tool_calls,
+                        is_streaming: false,
+                    });
+                }
+                tracing::info!(
+                    thread_id,
+                    converted_messages = converted.len(),
+                    "Desktop thread history converted"
+                );
+                state.write().apply_thread_history(thread_id, converted);
+            }
         }
         GatewayEvent::UserPromptRequest { id: _, prompt } => {
             state.write().pending_user_prompt = Some(prompt);
