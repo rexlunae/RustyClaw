@@ -380,6 +380,23 @@ pub enum HatchState {
 }
 
 impl HatchState {
+    /// Advance to the next animation state.
+    ///
+    /// Returns `true` once the sequence reaches `Connecting`, which callers
+    /// can use as a signal to trigger identity generation.
+    pub fn advance(&mut self) -> bool {
+        let next = match self {
+            HatchState::Egg => HatchState::Crack1,
+            HatchState::Crack1 => HatchState::Crack2,
+            HatchState::Crack2 => HatchState::Breaking,
+            HatchState::Breaking => HatchState::Hatched,
+            HatchState::Hatched => HatchState::Connecting,
+            HatchState::Connecting | HatchState::Awakened { .. } => return false,
+        };
+        *self = next;
+        matches!(self, HatchState::Connecting)
+    }
+
     /// Human-readable description of the current state.
     pub fn label(&self) -> &'static str {
         match self {
@@ -696,16 +713,26 @@ pub struct ToolPermInfoData {
     /// Tool name.
     pub name: String,
 
-    /// Whether the tool is allowed to auto-run without approval.
-    pub auto_approve: bool,
+    /// Permission label (typically `ALLOW`, `ASK`, or `DENY`).
+    pub permission: String,
 
-    /// How many times this tool has been called this session.
-    pub call_count: usize,
+    /// Short summary of what the tool does.
+    pub summary: String,
 }
 
 impl ToolPermInfoData {
-    /// Access label, e.g. `"auto-approved"` or `"requires approval"`.
-    pub fn access_label(&self) -> &'static str {
-        if self.auto_approve { "auto-approved" } else { "requires approval" }
+    /// Whether this tool is currently auto-approved.
+    pub fn is_allow(&self) -> bool {
+        self.permission.eq_ignore_ascii_case("ALLOW")
+    }
+
+    /// Whether this tool is currently denied.
+    pub fn is_deny(&self) -> bool {
+        self.permission.eq_ignore_ascii_case("DENY")
+    }
+
+    /// Whether this tool currently requires per-call approval.
+    pub fn is_ask(&self) -> bool {
+        self.permission.eq_ignore_ascii_case("ASK")
     }
 }

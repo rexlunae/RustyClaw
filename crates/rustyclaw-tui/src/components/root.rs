@@ -18,13 +18,16 @@ use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
 use crate::components::secrets_dialog::SecretsDialog;
-use rustyclaw_view::{SecretInfoData, SecretsDialogData, TabBarData};
+use rustyclaw_view::{
+    HatchState, PairingField, PairingStep, SecretInfoData, SecretsDialogData, SkillInfoData,
+    TabBarData, ToolPermInfoData,
+};
 use crate::components::sidebar::Sidebar;
 use crate::components::thread_tabs::ThreadTabs;
-use crate::components::skills_dialog::{SkillInfo, SkillsDialog};
+use crate::components::skills_dialog::SkillsDialog;
 use crate::components::status_bar::StatusBar;
 use crate::components::tool_approval_dialog::ToolApprovalDialog;
-use crate::components::tool_perms_dialog::{ToolPermInfo, ToolPermsDialog};
+use crate::components::tool_perms_dialog::ToolPermsDialog;
 use crate::components::user_prompt_dialog::UserPromptDialog;
 use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
@@ -111,7 +114,7 @@ pub struct RootProps {
 
     // skills dialog overlay
     pub show_skills_dialog: bool,
-    pub skills_data: Vec<SkillInfo>,
+    pub skills_data: Vec<SkillInfoData>,
     pub skills_selected: Option<usize>,
     pub skills_scroll_offset: usize,
 
@@ -124,13 +127,13 @@ pub struct RootProps {
 
     // tool permissions dialog overlay
     pub show_tool_perms_dialog: bool,
-    pub tool_perms_data: Vec<ToolPermInfo>,
+    pub tool_perms_data: Vec<ToolPermInfoData>,
     pub tool_perms_selected: Option<usize>,
     pub tool_perms_scroll_offset: usize,
 
     // hatching dialog overlay (first run)
     pub show_hatching: bool,
-    pub hatching_state: crate::components::hatching_dialog::HatchState,
+    pub hatching_state: HatchState,
     pub hatching_agent_name: String,
 
     // provider selector dialog overlay
@@ -163,8 +166,8 @@ pub struct RootProps {
 
     // pairing dialog overlay (SSH pairing)
     pub show_pairing: bool,
-    pub pairing_step: crate::components::pairing_dialog::PairingStep,
-    pub pairing_field: crate::components::pairing_dialog::PairingField,
+    pub pairing_step: PairingStep,
+    pub pairing_field: PairingField,
     pub pairing_public_key: String,
     pub pairing_fingerprint: String,
     pub pairing_fingerprint_art: String,

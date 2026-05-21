@@ -2,17 +2,11 @@
 
 use crate::theme;
 use iocraft::prelude::*;
-
-#[derive(Debug, Clone, Default)]
-pub struct SkillInfo {
-    pub name: String,
-    pub description: String,
-    pub enabled: bool,
-}
+use rustyclaw_view::SkillInfoData;
 
 #[derive(Default, Props)]
 pub struct SkillsDialogProps {
-    pub skills: Vec<SkillInfo>,
+    pub skills: Vec<SkillInfoData>,
     pub selected: Option<usize>,
     pub scroll_offset: usize,
 }

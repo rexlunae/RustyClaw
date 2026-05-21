@@ -2,17 +2,11 @@
 
 use crate::theme;
 use iocraft::prelude::*;
-
-#[derive(Debug, Clone, Default)]
-pub struct ToolPermInfo {
-    pub name: String,
-    pub permission: String,
-    pub summary: String,
-}
+use rustyclaw_view::ToolPermInfoData;
 
 #[derive(Default, Props)]
 pub struct ToolPermsDialogProps {
-    pub tools: Vec<ToolPermInfo>,
+    pub tools: Vec<ToolPermInfoData>,
     pub selected: Option<usize>,
     pub scroll_offset: usize,
 }
@@ -23,14 +17,14 @@ pub fn ToolPermsDialog(props: &ToolPermsDialogProps) -> impl Into<AnyElement<'st
     let allowed = props
         .tools
         .iter()
-        .filter(|t| t.permission == "ALLOW")
+        .filter(|t| t.is_allow())
         .count();
     let denied = props
         .tools
         .iter()
-        .filter(|t| t.permission == "DENY")
+        .filter(|t| t.is_deny())
         .count();
-    let ask = props.tools.iter().filter(|t| t.permission == "ASK").count();
+    let ask = props.tools.iter().filter(|t| t.is_ask()).count();
     let sel = props.selected.unwrap_or(0);
 
     element! {

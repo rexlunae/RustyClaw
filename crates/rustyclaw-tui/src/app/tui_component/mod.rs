@@ -67,17 +67,17 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
 
     // ── Hatching dialog state ───────────────────────────────────────
     let mut show_hatching = hooks.use_state(|| props.needs_hatching);
-    let mut hatching_state: State<crate::components::hatching_dialog::HatchState> =
-        hooks.use_state(|| crate::components::hatching_dialog::HatchState::Egg);
+    let mut hatching_state: State<rustyclaw_view::HatchState> =
+        hooks.use_state(|| rustyclaw_view::HatchState::Egg);
     let mut hatching_tick = hooks.use_state(|| 0usize);
     let mut hatching_pending = hooks.use_state(|| false); // True when waiting for hatching response
 
     // ── Pairing dialog state ────────────────────────────────────────
     let mut show_pairing = hooks.use_state(|| false);
-    let mut pairing_step: State<crate::components::pairing_dialog::PairingStep> =
-        hooks.use_state(|| crate::components::pairing_dialog::PairingStep::ShowKey);
-    let mut pairing_field: State<crate::components::pairing_dialog::PairingField> =
-        hooks.use_state(|| crate::components::pairing_dialog::PairingField::Host);
+    let mut pairing_step: State<rustyclaw_view::PairingStep> =
+        hooks.use_state(|| rustyclaw_view::PairingStep::ShowKey);
+    let mut pairing_field: State<rustyclaw_view::PairingField> =
+        hooks.use_state(|| rustyclaw_view::PairingField::Host);
     let mut pairing_public_key = hooks.use_state(String::new);
     let mut pairing_fingerprint = hooks.use_state(String::new);
     let mut pairing_fingerprint_art = hooks.use_state(String::new);
@@ -157,7 +157,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut secrets_add_value = hooks.use_state(String::new);
 
     let mut show_skills_dialog = hooks.use_state(|| false);
-    let mut skills_dialog_data: State<Vec<crate::components::skills_dialog::SkillInfo>> =
+    let mut skills_dialog_data: State<Vec<rustyclaw_view::SkillInfoData>> =
         hooks.use_state(Vec::new);
     let mut skills_selected: State<Option<usize>> = hooks.use_state(|| Some(0));
 
@@ -171,7 +171,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut details_dialog_scroll = hooks.use_state(|| 0usize);
 
     let mut show_tool_perms_dialog = hooks.use_state(|| false);
-    let mut tool_perms_dialog_data: State<Vec<crate::components::tool_perms_dialog::ToolPermInfo>> =
+    let mut tool_perms_dialog_data: State<Vec<rustyclaw_view::ToolPermInfoData>> =
         hooks.use_state(Vec::new);
     let mut tool_perms_selected: State<Option<usize>> = hooks.use_state(|| Some(0));
 
@@ -331,11 +331,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     if hatching_pending.get() {
                                         hatching_pending.set(false);
                                         // Set hatching state to Awakened with the identity
-                                        hatching_state.set(
-                                            crate::components::hatching_dialog::HatchState::Awakened {
+                                        hatching_state
+                                            .set(rustyclaw_view::HatchState::Awakened {
                                                 identity: completed_text.clone(),
-                                            }
-                                        );
+                                            });
                                         // Save to SOUL.md
                                         if let Ok(guard) = tx_for_history.lock() {
                                             if let Some(ref tx) = *guard {
@@ -705,7 +704,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 }
                                 GwEvent::PairingSuccess { gateway_name } => {
                                     // Pairing succeeded — update dialog state
-                                    pairing_step.set(crate::components::pairing_dialog::PairingStep::Complete);
+                                    pairing_step.set(rustyclaw_view::PairingStep::Complete);
                                     pairing_error.set(String::new());
                                     let mut m = messages.read().clone();
                                     m.push(DisplayMessage::success(format!(
@@ -715,7 +714,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 }
                                 GwEvent::PairingError(err) => {
                                     // Pairing failed — show error
-                                    pairing_step.set(crate::components::pairing_dialog::PairingStep::EnterGateway);
+                                    pairing_step.set(rustyclaw_view::PairingStep::EnterGateway);
                                     pairing_error.set(err.clone());
                                     let mut m = messages.read().clone();
                                     m.push(DisplayMessage::error(format!(
@@ -1102,7 +1101,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
 
                 // ── Pairing dialog ──────────────────────────────
                 if show_pairing.get() {
-                    use crate::components::pairing_dialog::{PairingStep, PairingField};
+                    use rustyclaw_view::{PairingField, PairingStep};
                     let step = *pairing_step.read();
                     match code {
                         KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => {
@@ -1224,7 +1223,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             let state = hatching_state.read().clone();
                             if matches!(
                                 state,
-                                crate::components::hatching_dialog::HatchState::Awakened { .. }
+                                rustyclaw_view::HatchState::Awakened { .. }
                             ) {
                                 show_hatching.set(false);
                                 let mut m = messages.read().clone();
@@ -1919,8 +1918,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     pairing_error.set(format!("Key generation failed: {}", e));
                                 }
                             }
-                            pairing_step.set(crate::components::pairing_dialog::PairingStep::ShowKey);
-                            pairing_field.set(crate::components::pairing_dialog::PairingField::Host);
+                            pairing_step.set(rustyclaw_view::PairingStep::ShowKey);
+                            pairing_field.set(rustyclaw_view::PairingField::Host);
                             pairing_host.set(prop_gateway_host.clone());
                             pairing_port.set(prop_gateway_port.clone());
                             show_pairing.set(true);

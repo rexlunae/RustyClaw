@@ -8,24 +8,7 @@
 
 use crate::theme;
 use iocraft::prelude::*;
-
-/// Steps in the pairing flow.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PairingStep {
-    #[default]
-    ShowKey,
-    EnterGateway,
-    Connecting,
-    Complete,
-}
-
-/// Input fields in the gateway entry step.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum PairingField {
-    #[default]
-    Host,
-    Port,
-}
+use rustyclaw_view::{PairingField, PairingStep};
 
 #[derive(Default, Props)]
 pub struct PairingDialogProps {

@@ -6,117 +6,85 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::HatchState;
 
-/// Animation states for the hatching sequence
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum HatchState {
-    #[default]
-    Egg,
-    Crack1,
-    Crack2,
-    Breaking,
-    Hatched,
-    /// Waiting for model response
-    Connecting,
-    /// Model generated identity
-    Awakened {
-        identity: String,
-    },
+/// Get the ASCII art for the current hatching state.
+fn art(state: &HatchState) -> &'static [&'static str] {
+    match state {
+        HatchState::Egg => &[
+            "     .-'''-.     ",
+            "   .'       '.   ",
+            "  /           \\  ",
+            " |             | ",
+            " |             | ",
+            " |             | ",
+            "  \\           /  ",
+            "   '.       .'   ",
+            "     '-----'     ",
+        ],
+        HatchState::Crack1 => &[
+            "     .-'''-.     ",
+            "   .'   ⟋   '.   ",
+            "  /    /      \\  ",
+            " |    ⟋       | ",
+            " |             | ",
+            " |             | ",
+            "  \\           /  ",
+            "   '.       .'   ",
+            "     '-----'     ",
+        ],
+        HatchState::Crack2 => &[
+            "     .-'''-.     ",
+            "   .'   ⟋   '.   ",
+            "  /    / \\    \\  ",
+            " |    ⟋   ⟍   | ",
+            " |         \\   | ",
+            " |          ⟍  | ",
+            "  \\           /  ",
+            "   '.       .'   ",
+            "     '-----'     ",
+        ],
+        HatchState::Breaking => &[
+            "     . '''  .    ",
+            "   .'  ⟋ \\  '.  ",
+            "  /   /   \\   \\  ",
+            " |   ⟋     ⟍  | ",
+            " |  /   ✦   \\  | ",
+            " | ⟋    |   ⟍ | ",
+            "  \\     |     /  ",
+            "   '.       .'   ",
+            "     '-----'     ",
+        ],
+        HatchState::Hatched | HatchState::Connecting => &[
+            "   .  ' '  .     ",
+            " .'         '.   ",
+            "/     ✦✦✦     \\  ",
+            "|    ✦   ✦    | ",
+            "|   ✦ ◠‿◠ ✦   | ",
+            "|    ✦   ✦    | ",
+            "\\     ✦✦✦     /  ",
+            " '._       _.'   ",
+            "____'-----'_____ ",
+        ],
+        HatchState::Awakened { .. } => &[
+            "                 ",
+            "    ✧･ﾟ: *✧･ﾟ    ",
+            "   ✦ AWAKENED ✦  ",
+            "    ･ﾟ✧*:･ﾟ✧     ",
+            "                 ",
+        ],
+    }
 }
 
-impl HatchState {
-    /// Advance to the next animation state
-    pub fn advance(&mut self) -> bool {
-        let next = match self {
-            HatchState::Egg => HatchState::Crack1,
-            HatchState::Crack1 => HatchState::Crack2,
-            HatchState::Crack2 => HatchState::Breaking,
-            HatchState::Breaking => HatchState::Hatched,
-            HatchState::Hatched => HatchState::Connecting,
-            HatchState::Connecting | HatchState::Awakened { .. } => return false,
-        };
-        *self = next;
-        matches!(self, HatchState::Connecting)
-    }
-
-    /// Get the ASCII art for the current state
-    fn art(&self) -> &'static [&'static str] {
-        match self {
-            HatchState::Egg => &[
-                "     .-'''-.     ",
-                "   .'       '.   ",
-                "  /           \\  ",
-                " |             | ",
-                " |             | ",
-                " |             | ",
-                "  \\           /  ",
-                "   '.       .'   ",
-                "     '-----'     ",
-            ],
-            HatchState::Crack1 => &[
-                "     .-'''-.     ",
-                "   .'   ⟋   '.   ",
-                "  /    /      \\  ",
-                " |    ⟋       | ",
-                " |             | ",
-                " |             | ",
-                "  \\           /  ",
-                "   '.       .'   ",
-                "     '-----'     ",
-            ],
-            HatchState::Crack2 => &[
-                "     .-'''-.     ",
-                "   .'   ⟋   '.   ",
-                "  /    / \\    \\  ",
-                " |    ⟋   ⟍   | ",
-                " |         \\   | ",
-                " |          ⟍  | ",
-                "  \\           /  ",
-                "   '.       .'   ",
-                "     '-----'     ",
-            ],
-            HatchState::Breaking => &[
-                "     . '''  .    ",
-                "   .'  ⟋ \\  '.  ",
-                "  /   /   \\   \\  ",
-                " |   ⟋     ⟍  | ",
-                " |  /   ✦   \\  | ",
-                " | ⟋    |   ⟍ | ",
-                "  \\     |     /  ",
-                "   '.       .'   ",
-                "     '-----'     ",
-            ],
-            HatchState::Hatched | HatchState::Connecting => &[
-                "   .  ' '  .     ",
-                " .'         '.   ",
-                "/     ✦✦✦     \\  ",
-                "|    ✦   ✦    | ",
-                "|   ✦ ◠‿◠ ✦   | ",
-                "|    ✦   ✦    | ",
-                "\\     ✦✦✦     /  ",
-                " '._       _.'   ",
-                "____'-----'_____ ",
-            ],
-            HatchState::Awakened { .. } => &[
-                "                 ",
-                "    ✧･ﾟ: *✧･ﾟ    ",
-                "   ✦ AWAKENED ✦  ",
-                "    ･ﾟ✧*:･ﾟ✧     ",
-                "                 ",
-            ],
-        }
-    }
-
-    fn status_text(&self) -> &'static str {
-        match self {
-            HatchState::Egg => "A new soul is forming...",
-            HatchState::Crack1 => "Something stirs within...",
-            HatchState::Crack2 => "Cracks appear...",
-            HatchState::Breaking => "Breaking free...",
-            HatchState::Hatched => "Emerging...",
-            HatchState::Connecting => "Discovering identity...",
-            HatchState::Awakened { .. } => "Identity established!",
-        }
+fn status_text(state: &HatchState) -> &'static str {
+    match state {
+        HatchState::Egg => "A new soul is forming...",
+        HatchState::Crack1 => "Something stirs within...",
+        HatchState::Crack2 => "Cracks appear...",
+        HatchState::Breaking => "Breaking free...",
+        HatchState::Hatched => "Emerging...",
+        HatchState::Connecting => "Discovering identity...",
+        HatchState::Awakened { .. } => "Identity established!",
     }
 }
 
@@ -143,8 +111,8 @@ pub struct HatchingDialogProps {
 
 #[component]
 pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'static>> {
-    let art = props.state.art();
-    let status = props.state.status_text();
+    let art = art(&props.state);
+    let status = status_text(&props.state);
 
     // For awakened state, show the identity
     let identity = if let HatchState::Awakened { identity } = &props.state {

@@ -116,11 +116,11 @@ pub(crate) enum GwEvent {
     },
     /// Show skills info dialog
     ShowSkills {
-        skills: Vec<crate::components::skills_dialog::SkillInfo>,
+        skills: Vec<rustyclaw_view::SkillInfoData>,
     },
     /// Show tool permissions info dialog
     ShowToolPerms {
-        tools: Vec<crate::components::tool_perms_dialog::ToolPermInfo>,
+        tools: Vec<rustyclaw_view::ToolPermInfoData>,
     },
     /// A secrets mutation succeeded — re-fetch the list from the gateway
     RefreshSecrets,
@@ -707,7 +707,7 @@ impl App {
                             let skills_list: Vec<_> = skill_manager
                                 .get_skills()
                                 .iter()
-                                .map(|s| crate::components::skills_dialog::SkillInfo {
+                                .map(|s| rustyclaw_view::SkillInfoData {
                                     name: s.name.clone(),
                                     description: s.description.clone().unwrap_or_default(),
                                     enabled: s.enabled,
@@ -727,7 +727,7 @@ impl App {
                                         .get(*name)
                                         .cloned()
                                         .unwrap_or_default();
-                                    crate::components::tool_perms_dialog::ToolPermInfo {
+                                    rustyclaw_view::ToolPermInfoData {
                                         name: name.to_string(),
                                         permission: perm.badge().to_string(),
                                         summary: rustyclaw_core::tools::tool_summary(name)
@@ -998,7 +998,7 @@ impl App {
                         let skills_list: Vec<_> = skill_manager
                             .get_skills()
                             .iter()
-                            .map(|s| crate::components::skills_dialog::SkillInfo {
+                            .map(|s| rustyclaw_view::SkillInfoData {
                                 name: s.name.clone(),
                                 description: s.description.clone().unwrap_or_default(),
                                 enabled: s.enabled,
@@ -1028,7 +1028,7 @@ impl App {
                                 .get(*tn)
                                 .cloned()
                                 .unwrap_or_default();
-                            crate::components::tool_perms_dialog::ToolPermInfo {
+                            rustyclaw_view::ToolPermInfoData {
                                 name: tn.to_string(),
                                 permission: perm.badge().to_string(),
                                 summary: rustyclaw_core::tools::tool_summary(tn).to_string(),
