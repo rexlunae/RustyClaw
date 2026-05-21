@@ -101,8 +101,6 @@ pub(crate) enum UserInput {
     RefreshThreads,
     /// Switch to a different thread
     ThreadSwitch(u64),
-    /// Create a new thread
-    ThreadCreate(String),
     /// Request identity generation for hatching
     HatchingRequest,
     /// Hatching response received - save to SOUL.md
@@ -516,14 +514,7 @@ impl App {
                         CommandAction::Quit => break,
                         CommandAction::AttachPromptFile(path) => {
                             if !prompt_attachments.iter().any(|item| item.path == path) {
-                                prompt_attachments.push(PromptAttachment::file(
-                                    path.clone(),
-                                    std::path::Path::new(&path)
-                                        .file_name()
-                                        .and_then(|name| name.to_str())
-                                        .unwrap_or(&path)
-                                        .to_string(),
-                                ));
+                                prompt_attachments.push(PromptAttachment::from_file_path(path.clone()));
                             }
                             let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
                                 attachments: prompt_attachments.clone(),
@@ -531,13 +522,8 @@ impl App {
                         }
                         CommandAction::AttachPromptDirectory(path) => {
                             if !prompt_attachments.iter().any(|item| item.path == path) {
-                                prompt_attachments.push(PromptAttachment::directory(
+                                prompt_attachments.push(PromptAttachment::from_directory_path(
                                     path.clone(),
-                                    std::path::Path::new(&path)
-                                        .file_name()
-                                        .and_then(|name| name.to_str())
-                                        .unwrap_or(&path)
-                                        .to_string(),
                                 ));
                             }
                             let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
@@ -983,17 +969,6 @@ impl App {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::ThreadList,
                             payload: ClientPayload::ThreadList,
-                        };
-                        if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_raw(&data).await;
-                        }
-                    }
-                }
-                Ok(UserInput::ThreadCreate(label)) => {
-                    if let Some(ref mut sink) = gw_writer {
-                        let frame = ClientFrame {
-                            frame_type: ClientFrameType::ThreadCreate,
-                            payload: ClientPayload::ThreadCreate { label },
                         };
                         if let Ok(data) = serialize_frame(&frame) {
                             let _ = sink.send_raw(&data).await;

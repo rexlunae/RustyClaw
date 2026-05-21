@@ -5,6 +5,8 @@
 //! provides the shared data types that both clients use to render
 //! the same composer UI.
 
+use std::path::Path;
+
 /// An attachment that should be included with the next prompt.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PromptAttachmentKind {
@@ -42,6 +44,14 @@ pub struct PromptAttachment {
 }
 
 impl PromptAttachment {
+    fn display_name_for_path(path: &str) -> String {
+        Path::new(path)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| path.to_string())
+    }
+
     pub fn file(path: impl Into<String>, display_name: impl Into<String>) -> Self {
         Self {
             kind: PromptAttachmentKind::File,
@@ -56,6 +66,16 @@ impl PromptAttachment {
             path: path.into(),
             display_name: display_name.into(),
         }
+    }
+
+    pub fn from_file_path(path: impl Into<String>) -> Self {
+        let path = path.into();
+        Self::file(path.clone(), Self::display_name_for_path(&path))
+    }
+
+    pub fn from_directory_path(path: impl Into<String>) -> Self {
+        let path = path.into();
+        Self::directory(path.clone(), Self::display_name_for_path(&path))
     }
 
     pub fn prompt_line(&self) -> String {

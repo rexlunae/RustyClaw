@@ -37,6 +37,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     // ── Local UI state ──────────────────────────────────────────────
     let mut messages: State<Vec<DisplayMessage>> = hooks.use_state(Vec::new);
     let mut input_value = hooks.use_state(String::new);
+    let mut input_cursor_offset = hooks.use_state(|| 0usize);
     let mut gw_status = hooks.use_state(|| rustyclaw_core::types::GatewayStatus::Connecting);
     let mut streaming = hooks.use_state(|| false);
     let mut stream_start: State<Option<Instant>> = hooks.use_state(|| None);
@@ -100,6 +101,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut show_credential_request = hooks.use_state(|| false);
     let mut credential_request_id = hooks.use_state(String::new);
     let mut credential_request_provider = hooks.use_state(String::new);
+    let mut credential_request_secret_name = hooks.use_state(String::new);
     let mut credential_request_message = hooks.use_state(String::new);
     let mut credential_request_input = hooks.use_state(String::new);
 
@@ -186,6 +188,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         hooks.use_const(|| Arc::new(StdMutex::new(CHANNEL_RX.lock().unwrap().take())));
     let user_tx: Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>> =
         hooks.use_const(|| Arc::new(StdMutex::new(CHANNEL_TX.lock().unwrap().take())));
+    let prop_provider_id = props.provider_id.clone();
+    let tx_for_model_completions = Arc::clone(&user_tx);
 
     // ── Poll gateway channel on a timer ─────────────────────────────
     hooks.use_future({
@@ -505,16 +509,17 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     }
                                     messages.set(m);
                                 }
-                                GwEvent::CredentialRequest { id, provider, secret_name: _, message } => {
+                                GwEvent::CredentialRequest { id, provider, secret_name, message } => {
                                     credential_request_id.set(id);
                                     credential_request_provider.set(provider.clone());
+                                    credential_request_secret_name.set(secret_name.clone());
                                     credential_request_message.set(message.clone());
                                     credential_request_input.set(String::new());
                                     show_credential_request.set(true);
                                     let mut m = messages.read().clone();
                                     m.push(DisplayMessage::warning(format!(
-                                        "🔑 Credential required for {} — enter API key",
-                                        provider,
+                                        "🔑 Credential required for {} ({}) — enter API key",
+                                        provider, secret_name,
                                     )));
                                     messages.set(m);
                                 }
@@ -576,9 +581,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     }
                                 }
                                 GwEvent::ThreadsUpdate {
-                                    threads: thread_list,
-                                    foreground_id: _,
+                                    threads: mut thread_list,
+                                    foreground_id,
                                 } => {
+                                    if let Some(active_id) = foreground_id {
+                                        for thread in &mut thread_list {
+                                            thread.is_foreground = thread.id == active_id;
+                                        }
+                                    }
                                     threads.set(thread_list);
                                     // Update tab_selected to stay in bounds
                                     let count = threads.read().len();
@@ -1780,6 +1790,219 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         command_completions.set(menu.completions);
                         command_selected.set(menu.selected);
                     }
+                    KeyCode::Home if !tab_focused.get() => {
+                        input_cursor_offset.set(0);
+                    }
+                    KeyCode::End if !tab_focused.get() => {
+                        input_cursor_offset.set(input_value.read().len());
+                    }
+                    KeyCode::Left if !tab_focused.get() => {
+                        let cursor = input_cursor_offset.get();
+                        if cursor > 0 {
+                            let text = input_value.read();
+                            let mut next = cursor.saturating_sub(1);
+                            while next > 0 && !text.is_char_boundary(next) {
+                                next -= 1;
+                            }
+                            input_cursor_offset.set(next);
+                        }
+                    }
+                    KeyCode::Right if !tab_focused.get() => {
+                        let cursor = input_cursor_offset.get();
+                        let text = input_value.read();
+                        if cursor < text.len() {
+                            let mut next = cursor + 1;
+                            while next < text.len() && !text.is_char_boundary(next) {
+                                next += 1;
+                            }
+                            input_cursor_offset.set(next);
+                        }
+                    }
+                    KeyCode::Backspace if !tab_focused.get() => {
+                        let cursor = input_cursor_offset.get();
+                        if cursor > 0 {
+                            let mut text = input_value.read().clone();
+                            let mut remove_at = cursor.saturating_sub(1);
+                            while remove_at > 0 && !text.is_char_boundary(remove_at) {
+                                remove_at -= 1;
+                            }
+                            if remove_at < text.len() {
+                                text.remove(remove_at);
+                                input_value.set(text.clone());
+                                input_cursor_offset.set(remove_at);
+                                let current_text = text;
+                                if let Some(partial) = current_text.strip_prefix('/') {
+                                    let current_pid = dynamic_provider_id.read().clone()
+                                        .unwrap_or_else(|| prop_provider_id.clone());
+                                    if partial.starts_with("model") {
+                                        let loaded = model_completion_provider
+                                            .read()
+                                            .as_deref()
+                                            == Some(current_pid.as_str());
+                                        let loading = model_completion_loading
+                                            .read()
+                                            .as_deref()
+                                            == Some(current_pid.as_str());
+                                        if !loaded && !loading {
+                                            model_completion_loading.set(Some(current_pid.clone()));
+                                            if let Ok(guard) = tx_for_model_completions.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.send(UserInput::FetchModelCompletions {
+                                                        provider: current_pid.clone(),
+                                                    });
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    let live_models = model_completion_models.read().clone();
+                                    let live_provider_matches =
+                                        model_completion_provider.read().as_deref() == Some(current_pid.as_str());
+                                    let filtered = rustyclaw_view::build_slash_completions(
+                                        &current_pid,
+                                        if live_provider_matches {
+                                            Some(live_models.as_slice())
+                                        } else {
+                                            None
+                                        },
+                                        partial,
+                                    );
+                                    if filtered.is_empty() {
+                                        command_completions.set(Vec::new());
+                                        command_selected.set(None);
+                                    } else {
+                                        command_completions.set(filtered);
+                                        command_selected.set(None);
+                                    }
+                                } else {
+                                    command_completions.set(Vec::new());
+                                    command_selected.set(None);
+                                }
+                            }
+                        }
+                    }
+                    KeyCode::Delete if !tab_focused.get() => {
+                        let cursor = input_cursor_offset.get();
+                        let mut text = input_value.read().clone();
+                        if cursor < text.len() && text.is_char_boundary(cursor) {
+                            text.remove(cursor);
+                            input_value.set(text.clone());
+                            let current_text = text;
+                            if let Some(partial) = current_text.strip_prefix('/') {
+                                let current_pid = dynamic_provider_id.read().clone()
+                                    .unwrap_or_else(|| prop_provider_id.clone());
+                                if partial.starts_with("model") {
+                                    let loaded = model_completion_provider
+                                        .read()
+                                        .as_deref()
+                                        == Some(current_pid.as_str());
+                                    let loading = model_completion_loading
+                                        .read()
+                                        .as_deref()
+                                        == Some(current_pid.as_str());
+                                    if !loaded && !loading {
+                                        model_completion_loading.set(Some(current_pid.clone()));
+                                        if let Ok(guard) = tx_for_model_completions.lock() {
+                                            if let Some(ref tx) = *guard {
+                                                let _ = tx.send(UserInput::FetchModelCompletions {
+                                                    provider: current_pid.clone(),
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+
+                                let live_models = model_completion_models.read().clone();
+                                let live_provider_matches =
+                                    model_completion_provider.read().as_deref() == Some(current_pid.as_str());
+                                let filtered = rustyclaw_view::build_slash_completions(
+                                    &current_pid,
+                                    if live_provider_matches {
+                                        Some(live_models.as_slice())
+                                    } else {
+                                        None
+                                    },
+                                    partial,
+                                );
+                                if filtered.is_empty() {
+                                    command_completions.set(Vec::new());
+                                    command_selected.set(None);
+                                } else {
+                                    command_completions.set(filtered);
+                                    command_selected.set(None);
+                                }
+                            } else {
+                                command_completions.set(Vec::new());
+                                command_selected.set(None);
+                            }
+                        }
+                    }
+                    KeyCode::Char(c)
+                        if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                            && !tab_focused.get() =>
+                    {
+                        // Some terminals deliver Shift+<letter> as the
+                        // lowercase char plus a SHIFT modifier instead of
+                        // pre-shifting the codepoint. Normalize that here so
+                        // typed uppercase letters are preserved.
+                        let c = if modifiers.contains(KeyModifiers::SHIFT)
+                            && c.is_ascii_lowercase()
+                        {
+                            c.to_ascii_uppercase()
+                        } else {
+                            c
+                        };
+                        let mut text = input_value.read().clone();
+                        let cursor = input_cursor_offset.get().min(text.len());
+                        text.insert(cursor, c);
+                        let next_cursor = cursor + c.len_utf8();
+                        input_value.set(text.clone());
+                        input_cursor_offset.set(next_cursor);
+
+                        if let Some(partial) = text.strip_prefix('/') {
+                            let current_pid = dynamic_provider_id.read().clone()
+                                .unwrap_or_else(|| prop_provider_id.clone());
+                            if partial.starts_with("model") {
+                                let loaded = model_completion_provider
+                                    .read()
+                                    .as_deref()
+                                    == Some(current_pid.as_str());
+                                let loading = model_completion_loading
+                                    .read()
+                                    .as_deref()
+                                    == Some(current_pid.as_str());
+                                if !loaded && !loading {
+                                    model_completion_loading.set(Some(current_pid.clone()));
+                                    if let Ok(guard) = tx_for_model_completions.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.send(UserInput::FetchModelCompletions {
+                                                provider: current_pid.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+
+                            let live_models = model_completion_models.read().clone();
+                            let live_provider_matches =
+                                model_completion_provider.read().as_deref() == Some(current_pid.as_str());
+                            let filtered = rustyclaw_view::build_slash_completions(
+                                &current_pid,
+                                if live_provider_matches { Some(live_models.as_slice()) } else { None },
+                                partial,
+                            );
+                            if filtered.is_empty() {
+                                command_completions.set(Vec::new());
+                                command_selected.set(None);
+                            } else {
+                                command_completions.set(filtered);
+                                command_selected.set(None);
+                            }
+                        } else {
+                            command_completions.set(Vec::new());
+                            command_selected.set(None);
+                        }
+                    }
                     KeyCode::Enter if tab_focused.get() => {
                         let thread_list = threads.read().clone();
                         if let Some(thread) = thread_list.get(tab_selected.get()) {
@@ -1797,6 +2020,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         let val = input_value.to_string();
                         if !val.is_empty() {
                             input_value.set(String::new());
+                            input_cursor_offset.set(0);
                             let mut menu = rustyclaw_view::CommandMenuData {
                                 completions: command_completions.read().clone(),
                                 selected: command_selected.get(),
@@ -1952,7 +2176,6 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let prop_model_label = props.model_label.clone();
     let prop_provider_id = props.provider_id.clone();
     let prop_hint = props.hint.clone();
-    let tx_for_model_completions = Arc::clone(&user_tx);
 
     element! {
         Root(
@@ -1977,6 +2200,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 attachments: prompt_attachments.read().clone(),
             },
             input_value: input_value.to_string(),
+            input_cursor_offset: input_cursor_offset.get(),
             input_has_focus: !show_auth_dialog.get()
                 && !show_tool_approval.get()
                 && !show_vault_unlock.get()
@@ -1992,53 +2216,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_model_selector.get()
                 && !show_pairing.get()
                 && !tab_focused.get(),
-            on_change: move |new_val: String| {
-                input_value.set(new_val.clone());
-                // Update slash-command completions
-                if let Some(partial) = new_val.strip_prefix('/') {
-                    let current_pid = dynamic_provider_id.read().clone()
-                        .unwrap_or_else(|| prop_provider_id.clone());
-                    if partial.starts_with("model") {
-                        let loaded = model_completion_provider
-                            .read()
-                            .as_deref()
-                            == Some(current_pid.as_str());
-                        let loading = model_completion_loading
-                            .read()
-                            .as_deref()
-                            == Some(current_pid.as_str());
-                        if !loaded && !loading {
-                            model_completion_loading.set(Some(current_pid.clone()));
-                            if let Ok(guard) = tx_for_model_completions.lock() {
-                                if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::FetchModelCompletions {
-                                        provider: current_pid.clone(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    let live_models = model_completion_models.read().clone();
-                    let live_provider_matches =
-                        model_completion_provider.read().as_deref() == Some(current_pid.as_str());
-                    let filtered = rustyclaw_view::build_slash_completions(
-                        &current_pid,
-                        if live_provider_matches { Some(live_models.as_slice()) } else { None },
-                        partial,
-                    );
-                    if filtered.is_empty() {
-                        command_completions.set(Vec::new());
-                        command_selected.set(None);
-                    } else {
-                        command_completions.set(filtered);
-                        command_selected.set(None);
-                    }
-                } else {
-                    command_completions.set(Vec::new());
-                    command_selected.set(None);
-                }
-            },
+            on_change: move |_new_val: String| {},
             on_submit: move |_val: String| {
                 // Submit handled by Enter key above
             },
@@ -2076,6 +2254,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             user_prompt_selected: user_prompt_selected.get(),
             show_credential_request: show_credential_request.get(),
             credential_request_provider: credential_request_provider.read().clone(),
+            credential_request_secret_name: credential_request_secret_name.read().clone(),
             credential_request_message: credential_request_message.read().clone(),
             credential_request_input_len: credential_request_input.read().len(),
             show_secrets_dialog: show_secrets_dialog.get(),

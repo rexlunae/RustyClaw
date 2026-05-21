@@ -369,7 +369,11 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
         "attach" => {
             match parts.get(1).copied() {
                 Some("file") => {
-                    let path = parts.get(2).copied().unwrap_or_default().to_string();
+                    let path = trimmed
+                        .strip_prefix("attach file")
+                        .map(str::trim_start)
+                        .unwrap_or_default()
+                        .to_string();
                     if path.is_empty() {
                         CommandResponse {
                             messages: vec!["Usage: /attach file <path>".to_string()],
@@ -383,7 +387,12 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     }
                 }
                 Some("dir") | Some("directory") => {
-                    let path = parts.get(2).copied().unwrap_or_default().to_string();
+                    let path = trimmed
+                        .strip_prefix("attach dir")
+                        .or_else(|| trimmed.strip_prefix("attach directory"))
+                        .map(str::trim_start)
+                        .unwrap_or_default()
+                        .to_string();
                     if path.is_empty() {
                         CommandResponse {
                             messages: vec!["Usage: /attach dir <path>".to_string()],

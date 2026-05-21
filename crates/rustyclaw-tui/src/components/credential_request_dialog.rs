@@ -7,6 +7,8 @@ use iocraft::prelude::*;
 pub struct CredentialRequestDialogProps {
     /// The provider that needs a credential (e.g. "openai", "anthropic").
     pub provider: String,
+    /// The secret or key name the gateway asked for.
+    pub secret_name: String,
     /// Human-readable message explaining what is needed.
     pub message: String,
     /// Length of the current input (masked as dots).
@@ -43,6 +45,14 @@ pub fn CredentialRequestDialog(
                     content: format!("🔑 Credential Required — {}", props.provider),
                     color: theme::WARN,
                     weight: Weight::Bold,
+                )
+
+                View(height: 1)
+
+                Text(
+                    content: format!("Requested secret: {}", props.secret_name),
+                    color: theme::MUTED,
+                    wrap: TextWrap::Wrap,
                 )
 
                 View(height: 1)

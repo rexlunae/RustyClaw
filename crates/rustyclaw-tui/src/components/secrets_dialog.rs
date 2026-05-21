@@ -4,22 +4,7 @@
 // with the desktop client and gateway protocol.
 
 use iocraft::prelude::*;
-use rustyclaw_view::SecretInfoData;
 use rustyclaw_view::SecretsDialogData;
-
-/// Policy badge color matching the desktop CSS scheme.
-fn policy_color(secret: &SecretInfoData) -> Color {
-    if secret.disabled {
-        return crate::theme::MUTED;
-    }
-    match secret.policy.as_str() {
-        "OPEN" => crate::theme::SUCCESS,
-        "ASK" => crate::theme::WARN,
-        "AUTH" => crate::theme::ERROR,
-        "SKILL" => crate::theme::INFO,
-        _ => crate::theme::MUTED,
-    }
-}
 
 #[derive(Default, Props)]
 pub struct SecretsDialogProps {

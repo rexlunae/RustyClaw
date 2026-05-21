@@ -25,22 +25,6 @@ const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
 const STYLES: &str = include_str!("../assets/styles.css");
 
-fn attachment_display_name(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_name()
-        .and_then(|name| name.to_str())
-        .map(|name| name.to_string())
-        .unwrap_or_else(|| path.to_string())
-}
-
-fn prompt_attachment_from_file(path: String) -> PromptAttachment {
-    PromptAttachment::file(path.clone(), attachment_display_name(&path))
-}
-
-fn prompt_attachment_from_directory(path: String) -> PromptAttachment {
-    PromptAttachment::directory(path.clone(), attachment_display_name(&path))
-}
-
 #[component]
 pub fn App() -> Element {
     // Application state
@@ -319,7 +303,7 @@ pub fn App() -> Element {
         }
         if let Some(file) = dialog.pick_file() {
             let path = file.display().to_string();
-            let attachment = prompt_attachment_from_file(path.clone());
+            let attachment = PromptAttachment::from_file_path(path.clone());
             let mut s = state.write();
             if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
                 s.prompt_attachments.push(attachment);
@@ -340,7 +324,7 @@ pub fn App() -> Element {
         }
         if let Some(folder) = dialog.pick_folder() {
             let path = folder.display().to_string();
-            let attachment = prompt_attachment_from_directory(path.clone());
+            let attachment = PromptAttachment::from_directory_path(path.clone());
             let mut s = state.write();
             if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
                 s.prompt_attachments.push(attachment);

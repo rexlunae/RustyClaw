@@ -7,6 +7,7 @@ use iocraft::prelude::*;
 pub struct InputBarProps {
     pub composer: rustyclaw_view::ComposerData,
     pub value: String,
+    pub cursor_offset: usize,
     pub on_change: HandlerMut<'static, String>,
     pub on_submit: HandlerMut<'static, String>,
     pub gateway_icon: String,
@@ -20,6 +21,16 @@ pub struct InputBarProps {
 pub fn InputBar(props: &mut InputBarProps) -> impl Into<AnyElement<'static>> {
     let status_color = props.gateway_color.unwrap_or(theme::MUTED);
     let attachments = props.composer.attachments.clone();
+    let cursor_offset = props.cursor_offset.min(props.value.len());
+    let display_value = if props.has_focus {
+        let mut rendered = String::with_capacity(props.value.len() + 1);
+        rendered.push_str(&props.value[..cursor_offset]);
+        rendered.push('▌');
+        rendered.push_str(&props.value[cursor_offset..]);
+        rendered
+    } else {
+        props.value.clone()
+    };
 
     element! {
         View(
@@ -32,12 +43,7 @@ pub fn InputBar(props: &mut InputBarProps) -> impl Into<AnyElement<'static>> {
             View(width: 100pct, height: 1, flex_direction: FlexDirection::Row) {
                 Text(content: "❯ ", color: theme::ACCENT_BRIGHT, weight: Weight::Bold)
                 View(flex_grow: 1.0, height: 1, background_color: theme::BG_MAIN) {
-                    TextInput(
-                        has_focus: props.has_focus,
-                        value: props.value.clone(),
-                        on_change: props.on_change.take(),
-                        color: theme::TEXT,
-                    )
+                    Text(content: display_value, color: theme::TEXT)
                 }
                 View(padding_left: 1) {
                     Text(content: format!("{} {}", props.gateway_icon, props.gateway_label), color: status_color)

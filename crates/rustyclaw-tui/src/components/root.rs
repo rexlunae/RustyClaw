@@ -59,6 +59,7 @@ pub struct RootProps {
     // input
     pub composer: rustyclaw_view::ComposerData,
     pub input_value: String,
+    pub input_cursor_offset: usize,
     pub on_change: HandlerMut<'static, String>,
     pub on_submit: HandlerMut<'static, String>,
     pub input_has_focus: bool,
@@ -99,6 +100,7 @@ pub struct RootProps {
     // credential request dialog overlay
     pub show_credential_request: bool,
     pub credential_request_provider: String,
+    pub credential_request_secret_name: String,
     pub credential_request_message: String,
     pub credential_request_input_len: usize,
 
@@ -293,6 +295,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     InputBar(
                         composer: props.composer.clone(),
                         value: props.input_value.clone(),
+                        cursor_offset: props.input_cursor_offset,
                         on_change: props.on_change.take(),
                         on_submit: props.on_submit.take(),
                         gateway_icon: props.gateway_icon.clone(),
@@ -412,6 +415,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         CredentialRequestDialog(
                             provider: props.credential_request_provider.clone(),
+                            secret_name: props.credential_request_secret_name.clone(),
                             message: props.credential_request_message.clone(),
                             input_len: props.credential_request_input_len,
                         )
