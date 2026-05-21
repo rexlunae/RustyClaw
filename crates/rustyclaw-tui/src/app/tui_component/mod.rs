@@ -405,30 +405,44 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     m.push(DisplayMessage::success(msg_text));
                                     messages.set(m);
                                 }
-                                GwEvent::ToolCall { name, arguments } => {
-                                    let msg = if name == "ask_user" {
-                                        // Don't show raw JSON args for ask_user — the dialog handles it
-                                        format!("🔧 {} — preparing question…", name)
-                                    } else {
-                                        // Pretty-print JSON arguments if possible
-                                        let pretty = serde_json::from_str::<serde_json::Value>(&arguments)
-                                            .ok()
-                                            .and_then(|v| serde_json::to_string_pretty(&v).ok())
-                                            .unwrap_or(arguments);
-                                        format!("🔧 {}\n{}", name, pretty)
-                                    };
+                                GwEvent::ToolCall { id, name, arguments } => {
                                     let mut m = messages.read().clone();
-                                    m.push(DisplayMessage::tool_call(msg));
+                                    if m.last().map(|x| x.role == rustyclaw_core::types::MessageRole::Assistant).unwrap_or(false) {
+                                        if let Some(last) = m.last_mut() {
+                                            last.add_tool_call(id, name, arguments);
+                                        }
+                                    } else {
+                                        let mut assistant = DisplayMessage::assistant("");
+                                        assistant.add_tool_call(id, name, arguments);
+                                        m.push(assistant);
+                                    }
                                     messages.set(m);
                                 }
-                                GwEvent::ToolResult { result } => {
-                                    let preview = if result.len() > 200 {
-                                        format!("{}…", &result[..200])
-                                    } else {
-                                        result
-                                    };
+                                GwEvent::ToolResult { id, name, result, is_error } => {
                                     let mut m = messages.read().clone();
-                                    m.push(DisplayMessage::tool_result(preview));
+                                    let mut matched = false;
+                                    for msg in m.iter_mut().rev() {
+                                        let before = msg.tool_calls.len();
+                                        msg.set_tool_result(&id, result.clone(), is_error);
+                                        let after_match = msg
+                                            .tool_calls
+                                            .iter()
+                                            .any(|tc| tc.id == id && tc.result.is_some());
+                                        if before > 0 && after_match {
+                                            matched = true;
+                                            break;
+                                        }
+                                    }
+                                    if !matched {
+                                        let mut fallback = DisplayMessage::assistant("");
+                                        fallback.add_tool_call(id, name, "{}".to_string());
+                                        fallback.set_tool_result(
+                                            &fallback.tool_calls[0].id.clone(),
+                                            result,
+                                            is_error,
+                                        );
+                                        m.push(fallback);
+                                    }
                                     messages.set(m);
                                 }
                                 GwEvent::ToolApprovalRequest { id, name, arguments } => {

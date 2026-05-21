@@ -19,6 +19,7 @@ pub mod skills_dialog;
 pub mod status_bar;
 pub mod thread_tabs;
 pub mod tool_approval_dialog;
+pub mod tool_call;
 pub mod tool_perms_dialog;
 pub mod user_prompt_dialog;
 pub mod vault_unlock_dialog;

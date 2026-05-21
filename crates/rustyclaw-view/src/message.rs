@@ -179,6 +179,19 @@ pub struct ToolCallData {
     pub collapsed: bool,
 }
 
+impl Default for ToolCallData {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            arguments: String::new(),
+            result: None,
+            is_error: false,
+            collapsed: true,
+        }
+    }
+}
+
 impl ToolCallData {
     /// A short summary line for this tool call.
     ///

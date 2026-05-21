@@ -79,11 +79,15 @@ pub(crate) enum GwEvent {
     ThinkingDelta,
     ThinkingEnd,
     ToolCall {
+        id: String,
         name: String,
         arguments: String,
     },
     ToolResult {
+        id: String,
+        name: String,
         result: String,
+        is_error: bool,
     },
     /// Gateway requests user approval for a tool call (Ask mode)
     ToolApprovalRequest {
@@ -1627,13 +1631,22 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
 
         // ── Tool calls and results ──────────────────────────────────────
         Action::GatewayToolCall {
-            name, arguments, ..
+            id, name, arguments,
         } => Some(GwEvent::ToolCall {
+            id: id.clone(),
             name: name.clone(),
             arguments: arguments.clone(),
         }),
-        Action::GatewayToolResult { result, .. } => Some(GwEvent::ToolResult {
+        Action::GatewayToolResult {
+            id,
+            name,
+            result,
+            is_error,
+        } => Some(GwEvent::ToolResult {
+            id: id.clone(),
+            name: name.clone(),
             result: result.clone(),
+            is_error: *is_error,
         }),
 
         // ── Interactive: tool approval ──────────────────────────────────

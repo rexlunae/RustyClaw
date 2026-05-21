@@ -8,6 +8,7 @@
 // `bottom: -(scroll_offset)` on an inner container.
 
 use crate::components::message::MessageBubble;
+use crate::components::tool_call::ToolCallPanel;
 use crate::theme;
 use crate::types::DisplayMessage;
 use iocraft::prelude::*;
@@ -54,10 +55,23 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                     let has_details = latest_details_idx == Some(i);
                     let bubble_data = msg.to_bubble_data(name, has_details);
                     element! {
-                        MessageBubble(
+                        View(
                             key: i as u64,
-                            data: bubble_data,
-                        )
+                            flex_direction: FlexDirection::Column,
+                            width: 100pct,
+                        ) {
+                            MessageBubble(
+                                data: bubble_data,
+                            )
+                            #(msg.tool_calls.iter().enumerate().map(|(ti, tool)| {
+                                element! {
+                                    ToolCallPanel(
+                                        key: ((i as u64) << 32) | (ti as u64),
+                                        data: tool.clone(),
+                                    )
+                                }
+                            }))
+                        }
                     }
                 }))
 

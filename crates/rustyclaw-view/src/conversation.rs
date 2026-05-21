@@ -3,7 +3,7 @@
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{StreamingState, ThreadInfo};
 
-use crate::MessageBubbleData;
+use crate::{MessageBubbleData, ToolCallData};
 
 /// A renderer-facing message row with optional extended details payload.
 ///
@@ -14,6 +14,7 @@ pub struct DisplayMessageData {
     pub role: MessageRole,
     pub content: String,
     pub details: Option<String>,
+    pub tool_calls: Vec<ToolCallData>,
 }
 
 impl DisplayMessageData {
@@ -22,6 +23,7 @@ impl DisplayMessageData {
             role,
             content: content.into(),
             details: None,
+            tool_calls: Vec::new(),
         }
     }
 
@@ -35,6 +37,7 @@ impl DisplayMessageData {
             role,
             content: content.into(),
             details: Some(details.into()),
+            tool_calls: Vec::new(),
         }
     }
 
@@ -72,6 +75,29 @@ impl DisplayMessageData {
     /// Append text to the message content.
     pub fn append(&mut self, text: &str) {
         self.content.push_str(text);
+    }
+
+    /// Add a structured tool call rendered alongside this message.
+    pub fn add_tool_call(&mut self, id: String, name: String, arguments: String) {
+        self.tool_calls.push(ToolCallData {
+            id,
+            name,
+            arguments,
+            result: None,
+            is_error: false,
+            collapsed: true,
+        });
+    }
+
+    /// Set the result for a tool call by id.
+    pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {
+        for tc in &mut self.tool_calls {
+            if tc.id == id {
+                tc.result = Some(result);
+                tc.is_error = is_error;
+                return;
+            }
+        }
     }
 
     /// Convert into a reusable message-bubble view model.
