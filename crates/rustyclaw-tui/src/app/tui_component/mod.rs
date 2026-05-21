@@ -232,6 +232,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     let mut m = messages.read().clone();
                                     m.push(DisplayMessage::info("Gateway connected."));
                                     messages.set(m);
+                                    // Reset foreground tracking so the next ThreadsUpdate
+                                    // always triggers a fresh history fetch, even when the
+                                    // same thread stays foreground across a reconnect.
+                                    foreground_thread_id.set(None);
                                     if let Ok(guard) = tx_for_history.lock() {
                                         if let Some(ref tx) = *guard {
                                             let _ = tx.send(UserInput::RefreshThreads);
@@ -244,6 +248,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     let mut m = messages.read().clone();
                                     m.push(DisplayMessage::success("Authenticated"));
                                     messages.set(m);
+                                    // Also reset on auth success (SSH key auth skips Connected).
+                                    foreground_thread_id.set(None);
                                     // Request initial thread list
                                     if let Ok(guard) = tx_for_history.lock() {
                                         if let Some(ref tx) = *guard {

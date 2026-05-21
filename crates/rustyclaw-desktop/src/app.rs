@@ -106,6 +106,9 @@ pub fn App() -> Element {
             let mut s = state.write();
             s.working_directory = Some(path);
             s.available_directories = options;
+            if let Some(root) = s.working_directory.as_deref() {
+                s.file_browser = rustyclaw_view::FileBrowserData::load(root);
+            }
         }
     });
 
@@ -213,6 +216,13 @@ pub fn App() -> Element {
                                         | GatewayEvent::AuthSuccess
                                         | GatewayEvent::VaultUnlocked
                                 );
+                                // On a fresh connection the gateway is a new session;
+                                // reset the guard so the foreground thread's history
+                                // is always fetched, even if the thread ID is unchanged.
+                                let should_reset_history_guard = matches!(
+                                    event,
+                                    GatewayEvent::Connected { .. } | GatewayEvent::AuthSuccess
+                                );
                                 let history_target = match &event {
                                     GatewayEvent::ThreadsUpdate {
                                         foreground_id: Some(thread_id),
@@ -223,6 +233,9 @@ pub fn App() -> Element {
                                 handle_gateway_event(event, state);
                                 if should_refresh_threads {
                                     let _ = client_ui.send(GatewayCommand::ThreadList).await;
+                                }
+                                if should_reset_history_guard {
+                                    last_foreground_history_request = None;
                                 }
                                 if let Some(thread_id) = history_target
                                     && last_foreground_history_request != Some(thread_id)
@@ -318,19 +331,21 @@ pub fn App() -> Element {
             .working_directory
             .clone()
             .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
-        let mut dialog = rfd::FileDialog::new();
-        if let Some(dir) = start_dir {
-            dialog = dialog.set_directory(dir);
-        }
-        if let Some(file) = dialog.pick_file() {
-            let path = file.display().to_string();
-            let attachment = PromptAttachment::from_file_path(path.clone());
-            let mut s = state.write();
-            if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
-                s.prompt_attachments.push(attachment);
+        spawn(async move {
+            let mut dialog = rfd::AsyncFileDialog::new();
+            if let Some(dir) = start_dir {
+                dialog = dialog.set_directory(dir);
             }
-            s.status_message = Some(format!("Attached file {}", path));
-        }
+            if let Some(file) = dialog.pick_file().await {
+                let path = file.path().display().to_string();
+                let attachment = PromptAttachment::from_file_path(path.clone());
+                let mut s = state.write();
+                if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+                    s.prompt_attachments.push(attachment);
+                }
+                s.status_message = Some(format!("Attached file {}", path));
+            }
+        });
     };
 
     let on_add_directory_attachment = move |_| {
@@ -339,19 +354,21 @@ pub fn App() -> Element {
             .working_directory
             .clone()
             .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
-        let mut dialog = rfd::FileDialog::new();
-        if let Some(dir) = start_dir {
-            dialog = dialog.set_directory(dir);
-        }
-        if let Some(folder) = dialog.pick_folder() {
-            let path = folder.display().to_string();
-            let attachment = PromptAttachment::from_directory_path(path.clone());
-            let mut s = state.write();
-            if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
-                s.prompt_attachments.push(attachment);
+        spawn(async move {
+            let mut dialog = rfd::AsyncFileDialog::new();
+            if let Some(dir) = start_dir {
+                dialog = dialog.set_directory(dir);
             }
-            s.status_message = Some(format!("Attached directory {}", path));
-        }
+            if let Some(folder) = dialog.pick_folder().await {
+                let path = folder.path().display().to_string();
+                let attachment = PromptAttachment::from_directory_path(path.clone());
+                let mut s = state.write();
+                if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+                    s.prompt_attachments.push(attachment);
+                }
+                s.status_message = Some(format!("Attached directory {}", path));
+            }
+        });
     };
 
     let on_clear_attachments = move |_| {
@@ -486,6 +503,68 @@ pub fn App() -> Element {
         });
     };
 
+    // ── Native OS menu event handler ──────────────────────────────────────
+    use dioxus::desktop::use_muda_event_handler;
+    use_muda_event_handler(move |event| {
+        if let Some(ids) = crate::menu::app_menu_ids() {
+            if event.id == ids.new_thread {
+                let gw = gateway.read().clone();
+                if let Some(client) = gw {
+                    spawn(async move {
+                        let _ = client.send(GatewayCommand::ThreadCreate { label: None }).await;
+                    });
+                }
+                let mut s = state.write();
+                if let Some(current_id) = s.foreground_thread_id {
+                    if !s.messages.is_empty() {
+                        let msgs = s.messages.clone();
+                        s.save_thread_messages(current_id, msgs);
+                    }
+                }
+                s.messages.clear();
+            } else if event.id == ids.toggle_left_sidebar {
+                let v = state.read().left_sidebar_visible;
+                state.write().left_sidebar_visible = !v;
+            } else if event.id == ids.toggle_right_sidebar {
+                let v = state.read().right_sidebar_visible;
+                state.write().right_sidebar_visible = !v;
+            } else if event.id == ids.settings {
+                show_settings.set(true);
+            } else if event.id == ids.secrets {
+                show_secrets.set(true);
+                let gw = gateway.read().clone();
+                if let Some(client) = gw {
+                    spawn(async move {
+                        let _ = client.send(GatewayCommand::SecretsList).await;
+                    });
+                }
+            } else if event.id == ids.pair {
+                show_pairing.set(true);
+            } else if event.id == ids.swarm {
+                show_swarm.set(true);
+            } else if event.id == ids.skills {
+                state.write().status_message =
+                    Some("Skills manager coming soon on desktop".to_string());
+            } else if event.id == ids.quit {
+                dioxus::desktop::window().close();
+            }
+        }
+    });
+
+    let on_file_browser_toggle = move |path: std::path::PathBuf| {
+        state.write().file_browser.toggle_expand(&path);
+    };
+
+    let on_file_browser_select = move |path: std::path::PathBuf| {
+        let path_str = path.to_string_lossy().into_owned();
+        let attachment = rustyclaw_view::PromptAttachment::from_file_path(path_str.clone());
+        let mut s = state.write();
+        if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+            s.prompt_attachments.push(attachment);
+        }
+        s.status_message = Some(format!("Attached {}", path.display()));
+    };
+
     rsx! {
         style { dangerous_inner_html: STYLES }
 
@@ -494,39 +573,82 @@ pub fn App() -> Element {
             class: "app",
             "data-theme": "{theme_attr}",
 
-            Sidebar {
-                connection: state.read().connection.clone(),
-                agent_name: state.read().agent_name.clone(),
-                model: state.read().model.clone(),
-                provider: state.read().provider.clone(),
-                collapsed: sidebar_collapsed,
-                on_toggle_collapse: move |_| {
-                    let v = state.read().sidebar_collapsed;
-                    state.write().sidebar_collapsed = !v;
-                },
-                on_new_thread: on_new_thread,
-                on_switch_thread: on_switch_thread,
-                on_rename_thread: on_rename_thread,
-                on_delete_thread: on_delete_thread,
-                threads: state
-                    .read()
-                    .threads
-                    .iter()
-                    .map(rustyclaw_view::SidebarItemData::from)
-                    .collect(),
-                foreground_id: state.read().foreground_thread_id,
-                on_pair: move |_| show_pairing.set(true),
-                on_secrets: move |_| {
-                    show_secrets.set(true);
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::SecretsList).await;
-                        });
-                    }
-                },
-                on_settings: move |_| show_settings.set(true),
+            // ── Tab row: sidebar toggles + thread tabs ─────────────────────
+            div { class: "rc-tab-row",
+                button {
+                    class: "sidebar-toggle-btn",
+                    title: "Toggle Left Sidebar",
+                    onclick: move |_| {
+                        let v = state.read().left_sidebar_visible;
+                        state.write().left_sidebar_visible = !v;
+                    },
+                    "☰"
+                }
+                TabBar {
+                    data: rustyclaw_view::TabBarData::from_threads(
+                        &state.read().threads,
+                    ),
+                    on_switch: on_switch_thread,
+                    on_new: on_new_thread,
+                    on_close: move |id| {
+                        let label = state
+                            .read()
+                            .threads
+                            .iter()
+                            .find(|thread| thread.id == id)
+                            .and_then(|thread| thread.label.clone())
+                            .unwrap_or_else(|| format!("Session #{}", id));
+                        pending_thread_delete.set(Some((id, label)));
+                    },
+                }
+                button {
+                    class: "sidebar-toggle-btn",
+                    title: "Toggle Right Sidebar",
+                    onclick: move |_| {
+                        let v = state.read().right_sidebar_visible;
+                        state.write().right_sidebar_visible = !v;
+                    },
+                    "◫"
+                }
             }
+
+            // ── Workspace: left sidebar + main content + right sidebar ──────
+            div { class: "rc-workspace",
+                if state.read().left_sidebar_visible {
+                    Sidebar {
+                        connection: state.read().connection.clone(),
+                        agent_name: state.read().agent_name.clone(),
+                        model: state.read().model.clone(),
+                        provider: state.read().provider.clone(),
+                        collapsed: sidebar_collapsed,
+                        on_toggle_collapse: move |_| {
+                            let v = state.read().sidebar_collapsed;
+                            state.write().sidebar_collapsed = !v;
+                        },
+                        on_new_thread: on_new_thread,
+                        on_switch_thread: on_switch_thread,
+                        on_rename_thread: on_rename_thread,
+                        on_delete_thread: on_delete_thread,
+                        threads: state
+                            .read()
+                            .threads
+                            .iter()
+                            .map(rustyclaw_view::SidebarItemData::from)
+                            .collect(),
+                        foreground_id: state.read().foreground_thread_id,
+                        on_pair: move |_| show_pairing.set(true),
+                        on_secrets: move |_| {
+                            show_secrets.set(true);
+                            let gw = gateway.read().clone();
+                            if let Some(client) = gw {
+                                spawn(async move {
+                                    let _ = client.send(GatewayCommand::SecretsList).await;
+                                });
+                            }
+                        },
+                        on_settings: move |_| show_settings.set(true),
+                    }
+                }
 
             div { class: "main",
                 // Top bar with current thread / model summary
@@ -589,25 +711,6 @@ pub fn App() -> Element {
                             }
                         }
                     }
-                }
-
-                // Thread tab bar
-                TabBar {
-                    data: rustyclaw_view::TabBarData::from_threads(
-                        &state.read().threads,
-                    ),
-                    on_switch: on_switch_thread,
-                    on_new: on_new_thread,
-                    on_close: move |id| {
-                        let label = state
-                            .read()
-                            .threads
-                            .iter()
-                            .find(|thread| thread.id == id)
-                            .and_then(|thread| thread.label.clone())
-                            .unwrap_or_else(|| format!("Session #{}", id));
-                        pending_thread_delete.set(Some((id, label)));
-                    },
                 }
 
                 Chat {
@@ -694,45 +797,49 @@ pub fn App() -> Element {
                                 .working_directory
                                 .clone()
                                 .unwrap_or_else(|| ".".to_string());
-                            let picked = rfd::FileDialog::new()
-                                .set_directory(start_dir)
-                                .pick_folder();
-                            if let Some(folder) = picked {
-                                let selected = folder.display().to_string();
-                                match std::env::set_current_dir(&selected) {
-                                    Ok(()) => {
-                                        let options = build_directory_options(&selected);
-                                        let mut s = state.write();
-                                        s.working_directory = Some(selected.clone());
-                                        s.available_directories = options;
-                                        s.directory_selector_expanded = false;
-                                        s.directory_selector_error = None;
-                                        s.status_message = Some(format!(
-                                            "Working directory set to {}",
-                                            display_path(&selected)
-                                        ));
-                                        // Tell the gateway so agent tools use the new dir.
-                                        let gw = gateway.read().clone();
-                                        if let Some(client) = gw {
-                                            let path = selected.clone();
-                                            spawn(async move {
+                            spawn(async move {
+                                let picked = rfd::AsyncFileDialog::new()
+                                    .set_directory(start_dir)
+                                    .pick_folder()
+                                    .await;
+                                if let Some(folder) = picked {
+                                    let selected = folder.path().display().to_string();
+                                    match std::env::set_current_dir(&selected) {
+                                        Ok(()) => {
+                                            let options = build_directory_options(&selected);
+                                            let mut s = state.write();
+                                            s.working_directory = Some(selected.clone());
+                                            s.available_directories = options;
+                                            s.file_browser = rustyclaw_view::FileBrowserData::load(
+                                                &selected,
+                                            );
+                                            s.directory_selector_expanded = false;
+                                            s.directory_selector_error = None;
+                                            s.status_message = Some(format!(
+                                                "Working directory set to {}",
+                                                display_path(&selected)
+                                            ));
+                                            // Tell the gateway so agent tools use the new dir.
+                                            let gw = gateway.read().clone();
+                                            if let Some(client) = gw {
+                                                let path = selected.clone();
                                                 let _ = client
                                                     .send(GatewayCommand::SetWorkingDirectory { path })
                                                     .await;
-                                            });
+                                            }
+                                        }
+                                        Err(e) => {
+                                            let mut s = state.write();
+                                            s.directory_selector_error = Some(format!(
+                                                "Failed to change directory: {}",
+                                                e
+                                            ));
                                         }
                                     }
-                                    Err(e) => {
-                                        let mut s = state.write();
-                                        s.directory_selector_error = Some(format!(
-                                            "Failed to change directory: {}",
-                                            e
-                                        ));
-                                    }
+                                } else {
+                                    state.write().directory_selector_expanded = false;
                                 }
-                            } else {
-                                state.write().directory_selector_expanded = false;
-                            }
+                            });
                             return;
                         }
 
@@ -742,6 +849,7 @@ pub fn App() -> Element {
                                 let mut s = state.write();
                                 s.working_directory = Some(path.clone());
                                 s.available_directories = options;
+                                s.file_browser = rustyclaw_view::FileBrowserData::load(&path);
                                 s.directory_selector_expanded = false;
                                 s.directory_selector_error = None;
                                 s.status_message = Some(format!(
@@ -768,6 +876,17 @@ pub fn App() -> Element {
                             }
                         }
                     },
+                }
+            }
+
+                if state.read().right_sidebar_visible {
+                    aside { class: "sidebar sidebar-right",
+                        crate::components::FileBrowser {
+                            data: state.read().file_browser.clone(),
+                            on_toggle: on_file_browser_toggle,
+                            on_select: on_file_browser_select,
+                        }
+                    }
                 }
             }
 

@@ -10,6 +10,7 @@ pub mod app;
 mod components;
 mod gateway;
 mod markdown;
+pub(crate) mod menu;
 mod state;
 
 static GATEWAY_URL: OnceLock<Option<String>> = OnceLock::new();
@@ -33,7 +34,8 @@ pub fn run(gateway_url: Option<String>) {
     // Match the dark-theme background so there's no white flash on startup.
     let cfg = DesktopConfig::new()
         .with_window(window)
-        .with_background_color((15, 17, 21, 0xFF));
+        .with_background_color((15, 17, 21, 0xFF))
+        .with_menu(menu::build_app_menu());
 
     dioxus::LaunchBuilder::desktop()
         .with_cfg(cfg)

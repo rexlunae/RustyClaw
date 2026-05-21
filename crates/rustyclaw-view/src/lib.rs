@@ -36,10 +36,12 @@
 //! change to how the bubble looks (`MessageBubbleData`) doesn't
 //! require touching event-processing code.
 
+pub mod app_menu;
 pub mod composer;
 pub mod command_menu;
 pub mod conversation;
 pub mod dialogs;
+pub mod file_browser;
 pub mod message;
 pub mod sidebar;
 pub mod status;
@@ -47,6 +49,7 @@ pub mod swarm;
 pub mod tabs;
 
 // Re-export at crate root for convenience.
+pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
 pub use composer::{
     BottomBarData, ComposerData, DirectoryOption, DirectorySelectorState, PromptAttachment,
     PromptAttachmentKind, build_prompt_with_attachments,
@@ -62,6 +65,7 @@ pub use dialogs::{
     PairingDialogData, PairingField, PairingStep, SecretInfoData, SecretsDialogData,
     SkillInfoData, ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
 };
+pub use file_browser::{FileBrowserData, FileBrowserEntry};
 pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData};
 pub use sidebar::SidebarItemData;
 pub use status::StatusBarData;

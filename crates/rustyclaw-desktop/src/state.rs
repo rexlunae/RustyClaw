@@ -123,6 +123,15 @@ pub struct AppState {
 
     /// Error message from directory operations if any
     pub directory_selector_error: Option<String>,
+
+    /// Whether the left sidebar (thread list) is visible.
+    pub left_sidebar_visible: bool,
+
+    /// Whether the right sidebar (file browser) is visible.
+    pub right_sidebar_visible: bool,
+
+    /// File browser data for the right sidebar.
+    pub file_browser: rustyclaw_view::FileBrowserData,
 }
 
 impl Default for AppState {
@@ -165,10 +174,16 @@ impl Default for AppState {
             streaming_bytes: 0,
             agent_access: false,
             secrets_data: SecretsDialogData::from_vault(Vec::new(), false, false),
-            working_directory,
+            working_directory: working_directory.clone(),
             available_directories: Vec::new(),
             directory_selector_expanded: false,
             directory_selector_error: None,
+            left_sidebar_visible: true,
+            right_sidebar_visible: true,
+            file_browser: working_directory
+                .as_deref()
+                .map(|p| rustyclaw_view::FileBrowserData::load(p))
+                .unwrap_or_default(),
         }
     }
 }

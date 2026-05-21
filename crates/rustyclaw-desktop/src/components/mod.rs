@@ -16,6 +16,7 @@
 mod chat;
 mod credential_request;
 mod device_flow;
+mod file_browser;
 mod hatching;
 mod input_bar;
 mod message;
@@ -34,6 +35,7 @@ mod vault_unlock;
 pub use chat::Chat;
 pub use credential_request::CredentialRequestDialog;
 pub use device_flow::DeviceFlowDialog;
+pub use file_browser::FileBrowser;
 pub use hatching::{HatchingDialog, HatchingResult};
 pub use pairing::{PairingDialog, generate_qr_code};
 pub use secrets::{SecretsCommand, SecretsDialog};
