@@ -1,3 +1,4 @@
+mod events;
 mod tui_component;
 // ── App module ──────────────────────────────────────────────────────────────
 //
@@ -6,4 +7,5 @@ mod tui_component;
 mod app;
 
 pub use app::App;
-pub(crate) use app::{GwEvent, UserInput};
+pub(crate) use app::UserInput;
+pub(crate) use events::GwEvent;

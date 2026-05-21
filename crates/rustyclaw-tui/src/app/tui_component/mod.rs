@@ -607,12 +607,6 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     // Unfocus tab after switch
                                     tab_focused.set(false);
                                 }
-                                GwEvent::HatchingResponse(_identity) => {
-                                    // Hatching response is handled via ResponseDone
-                                    // since it comes through as streaming chunks.
-                                    // This event is currently unused but defined for
-                                    // potential future direct gateway hatching support.
-                                }
                                 GwEvent::ShowProviderSelector { providers, provider_ids, auth_hints } => {
                                     provider_selector_items.set(providers);
                                     provider_selector_ids.set(provider_ids);
