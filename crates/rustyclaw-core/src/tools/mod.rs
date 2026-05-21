@@ -8,6 +8,7 @@ pub mod agent_setup;
 
 use tracing::{debug, instrument, warn};
 
+mod ast_grep;
 mod browser;
 mod cron_tool;
 mod devices;
@@ -29,6 +30,9 @@ mod swarm_tools;
 mod system_tools;
 pub mod uv;
 mod web;
+// ast-grep structural code tool
+use ast_grep::exec_ast_grep;
+
 // UV tool
 use uv::exec_uv_manage;
 
@@ -307,6 +311,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "client_dom_query" => "Evaluate JavaScript in the desktop client's webview DOM",
         "ollama_manage" => "Administer the Ollama model server",
         "exo_manage" => "Administer the Exo distributed AI cluster (git clone + uv run)",
+        "ast_grep_manage" => "Structural code search, lint & rewrite via ast-grep",
         "uv_manage" => "Manage Python envs & packages via uv",
         "npm_manage" => "Manage Node.js packages & scripts via npm",
         "agent_setup" => "Set up local model infrastructure",
@@ -443,6 +448,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &FIREWALL,
         &OLLAMA_MANAGE,
         &EXO_MANAGE,
+        &AST_GREP_MANAGE,
         &UV_MANAGE,
         &NPM_MANAGE,
         &AGENT_SETUP,
@@ -1276,6 +1282,22 @@ pub static AGENT_SETUP: ToolDef = ToolDef {
                   parameter to set up only specific tools (e.g. ['ollama','uv']).",
     parameters: vec![],
     execute: exec_agent_setup,
+};
+
+// ── ast-grep tool ──────────────────────────────────────────────────────────
+
+pub static AST_GREP_MANAGE: ToolDef = ToolDef {
+    name: "ast_grep_manage",
+    description: "Structural code search, lint, and rewriting via ast-grep. \
+                  Uses tree-sitter AST patterns to match code structure instead of text. \
+                  Actions: setup (install ast-grep), search/run (search or rewrite with \
+                  AST patterns), scan (run lint rules by config), test (test rules), \
+                  new (create rules/tests/projects), version, help. \
+                  Pattern syntax: use code snippets with metavariables like $$VAR. \
+                  Example: ast_grep_manage with pattern='Some($$VAL)', lang='rust' \
+                  to match all Option::Some usages.",
+    parameters: vec![],
+    execute: exec_ast_grep,
 };
 
 // ── Interactive prompt tool ────────────────────────────────────────────────
