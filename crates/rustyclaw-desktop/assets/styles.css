@@ -144,6 +144,18 @@ p { margin: 0; }
 }
 .rc-tab-row > * { -webkit-app-region: no-drag; }
 
+.rc-tab-actions {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding-right: 4px;
+}
+
+.rc-tab-actions.buttons {
+    margin-bottom: 0;
+}
+
 /* Horizontal workspace: left sidebar + main + right sidebar */
 .rc-workspace {
     display: flex;
@@ -171,6 +183,11 @@ p { margin: 0; }
 .sidebar-toggle-btn:hover {
     background: var(--rc-bg-hover);
     color: var(--rc-text);
+}
+
+.sidebar-toggle-btn.button {
+    margin: 0;
+    border: none;
 }
 
 /* ============================================================
@@ -524,6 +541,11 @@ p { margin: 0; }
     transition: background 0.12s ease, color 0.12s ease;
 }
 .icon-btn:hover { background: var(--rc-bg-hover); color: var(--rc-text); }
+
+.icon-btn.button {
+    margin: 0;
+    border: none;
+}
 
 /* ---- Connection banner ---- */
 
@@ -1851,6 +1873,8 @@ p { margin: 0; }
     background: var(--rc-surface, #1a1a2e);
     border-bottom: 1px solid var(--rc-border);
     min-height: 34px;
+    flex: 1;
+    min-width: 0;
     flex-shrink: 0;
 }
 

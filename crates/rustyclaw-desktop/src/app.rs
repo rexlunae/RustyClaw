@@ -1,6 +1,7 @@
 //! Top-level application component.
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{
@@ -575,9 +576,10 @@ pub fn App() -> Element {
 
             // ── Tab row: sidebar toggles + thread tabs ─────────────────────
             div { class: "rc-tab-row",
-                button {
+                Button {
+                    color: BulmaColor::Ghost,
+                    size: BulmaSize::Small,
                     class: "sidebar-toggle-btn",
-                    title: "Toggle Left Sidebar",
                     onclick: move |_| {
                         let v = state.read().left_sidebar_visible;
                         state.write().left_sidebar_visible = !v;
@@ -601,9 +603,41 @@ pub fn App() -> Element {
                         pending_thread_delete.set(Some((id, label)));
                     },
                 }
-                button {
+                Buttons { class: "rc-tab-actions", addons: true,
+                    Button {
+                        color: BulmaColor::Ghost,
+                        size: BulmaSize::Small,
+                        class: "icon-btn",
+                        onclick: move |_| {
+                            show_secrets.set(true);
+                            let gw = gateway.read().clone();
+                            if let Some(client) = gw {
+                                spawn(async move {
+                                    let _ = client.send(GatewayCommand::SecretsList).await;
+                                });
+                            }
+                        },
+                        "🔑"
+                    }
+                    Button {
+                        color: BulmaColor::Ghost,
+                        size: BulmaSize::Small,
+                        class: "icon-btn",
+                        onclick: move |_| show_swarm.set(true),
+                        "🐝"
+                    }
+                    Button {
+                        color: BulmaColor::Ghost,
+                        size: BulmaSize::Small,
+                        class: "icon-btn",
+                        onclick: move |_| show_settings.set(true),
+                        "⚙"
+                    }
+                }
+                Button {
+                    color: BulmaColor::Ghost,
+                    size: BulmaSize::Small,
                     class: "sidebar-toggle-btn",
-                    title: "Toggle Right Sidebar",
                     onclick: move |_| {
                         let v = state.read().right_sidebar_visible;
                         state.write().right_sidebar_visible = !v;
@@ -651,41 +685,25 @@ pub fn App() -> Element {
                 }
 
             div { class: "main",
-                // Top bar with current thread / model summary
-                TopBar {
-                    data: rustyclaw_view::TopBarData::from_threads(
-                        state.read().foreground_thread_id,
-                        &state.read().threads,
-                        state.read().agent_name.clone(),
-                        state.read().provider.clone(),
-                        state.read().model.clone(),
-                    ),
-                    on_secrets: move |_| {
-                        show_secrets.set(true);
-                        let gw = gateway.read().clone();
-                        if let Some(client) = gw {
-                            spawn(async move {
-                                let _ = client.send(GatewayCommand::SecretsList).await;
-                            });
-                        }
-                    },
-                    on_settings: move |_| show_settings.set(true),
-                    on_swarm: move |_| show_swarm.set(true),
-                }
-
                 // Connection / status banners
                 if let ConnectionStatus::Error(err) = state.read().connection.clone() {
-                    div { class: "banner is-danger",
+                    Notification {
+                        color: BulmaColor::Danger,
+                        class: "banner is-danger",
                         span { class: "banner-text",
                             "🚫 Connection error: {err}"
                         }
-                        div { class: "banner-actions",
-                            button {
+                        Buttons { class: "banner-actions", addons: true,
+                            Button {
+                                color: BulmaColor::Ghost,
+                                size: BulmaSize::Small,
                                 class: "btn btn-ghost btn-sm",
                                 onclick: move |_| do_reconnect(),
                                 "↻ Retry"
                             }
-                            button {
+                            Button {
+                                color: BulmaColor::Light,
+                                size: BulmaSize::Small,
                                 class: "btn btn-subtle btn-sm",
                                 onclick: move |_| show_pairing.set(true),
                                 "Pair gateway"
@@ -693,7 +711,9 @@ pub fn App() -> Element {
                         }
                     }
                 } else if matches!(state.read().connection.clone(), ConnectionStatus::Connecting) {
-                    div { class: "banner is-info",
+                    Notification {
+                        color: BulmaColor::Info,
+                        class: "banner is-info",
                         span { class: "banner-text",
                             "🔄 Connecting to gateway…"
                         }
@@ -701,10 +721,14 @@ pub fn App() -> Element {
                 }
 
                 if let Some(msg) = state.read().status_message.clone() {
-                    div { class: "banner is-warn",
+                    Notification {
+                        color: BulmaColor::Warning,
+                        class: "banner is-warn",
                         span { class: "banner-text", "{msg}" }
-                        div { class: "banner-actions",
-                            button {
+                        Buttons { class: "banner-actions", addons: true,
+                            Button {
+                                color: BulmaColor::Ghost,
+                                size: BulmaSize::Small,
                                 class: "btn btn-ghost btn-sm",
                                 onclick: move |_| state.write().status_message = None,
                                 "Dismiss"
@@ -1173,12 +1197,17 @@ pub fn App() -> Element {
                             p { class: "modal-muted", "This action cannot be undone." }
                         }
                         div { class: "modal-foot",
-                            button {
+                            Buttons {
+                                Button {
+                                    color: BulmaColor::Ghost,
+                                    size: BulmaSize::Small,
                                 class: "btn btn-ghost",
                                 onclick: move |_| pending_thread_delete.set(None),
                                 "Cancel"
-                            }
-                            button {
+                                }
+                                Button {
+                                    color: BulmaColor::Danger,
+                                    size: BulmaSize::Small,
                                 class: "btn btn-danger",
                                 onclick: move |_| {
                                     pending_thread_delete.set(None);
@@ -1212,6 +1241,7 @@ pub fn App() -> Element {
                                     }
                                 },
                                 "Delete Thread"
+                                }
                             }
                         }
                     }
@@ -1265,7 +1295,10 @@ pub fn App() -> Element {
                             }
                         }
                         div { class: "modal-foot",
-                            button {
+                            Buttons {
+                                Button {
+                                    color: BulmaColor::Primary,
+                                    size: BulmaSize::Small,
                                 class: "btn btn-primary",
                                 disabled: auth_code.read().trim().is_empty(),
                                 onclick: move |_| {
@@ -1284,52 +1317,10 @@ pub fn App() -> Element {
                                     }
                                 },
                                 "Verify"
+                                }
                             }
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-#[derive(Props, Clone, PartialEq)]
-struct TopBarProps {
-    data: rustyclaw_view::TopBarData,
-    on_secrets: EventHandler<()>,
-    on_settings: EventHandler<()>,
-    on_swarm: EventHandler<()>,
-}
-
-#[component]
-fn TopBar(props: TopBarProps) -> Element {
-    rsx! {
-        div { class: "topbar",
-            div {
-                style: "display: flex; flex-direction: column; min-width: 0;",
-                span { class: "topbar-title", "{props.data.title}" }
-                if !props.data.subtitle.is_empty() {
-                    span { class: "topbar-sub", "{props.data.subtitle}" }
-                }
-            }
-            div { class: "topbar-right",
-                button {
-                    class: "icon-btn",
-                    title: "Secrets Vault",
-                    onclick: move |_| props.on_secrets.call(()),
-                    "🔑"
-                }
-                button {
-                    class: "icon-btn",
-                    title: "Swarm Manager",
-                    onclick: move |_| props.on_swarm.call(()),
-                    "🐝"
-                }
-                button {
-                    class: "icon-btn",
-                    title: "Settings",
-                    onclick: move |_| props.on_settings.call(()),
-                    "⚙"
                 }
             }
         }
