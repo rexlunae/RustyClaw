@@ -1,14 +1,13 @@
 //! Credential request dialog: gateway needs an API key or token from the user.
 
 use dioxus::prelude::*;
+use rustyclaw_view::CredentialRequestData;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct CredentialRequestDialogProps {
     pub visible: bool,
     pub id: String,
-    pub provider: String,
-    pub secret_name: String,
-    pub message: String,
+    pub data: CredentialRequestData,
     pub on_submit: EventHandler<(String, String)>,
     pub on_dismiss: EventHandler<String>,
 }
@@ -54,17 +53,17 @@ pub fn CredentialRequestDialog(props: CredentialRequestDialogProps) -> Element {
                         style: "margin-bottom: 12px;",
                         span {
                             style: "color: var(--accent-bright); font-weight: bold;",
-                            "{props.provider}"
+                            "{props.data.provider}"
                         }
                         span {
                             style: "color: var(--text-dim); margin-left: 8px;",
-                            "({props.secret_name})"
+                            "({props.data.secret_name})"
                         }
                     }
 
                     p {
                         style: "color: var(--text-dim); margin-bottom: 12px;",
-                        "{props.message}"
+                        "{props.data.message}"
                     }
 
                     form {

@@ -1,11 +1,12 @@
 //! Vault unlock dialog: enter password to unlock the encrypted vault.
 
 use dioxus::prelude::*;
+use rustyclaw_view::VaultUnlockData;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct VaultUnlockDialogProps {
     pub visible: bool,
-    pub error: Option<String>,
+    pub data: VaultUnlockData,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
 }
@@ -41,10 +42,10 @@ pub fn VaultUnlockDialog(props: VaultUnlockDialogProps) -> Element {
                         "Enter your vault password to unlock secrets."
                     }
 
-                    if let Some(err) = &props.error {
+                    if !props.data.error.is_empty() {
                         div {
                             style: "color: var(--error); margin-bottom: 8px; font-size: 0.9em;",
-                            "⚠ {err}"
+                            "⚠ {props.data.error}"
                         }
                     }
 

@@ -1,14 +1,12 @@
 //! Device flow dialog: OAuth device flow showing URL and code.
 
 use dioxus::prelude::*;
+use rustyclaw_view::DeviceFlowData;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct DeviceFlowDialogProps {
     pub visible: bool,
-    pub url: String,
-    pub code: String,
-    /// Optional error message from the provider that triggered the flow.
-    pub message: Option<String>,
+    pub data: DeviceFlowData,
     pub on_close: EventHandler<()>,
 }
 
@@ -30,7 +28,7 @@ pub fn DeviceFlowDialog(props: DeviceFlowDialogProps) -> Element {
                 }
 
                 div { class: "modal-body",
-                    if let Some(ref msg) = props.message {
+                    if let Some(ref msg) = props.data.message {
                         p {
                             style: "color: var(--warning); margin-bottom: 12px; font-size: 0.85em; padding: 8px 12px; background: var(--bg-surface); border-radius: 6px; border-left: 3px solid var(--warning);",
                             "Provider: {msg}"
@@ -47,10 +45,10 @@ pub fn DeviceFlowDialog(props: DeviceFlowDialogProps) -> Element {
                         div {
                             style: "margin-top: 8px; padding: 10px 14px; background: var(--bg-surface); border-radius: 6px; font-family: monospace; word-break: break-all;",
                             a {
-                                href: "{props.url}",
+                                href: "{props.data.url}",
                                 target: "_blank",
                                 style: "color: var(--accent-bright);",
-                                "{props.url}"
+                                "{props.data.url}"
                             }
                         }
                     }
@@ -59,7 +57,7 @@ pub fn DeviceFlowDialog(props: DeviceFlowDialogProps) -> Element {
                         div { class: "settings-section-title", "Code" }
                         div {
                             style: "margin-top: 8px; padding: 12px 14px; background: var(--bg-surface); border-radius: 6px; font-family: monospace; font-size: 1.4em; font-weight: bold; text-align: center; letter-spacing: 0.15em; color: var(--accent-bright);",
-                            "{props.code}"
+                            "{props.data.code}"
                         }
                     }
 

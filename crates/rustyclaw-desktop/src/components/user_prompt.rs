@@ -1,12 +1,14 @@
 //! User prompt dialog: structured input requested by the agent (ask_user tool).
 
 use dioxus::prelude::*;
-use rustyclaw_core::user_prompt_types::{PromptResponseValue, PromptType, UserPrompt};
+use rustyclaw_core::user_prompt_types::{PromptResponseValue, PromptType};
+use rustyclaw_view::UserPromptData;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct UserPromptDialogProps {
     pub visible: bool,
-    pub prompt: Option<UserPrompt>,
+    pub prompt_id: String,
+    pub data: Option<UserPromptData>,
     pub on_respond: EventHandler<(String, PromptResponseValue)>,
     pub on_dismiss: EventHandler<String>,
 }
@@ -21,13 +23,13 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
         return rsx! {};
     }
 
-    let prompt = match &props.prompt {
+    let prompt = match &props.data {
         Some(p) => p.clone(),
         None => return rsx! {},
     };
 
-    let prompt_id = prompt.id.clone();
-    let prompt_id_dismiss = prompt.id.clone();
+    let prompt_id = props.prompt_id.clone();
+    let prompt_id_dismiss = props.prompt_id.clone();
 
     rsx! {
         div { class: "modal-backdrop",
@@ -52,15 +54,15 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
                 }
 
                 div { class: "modal-body",
-                    if let Some(desc) = &prompt.description {
+                    if !prompt.description.is_empty() {
                         p {
                             style: "color: var(--text-dim); margin-bottom: 12px;",
-                            "{desc}"
+                            "{prompt.description}"
                         }
                     }
 
                     {match &prompt.prompt_type {
-                        PromptType::TextInput { placeholder, .. } => {
+                        Some(PromptType::TextInput { placeholder, .. }) => {
                             let ph = placeholder.clone().unwrap_or_default();
                             rsx! {
                                 div { class: "field",
@@ -74,7 +76,7 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
                                 }
                             }
                         }
-                        PromptType::Confirm { default } => {
+                        Some(PromptType::Confirm { default }) => {
                             let _ = *default;
                             rsx! {
                                 div {
@@ -102,7 +104,7 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
                                 }
                             }
                         }
-                        PromptType::Select { options, .. } => {
+                        Some(PromptType::Select { options, .. }) => {
                             rsx! {
                                 div {
                                     style: "display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow: auto;",
@@ -154,13 +156,13 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
                             let prompt_type = prompt.prompt_type.clone();
                             move |_| {
                                 let value = match &prompt_type {
-                                    PromptType::TextInput { .. } => {
+                                    Some(PromptType::TextInput { .. }) => {
                                         PromptResponseValue::Text(text_input.read().clone())
                                     }
-                                    PromptType::Confirm { .. } => {
+                                    Some(PromptType::Confirm { .. }) => {
                                         PromptResponseValue::Confirm(*confirm_value.read())
                                     }
-                                    PromptType::Select { options, .. } => {
+                                    Some(PromptType::Select { options, .. }) => {
                                         let idx = *selected_index.read();
                                         let label = options
                                             .get(idx)

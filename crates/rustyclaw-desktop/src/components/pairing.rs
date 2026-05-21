@@ -1,14 +1,13 @@
 //! Pairing dialog: show keypair / QR, configure host:port, connect.
 
 use dioxus::prelude::*;
+use rustyclaw_view::PairingDialogData;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct PairingDialogProps {
     pub visible: bool,
-    pub public_key: Option<String>,
+    pub data: PairingDialogData,
     pub qr_code_data_url: Option<String>,
-    pub gateway_host: String,
-    pub gateway_port: u16,
     pub on_host_change: EventHandler<String>,
     pub on_port_change: EventHandler<u16>,
     pub on_connect: EventHandler<()>,
@@ -18,8 +17,8 @@ pub struct PairingDialogProps {
 
 #[component]
 pub fn PairingDialog(props: PairingDialogProps) -> Element {
-    let mut host = use_signal(|| props.gateway_host.clone());
-    let mut port_str = use_signal(|| props.gateway_port.to_string());
+    let mut host = use_signal(|| props.data.host.clone());
+    let mut port_str = use_signal(|| props.data.port.clone());
     let mut copied = use_signal(|| false);
 
     use_effect(move || {
@@ -35,7 +34,12 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
         return rsx! {};
     }
 
-    let public_key_for_copy = props.public_key.clone();
+    let public_key_for_copy = if props.data.public_key.is_empty() {
+        None
+    } else {
+        Some(props.data.public_key.clone())
+    };
+    let public_key_for_render = public_key_for_copy.clone();
     let handle_copy = move |_| {
         if let Some(key) = &public_key_for_copy {
             tracing::info!("Copy public key: {}", key);
@@ -66,7 +70,7 @@ pub fn PairingDialog(props: PairingDialogProps) -> Element {
                     // Public key card
                     div { class: "pair-card",
                         div { class: "pair-card-title", "🔑 Your public key" }
-                        if let Some(key) = props.public_key.as_ref() {
+                        if let Some(key) = public_key_for_render.as_ref() {
                             pre { class: "key-pre", "{key}" }
                             div {
                                 style: "display: flex; justify-content: flex-end; margin-top: 8px;",

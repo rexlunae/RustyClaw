@@ -13,7 +13,10 @@ use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
 use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
-use rustyclaw_view::{SecretInfoData, SecretsDialogData, SwarmAgentData, SwarmData};
+use rustyclaw_view::{
+    CredentialRequestData, DeviceFlowData, PairingDialogData, SecretInfoData, SecretsDialogData,
+    SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData, VaultUnlockData,
+};
 
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
@@ -555,10 +558,18 @@ pub fn App() -> Element {
 
             PairingDialog {
                 visible: *show_pairing.read(),
-                public_key: public_key.read().clone(),
+                data: PairingDialogData {
+                    step: rustyclaw_view::PairingStep::EnterGateway,
+                    field: rustyclaw_view::PairingField::Host,
+                    public_key: public_key.read().clone().unwrap_or_default(),
+                    fingerprint: String::new(),
+                    fingerprint_art: String::new(),
+                    qr_ascii: String::new(),
+                    host: "127.0.0.1".to_string(),
+                    port: "2222".to_string(),
+                    error: String::new(),
+                },
                 qr_code_data_url: qr_code_url.read().clone(),
-                gateway_host: "127.0.0.1".to_string(),
-                gateway_port: 2222,
                 on_host_change: move |_| {},
                 on_port_change: move |_| {},
                 on_connect: move |_| {
@@ -632,9 +643,12 @@ pub fn App() -> Element {
 
             ToolApprovalDialog {
                 visible: *show_tool_approval.read(),
-                id: tool_approval_id.read().clone(),
-                tool_name: tool_approval_name.read().clone(),
-                arguments: tool_approval_args.read().clone(),
+                data: ToolApprovalData {
+                    id: tool_approval_id.read().clone(),
+                    name: tool_approval_name.read().clone(),
+                    arguments: tool_approval_args.read().clone(),
+                    selected_allow: true,
+                },
                 on_approve: move |id: String| {
                     state.write().pending_tool_approval = None;
                     let gw = gateway.read().clone();
@@ -657,7 +671,10 @@ pub fn App() -> Element {
 
             VaultUnlockDialog {
                 visible: *show_vault_unlock.read(),
-                error: vault_unlock_error.read().clone(),
+                data: VaultUnlockData {
+                    password_len: 0,
+                    error: vault_unlock_error.read().clone().unwrap_or_default(),
+                },
                 on_submit: move |password: String| {
                     vault_unlock_error.set(None);
                     let gw = gateway.read().clone();
@@ -672,7 +689,12 @@ pub fn App() -> Element {
 
             UserPromptDialog {
                 visible: *show_user_prompt.read(),
-                prompt: user_prompt_data.read().clone(),
+                prompt_id: user_prompt_data
+                    .read()
+                    .as_ref()
+                    .map(|p| p.id.clone())
+                    .unwrap_or_default(),
+                data: user_prompt_data.read().clone().map(UserPromptData::from),
                 on_respond: move |(id, value): (String, PromptResponseValue)| {
                     state.write().pending_user_prompt = None;
                     let gw = gateway.read().clone();
@@ -704,9 +726,12 @@ pub fn App() -> Element {
             CredentialRequestDialog {
                 visible: *show_cred_request.read(),
                 id: cred_request_id.read().clone(),
-                provider: cred_request_provider.read().clone(),
-                secret_name: cred_request_secret.read().clone(),
-                message: cred_request_message.read().clone(),
+                data: CredentialRequestData {
+                    provider: cred_request_provider.read().clone(),
+                    secret_name: cred_request_secret.read().clone(),
+                    message: cred_request_message.read().clone(),
+                    input_len: 0,
+                },
                 on_submit: move |(id, value): (String, String)| {
                     state.write().pending_credential_request = None;
                     let gw = gateway.read().clone();
@@ -744,9 +769,27 @@ pub fn App() -> Element {
 
             DeviceFlowDialog {
                 visible: state.read().pending_device_flow.is_some(),
-                url: state.read().pending_device_flow.as_ref().map(|(u, _, _)| u.clone()).unwrap_or_default(),
-                code: state.read().pending_device_flow.as_ref().map(|(_, c, _)| c.clone()).unwrap_or_default(),
-                message: state.read().pending_device_flow.as_ref().and_then(|(_, _, m)| m.clone()),
+                data: DeviceFlowData {
+                    url: state
+                        .read()
+                        .pending_device_flow
+                        .as_ref()
+                        .map(|(u, _, _)| u.clone())
+                        .unwrap_or_default(),
+                    code: state
+                        .read()
+                        .pending_device_flow
+                        .as_ref()
+                        .map(|(_, c, _)| c.clone())
+                        .unwrap_or_default(),
+                    message: state
+                        .read()
+                        .pending_device_flow
+                        .as_ref()
+                        .and_then(|(_, _, m)| m.clone()),
+                    browser_opened: false,
+                    tick: 0,
+                },
                 on_close: move |_| {
                     state.write().pending_device_flow = None;
                     state.write().status_message = Some("Device flow cancelled.".to_string());

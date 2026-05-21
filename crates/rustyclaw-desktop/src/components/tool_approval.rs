@@ -1,13 +1,12 @@
 //! Tool approval dialog: approve or deny tool execution in Ask mode.
 
 use dioxus::prelude::*;
+use rustyclaw_view::ToolApprovalData;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct ToolApprovalDialogProps {
     pub visible: bool,
-    pub id: String,
-    pub tool_name: String,
-    pub arguments: String,
+    pub data: ToolApprovalData,
     pub on_approve: EventHandler<String>,
     pub on_deny: EventHandler<String>,
 }
@@ -18,15 +17,10 @@ pub fn ToolApprovalDialog(props: ToolApprovalDialogProps) -> Element {
         return rsx! {};
     }
 
-    let truncated_args = if props.arguments.len() > 500 {
-        let end = props.arguments.floor_char_boundary(500);
-        format!("{}…", &props.arguments[..end])
-    } else {
-        props.arguments.clone()
-    };
+    let truncated_args = props.data.arguments_preview(500, 20);
 
-    let id_approve = props.id.clone();
-    let id_deny = props.id.clone();
+    let id_approve = props.data.id.clone();
+    let id_deny = props.data.id.clone();
 
     rsx! {
         div { class: "modal-backdrop",
@@ -46,7 +40,7 @@ pub fn ToolApprovalDialog(props: ToolApprovalDialogProps) -> Element {
                             style: "margin-top: 8px; padding: 8px 12px; background: var(--bg-surface); border-radius: 6px; font-family: monospace;",
                             span {
                                 style: "color: var(--accent-bright); font-weight: bold;",
-                                "{props.tool_name}"
+                                "{props.data.name}"
                             }
                         }
                     }
