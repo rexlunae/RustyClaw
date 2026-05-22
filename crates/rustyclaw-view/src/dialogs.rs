@@ -16,7 +16,7 @@ use rustyclaw_core::user_prompt_types::{PromptType, UserPrompt};
 /// Data for the tool approval dialog.
 ///
 /// Shown when a tool call requires user approval before execution.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct ToolApprovalData {
     /// Tool call ID (matches the approval response flow).
     pub id: String,
@@ -123,7 +123,7 @@ impl VaultUnlockData {
 ///
 /// Shown when the agent asks the user a question via the `ask_user`
 /// tool (confirm, text input, select, multi-select).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct UserPromptData {
     /// The question title from the agent.
     pub title: String,
@@ -169,7 +169,10 @@ impl UserPromptData {
 
     /// Whether this prompt expects selection from options.
     pub fn is_selection(&self) -> bool {
-        matches!(self.prompt_type, Some(PromptType::Select { .. }) | Some(PromptType::MultiSelect { .. }))
+        matches!(
+            self.prompt_type,
+            Some(PromptType::Select { .. }) | Some(PromptType::MultiSelect { .. })
+        )
     }
 
     /// Whether this prompt is a multi-field form.
@@ -197,7 +200,7 @@ impl From<UserPrompt> for UserPromptData {
 /// Shown when the gateway needs an API key or other credential.
 /// The actual credential value is never stored in props — only
 /// the input length (for masked display).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct CredentialRequestData {
     /// The provider that needs a credential (e.g. "openai", "anthropic").
     pub provider: String,
@@ -239,7 +242,7 @@ impl CredentialRequestData {
 ///
 /// Shown when a provider requires browser-based OAuth via a
 /// device code flow (user visits a URL and enters a code).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct DeviceFlowData {
     /// The verification URL the user should visit.
     pub url: String,
@@ -263,6 +266,152 @@ impl DeviceFlowData {
     /// Formats as `"Code: XXXXXX  |  URL: {url}"`.
     pub fn display_with_code(&self) -> String {
         format!("Code: {}  |  URL: {}", self.code, self.url)
+    }
+}
+
+// ── Provider selection ───────────────────────────────────────────────────────
+
+/// A single provider choice shown in the provider selector dialog.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ProviderOptionData {
+    /// Provider identifier used in commands/events.
+    pub id: String,
+
+    /// Human-readable provider name.
+    pub display_name: String,
+
+    /// Auth method hint ("apikey", "deviceflow", "none", ...).
+    pub auth_hint: String,
+}
+
+impl ProviderOptionData {
+    /// Small status badge shown next to the provider name.
+    pub fn auth_badge(&self) -> &'static str {
+        match self.auth_hint.as_str() {
+            "apikey" => " 🔑",
+            "deviceflow" => " 🔗",
+            "none" => " ✓",
+            _ => "",
+        }
+    }
+}
+
+/// Data for the provider selector dialog.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ProviderSelectorData {
+    /// Available providers to choose from.
+    pub providers: Vec<ProviderOptionData>,
+
+    /// Currently highlighted index.
+    pub cursor: usize,
+}
+
+impl ProviderSelectorData {
+    /// The currently highlighted provider, if any.
+    pub fn selected(&self) -> Option<&ProviderOptionData> {
+        self.providers.get(self.cursor)
+    }
+}
+
+// ── API key input ────────────────────────────────────────────────────────────
+
+/// Data for the API-key input dialog.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ApiKeyDialogData {
+    /// Provider identifier used when submitting the key.
+    pub provider: String,
+
+    /// Human-readable provider label.
+    pub provider_display: String,
+
+    /// Current input length (the actual key is not stored here).
+    pub input_len: usize,
+
+    /// Optional help URL for getting a key.
+    pub help_url: String,
+
+    /// Optional help text for getting a key.
+    pub help_text: String,
+}
+
+impl ApiKeyDialogData {
+    /// Masked display of the current key input.
+    pub fn masked_input(&self, width: usize) -> String {
+        if self.input_len == 0 {
+            "·".repeat(width)
+        } else {
+            format!(
+                "{}{}",
+                "•".repeat(self.input_len),
+                "·".repeat(width.saturating_sub(self.input_len))
+            )
+        }
+    }
+
+    pub fn has_help(&self) -> bool {
+        !self.help_text.is_empty()
+    }
+
+    pub fn has_url(&self) -> bool {
+        !self.help_url.is_empty()
+    }
+}
+
+// ── Model selection ──────────────────────────────────────────────────────────
+
+/// Data for the model selector dialog.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ModelSelectorData {
+    /// Provider identifier used when submitting the model.
+    pub provider: String,
+
+    /// Human-readable provider label.
+    pub provider_display: String,
+
+    /// Available model names.
+    pub models: Vec<String>,
+
+    /// Currently highlighted index.
+    pub cursor: usize,
+
+    /// Whether models are still being loaded.
+    pub loading: bool,
+
+    /// Spinner tick for loading animation.
+    pub spinner_tick: usize,
+}
+
+impl ModelSelectorData {
+    /// The currently highlighted model, if any.
+    pub fn selected_model(&self) -> Option<&str> {
+        self.models.get(self.cursor).map(String::as_str)
+    }
+
+    /// Visible slice bounds for a compact scrolling list.
+    pub fn visible_window(&self, max_visible: usize) -> (usize, usize) {
+        let total = self.models.len();
+        if total <= max_visible {
+            return (0, total);
+        }
+
+        let half = max_visible / 2;
+        let start = self.cursor.saturating_sub(half);
+        let end = (start + max_visible).min(total);
+        let start = if end == total {
+            total.saturating_sub(max_visible)
+        } else {
+            start
+        };
+        (start, end)
+    }
+
+    /// Compact "(index/total)" scroll hint for long lists.
+    pub fn scroll_hint(&self, max_visible: usize) -> String {
+        if self.models.len() > max_visible {
+            format!("  ({}/{})", self.cursor + 1, self.models.len())
+        } else {
+            String::new()
+        }
     }
 }
 
@@ -319,7 +468,7 @@ impl PairingField {
 }
 
 /// Data for the SSH pairing wizard dialog.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct PairingDialogData {
     /// Current step in the pairing flow.
     pub step: PairingStep,
@@ -537,11 +686,7 @@ pub struct SecretsDialogData {
 
 impl SecretsDialogData {
     /// Create a new secrets dialog from raw gateway data.
-    pub fn from_vault(
-        secrets: Vec<SecretInfoData>,
-        agent_access: bool,
-        has_totp: bool,
-    ) -> Self {
+    pub fn from_vault(secrets: Vec<SecretInfoData>, agent_access: bool, has_totp: bool) -> Self {
         Self {
             secrets,
             agent_access,

@@ -2,24 +2,19 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::CredentialRequestData;
 
 #[derive(Default, Props)]
 pub struct CredentialRequestDialogProps {
-    /// The provider that needs a credential (e.g. "openai", "anthropic").
-    pub provider: String,
-    /// The secret or key name the gateway asked for.
-    pub secret_name: String,
-    /// Human-readable message explaining what is needed.
-    pub message: String,
-    /// Length of the current input (masked as dots).
-    pub input_len: usize,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: CredentialRequestData,
 }
 
 #[component]
 pub fn CredentialRequestDialog(
     props: &CredentialRequestDialogProps,
 ) -> impl Into<AnyElement<'static>> {
-    let mask = "•".repeat(props.input_len);
+    let mask = props.data.masked_input();
     let cursor = "▏";
 
     element! {
@@ -42,7 +37,7 @@ pub fn CredentialRequestDialog(
             ) {
                 // Title
                 Text(
-                    content: format!("🔑 Credential Required — {}", props.provider),
+                    content: format!("🔑 Credential Required — {}", props.data.provider),
                     color: theme::WARN,
                     weight: Weight::Bold,
                 )
@@ -50,7 +45,7 @@ pub fn CredentialRequestDialog(
                 View(height: 1)
 
                 Text(
-                    content: format!("Requested secret: {}", props.secret_name),
+                    content: format!("Requested secret: {}", props.data.secret_name),
                     color: theme::MUTED,
                     wrap: TextWrap::Wrap,
                 )
@@ -59,7 +54,7 @@ pub fn CredentialRequestDialog(
 
                 // Message
                 Text(
-                    content: props.message.clone(),
+                    content: props.data.message.clone(),
                     color: theme::TEXT,
                     wrap: TextWrap::Wrap,
                 )

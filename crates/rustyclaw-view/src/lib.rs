@@ -37,8 +37,8 @@
 //! require touching event-processing code.
 
 pub mod app_menu;
-pub mod composer;
 pub mod command_menu;
+pub mod composer;
 pub mod conversation;
 pub mod dialogs;
 pub mod file_browser;
@@ -50,20 +50,20 @@ pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
+pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use composer::{
     BottomBarData, ComposerData, DirectoryOption, DirectorySelectorState, PromptAttachment,
     PromptAttachmentKind, build_prompt_with_attachments,
 };
-pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use conversation::{
-    convert_history, ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData,
-    TopBarData,
-    latest_details_index, starter_prompts,
+    ChatSurfaceData, DisplayMessageData, EmptyStateData, StarterPromptData, TopBarData,
+    convert_history, latest_details_index, starter_prompts,
 };
 pub use dialogs::{
-    AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState, HatchingDialogData,
-    PairingDialogData, PairingField, PairingStep, SecretInfoData, SecretsDialogData,
-    SkillInfoData, ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
+    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState,
+    HatchingDialogData, ModelSelectorData, PairingDialogData, PairingField, PairingStep,
+    ProviderOptionData, ProviderSelectorData, SecretInfoData, SecretsDialogData, SkillInfoData,
+    ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
 };
 pub use file_browser::{FileBrowserData, FileBrowserEntry};
 pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData};

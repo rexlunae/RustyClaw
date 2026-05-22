@@ -2,46 +2,25 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::ModelSelectorData;
 
 pub const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 #[derive(Default, Props)]
 pub struct ModelSelectorDialogProps {
-    /// Provider display name.
-    pub provider_display: String,
-    /// Available model names.
-    pub models: Vec<String>,
-    /// Currently highlighted index.
-    pub cursor: usize,
-    /// Whether we're still loading models.
-    pub loading: bool,
-    /// Spinner tick for loading animation.
-    pub spinner_tick: usize,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: ModelSelectorData,
 }
 
 #[component]
 pub fn ModelSelectorDialog(props: &ModelSelectorDialogProps) -> impl Into<AnyElement<'static>> {
-    let loading = props.loading;
-
-    // Show at most 15 models around cursor to keep the dialog compact
+    let loading = props.data.loading;
     let max_visible = 15usize;
-    let total = props.models.len();
-    let (start, end) = if total <= max_visible {
-        (0, total)
-    } else {
-        let half = max_visible / 2;
-        let start = props.cursor.saturating_sub(half);
-        let end = (start + max_visible).min(total);
-        let start = if end == total {
-            total.saturating_sub(max_visible)
-        } else {
-            start
-        };
-        (start, end)
-    };
+    let total = props.data.models.len();
+    let (start, end) = props.data.visible_window(max_visible);
 
     let items: Vec<AnyElement> = if loading {
-        let spinner = SPINNER[props.spinner_tick % SPINNER.len()];
+        let spinner = SPINNER[props.data.spinner_tick % SPINNER.len()];
         vec![
             element! {
                 Text(
@@ -59,12 +38,12 @@ pub fn ModelSelectorDialog(props: &ModelSelectorDialogProps) -> impl Into<AnyEle
             .into_any(),
         ]
     } else {
-        props.models[start..end]
+        props.data.models[start..end]
             .iter()
             .enumerate()
             .map(|(i, name)| {
                 let real_i = start + i;
-                let selected = real_i == props.cursor;
+                let selected = real_i == props.data.cursor;
                 let indicator = if selected { "▸ " } else { "  " };
                 let color = if selected {
                     theme::ACCENT_BRIGHT
@@ -80,11 +59,7 @@ pub fn ModelSelectorDialog(props: &ModelSelectorDialogProps) -> impl Into<AnyEle
     };
 
     // Scroll indicator
-    let scroll_hint = if total > max_visible {
-        format!("  ({}/{})", props.cursor + 1, total)
-    } else {
-        String::new()
-    };
+    let scroll_hint = props.data.scroll_hint(max_visible);
 
     element! {
         View(
@@ -105,7 +80,10 @@ pub fn ModelSelectorDialog(props: &ModelSelectorDialogProps) -> impl Into<AnyEle
                 padding_bottom: 1,
             ) {
                 Text(
-                    content: format!("📦 Select Model — {}{}", props.provider_display, scroll_hint),
+                    content: format!(
+                        "📦 Select Model — {}{}",
+                        props.data.provider_display, scroll_hint
+                    ),
                     color: theme::ACCENT_BRIGHT,
                     weight: Weight::Bold,
                 )

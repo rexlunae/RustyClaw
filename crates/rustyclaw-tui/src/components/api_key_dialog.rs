@@ -2,33 +2,19 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::ApiKeyDialogData;
 
 #[derive(Default, Props)]
 pub struct ApiKeyDialogProps {
-    /// Display name of the provider (e.g. "Anthropic (Claude)").
-    pub provider_display: String,
-    /// Number of characters typed so far.
-    pub input_len: usize,
-    /// URL where the user can get an API key (shown as help).
-    pub help_url: String,
-    /// Short help text (e.g. "Get a key at console.anthropic.com").
-    pub help_text: String,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: ApiKeyDialogData,
 }
 
 #[component]
 pub fn ApiKeyDialog(props: &ApiKeyDialogProps) -> impl Into<AnyElement<'static>> {
-    let mask = if props.input_len == 0 {
-        "·".repeat(20)
-    } else {
-        format!(
-            "{}{}",
-            "•".repeat(props.input_len),
-            "·".repeat(20usize.saturating_sub(props.input_len))
-        )
-    };
-
-    let has_help = !props.help_text.is_empty();
-    let has_url = !props.help_url.is_empty();
+    let mask = props.data.masked_input(20);
+    let has_help = props.data.has_help();
+    let has_url = props.data.has_url();
 
     element! {
         View(
@@ -49,7 +35,7 @@ pub fn ApiKeyDialog(props: &ApiKeyDialogProps) -> impl Into<AnyElement<'static>>
                 padding_bottom: 1,
             ) {
                 Text(
-                    content: format!("🔑 API Key — {}", props.provider_display),
+                    content: format!("🔑 API Key — {}", props.data.provider_display),
                     color: theme::WARN,
                     weight: Weight::Bold,
                 )
@@ -58,14 +44,14 @@ pub fn ApiKeyDialog(props: &ApiKeyDialogProps) -> impl Into<AnyElement<'static>>
                 // Help text
                 #(if has_help {
                     element! {
-                        Text(content: props.help_text.clone(), color: theme::MUTED)
+                        Text(content: props.data.help_text.clone(), color: theme::MUTED)
                     }.into_any()
                 } else {
                     element! { View() }.into_any()
                 })
                 #(if has_url {
                     element! {
-                        Text(content: props.help_url.clone(), color: theme::INFO)
+                        Text(content: props.data.help_url.clone(), color: theme::INFO)
                     }.into_any()
                 } else {
                     element! { View() }.into_any()

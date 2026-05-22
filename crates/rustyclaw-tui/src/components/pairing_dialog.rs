@@ -8,35 +8,19 @@
 
 use crate::theme;
 use iocraft::prelude::*;
-use rustyclaw_view::{PairingField, PairingStep};
+use rustyclaw_view::{PairingDialogData, PairingField, PairingStep};
 
 #[derive(Default, Props)]
 pub struct PairingDialogProps {
-    /// Current step in the pairing flow.
-    pub step: PairingStep,
-    /// The client's public key in OpenSSH format.
-    pub public_key: String,
-    /// The key fingerprint (SHA256:...).
-    pub fingerprint: String,
-    /// ASCII art fingerprint visualization.
-    pub fingerprint_art: String,
-    /// QR code ASCII art (optional).
-    pub qr_ascii: String,
-    /// Gateway host input.
-    pub gateway_host: String,
-    /// Gateway port input.
-    pub gateway_port: String,
-    /// Which input field is active.
-    pub active_field: PairingField,
-    /// Error message to display.
-    pub error: String,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: PairingDialogData,
     /// Success message.
     pub success: String,
 }
 
 #[component]
 pub fn PairingDialog(props: &PairingDialogProps) -> impl Into<AnyElement<'static>> {
-    let title = match props.step {
+    let title = match props.data.step {
         PairingStep::ShowKey => "🔐 Pair with Gateway — Step 1/2",
         PairingStep::EnterGateway => "🔐 Pair with Gateway — Step 2/2",
         PairingStep::Connecting => "🔐 Connecting...",
@@ -73,7 +57,7 @@ pub fn PairingDialog(props: &PairingDialogProps) -> impl Into<AnyElement<'static
                 View(height: 1)
 
                 // Step-specific content
-                #(match props.step {
+                #(match props.data.step {
                     PairingStep::ShowKey => {
                         let el: AnyElement<'static> = render_show_key(props).into();
                         el
@@ -97,11 +81,11 @@ pub fn PairingDialog(props: &PairingDialogProps) -> impl Into<AnyElement<'static
 }
 
 fn render_show_key(props: &PairingDialogProps) -> impl Into<AnyElement<'static>> {
-    let has_qr = !props.qr_ascii.is_empty();
+    let has_qr = !props.data.qr_ascii.is_empty();
     let visual = if has_qr {
-        props.qr_ascii.clone()
+        props.data.qr_ascii.clone()
     } else {
-        props.fingerprint_art.clone()
+        props.data.fingerprint_art.clone()
     };
     let visual_title = if has_qr { "QR Code" } else { "Key Art" };
 
@@ -138,7 +122,7 @@ fn render_show_key(props: &PairingDialogProps) -> impl Into<AnyElement<'static>>
             ) {
                 // Truncate key for display if too long
                 Text(
-                    content: truncate_key(&props.public_key, 66),
+                    content: truncate_key(&props.data.public_key, 66),
                     color: theme::TEXT,
                 )
             }
@@ -148,7 +132,7 @@ fn render_show_key(props: &PairingDialogProps) -> impl Into<AnyElement<'static>>
             // Fingerprint
             View(flex_direction: FlexDirection::Row) {
                 Text(content: "Fingerprint: ", color: theme::MUTED)
-                Text(content: props.fingerprint.clone(), color: theme::ACCENT)
+                Text(content: props.data.fingerprint.clone(), color: theme::ACCENT)
             }
 
             View(height: 1)
@@ -186,9 +170,9 @@ fn render_show_key(props: &PairingDialogProps) -> impl Into<AnyElement<'static>>
 }
 
 fn render_enter_gateway(props: &PairingDialogProps) -> impl Into<AnyElement<'static>> {
-    let host_focused = props.active_field == PairingField::Host;
-    let port_focused = props.active_field == PairingField::Port;
-    let has_error = !props.error.is_empty();
+    let host_focused = props.data.field == PairingField::Host;
+    let port_focused = props.data.field == PairingField::Port;
+    let has_error = !props.data.error.is_empty();
 
     element! {
         View(flex_direction: FlexDirection::Column) {
@@ -214,12 +198,12 @@ fn render_enter_gateway(props: &PairingDialogProps) -> impl Into<AnyElement<'sta
             }
             View(padding_left: 2) {
                 Text(
-                    content: if props.gateway_host.is_empty() {
+                    content: if props.data.host.is_empty() {
                         "example.com".to_string()
                     } else {
-                        props.gateway_host.clone()
+                        props.data.host.clone()
                     },
-                    color: if props.gateway_host.is_empty() { theme::MUTED } else { theme::TEXT },
+                    color: if props.data.host.is_empty() { theme::MUTED } else { theme::TEXT },
                 )
             }
 
@@ -239,7 +223,7 @@ fn render_enter_gateway(props: &PairingDialogProps) -> impl Into<AnyElement<'sta
             }
             View(padding_left: 2) {
                 Text(
-                    content: props.gateway_port.clone(),
+                    content: props.data.port.clone(),
                     color: theme::TEXT,
                 )
             }
@@ -249,7 +233,7 @@ fn render_enter_gateway(props: &PairingDialogProps) -> impl Into<AnyElement<'sta
             // Error message
             #(if has_error {
                 element! {
-                    Text(content: props.error.clone(), color: theme::ERROR)
+                    Text(content: props.data.error.clone(), color: theme::ERROR)
                 }.into_any()
             } else {
                 element! { View() }.into_any()
@@ -271,7 +255,7 @@ fn render_enter_gateway(props: &PairingDialogProps) -> impl Into<AnyElement<'sta
 }
 
 fn render_connecting(props: &PairingDialogProps) -> impl Into<AnyElement<'static>> {
-    let address = format!("{}:{}", props.gateway_host, props.gateway_port);
+    let address = props.data.gateway_address();
 
     element! {
         View(

@@ -5,7 +5,11 @@
 
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ChatMessage, ThreadInfo, ToolCallInfo};
-use rustyclaw_view::{AuthDialogData, CredentialRequestData, MessageBubbleData, PairingStep, SidebarItemData, StatusBarData, ToolApprovalData, ToolCallData, VaultUnlockData};
+use rustyclaw_view::{
+    ApiKeyDialogData, AuthDialogData, CredentialRequestData, MessageBubbleData, ModelSelectorData,
+    PairingStep, ProviderOptionData, ProviderSelectorData, SidebarItemData, StatusBarData,
+    ToolApprovalData, ToolCallData, VaultUnlockData,
+};
 
 // ── MessageBubbleData ────────────────────────────────────────────────
 
@@ -454,6 +458,52 @@ fn credential_masked_input() {
     assert!(cr.has_input());
 }
 
+#[test]
+fn provider_selector_selected_provider() {
+    let data = ProviderSelectorData {
+        providers: vec![
+            ProviderOptionData {
+                id: "anthropic".into(),
+                display_name: "Anthropic".into(),
+                auth_hint: "apikey".into(),
+            },
+            ProviderOptionData {
+                id: "github".into(),
+                display_name: "GitHub Copilot".into(),
+                auth_hint: "deviceflow".into(),
+            },
+        ],
+        cursor: 1,
+    };
+
+    let selected = data.selected().expect("selected provider");
+    assert_eq!(selected.id, "github");
+    assert_eq!(selected.auth_badge(), " 🔗");
+}
+
+#[test]
+fn api_key_masked_input_uses_width() {
+    let data = ApiKeyDialogData {
+        input_len: 4,
+        ..Default::default()
+    };
+
+    assert_eq!(data.masked_input(8), "••••····");
+}
+
+#[test]
+fn model_selector_visible_window_and_scroll_hint() {
+    let data = ModelSelectorData {
+        models: (0..20).map(|i| format!("model-{i}")).collect(),
+        cursor: 10,
+        ..Default::default()
+    };
+
+    assert_eq!(data.visible_window(5), (8, 13));
+    assert_eq!(data.scroll_hint(5), "  (11/20)");
+    assert_eq!(data.selected_model(), Some("model-10"));
+}
+
 fn default_credential() -> CredentialRequestData {
     CredentialRequestData {
         provider: String::new(),
@@ -478,8 +528,8 @@ fn status_bar_connection_labels() {
 
 #[test]
 fn status_bar_static_methods() {
-    use rustyclaw_core::ui::ConnectionStatus;
     use ConnectionStatus::*;
+    use rustyclaw_core::ui::ConnectionStatus;
 
     assert_eq!(
         StatusBarData::connection_label_static(&Disconnected),

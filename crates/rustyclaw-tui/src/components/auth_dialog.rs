@@ -2,23 +2,22 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::AuthDialogData;
 
 #[derive(Default, Props)]
 pub struct AuthDialogProps {
-    /// The digits entered so far (0–6 characters).
-    pub code: String,
-    /// Optional error/retry message to display.
-    pub error: String,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: AuthDialogData,
 }
 
 #[component]
 pub fn AuthDialog(props: &AuthDialogProps) -> impl Into<AnyElement<'static>> {
     // Build the display: show typed digits + placeholder dots
-    let typed = &props.code;
+    let typed = &props.data.code;
     let remaining = 6usize.saturating_sub(typed.len());
     let display = format!("{}{}", typed, "·".repeat(remaining),);
 
-    let has_error = !props.error.is_empty();
+    let has_error = !props.data.error.is_empty();
 
     element! {
         // Full-screen overlay with semi-transparent feel
@@ -75,7 +74,7 @@ pub fn AuthDialog(props: &AuthDialogProps) -> impl Into<AnyElement<'static>> {
                 #(if has_error {
                     element! {
                         View(margin_top: 1) {
-                            Text(content: props.error.clone(), color: theme::ERROR)
+                            Text(content: props.data.error.clone(), color: theme::ERROR)
                         }
                     }.into_any()
                 } else {
