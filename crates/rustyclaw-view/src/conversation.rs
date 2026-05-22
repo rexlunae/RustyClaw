@@ -2,6 +2,7 @@
 
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{StreamingState, ThreadInfo};
+use rustyclaw_core::gateway::protocol::types::WireMessageRole;
 
 use crate::{MessageBubbleData, ToolCallData};
 
@@ -118,11 +119,11 @@ impl DisplayMessageData {
     pub fn from_chat_message(
         msg: &rustyclaw_core::gateway::protocol::types::ChatMessage,
     ) -> Self {
-        let role = match msg.role.as_str() {
-            "user" => MessageRole::User,
-            "assistant" => MessageRole::Assistant,
-            "tool" => MessageRole::ToolResult,
-            "system" => MessageRole::System,
+        let role = match msg.role_kind() {
+            WireMessageRole::User => MessageRole::User,
+            WireMessageRole::Assistant => MessageRole::Assistant,
+            WireMessageRole::Tool => MessageRole::ToolResult,
+            WireMessageRole::System => MessageRole::System,
             _ => MessageRole::System,
         };
         let mut data = Self::new(role, msg.content.clone());
@@ -166,7 +167,7 @@ pub fn convert_history(
 ) -> Vec<DisplayMessageData> {
     let mut out: Vec<DisplayMessageData> = Vec::with_capacity(msgs.len());
     for m in msgs {
-        if m.role == "tool" {
+        if m.role_kind() == WireMessageRole::Tool {
             if let Some(call_id) = &m.tool_call_id {
                 if let Some(prev) = out.iter_mut().rev().find(|d| {
                     d.role == MessageRole::Assistant

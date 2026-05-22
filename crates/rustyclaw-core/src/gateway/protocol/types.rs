@@ -95,6 +95,16 @@ pub struct ChatMessage {
     pub media: Option<Vec<MediaRef>>,
 }
 
+/// Normalized role classification for wire `ChatMessage` roles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WireMessageRole {
+    User,
+    Assistant,
+    Tool,
+    System,
+    Unknown,
+}
+
 impl ChatMessage {
     /// Create a simple text message.
     pub fn text(role: &str, content: &str) -> Self {
@@ -115,6 +125,17 @@ impl ChatMessage {
             tool_calls: None,
             tool_call_id: None,
             media: if media.is_empty() { None } else { Some(media) },
+        }
+    }
+
+    /// Classify wire role text into a strongly-typed role.
+    pub fn role_kind(&self) -> WireMessageRole {
+        match self.role.as_str() {
+            "user" => WireMessageRole::User,
+            "assistant" => WireMessageRole::Assistant,
+            "tool" => WireMessageRole::Tool,
+            "system" => WireMessageRole::System,
+            _ => WireMessageRole::Unknown,
         }
     }
 
