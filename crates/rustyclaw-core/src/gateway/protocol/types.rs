@@ -95,16 +95,6 @@ pub struct ChatMessage {
     pub media: Option<Vec<MediaRef>>,
 }
 
-/// Normalized role classification for wire `ChatMessage` roles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WireMessageRole {
-    User,
-    Assistant,
-    Tool,
-    System,
-    Unknown,
-}
-
 impl ChatMessage {
     /// Create a simple text message.
     pub fn text(role: &str, content: &str) -> Self {
@@ -128,14 +118,14 @@ impl ChatMessage {
         }
     }
 
-    /// Classify wire role text into a strongly-typed role.
-    pub fn role_kind(&self) -> WireMessageRole {
+    /// Convert wire role text into the shared UI/core role enum.
+    pub fn to_core_message_role(&self) -> crate::types::MessageRole {
         match self.role.as_str() {
-            "user" => WireMessageRole::User,
-            "assistant" => WireMessageRole::Assistant,
-            "tool" => WireMessageRole::Tool,
-            "system" => WireMessageRole::System,
-            _ => WireMessageRole::Unknown,
+            "user" => crate::types::MessageRole::User,
+            "assistant" => crate::types::MessageRole::Assistant,
+            "tool" => crate::types::MessageRole::ToolResult,
+            "system" => crate::types::MessageRole::System,
+            _ => crate::types::MessageRole::System,
         }
     }
 

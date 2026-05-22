@@ -2,7 +2,6 @@
 
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{StreamingState, ThreadInfo};
-use rustyclaw_core::gateway::protocol::types::WireMessageRole;
 
 use crate::{MessageBubbleData, ToolCallData};
 
@@ -119,13 +118,7 @@ impl DisplayMessageData {
     pub fn from_chat_message(
         msg: &rustyclaw_core::gateway::protocol::types::ChatMessage,
     ) -> Self {
-        let role = match msg.role_kind() {
-            WireMessageRole::User => MessageRole::User,
-            WireMessageRole::Assistant => MessageRole::Assistant,
-            WireMessageRole::Tool => MessageRole::ToolResult,
-            WireMessageRole::System => MessageRole::System,
-            _ => MessageRole::System,
-        };
+        let role = msg.to_core_message_role();
         let mut data = Self::new(role, msg.content.clone());
         // Surface tool calls embedded in an assistant turn so the
         // history view shows the same activity that was visible live.
@@ -167,7 +160,7 @@ pub fn convert_history(
 ) -> Vec<DisplayMessageData> {
     let mut out: Vec<DisplayMessageData> = Vec::with_capacity(msgs.len());
     for m in msgs {
-        if m.role_kind() == WireMessageRole::Tool {
+        if m.to_core_message_role() == MessageRole::ToolResult {
             if let Some(call_id) = &m.tool_call_id {
                 if let Some(prev) = out.iter_mut().rev().find(|d| {
                     d.role == MessageRole::Assistant
