@@ -238,6 +238,13 @@ pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
             threads: threads.clone(),
             foreground_id: *foreground_id,
         }),
+        ServerPayload::ThreadMessages {
+            thread_id,
+            messages,
+        } => FrameAction::just_action(Action::ThreadMessages {
+            thread_id: *thread_id,
+            messages: messages.clone(),
+        }),
         ServerPayload::ThreadCreated {
             thread_id: _,
             label: _,

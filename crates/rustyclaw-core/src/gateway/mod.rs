@@ -696,6 +696,44 @@ async fn send_threads_update(
     send_frame(writer, &frame).await
 }
 
+fn thread_history_messages(
+    thread: &crate::threads::AgentThread,
+) -> Vec<protocol::types::ChatMessage> {
+    thread
+        .messages
+        .iter()
+        .map(|message| {
+            let role = match message.role {
+                crate::threads::MessageRole::User => "user",
+                crate::threads::MessageRole::Assistant => "assistant",
+                crate::threads::MessageRole::System => "system",
+                crate::threads::MessageRole::Tool => "tool",
+            };
+            protocol::types::ChatMessage::text(role, &message.content)
+        })
+        .collect()
+}
+
+async fn send_thread_messages_update(
+    writer: &mut dyn transport::TransportWriter,
+    thread_id: crate::threads::ThreadId,
+    thread_mgr: &crate::threads::ThreadManager,
+) -> Result<()> {
+    let messages = thread_mgr
+        .get(thread_id)
+        .map(thread_history_messages)
+        .unwrap_or_default();
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ThreadMessages,
+        payload: ServerPayload::ThreadMessages {
+            thread_id: thread_id.0,
+            messages,
+        },
+    };
+
+    send_frame(writer, &frame).await
+}
+
 async fn handle_connection(
     conn: Box<dyn transport::Transport>,
     shared_config: SharedConfig,
@@ -1383,6 +1421,7 @@ async fn handle_connection(
                                             send_frame(&mut *writer, &frame).await?;
                                             // Update thread list
                                             send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                                            send_thread_messages_update(&mut *writer, better_thread_id, &thread_mgr).await?;
                                         }
                                     }
                                 }
@@ -1391,7 +1430,9 @@ async fn handle_connection(
                                 let mut did_auto_label = false;
                                 let mut needs_caption = false;
                                 let mut did_append_user_message = false;
+                                let mut active_thread_id = None;
                                 if let Some(thread) = thread_mgr.foreground_mut() {
+                                    active_thread_id = Some(thread.id);
                                     // Find the last user message (typically the new one)
                                     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
                                         // Check if this is the first message in a new thread
@@ -1432,6 +1473,9 @@ async fn handle_connection(
                                             let _ = mem.add_memory(&text, "conversations", "user", None).await;
                                         }
                                     });
+                                }
+                                if let Some(thread_id) = active_thread_id {
+                                    send_thread_messages_update(&mut *writer, thread_id, &thread_mgr).await?;
                                 }
 
                                 // Re-read model_ctx from shared state for each dispatch
@@ -1502,8 +1546,15 @@ async fn handle_connection(
                                 // Inject thread context into system prompt if available
                                 let mut messages_with_context = {
                                     let global_ctx = thread_mgr.build_global_context();
-                                    if !global_ctx.is_empty() && !messages.is_empty() && messages[0].role == "system" {
-                                        let mut msgs = messages.clone();
+                                    let mut msgs = active_thread_id
+                                        .and_then(|thread_id| thread_mgr.get(thread_id).map(thread_history_messages))
+                                        .unwrap_or_else(|| messages.clone());
+                                    if let Some(system_message) = messages.first().filter(|m| m.role == "system") {
+                                        if msgs.first().map(|m| m.role.as_str()) != Some("system") {
+                                            msgs.insert(0, system_message.clone());
+                                        }
+                                    }
+                                    if !global_ctx.is_empty() && !msgs.is_empty() && msgs[0].role == "system" {
                                         msgs[0].content = format!(
                                             "{}\n\n# Background Tasks\n\n{}",
                                             msgs[0].content,
@@ -1511,7 +1562,7 @@ async fn handle_connection(
                                         );
                                         msgs
                                     } else {
-                                        messages
+                                        msgs
                                     }
                                 };
 
@@ -1662,6 +1713,14 @@ async fn handle_connection(
                                     };
                                     send_frame(&mut *writer, &frame).await?;
                                     send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                                    let frame = ServerFrame {
+                                        frame_type: ServerFrameType::ThreadMessages,
+                                        payload: ServerPayload::ThreadMessages {
+                                            thread_id: 0,
+                                            messages: Vec::new(),
+                                        },
+                                    };
+                                    send_frame(&mut *writer, &frame).await?;
                                     let _ = thread_mgr.save_to_file(&threads_path);
                                     continue;
                                 }
@@ -1742,6 +1801,7 @@ async fn handle_connection(
                                     send_frame(&mut *writer, &frame).await?;
                                     // Send updated thread list
                                     send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                                    send_thread_messages_update(&mut *writer, target_id, &thread_mgr).await?;
                                     // Persist thread state (includes compaction summary)
                                     let _ = thread_mgr.save_to_file(&threads_path);
                                 } else {
@@ -1758,6 +1818,9 @@ async fn handle_connection(
                             ClientPayload::ThreadList => {
                                 debug!("Thread list request");
                                 send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                                if let Some(thread) = thread_mgr.foreground() {
+                                    send_thread_messages_update(&mut *writer, thread.id, &thread_mgr).await?;
+                                }
                             }
                             ClientPayload::ThreadHistoryRequest { thread_id } => {
                                 debug!("Thread history request: {}", thread_id);
@@ -1950,6 +2013,7 @@ async fn handle_connection(
                                 if let Some(thread) = thread_mgr.get_mut(thread_id) {
                                     thread.add_message(crate::threads::MessageRole::Assistant, &text);
                                 }
+                                send_thread_messages_update(&mut *writer, thread_id, &thread_mgr).await?;
                             }
 
                             // Send updated thread list (status may have changed)
@@ -2609,8 +2673,10 @@ async fn dispatch_text_message(
 
                 // Model explicitly finished — we're done
                 // Record assistant response in thread history
+                let mut updated_thread_id = None;
                 if !model_resp.text.is_empty() {
                     if let Some(thread) = thread_mgr.foreground_mut() {
+                        updated_thread_id = Some(thread.id);
                         thread
                             .add_message(crate::threads::MessageRole::Assistant, &model_resp.text);
                     }
@@ -2627,6 +2693,9 @@ async fn dispatch_text_message(
                     });
                 }
                 providers::send_response_done(writer).await?;
+                if let Some(thread_id) = updated_thread_id {
+                    send_thread_messages_update(writer, thread_id, thread_mgr).await?;
+                }
                 return Ok(());
             } else if finish_reason == "length" {
                 let traced = errors::GatewayError::TokenLimit.into_traced();

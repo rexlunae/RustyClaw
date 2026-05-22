@@ -501,6 +501,13 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
             messages,
             error,
         }),
+        ServerPayload::ThreadMessages {
+            thread_id,
+            messages,
+        } => Some(GatewayEvent::ThreadMessages {
+            thread_id,
+            messages,
+        }),
         ServerPayload::SecretsListResult { ok, entries } => {
             Some(GatewayEvent::SecretsListResult {
                 ok,

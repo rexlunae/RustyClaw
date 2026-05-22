@@ -1571,6 +1571,12 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
                 state.write().apply_thread_history(thread_id, converted);
             }
         }
+        GatewayEvent::ThreadMessages {
+            thread_id,
+            messages,
+        } => {
+            state.write().hydrate_thread_messages(thread_id, messages);
+        }
         GatewayEvent::UserPromptRequest { id: _, prompt } => {
             state.write().pending_user_prompt = Some(prompt);
         }

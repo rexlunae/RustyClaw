@@ -11,6 +11,18 @@ use crate::types::DisplayMessage;
 
 use crate::app::{GwEvent, UserInput};
 
+fn display_message_from_gateway(
+    message: rustyclaw_core::gateway::protocol::types::ChatMessage,
+) -> DisplayMessage {
+    match message.role.as_str() {
+        "user" => DisplayMessage::user(message.display_content()),
+        "assistant" => DisplayMessage::assistant(message.display_content()),
+        "system" => DisplayMessage::system(message.display_content()),
+        "tool" => DisplayMessage::tool_result(message.display_content()),
+        _ => DisplayMessage::info(message.display_content()),
+    }
+}
+
 #[derive(Default, Props)]
 pub struct TuiRootProps {
     pub soul_name: String,
@@ -637,6 +649,18 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     if count > 0 && tab_selected.get() >= count {
                                         tab_selected.set(count - 1);
                                     }
+                                }
+                                GwEvent::ThreadMessages {
+                                    thread_id: _,
+                                    messages: thread_messages,
+                                } => {
+                                    messages.set(
+                                        thread_messages
+                                            .into_iter()
+                                            .map(display_message_from_gateway)
+                                            .collect(),
+                                    );
+                                    scroll_offset.set(0);
                                 }
                                 GwEvent::ThreadSwitched {
                                     thread_id,

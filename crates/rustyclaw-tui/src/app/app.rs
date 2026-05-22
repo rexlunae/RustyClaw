@@ -344,7 +344,6 @@ impl App {
         });
 
         // ── Tokio loop: handle UserInput from UI ────────────────────────
-        let mut conversation: Vec<ChatMessage> = Vec::new();
         let mut next_stream_id: u64 = 1;
         let mut active_stream_id: u64 = 0;
         let mut prompt_attachments: Vec<PromptAttachment> = Vec::new();
@@ -360,7 +359,6 @@ impl App {
                     next_stream_id = next_stream_id.saturating_add(2);
                     active_stream_id = stream_id;
                     let prompt = build_prompt_with_attachments(&text, &prompt_attachments);
-                    conversation.push(ChatMessage::text("user", &prompt));
                     prompt_attachments.clear();
                     let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
                         attachments: prompt_attachments.clone(),
@@ -369,7 +367,7 @@ impl App {
                         let frame = ClientFrame {
                             frame_type: ClientFrameType::Chat,
                             payload: ClientPayload::Chat {
-                                messages: conversation.clone(),
+                                messages: vec![ChatMessage::text("user", &prompt)],
                             },
                         };
                         if let Ok(data) = serialize_client_frame(&frame, stream_id) {
@@ -463,9 +461,7 @@ impl App {
                 }
                 Ok(UserInput::AssistantResponse(text)) => {
                     active_stream_id = 0;
-                    // Feed the completed assistant response into the conversation
-                    // so subsequent Chat frames include the full history.
-                    conversation.push(ChatMessage::text("assistant", &text));
+                    let _ = text;
                 }
                 Ok(UserInput::FetchModelCompletions { provider }) => {
                     let base_url = config.model.as_ref().and_then(|m| m.base_url.clone());
@@ -1541,6 +1537,13 @@ fn action_to_gw_event(action: &crate::action::Action) -> Option<GwEvent> {
         } => Some(GwEvent::ThreadsUpdate {
             threads: threads.clone(),
             foreground_id: *foreground_id,
+        }),
+        Action::ThreadMessages {
+            thread_id,
+            messages,
+        } => Some(GwEvent::ThreadMessages {
+            thread_id: *thread_id,
+            messages: messages.clone(),
         }),
         Action::ThreadSwitched {
             thread_id,

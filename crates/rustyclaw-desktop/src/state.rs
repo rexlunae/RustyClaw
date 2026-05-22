@@ -7,6 +7,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
+use rustyclaw_core::gateway::protocol;
 use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
 use rustyclaw_view::{PromptAttachment, SecretsDialogData};
@@ -262,6 +263,32 @@ impl AppState {
         self.thread_messages.insert(thread_id, messages.clone());
         if self.foreground_thread_id == Some(thread_id) {
             self.messages = messages;
+            self.is_processing = false;
+            self.is_streaming = false;
+            self.is_thinking = false;
+            self.streaming_chunks = 0;
+            self.streaming_bytes = 0;
+        }
+    }
+
+    /// Replace a thread's messages with canonical history from the gateway.
+    pub fn hydrate_thread_messages(
+        &mut self,
+        thread_id: u64,
+        messages: Vec<protocol::types::ChatMessage>,
+    ) {
+        let hydrated: VecDeque<ChatMessage> = messages
+            .into_iter()
+            .map(ui_message_from_gateway)
+            .collect();
+        self.thread_messages.insert(thread_id, hydrated.clone());
+        if self.foreground_thread_id == Some(thread_id) || thread_id == 0 {
+            self.messages = hydrated;
+            self.is_processing = false;
+            self.is_streaming = false;
+            self.is_thinking = false;
+            self.streaming_chunks = 0;
+            self.streaming_bytes = 0;
         }
     }
 
@@ -289,5 +316,24 @@ impl AppState {
         self.is_thinking = false;
         self.streaming_chunks = 0;
         self.streaming_bytes = 0;
+    }
+}
+
+fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage {
+    let role = match message.role.as_str() {
+        "user" => rustyclaw_core::types::MessageRole::User,
+        "assistant" => rustyclaw_core::types::MessageRole::Assistant,
+        "system" => rustyclaw_core::types::MessageRole::System,
+        "tool" => rustyclaw_core::types::MessageRole::ToolResult,
+        _ => rustyclaw_core::types::MessageRole::Info,
+    };
+
+    ChatMessage {
+        id: uuid::Uuid::new_v4().to_string(),
+        role,
+        content: message.display_content(),
+        timestamp: chrono::Utc::now(),
+        tool_calls: Vec::new(),
+        is_streaming: false,
     }
 }

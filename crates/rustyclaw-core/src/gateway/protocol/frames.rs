@@ -157,6 +157,9 @@ pub enum ServerFrameType {
     DomQuery = 38,
     /// Reply carrying a thread's persisted conversation history.
     ThreadHistoryReply = 39,
+
+    /// Thread messages/history update.
+    ThreadMessages = 40,
 }
 
 /// Status frame sub-types.
@@ -529,6 +532,7 @@ pub enum ServerPayload {
         /// JavaScript expression to evaluate.
         js: String,
     },
+
     /// Reply to a `ThreadHistoryRequest` — the full persisted message
     /// log for a thread, in chronological order, in the wire `ChatMessage`
     /// shape suitable for re-display by any client.
@@ -537,6 +541,12 @@ pub enum ServerPayload {
         ok: bool,
         messages: Vec<super::types::ChatMessage>,
         error: Option<String>,
+    },
+
+    /// Live message/history update for a thread.
+    ThreadMessages {
+        thread_id: u64,
+        messages: Vec<super::types::ChatMessage>,
     },
 }
 
@@ -670,6 +680,7 @@ mod tests {
             assert_eq!(ServerFrameType::DeviceFlowComplete as u8, 37);
             assert_eq!(ServerFrameType::DomQuery as u8, 38);
             assert_eq!(ServerFrameType::ThreadHistoryReply as u8, 39);
+            assert_eq!(ServerFrameType::ThreadMessages as u8, 40);
         }
 
         #[test]

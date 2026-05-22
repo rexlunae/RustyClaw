@@ -238,6 +238,11 @@ pub enum Action {
         threads: Vec<ThreadInfo>,
         foreground_id: Option<u64>,
     },
+    /// Gateway sent canonical messages for a thread
+    ThreadMessages {
+        thread_id: u64,
+        messages: Vec<rustyclaw_core::gateway::protocol::types::ChatMessage>,
+    },
     /// Gateway confirmed thread switch
     ThreadSwitched {
         thread_id: u64,

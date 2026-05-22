@@ -126,6 +126,12 @@ pub enum GatewayEvent {
         error: Option<String>,
     },
 
+    /// Thread messages/history updated
+    ThreadMessages {
+        thread_id: u64,
+        messages: Vec<crate::gateway::protocol::types::ChatMessage>,
+    },
+
     /// Error from gateway
     Error { message: String },
 
