@@ -2,17 +2,12 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::ProviderSelectorData;
 
 #[derive(Default, Props)]
 pub struct ProviderSelectorDialogProps {
-    /// Display names of available providers.
-    pub providers: Vec<String>,
-    /// Provider IDs (parallel to `providers`).
-    pub provider_ids: Vec<String>,
-    /// Auth methods — "apikey", "deviceflow", "none" (parallel).
-    pub auth_hints: Vec<String>,
-    /// Currently highlighted index.
-    pub cursor: usize,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: ProviderSelectorData,
 }
 
 #[component]
@@ -20,31 +15,29 @@ pub fn ProviderSelectorDialog(
     props: &ProviderSelectorDialogProps,
 ) -> impl Into<AnyElement<'static>> {
     let items: Vec<AnyElement> = props
+        .data
         .providers
         .iter()
         .enumerate()
-        .map(|(i, name)| {
-            let selected = i == props.cursor;
+        .map(|(i, provider)| {
+            let selected = i == props.data.cursor;
             let indicator = if selected { "▸ " } else { "  " };
             let color = if selected {
                 theme::ACCENT_BRIGHT
             } else {
                 theme::TEXT
             };
-            // Show auth hint badge
-            let badge = props
-                .auth_hints
-                .get(i)
-                .map(|h| match h.as_str() {
-                    "apikey" => " 🔑",
-                    "deviceflow" => " 🔗",
-                    "none" => " ✓",
-                    _ => "",
-                })
-                .unwrap_or("");
 
             element! {
-                Text(content: format!("{}{}{}", indicator, name, badge), color: color)
+                Text(
+                    content: format!(
+                        "{}{}{}",
+                        indicator,
+                        provider.display_name,
+                        provider.auth_badge()
+                    ),
+                    color: color
+                )
             }
             .into_any()
         })

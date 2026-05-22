@@ -2,6 +2,7 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::DeviceFlowData;
 
 pub const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
@@ -28,24 +29,18 @@ pub fn open_url_in_browser(url: &str) {
 
 #[derive(Default, Props)]
 pub struct DeviceFlowDialogProps {
-    /// The verification URL the user should visit.
-    pub url: String,
-    /// The one-time user code to enter on that page.
-    pub code: String,
-    /// Spinner tick for the waiting animation.
-    pub tick: usize,
-    /// Whether the browser was already opened automatically.
-    pub browser_opened: bool,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: DeviceFlowData,
 }
 
 #[component]
 pub fn DeviceFlowDialog(props: &DeviceFlowDialogProps) -> impl Into<AnyElement<'static>> {
-    let spinner = SPINNER[props.tick % SPINNER.len()];
+    let spinner = SPINNER[props.data.tick % SPINNER.len()];
 
     // Build the clickable hyperlink text using OSC 8 escape sequences.
-    let hyperlink = osc8_hyperlink(&props.url, &props.url);
+    let hyperlink = osc8_hyperlink(&props.data.url, &props.data.url);
 
-    let browser_hint = if props.browser_opened {
+    let browser_hint = if props.data.browser_opened {
         "  ✓ Opened in your browser"
     } else {
         "  Enter to open in browser"
@@ -90,7 +85,7 @@ pub fn DeviceFlowDialog(props: &DeviceFlowDialogProps) -> impl Into<AnyElement<'
                 }
                 Text(
                     content: browser_hint.to_string(),
-                    color: if props.browser_opened { theme::SUCCESS } else { theme::MUTED },
+                    color: if props.data.browser_opened { theme::SUCCESS } else { theme::MUTED },
                 )
                 View(height: 1)
 
@@ -101,7 +96,7 @@ pub fn DeviceFlowDialog(props: &DeviceFlowDialogProps) -> impl Into<AnyElement<'
                     justify_content: JustifyContent::Center,
                 ) {
                     Text(
-                        content: format!("  {}  ", props.code),
+                        content: format!("  {}  ", props.data.code),
                         color: theme::WARN,
                         weight: Weight::Bold,
                     )

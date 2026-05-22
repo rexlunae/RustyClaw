@@ -18,20 +18,21 @@ use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
 use crate::components::secrets_dialog::SecretsDialog;
-use rustyclaw_view::{
-    HatchState, PairingField, PairingStep, SecretInfoData, SecretsDialogData, SkillInfoData,
-    TabBarData, ToolPermInfoData,
-};
 use crate::components::sidebar::Sidebar;
-use crate::components::thread_tabs::ThreadTabs;
 use crate::components::skills_dialog::SkillsDialog;
 use crate::components::status_bar::StatusBar;
+use crate::components::thread_tabs::ThreadTabs;
 use crate::components::tool_approval_dialog::ToolApprovalDialog;
 use crate::components::tool_perms_dialog::ToolPermsDialog;
 use crate::components::user_prompt_dialog::UserPromptDialog;
 use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
 use crate::types::DisplayMessage;
+use rustyclaw_view::{
+    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState,
+    ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
+    SkillInfoData, TabBarData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
+};
 
 #[derive(Default, Props)]
 pub struct RootProps {
@@ -75,19 +76,15 @@ pub struct RootProps {
 
     // auth dialog overlay
     pub show_auth_dialog: bool,
-    pub auth_code: String,
-    pub auth_error: String,
+    pub auth_dialog: AuthDialogData,
 
     // tool approval dialog overlay
     pub show_tool_approval: bool,
-    pub tool_approval_name: String,
-    pub tool_approval_args: String,
-    pub tool_approval_selected: bool,
+    pub tool_approval: ToolApprovalData,
 
     // vault unlock dialog overlay
     pub show_vault_unlock: bool,
-    pub vault_password_len: usize,
-    pub vault_error: String,
+    pub vault_unlock: VaultUnlockData,
 
     // user prompt dialog overlay
     pub show_user_prompt: bool,
@@ -99,10 +96,7 @@ pub struct RootProps {
 
     // credential request dialog overlay
     pub show_credential_request: bool,
-    pub credential_request_provider: String,
-    pub credential_request_secret_name: String,
-    pub credential_request_message: String,
-    pub credential_request_input_len: usize,
+    pub credential_request: CredentialRequestData,
 
     // secrets dialog overlay
     pub show_secrets_dialog: bool,
@@ -141,43 +135,23 @@ pub struct RootProps {
 
     // provider selector dialog overlay
     pub show_provider_selector: bool,
-    pub provider_selector_items: Vec<String>,
-    pub provider_selector_ids: Vec<String>,
-    pub provider_selector_hints: Vec<String>,
-    pub provider_selector_cursor: usize,
+    pub provider_selector: ProviderSelectorData,
 
     // API key dialog overlay
     pub show_api_key_dialog: bool,
-    pub api_key_provider_display: String,
-    pub api_key_input_len: usize,
-    pub api_key_help_url: String,
-    pub api_key_help_text: String,
+    pub api_key_dialog: ApiKeyDialogData,
 
     // device flow dialog overlay
     pub show_device_flow: bool,
-    pub device_flow_url: String,
-    pub device_flow_code: String,
-    pub device_flow_tick: usize,
-    pub device_flow_browser_opened: bool,
+    pub device_flow: DeviceFlowData,
 
     // model selector dialog overlay
     pub show_model_selector: bool,
-    pub model_selector_provider_display: String,
-    pub model_selector_models: Vec<String>,
-    pub model_selector_cursor: usize,
-    pub model_selector_loading: bool,
+    pub model_selector: ModelSelectorData,
 
     // pairing dialog overlay (SSH pairing)
     pub show_pairing: bool,
-    pub pairing_step: PairingStep,
-    pub pairing_field: PairingField,
-    pub pairing_public_key: String,
-    pub pairing_fingerprint: String,
-    pub pairing_fingerprint_art: String,
-    pub pairing_qr_ascii: String,
-    pub pairing_host: String,
-    pub pairing_port: String,
-    pub pairing_error: String,
+    pub pairing: PairingDialogData,
 }
 
 #[component]
@@ -187,6 +161,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let show_vault = props.show_vault_unlock;
     let show_prompt = props.show_user_prompt;
     let show_credential = props.show_credential_request;
+    let auth_dialog = props.auth_dialog.clone();
+    let tool_approval = props.tool_approval.clone();
+    let vault_unlock = props.vault_unlock.clone();
+    let credential_request = props.credential_request.clone();
 
     let secrets_data = std::mem::take(&mut props.secrets_data);
     let secrets_agent = props.secrets_agent_access;
@@ -219,40 +197,20 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
 
     // Provider / model selection dialog state
     let show_provider_sel = props.show_provider_selector;
-    let provider_sel_items = std::mem::take(&mut props.provider_selector_items);
-    let provider_sel_ids = std::mem::take(&mut props.provider_selector_ids);
-    let provider_sel_hints = std::mem::take(&mut props.provider_selector_hints);
-    let provider_sel_cursor = props.provider_selector_cursor;
+    let provider_selector = props.provider_selector.clone();
 
     let show_apikey = props.show_api_key_dialog;
-    let apikey_display = props.api_key_provider_display.clone();
-    let apikey_input_len = props.api_key_input_len;
-    let apikey_help_url = props.api_key_help_url.clone();
-    let apikey_help_text = props.api_key_help_text.clone();
+    let api_key_dialog = props.api_key_dialog.clone();
 
     let show_devflow = props.show_device_flow;
-    let devflow_url = props.device_flow_url.clone();
-    let devflow_code = props.device_flow_code.clone();
-    let devflow_tick = props.device_flow_tick;
-    let devflow_browser_opened = props.device_flow_browser_opened;
+    let device_flow = props.device_flow.clone();
 
     let show_model_sel = props.show_model_selector;
-    let model_sel_display = props.model_selector_provider_display.clone();
-    let model_sel_models = std::mem::take(&mut props.model_selector_models);
-    let model_sel_cursor = props.model_selector_cursor;
-    let model_sel_loading = props.model_selector_loading;
+    let model_selector = props.model_selector.clone();
 
     // Pairing dialog state
     let show_pairing = props.show_pairing;
-    let pairing_step = props.pairing_step;
-    let pairing_field = props.pairing_field;
-    let pairing_public_key = std::mem::take(&mut props.pairing_public_key);
-    let pairing_fingerprint = std::mem::take(&mut props.pairing_fingerprint);
-    let pairing_fingerprint_art = std::mem::take(&mut props.pairing_fingerprint_art);
-    let pairing_qr_ascii = std::mem::take(&mut props.pairing_qr_ascii);
-    let pairing_host = std::mem::take(&mut props.pairing_host);
-    let pairing_port = std::mem::take(&mut props.pairing_port);
-    let pairing_error = std::mem::take(&mut props.pairing_error);
+    let pairing = props.pairing.clone();
 
     element! {
         View(
@@ -330,8 +288,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         AuthDialog(
-                            code: props.auth_code.clone(),
-                            error: props.auth_error.clone(),
+                            data: auth_dialog,
                         )
                     }
                 }.into_any()
@@ -350,9 +307,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         ToolApprovalDialog(
-                            tool_name: props.tool_approval_name.clone(),
-                            arguments: props.tool_approval_args.clone(),
-                            selected_allow: props.tool_approval_selected,
+                            data: tool_approval,
                         )
                     }
                 }.into_any()
@@ -371,8 +326,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         VaultUnlockDialog(
-                            password_len: props.vault_password_len,
-                            error: props.vault_error.clone(),
+                            data: vault_unlock,
                         )
                     }
                 }.into_any()
@@ -414,10 +368,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         CredentialRequestDialog(
-                            provider: props.credential_request_provider.clone(),
-                            secret_name: props.credential_request_secret_name.clone(),
-                            message: props.credential_request_message.clone(),
-                            input_len: props.credential_request_input_len,
+                            data: credential_request,
                         )
                     }
                 }.into_any()
@@ -548,10 +499,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         ProviderSelectorDialog(
-                            providers: provider_sel_items,
-                            provider_ids: provider_sel_ids,
-                            auth_hints: provider_sel_hints,
-                            cursor: provider_sel_cursor,
+                            data: provider_selector,
                         )
                     }
                 }.into_any()
@@ -570,10 +518,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         ApiKeyDialog(
-                            provider_display: apikey_display,
-                            input_len: apikey_input_len,
-                            help_url: apikey_help_url,
-                            help_text: apikey_help_text,
+                            data: api_key_dialog,
                         )
                     }
                 }.into_any()
@@ -592,10 +537,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         DeviceFlowDialog(
-                            url: devflow_url,
-                            code: devflow_code,
-                            tick: devflow_tick,
-                            browser_opened: devflow_browser_opened,
+                            data: device_flow,
                         )
                     }
                 }.into_any()
@@ -614,11 +556,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         ModelSelectorDialog(
-                            provider_display: model_sel_display,
-                            models: model_sel_models,
-                            cursor: model_sel_cursor,
-                            loading: model_sel_loading,
-                            spinner_tick: devflow_tick,
+                            data: model_selector,
                         )
                     }
                 }.into_any()
@@ -637,15 +575,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         PairingDialog(
-                            step: pairing_step,
-                            public_key: pairing_public_key,
-                            fingerprint: pairing_fingerprint,
-                            fingerprint_art: pairing_fingerprint_art,
-                            qr_ascii: pairing_qr_ascii,
-                            gateway_host: pairing_host,
-                            gateway_port: pairing_port,
-                            active_field: pairing_field,
-                            error: pairing_error,
+                            data: pairing,
                             success: String::new(),
                         )
                     }

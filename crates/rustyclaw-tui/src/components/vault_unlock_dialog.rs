@@ -2,20 +2,23 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::VaultUnlockData;
 
 #[derive(Default, Props)]
 pub struct VaultUnlockDialogProps {
-    /// Number of characters typed (we show dots, never the actual password).
-    pub password_len: usize,
-    /// Optional error/status message.
-    pub error: String,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: VaultUnlockData,
 }
 
 #[component]
 pub fn VaultUnlockDialog(props: &VaultUnlockDialogProps) -> impl Into<AnyElement<'static>> {
-    let dots = "•".repeat(props.password_len);
-    let cursor = if props.password_len == 0 { "▏" } else { "" };
-    let has_error = !props.error.is_empty();
+    let dots = props.data.masked_password();
+    let cursor = if props.data.password_len == 0 {
+        "▏"
+    } else {
+        ""
+    };
+    let has_error = !props.data.error.is_empty();
 
     element! {
         View(
@@ -69,7 +72,7 @@ pub fn VaultUnlockDialog(props: &VaultUnlockDialogProps) -> impl Into<AnyElement
                 #(if has_error {
                     element! {
                         View(margin_top: 1) {
-                            Text(content: props.error.clone(), color: theme::ERROR)
+                            Text(content: props.data.error.clone(), color: theme::ERROR)
                         }
                     }.into_any()
                 } else {

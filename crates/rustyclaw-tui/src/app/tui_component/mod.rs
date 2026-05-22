@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex as StdMutex};
 use std::time::{Duration, Instant};
 
 use crate::components::root::Root;
-use rustyclaw_view;
 use crate::theme;
 use crate::types::DisplayMessage;
+use rustyclaw_view;
 
 use crate::app::{GwEvent, UserInput};
 
@@ -2400,15 +2400,22 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             tab_selected: tab_selected.get(),
             hint: prop_hint.clone(),
             show_auth_dialog: show_auth_dialog.get(),
-            auth_code: auth_code.read().clone(),
-            auth_error: auth_error.read().clone(),
+            auth_dialog: rustyclaw_view::AuthDialogData {
+                code: auth_code.read().clone(),
+                error: auth_error.read().clone(),
+            },
             show_tool_approval: show_tool_approval.get(),
-            tool_approval_name: tool_approval_name.read().clone(),
-            tool_approval_args: tool_approval_args.read().clone(),
-            tool_approval_selected: tool_approval_selected.get(),
+            tool_approval: rustyclaw_view::ToolApprovalData {
+                id: tool_approval_id.read().clone(),
+                name: tool_approval_name.read().clone(),
+                arguments: tool_approval_args.read().clone(),
+                selected_allow: tool_approval_selected.get(),
+            },
             show_vault_unlock: show_vault_unlock.get(),
-            vault_password_len: vault_password.read().len(),
-            vault_error: vault_error.read().clone(),
+            vault_unlock: rustyclaw_view::VaultUnlockData {
+                password_len: vault_password.read().len(),
+                error: vault_error.read().clone(),
+            },
             show_user_prompt: show_user_prompt.get(),
             user_prompt_title: user_prompt_title.read().clone(),
             user_prompt_desc: user_prompt_desc.read().clone(),
@@ -2416,10 +2423,12 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             user_prompt_type: user_prompt_type.read().clone(),
             user_prompt_selected: user_prompt_selected.get(),
             show_credential_request: show_credential_request.get(),
-            credential_request_provider: credential_request_provider.read().clone(),
-            credential_request_secret_name: credential_request_secret_name.read().clone(),
-            credential_request_message: credential_request_message.read().clone(),
-            credential_request_input_len: credential_request_input.read().len(),
+            credential_request: rustyclaw_view::CredentialRequestData {
+                provider: credential_request_provider.read().clone(),
+                secret_name: credential_request_secret_name.read().clone(),
+                message: credential_request_message.read().clone(),
+                input_len: credential_request_input.read().len(),
+            },
             show_secrets_dialog: show_secrets_dialog.get(),
             secrets_data: secrets_dialog_data.read().clone(),
             secrets_agent_access: secrets_agent_access.get(),
@@ -2445,35 +2454,58 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             hatching_state: hatching_state.read().clone(),
             hatching_agent_name: prop_soul_name_for_hatching,
             show_provider_selector: show_provider_selector.get(),
-            provider_selector_items: provider_selector_items.read().clone(),
-            provider_selector_ids: provider_selector_ids.read().clone(),
-            provider_selector_hints: provider_selector_hints.read().clone(),
-            provider_selector_cursor: provider_selector_cursor.get(),
+            provider_selector: rustyclaw_view::ProviderSelectorData {
+                providers: provider_selector_items
+                    .read()
+                    .iter()
+                    .cloned()
+                    .zip(provider_selector_ids.read().iter().cloned())
+                    .zip(provider_selector_hints.read().iter().cloned())
+                    .map(|((display_name, id), auth_hint)| rustyclaw_view::ProviderOptionData {
+                        id,
+                        display_name,
+                        auth_hint,
+                    })
+                    .collect(),
+                cursor: provider_selector_cursor.get(),
+            },
             show_api_key_dialog: show_api_key_dialog.get(),
-            api_key_provider_display: api_key_provider_display.read().clone(),
-            api_key_input_len: api_key_input.read().len(),
-            api_key_help_url: api_key_help_url.read().clone(),
-            api_key_help_text: api_key_help_text.read().clone(),
+            api_key_dialog: rustyclaw_view::ApiKeyDialogData {
+                provider: api_key_provider.read().clone(),
+                provider_display: api_key_provider_display.read().clone(),
+                input_len: api_key_input.read().len(),
+                help_url: api_key_help_url.read().clone(),
+                help_text: api_key_help_text.read().clone(),
+            },
             show_device_flow: show_device_flow.get(),
-            device_flow_url: device_flow_url.read().clone(),
-            device_flow_code: device_flow_code.read().clone(),
-            device_flow_tick: device_flow_tick.get(),
-            device_flow_browser_opened: device_flow_browser_opened.get(),
+            device_flow: rustyclaw_view::DeviceFlowData {
+                url: device_flow_url.read().clone(),
+                code: device_flow_code.read().clone(),
+                message: None,
+                browser_opened: device_flow_browser_opened.get(),
+                tick: device_flow_tick.get(),
+            },
             show_model_selector: show_model_selector.get(),
-            model_selector_provider_display: model_selector_provider_display.read().clone(),
-            model_selector_models: model_selector_models.read().clone(),
-            model_selector_cursor: model_selector_cursor.get(),
-            model_selector_loading: model_selector_loading.get(),
+            model_selector: rustyclaw_view::ModelSelectorData {
+                provider: model_selector_provider.read().clone(),
+                provider_display: model_selector_provider_display.read().clone(),
+                models: model_selector_models.read().clone(),
+                cursor: model_selector_cursor.get(),
+                loading: model_selector_loading.get(),
+                spinner_tick: device_flow_tick.get(),
+            },
             show_pairing: show_pairing.get(),
-            pairing_step: *pairing_step.read(),
-            pairing_field: *pairing_field.read(),
-            pairing_public_key: pairing_public_key.read().clone(),
-            pairing_fingerprint: pairing_fingerprint.read().clone(),
-            pairing_fingerprint_art: pairing_fingerprint_art.read().clone(),
-            pairing_qr_ascii: pairing_qr_ascii.read().clone(),
-            pairing_host: pairing_host.read().clone(),
-            pairing_port: pairing_port.read().clone(),
-            pairing_error: pairing_error.read().clone(),
+            pairing: rustyclaw_view::PairingDialogData {
+                step: *pairing_step.read(),
+                field: *pairing_field.read(),
+                public_key: pairing_public_key.read().clone(),
+                fingerprint: pairing_fingerprint.read().clone(),
+                fingerprint_art: pairing_fingerprint_art.read().clone(),
+                qr_ascii: pairing_qr_ascii.read().clone(),
+                host: pairing_host.read().clone(),
+                port: pairing_port.read().clone(),
+                error: pairing_error.read().clone(),
+            },
         )
     }
 }

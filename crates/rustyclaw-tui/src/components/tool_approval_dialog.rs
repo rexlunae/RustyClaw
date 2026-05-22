@@ -2,38 +2,37 @@
 
 use crate::theme;
 use iocraft::prelude::*;
+use rustyclaw_view::ToolApprovalData;
 
 #[derive(Default, Props)]
 pub struct ToolApprovalDialogProps {
-    /// Name of the tool requesting approval.
-    pub tool_name: String,
-    /// Pretty-printed arguments JSON.
-    pub arguments: String,
-    /// Whether "Allow" is currently selected (vs "Deny").
-    pub selected_allow: bool,
+    /// Shared dialog data from `rustyclaw-view`.
+    pub data: ToolApprovalData,
 }
 
 #[component]
 pub fn ToolApprovalDialog(props: &ToolApprovalDialogProps) -> impl Into<AnyElement<'static>> {
-    let allow_color = if props.selected_allow {
+    let allow_color = if props.data.selected_allow {
         theme::SUCCESS
     } else {
         theme::MUTED
     };
-    let deny_color = if props.selected_allow {
+    let deny_color = if props.data.selected_allow {
         theme::MUTED
     } else {
         theme::ERROR
     };
-    let allow_indicator = if props.selected_allow { "▸ " } else { "  " };
-    let deny_indicator = if props.selected_allow { "  " } else { "▸ " };
-
-    // Truncate args to avoid blowing up the dialog
-    let args_display = if props.arguments.len() > 300 {
-        format!("{}…", &props.arguments[..300])
+    let allow_indicator = if props.data.selected_allow {
+        "▸ "
     } else {
-        props.arguments.clone()
+        "  "
     };
+    let deny_indicator = if props.data.selected_allow {
+        "  "
+    } else {
+        "▸ "
+    };
+    let args_display = props.data.arguments_preview(300, 12);
 
     element! {
         View(
@@ -64,7 +63,7 @@ pub fn ToolApprovalDialog(props: &ToolApprovalDialogProps) -> impl Into<AnyEleme
 
                 // Tool name
                 Text(
-                    content: format!("Tool: {}", props.tool_name),
+                    content: format!("Tool: {}", props.data.name),
                     color: theme::TEXT,
                     weight: Weight::Bold,
                 )
