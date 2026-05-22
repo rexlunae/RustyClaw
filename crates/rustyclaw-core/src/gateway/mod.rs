@@ -1554,8 +1554,21 @@ async fn handle_connection(
                                 // Inject thread context into system prompt if available
                                 let mut messages_with_context = {
                                     let global_ctx = thread_mgr.build_global_context();
+                                    let provider_name = current_model_ctx
+                                        .as_deref()
+                                        .map(|c| c.provider.as_str())
+                                        .unwrap_or("openai");
                                     let mut msgs = active_thread_id
-                                        .and_then(|thread_id| thread_mgr.get(thread_id).map(thread_history_messages))
+                                        .and_then(|thread_id| {
+                                            thread_mgr.get(thread_id).map(|thread| {
+                                                let history: Vec<crate::threads::ThreadMessage> =
+                                                    thread.messages.iter().cloned().collect();
+                                                providers::thread_history_to_chat_messages(
+                                                    provider_name,
+                                                    &history,
+                                                )
+                                            })
+                                        })
                                         .unwrap_or_else(|| messages.clone());
                                     if let Some(system_message) = messages.first().filter(|m| m.role == "system") {
                                         if msgs.first().map(|m| m.role.as_str()) != Some("system") {
