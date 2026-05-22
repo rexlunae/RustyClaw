@@ -1,0 +1,35 @@
+[package]
+name = "memory-tree"
+description = "Hierarchical, summary-tree memory store for AI agents. Chunks external data (emails, scrapes, docs) into bounded markdown segments, scores, seals into L0→L1→L2 summary buffers, and supports source / topic / global retrieval scopes."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["llm", "agent", "memory", "knowledge-base", "retrieval"]
+categories = ["text-processing"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+async-trait.workspace = true
+tokio.workspace = true
+
+# Self-contained sqlite dep — kept inside the crate so the workspace doesn't
+# have to re-add rusqlite at the root (it was removed in commit 32c1170).
+rusqlite = { version = "0.37", features = ["bundled-full"] }
+
+[dependencies.sha2]
+version = "0.11"
+
+[dev-dependencies]
+tempfile = "3"

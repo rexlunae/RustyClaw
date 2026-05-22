@@ -112,6 +112,15 @@ pub struct ProvidersConfig {
     /// Model aliases (e.g., "fast" -> "groq/llama-3.1-70b-versatile").
     #[serde(default)]
     pub model_aliases: HashMap<String, String>,
+
+    /// Hint-based routes. Callers pass `hint:<name>` as the model ref;
+    /// the value is resolved through the same alias/provider machinery.
+    ///
+    /// Conventional hints: `reasoning`, `fast`, `vision`, `summarize`, `code`.
+    /// Tasks emit a hint; the router picks the model. Callers never need to
+    /// hardcode a provider.
+    #[serde(default)]
+    pub hints: HashMap<String, String>,
 }
 
 // ── Provider Registry ───────────────────────────────────────────────────────
@@ -206,12 +215,14 @@ impl ProviderRegistry {
     /// Resolve a model reference to provider + model.
     ///
     /// Formats:
-    /// - "provider/model" -> provider, model
-    /// - "alias" -> resolved from model_aliases
-    /// - "bare-model" -> auto-detect via genai
+    /// - `hint:<name>` -> looked up in `hints`, then re-resolved
+    /// - `provider/model` -> provider, model
+    /// - `alias` -> resolved from `model_aliases`
+    /// - bare model -> auto-detect via genai (errors if no provider matches)
     ///
-    /// Alias chains are followed iteratively; a cycle is detected via a visited
-    /// set and reported as an error naming the exact aliases that form the cycle.
+    /// Alias and hint chains are followed iteratively; a cycle is detected via a
+    /// visited set and reported as an error naming the exact aliases/hints that
+    /// form the cycle.
     pub fn resolve(&self, model_ref: &str) -> Result<ResolvedModel> {
         let mut current = model_ref;
         // `path` preserves insertion order so we can slice out the exact cycle.
@@ -232,6 +243,20 @@ impl ProviderRegistry {
                 );
             }
             path.push(current);
+
+            // Follow `hint:` prefix if present.
+            if let Some(hint_name) = current.strip_prefix("hint:") {
+                match self.config.hints.get(hint_name) {
+                    Some(target) => {
+                        current = target.as_str();
+                        continue;
+                    }
+                    None => anyhow::bail!(
+                        "Unknown hint '{}'. Define it under [hints] in providers config.",
+                        hint_name
+                    ),
+                }
+            }
 
             // Follow alias if one exists.
             if let Some(next) = self.config.model_aliases.get(current) {
@@ -256,6 +281,16 @@ impl ProviderRegistry {
                 current
             );
         }
+    }
+
+    /// List configured hint names.
+    pub fn hints(&self) -> Vec<&str> {
+        self.config.hints.keys().map(|s| s.as_str()).collect()
+    }
+
+    /// Get the raw target a hint resolves to (before alias/provider expansion).
+    pub fn hint_target(&self, name: &str) -> Option<&str> {
+        self.config.hints.get(name).map(|s| s.as_str())
     }
 
     /// Get the genai client for direct use.
@@ -618,6 +653,7 @@ mod tests {
         let config = ProvidersConfig {
             providers,
             model_aliases: HashMap::new(),
+            hints: HashMap::new(),
         };
 
         let registry = ProviderRegistry::new(config).unwrap();
@@ -653,6 +689,7 @@ mod tests {
         let config = ProvidersConfig {
             providers,
             model_aliases: aliases,
+            hints: HashMap::new(),
         };
 
         let registry = ProviderRegistry::new(config).unwrap();
@@ -660,6 +697,92 @@ mod tests {
 
         assert_eq!(resolved.provider_id, "groq");
         assert_eq!(resolved.model_name, "llama-3.1-70b-versatile");
+    }
+
+    #[test]
+    fn test_resolve_hint_routing() {
+        let mut providers = HashMap::new();
+        providers.insert(
+            "anthropic".to_string(),
+            ProviderConfig {
+                api: "anthropic".to_string(),
+                base_url: None,
+                api_key_env: Some("ANTHROPIC_API_KEY".to_string()),
+                api_key_file: None,
+                api_key: None,
+                default_model: None,
+                display_name: None,
+                help_url: None,
+            },
+        );
+        providers.insert(
+            "groq".to_string(),
+            ProviderConfig {
+                api: "groq".to_string(),
+                base_url: None,
+                api_key_env: Some("GROQ_API_KEY".to_string()),
+                api_key_file: None,
+                api_key: None,
+                default_model: None,
+                display_name: None,
+                help_url: None,
+            },
+        );
+
+        let mut hints = HashMap::new();
+        hints.insert(
+            "reasoning".to_string(),
+            "anthropic/claude-sonnet-4".to_string(),
+        );
+        hints.insert("fast".to_string(), "groq/llama-3.1-70b-versatile".to_string());
+
+        // Hints can chain through aliases too.
+        let mut aliases = HashMap::new();
+        aliases.insert(
+            "blazing".to_string(),
+            "groq/llama-3.1-70b-versatile".to_string(),
+        );
+        hints.insert("ultra-fast".to_string(), "blazing".to_string());
+
+        let config = ProvidersConfig {
+            providers,
+            model_aliases: aliases,
+            hints,
+        };
+
+        let registry = ProviderRegistry::new(config).unwrap();
+
+        let r = registry.resolve("hint:reasoning").unwrap();
+        assert_eq!(r.provider_id, "anthropic");
+        assert_eq!(r.model_name, "claude-sonnet-4");
+
+        let r = registry.resolve("hint:fast").unwrap();
+        assert_eq!(r.provider_id, "groq");
+
+        let r = registry.resolve("hint:ultra-fast").unwrap();
+        assert_eq!(r.provider_id, "groq");
+        assert_eq!(r.model_name, "llama-3.1-70b-versatile");
+
+        // Unknown hint is a clear error.
+        let err = registry.resolve("hint:nonsense").unwrap_err();
+        assert!(err.to_string().contains("Unknown hint"));
+    }
+
+    #[test]
+    fn test_resolve_hint_cycle_detected() {
+        let mut hints = HashMap::new();
+        hints.insert("a".to_string(), "hint:b".to_string());
+        hints.insert("b".to_string(), "hint:a".to_string());
+
+        let config = ProvidersConfig {
+            providers: HashMap::new(),
+            model_aliases: HashMap::new(),
+            hints,
+        };
+
+        let registry = ProviderRegistry::new(config).unwrap();
+        let err = registry.resolve("hint:a").unwrap_err();
+        assert!(err.to_string().contains("Circular alias"));
     }
 
     #[test]
@@ -706,6 +829,7 @@ mod tests {
         let config = ProvidersConfig {
             providers,
             model_aliases: HashMap::new(),
+            hints: HashMap::new(),
         };
 
         let registry = ProviderRegistry::new(config).unwrap();
@@ -745,6 +869,7 @@ mod tests {
         let config = ProvidersConfig {
             providers,
             model_aliases: HashMap::new(),
+            hints: HashMap::new(),
         };
 
         let registry = ProviderRegistry::new(config).unwrap();
@@ -818,6 +943,7 @@ mod tests {
         let config = ProvidersConfig {
             providers,
             model_aliases: HashMap::new(),
+            hints: HashMap::new(),
         };
 
         let registry = ProviderRegistry::new(config).unwrap();
