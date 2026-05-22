@@ -14,6 +14,7 @@
 //!                           user_prompt, vault_unlock
 
 mod chat;
+mod connection;
 mod credential_request;
 mod device_flow;
 mod file_browser;
@@ -33,6 +34,7 @@ mod user_prompt;
 mod vault_unlock;
 
 pub use chat::Chat;
+pub use connection::ConnectionDialog;
 pub use credential_request::CredentialRequestDialog;
 pub use device_flow::DeviceFlowDialog;
 pub use file_browser::FileBrowser;

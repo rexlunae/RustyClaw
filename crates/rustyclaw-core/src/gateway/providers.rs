@@ -351,6 +351,130 @@ fn format_tool_results(provider: &str, results: &[ToolCallResult]) -> Vec<(Strin
     }
 }
 
+/// Convert persisted [`ThreadMessage`]s into the [`ChatMessage`] wire form
+/// expected by the provider.
+///
+/// Thread history stores assistant turns and tool results in a normalized,
+/// provider-agnostic shape (text + `tool_calls` JSON on assistant messages;
+/// `tool_call_id` on tool messages). The provider request builders, however,
+/// expect tool-loop continuation messages to carry their structured payload
+/// as a JSON-encoded `content` string (see [`format_assistant_message`] and
+/// [`format_tool_results`]).
+///
+/// Without this re-encoding, an assistant message that issued tool calls
+/// would be sent without its `tool_calls` field and the following tool
+/// messages would be sent as plain text — causing OpenAI-compatible
+/// providers to reject the request with:
+/// `messages with role 'tool' must be a response to a preceding message
+/// with 'tool_calls'`.
+pub fn thread_history_to_chat_messages(
+    provider: &str,
+    history: &[crate::threads::ThreadMessage],
+) -> Vec<ChatMessage> {
+    use crate::threads::MessageRole;
+
+    let mut out: Vec<ChatMessage> = Vec::with_capacity(history.len());
+    let mut i = 0;
+    while i < history.len() {
+        let m = &history[i];
+        match m.role {
+            MessageRole::User => {
+                out.push(ChatMessage::text("user", &m.content));
+                i += 1;
+            }
+            MessageRole::System => {
+                out.push(ChatMessage::text("system", &m.content));
+                i += 1;
+            }
+            MessageRole::Assistant => {
+                // Reconstruct ParsedToolCall list from the stored JSON.
+                let tool_calls: Vec<ParsedToolCall> = m
+                    .tool_calls
+                    .as_ref()
+                    .and_then(|v| v.as_array())
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|tc| {
+                                let id = tc.get("id")?.as_str()?.to_string();
+                                let name = tc.get("name")?.as_str()?.to_string();
+                                let arguments = tc
+                                    .get("arguments")
+                                    .cloned()
+                                    .unwrap_or_else(|| json!({}));
+                                Some(ParsedToolCall {
+                                    id,
+                                    name,
+                                    arguments,
+                                })
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
+                if tool_calls.is_empty() {
+                    // Plain assistant text turn.
+                    out.push(ChatMessage::text("assistant", &m.content));
+                    i += 1;
+                    continue;
+                }
+
+                // Gather the contiguous run of following Tool results so we
+                // can attach a name (Google needs it) when available.
+                let mut j = i + 1;
+                let mut results: Vec<ToolCallResult> = Vec::new();
+                while j < history.len()
+                    && matches!(history[j].role, MessageRole::Tool)
+                {
+                    let tm = &history[j];
+                    let id = tm.tool_call_id.clone().unwrap_or_default();
+                    // Recover the tool name from the matching call.
+                    let name = tool_calls
+                        .iter()
+                        .find(|tc| tc.id == id)
+                        .map(|tc| tc.name.clone())
+                        .unwrap_or_default();
+                    results.push(ToolCallResult {
+                        id,
+                        name,
+                        output: tm.content.clone(),
+                        is_error: false,
+                    });
+                    j += 1;
+                }
+
+                // Synthesize a ModelResponse so we can reuse the existing
+                // provider-aware formatters.
+                let model_resp = ModelResponse {
+                    text: m.content.clone(),
+                    tool_calls,
+                    ..Default::default()
+                };
+                let assistant_content = format_assistant_message(provider, &model_resp);
+                out.push(ChatMessage::text("assistant", &assistant_content));
+
+                for (role, content) in format_tool_results(provider, &results) {
+                    out.push(ChatMessage::text(&role, &content));
+                }
+
+                i = j;
+            }
+            MessageRole::Tool => {
+                // Orphan tool message (no preceding assistant tool_calls in
+                // this run — likely a corrupted history). Drop it rather
+                // than forwarding an unanchored tool message, which the
+                // provider would reject outright.
+                tracing::warn!(
+                    target: "rustyclaw::gateway",
+                    tool_call_id = ?m.tool_call_id,
+                    "Dropping orphan tool message during history reconstruction"
+                );
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 // ── Context compaction ──────────────────────────────────────────────────────
 
 use super::helpers::estimate_tokens;

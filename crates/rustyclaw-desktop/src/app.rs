@@ -5,7 +5,7 @@ use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{
-    Chat, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
+    Chat, ConnectionDialog, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
     PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar, SwarmPanel, TabBar,
     ToolApprovalDialog, UserPromptDialog,
     VaultUnlockDialog, generate_qr_code,
@@ -78,9 +78,22 @@ pub fn App() -> Element {
     // Initialize directory chooser state once.
     let mut did_init_directories = use_signal(|| false);
 
+    // Connection dialog: shown on startup so the user can pick or
+    // confirm the gateway URL. Auto-skipped when a URL was provided
+    // on the command line (preserves the old "just connect" behavior
+    // for scripted launches), or when --no-dialog was passed.
+    let mut show_connection = use_signal(|| {
+        crate::configured_gateway_url().is_none() && !crate::skip_connection_dialog()
+    });
+
     // Auto-connect on mount
     use_effect(move || {
         if *did_auto_connect.read() {
+            return;
+        }
+        // When the connection dialog is showing we wait for the user
+        // to confirm/edit the URL before attempting any connection.
+        if *show_connection.read() {
             return;
         }
         did_auto_connect.set(true);
@@ -89,6 +102,19 @@ pub fn App() -> Element {
         spawn(async move {
             connect_to_gateway(&url, state, gateway).await;
         });
+    });
+
+    // Close the connection dialog automatically once we've successfully
+    // connected (or authenticated, for gateways that require auth).
+    use_effect(move || {
+        let status = state.read().connection.clone();
+        if matches!(
+            status,
+            ConnectionStatus::Connected | ConnectionStatus::Authenticated
+        ) && *show_connection.read()
+        {
+            show_connection.set(false);
+        }
     });
 
     use_effect(move || {
@@ -190,6 +216,7 @@ pub fn App() -> Element {
             let client_ui = client.clone();
             spawn(async move {
                 let mut last_foreground_history_request: Option<u64> = None;
+                let mut refreshed_threads_this_connection = false;
                 loop {
                     notify.notified().await;
 
@@ -211,7 +238,7 @@ pub fn App() -> Element {
                                 handle_dom_query(&client_ui, id, js).await;
                             }
                             BufferEntry::Event(event) => {
-                                let should_refresh_threads = matches!(
+                                let triggers_refresh = matches!(
                                     event,
                                     GatewayEvent::Connected { .. }
                                         | GatewayEvent::AuthSuccess
@@ -232,7 +259,8 @@ pub fn App() -> Element {
                                     _ => None,
                                 };
                                 handle_gateway_event(event, state);
-                                if should_refresh_threads {
+                                if triggers_refresh && !refreshed_threads_this_connection {
+                                    refreshed_threads_this_connection = true;
                                     let _ = client_ui.send(GatewayCommand::ThreadList).await;
                                 }
                                 if should_reset_history_guard {
@@ -915,6 +943,23 @@ pub fn App() -> Element {
             }
 
             // Modals
+            ConnectionDialog {
+                visible: *show_connection.read(),
+                gateway_url: state.read().gateway_url.clone(),
+                status: state.read().connection.clone(),
+                on_connect: move |url: String| {
+                    crate::save_gateway_url(&url);
+                    state.write().gateway_url = url.clone();
+                    // Mark auto-connect as done so it does not also fire when
+                    // the dialog auto-closes after the connection succeeds.
+                    did_auto_connect.set(true);
+                    spawn(async move {
+                        connect_to_gateway(&url, state, gateway).await;
+                    });
+                },
+                on_cancel: move |_| show_connection.set(false),
+            }
+
             HatchingDialog {
                 visible: *show_hatching.read(),
                 on_complete: move |result: HatchingResult| {
@@ -972,7 +1017,11 @@ pub fn App() -> Element {
                 gateway_url: state.read().gateway_url.clone(),
                 on_theme_change: move |t: Theme| state.write().theme = t,
                 on_gateway_url_change: move |v: String| state.write().gateway_url = v,
-                on_reconnect: move |_| do_reconnect(),
+                on_reconnect: move |_| {
+                    let url = state.read().gateway_url.clone();
+                    crate::save_gateway_url(&url);
+                    do_reconnect();
+                },
                 on_credential_save: move |(provider_id, api_key): (String, String)| {
                     let secret_key = rustyclaw_core::providers::secret_key_for_provider(&provider_id)
                         .unwrap_or(&provider_id)

@@ -1,3 +1,3 @@
 fn main() {
-    rustyclaw_desktop::run(None);
+    rustyclaw_desktop::run(None, false);
 }

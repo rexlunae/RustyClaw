@@ -342,6 +342,10 @@ struct TuiArgs {
     /// Send an initial message instead of entering interactive mode
     #[arg(long, value_name = "TEXT")]
     message: Option<String>,
+    /// Skip the interactive connection dialog and use the saved/default
+    /// gateway URL when --url is not provided.
+    #[arg(long = "no-dialog", alias = "auto-connect")]
+    no_dialog: bool,
 }
 
 #[derive(Debug, Args, Default)]
@@ -349,6 +353,10 @@ struct DesktopArgs {
     /// Gateway URL (overrides config)
     #[arg(long = "url", value_name = "URL")]
     url: Option<String>,
+    /// Skip the connection dialog on startup and connect to the saved
+    /// or default URL automatically.
+    #[arg(long = "no-dialog", alias = "auto-connect")]
+    no_dialog: bool,
 }
 
 // ── Command / Message ───────────────────────────────────────────────────────
@@ -889,6 +897,7 @@ async fn main() -> Result<()> {
                 if let Some(pw) = _args.password {
                     app.set_deferred_vault_password(pw);
                 }
+                app.set_skip_connection_dialog(_args.no_dialog);
                 app.run().await?;
             }
             #[cfg(not(feature = "tui"))]
@@ -904,11 +913,11 @@ async fn main() -> Result<()> {
         Commands::Desktop(args) => {
             #[cfg(feature = "desktop")]
             {
-                let gateway_url = args
-                    .url
-                    .or_else(|| config.gateway_url.clone())
-                    .unwrap_or_else(|| "ssh://127.0.0.1:2222".to_string());
-                desktop_app::run(Some(gateway_url));
+                // Only forward an explicit URL (from --url or config). When
+                // neither is set, leave it as None so the desktop client can
+                // show its connection dialog with the default pre-filled.
+                let gateway_url = args.url.or_else(|| config.gateway_url.clone());
+                desktop_app::run(gateway_url, args.no_dialog);
             }
             #[cfg(not(feature = "desktop"))]
             {

@@ -142,6 +142,7 @@ pub struct App {
     skill_manager: SkillManager,
     soul_manager: SoulManager,
     deferred_vault_password: Option<String>,
+    skip_connection_dialog: bool,
 }
 
 impl App {
@@ -162,6 +163,12 @@ impl App {
 
     pub fn set_deferred_vault_password(&mut self, password: String) {
         self.deferred_vault_password = Some(password);
+    }
+
+    /// Skip the interactive connection dialog and connect directly using
+    /// the configured / saved / default gateway URL.
+    pub fn set_skip_connection_dialog(&mut self, skip: bool) {
+        self.skip_connection_dialog = skip;
     }
 
     fn build(config: Config, mut secrets_manager: SecretsManager) -> Result<Self> {
@@ -185,6 +192,7 @@ impl App {
             skill_manager,
             soul_manager,
             deferred_vault_password: None,
+            skip_connection_dialog: false,
         })
     }
 
@@ -229,11 +237,33 @@ impl App {
             format!("{} / {}", provider, model)
         };
 
-        let gateway_url = self
-            .config
-            .gateway_url
-            .clone()
-            .unwrap_or_else(|| "ssh://127.0.0.1:2222".to_string());
+        let gateway_url_explicit = self.config.gateway_url.clone();
+        let skip_dialog = self.skip_connection_dialog;
+
+        // ── Show the connection dialog (or skip when --url/config provided)
+        //    and establish the SSH transport before iocraft takes over. ──
+        let conn_result = match crate::connection_dialog::prompt_and_connect(
+            gateway_url_explicit.clone(),
+            skip_dialog,
+        )
+        .await
+        {
+            Ok(Some(r)) => r,
+            Ok(None) => {
+                // User cancelled the dialog — exit cleanly.
+                return Ok(());
+            }
+            Err(e) => {
+                let _ = gw_tx.send(GwEvent::error(format!("SSH connection failed: {}", e)));
+                let _ = gw_tx.send(GwEvent::Disconnected(format!(
+                    "Failed to connect: {}",
+                    e
+                )));
+                return Ok(());
+            }
+        };
+
+        let gateway_url = conn_result.url.clone();
 
         let hint = "Ctrl+C quit · Esc cancel run · /help commands · ↑↓ scroll".to_string();
 
@@ -250,20 +280,11 @@ impl App {
                 (String::new(), "2222".to_string())
             };
 
-        // ── Connect via shared SSH transport ────────────────────────────
+        // ── Use the SSH transport from the connection dialog ────────────
         let gw_tx_conn = gw_tx.clone();
-        let (_ssh_connection, ssh_writer_raw, mut ssh_reader) =
-            match rustyclaw_core::gateway::SshConnection::connect(&gateway_url).await {
-                Ok(triple) => triple,
-                Err(e) => {
-                    let _ = gw_tx.send(GwEvent::error(format!("SSH connection failed: {}", e)));
-                    let _ = gw_tx.send(GwEvent::Disconnected(format!(
-                        "Failed to connect: {}",
-                        e
-                    )));
-                    return Ok(());
-                }
-            };
+        let _ssh_connection = conn_result.connection;
+        let ssh_writer_raw = conn_result.writer;
+        let mut ssh_reader = conn_result.reader;
 
         // Wrap writer in Option for compatibility with the gateways event loop
         // that expects an optional sink (may be None if connection failed).

@@ -14,10 +14,12 @@ pub(crate) mod menu;
 mod state;
 
 static GATEWAY_URL: OnceLock<Option<String>> = OnceLock::new();
+static SKIP_DIALOG: OnceLock<bool> = OnceLock::new();
 
-pub fn run(gateway_url: Option<String>) {
+pub fn run(gateway_url: Option<String>, no_dialog: bool) {
     let normalized_gateway_url = normalize_gateway_url(gateway_url);
     let _ = GATEWAY_URL.set(normalized_gateway_url);
+    let _ = SKIP_DIALOG.set(no_dialog);
 
     let _ = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
@@ -44,6 +46,10 @@ pub fn run(gateway_url: Option<String>) {
 
 pub(crate) fn configured_gateway_url() -> Option<String> {
     GATEWAY_URL.get().cloned().flatten()
+}
+
+pub(crate) fn skip_connection_dialog() -> bool {
+    SKIP_DIALOG.get().copied().unwrap_or(false)
 }
 
 fn normalize_gateway_url(gateway_url: Option<String>) -> Option<String> {
@@ -78,3 +84,9 @@ fn normalize_gateway_url(gateway_url: Option<String>) -> Option<String> {
 
     Some(normalized)
 }
+
+/// Re-export shared client preference helpers from `rustyclaw-core` so the
+/// desktop and TUI clients stay in lock-step.
+pub use rustyclaw_core::client_prefs::{
+    DEFAULT_GATEWAY_URL, load_saved_gateway_url, save_gateway_url,
+};

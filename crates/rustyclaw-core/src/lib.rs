@@ -15,6 +15,7 @@
 
 pub mod args;
 pub mod canvas;
+pub mod client_prefs;
 pub mod commands;
 pub mod config;
 pub mod cron;

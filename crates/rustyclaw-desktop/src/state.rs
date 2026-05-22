@@ -149,7 +149,8 @@ impl Default for AppState {
         Self {
             connection: ConnectionStatus::Disconnected,
             gateway_url: crate::configured_gateway_url()
-                .unwrap_or_else(|| "ssh://127.0.0.1:2222".to_string()),
+                .or_else(crate::load_saved_gateway_url)
+                .unwrap_or_else(|| crate::DEFAULT_GATEWAY_URL.to_string()),
             messages: VecDeque::new(),
             thread_messages: HashMap::new(),
             input: String::new(),

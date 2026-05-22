@@ -1522,19 +1522,27 @@ async fn handle_connection(
                                                 ));
                                             }
                                             let insert_pos = if thread.compact_summary.is_some() { 2 } else { 1 };
-                                            let history_msgs: Vec<ChatMessage> = history
+                                            // Reconstruct the history with structured
+                                            // tool_call / tool_result payloads so that
+                                            // assistant messages keep their `tool_calls`
+                                            // and following tool results stay anchored
+                                            // to them. Flattening to plain text would
+                                            // produce orphan `tool` messages that the
+                                            // provider rejects.
+                                            let provider_name = current_model_ctx
+                                                .as_deref()
+                                                .map(|c| c.provider.as_str())
+                                                .unwrap_or("openai");
+                                            let history_slice: Vec<crate::threads::ThreadMessage> = history
                                                 .iter()
                                                 .take(prior_count)
-                                                .map(|m| {
-                                                    let role = match m.role {
-                                                        crate::threads::MessageRole::User => "user",
-                                                        crate::threads::MessageRole::Assistant => "assistant",
-                                                        crate::threads::MessageRole::System => "system",
-                                                        crate::threads::MessageRole::Tool => "tool",
-                                                    };
-                                                    ChatMessage::text(role, &m.content)
-                                                })
+                                                .cloned()
                                                 .collect();
+                                            let history_msgs: Vec<ChatMessage> =
+                                                providers::thread_history_to_chat_messages(
+                                                    provider_name,
+                                                    &history_slice,
+                                                );
                                             // Insert history between system prompt and current user message
                                             let tail = messages.split_off(insert_pos);
                                             messages.extend(history_msgs);
