@@ -1,0 +1,26 @@
+[package]
+name = "tokenjuice"
+description = "Rule-driven tool-output compression. JSON-overlay rules strip noise and keep signal before output enters an LLM context window."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+keywords = ["llm", "agent", "compaction", "tokens", "context"]
+categories = ["text-processing"]
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+regex.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile = "3"

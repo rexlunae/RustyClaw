@@ -1745,7 +1745,7 @@ pub async fn execute_tool(
         if result.is_err() {
             warn!(error = ?result.as_ref().err(), "Tool execution failed");
         }
-        return result;
+        return result.map(|s| crate::tool_pipeline::apply_global(name, args, s));
     }
 
     // Find the tool for sync execution
@@ -1758,6 +1758,7 @@ pub async fn execute_tool(
 
     // Clone what we need for the blocking task
     let execute_fn = tool.execute;
+    let args_for_pipeline = args.clone();
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
 
@@ -1770,7 +1771,7 @@ pub async fn execute_tool(
         warn!(error = ?result.as_ref().err(), "Tool execution failed");
     }
 
-    result
+    result.map(|s| crate::tool_pipeline::apply_global(name, &args_for_pipeline, s))
 }
 
 // ── Wire types for WebSocket protocol ───────────────────────────────────────

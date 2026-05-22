@@ -14,6 +14,7 @@
 //! - [`soul`] — agent personality definition (`SOUL.md`)
 
 pub mod args;
+pub mod auto_fetch;
 pub mod canvas;
 pub mod commands;
 pub mod config;
@@ -28,6 +29,7 @@ pub mod mcp;
 pub mod memory;
 pub mod memory_consolidation;
 pub mod memory_flush;
+pub mod memory_vault;
 pub mod messengers;
 pub mod models;
 pub mod observability;
@@ -46,12 +48,15 @@ pub mod sessions;
 pub mod skills;
 pub mod soul;
 pub mod steel_memory;
+pub mod steel_memory_indexer;
 pub mod swarm;
 pub mod streaming;
+pub mod subconscious;
 pub mod tasks;
 pub mod theme;
 pub mod threads;
 pub mod ui;
+pub mod tool_pipeline;
 pub mod tools;
 pub mod types;
 pub mod user_prompt_types;

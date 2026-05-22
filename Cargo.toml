@@ -5,6 +5,8 @@ members = [
     "crates/rustyclaw-tui",
     "crates/rustyclaw-desktop",
     "crates/rustyclaw-view",
+    "crates/tokenjuice",
+    "crates/memory-tree",
 ]
 resolver = "3"
 
@@ -40,6 +42,8 @@ desktop = { description = "Enable desktop GUI client (requires GTK system librar
 rustyclaw-core = { path = "crates/rustyclaw-core", version = "0.3.0" }
 rustyclaw-tui = { path = "crates/rustyclaw-tui", version = "0.3.0" }
 rustyclaw-view = { path = "crates/rustyclaw-view", version = "0.3.0" }
+tokenjuice = { path = "crates/tokenjuice", version = "0.3.0" }
+memory-tree = { path = "crates/memory-tree", version = "0.3.0" }
 chat-system = { version = "0.1.3", default-features = false }
 
 # Configuration and serialization
