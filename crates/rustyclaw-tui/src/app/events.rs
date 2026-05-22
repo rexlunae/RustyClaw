@@ -88,6 +88,14 @@ pub(crate) enum GwEvent {
         threads: Vec<crate::action::ThreadInfo>,
         foreground_id: Option<u64>,
     },
+
+    /// Live message/history update for a thread.
+    ThreadMessages {
+        #[allow(dead_code)]
+        thread_id: u64,
+        messages: Vec<rustyclaw_core::gateway::protocol::types::ChatMessage>,
+    },
+
     /// Thread switch confirmed — clear messages and show context.
     ThreadSwitched {
         thread_id: u64,
