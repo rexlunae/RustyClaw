@@ -2481,6 +2481,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             device_flow: rustyclaw_view::DeviceFlowData {
                 url: device_flow_url.read().clone(),
                 code: device_flow_code.read().clone(),
+                // The TUI event flow currently only provides URL + code.
+                // Provider-specific explanatory text is not sent on this path.
                 message: None,
                 browser_opened: device_flow_browser_opened.get(),
                 tick: device_flow_tick.get(),
