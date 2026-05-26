@@ -146,6 +146,16 @@ impl Default for AppState {
         let provider = configured_model.as_ref().map(|m| m.provider.clone());
         let model = configured_model.and_then(|m| m.model);
 
+        // Check whether SOUL.md needs first-run setup.
+        let needs_hatching = rustyclaw_core::config::Config::load(None)
+            .ok()
+            .map(|cfg| {
+                let mut sm = rustyclaw_core::soul::SoulManager::new(cfg.soul_path());
+                let _ = sm.load();
+                sm.needs_hatching()
+            })
+            .unwrap_or(false);
+
         Self {
             connection: ConnectionStatus::Disconnected,
             gateway_url: crate::configured_gateway_url()
@@ -161,7 +171,7 @@ impl Default for AppState {
             foreground_thread_id: None,
             agent_name: None,
             vault_locked: false,
-            needs_hatching: false,
+            needs_hatching,
             model,
             provider,
             prompt_attachments: Vec::new(),

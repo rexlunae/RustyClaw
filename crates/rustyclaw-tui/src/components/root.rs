@@ -283,6 +283,27 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 model_label: props.model_label.clone(),
             )
 
+            // ── Hatching dialog overlay (first run, rendered before auth so auth is on top) ──
+            #(if show_hatching {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        HatchingDialog(
+                            name_input: hatching_name_input,
+                            personality_input: hatching_personality_input,
+                            focus: hatching_focus,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
             // ── Auth dialog overlay ─────────────────────────────────────
             #(if show_auth {
                 element! {
@@ -467,27 +488,6 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             tools: tool_perms_data,
                             selected: tool_perms_selected,
                             scroll_offset: tool_perms_scroll,
-                        )
-                    }
-                }.into_any()
-            } else {
-                element! { View() }.into_any()
-            })
-
-            // ── Hatching dialog overlay (first run) ─────────────────────
-            #(if show_hatching {
-                element! {
-                    View(
-                        width: props.width,
-                        height: props.height,
-                        position: Position::Absolute,
-                        top: 0,
-                        left: 0,
-                    ) {
-                        HatchingDialog(
-                            name_input: hatching_name_input,
-                            personality_input: hatching_personality_input,
-                            focus: hatching_focus,
                         )
                     }
                 }.into_any()
