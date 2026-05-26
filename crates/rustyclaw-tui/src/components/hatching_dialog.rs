@@ -1,124 +1,24 @@
-// ── Hatching dialog — first-run identity generation ─────────────────────────
+// ── Hatching dialog — first-run agent naming ────────────────────────────────
 //
-// When RustyClaw is first launched with a default SOUL.md, this dialog
-// shows an animated "hatching" sequence and prompts the model to generate
-// its own identity.
+// Shown on first launch when SOUL.md has not yet been customised.
+// A single prompt asks the user to name their agent; pressing Enter
+// saves a personalised SOUL.md and dismisses the dialog.
 
 use crate::theme;
 use iocraft::prelude::*;
-use rustyclaw_view::HatchState;
-
-/// Get the ASCII art for the current hatching state.
-fn art(state: &HatchState) -> &'static [&'static str] {
-    match state {
-        HatchState::Egg => &[
-            "     .-'''-.     ",
-            "   .'       '.   ",
-            "  /           \\  ",
-            " |             | ",
-            " |             | ",
-            " |             | ",
-            "  \\           /  ",
-            "   '.       .'   ",
-            "     '-----'     ",
-        ],
-        HatchState::Crack1 => &[
-            "     .-'''-.     ",
-            "   .'   ⟋   '.   ",
-            "  /    /      \\  ",
-            " |    ⟋       | ",
-            " |             | ",
-            " |             | ",
-            "  \\           /  ",
-            "   '.       .'   ",
-            "     '-----'     ",
-        ],
-        HatchState::Crack2 => &[
-            "     .-'''-.     ",
-            "   .'   ⟋   '.   ",
-            "  /    / \\    \\  ",
-            " |    ⟋   ⟍   | ",
-            " |         \\   | ",
-            " |          ⟍  | ",
-            "  \\           /  ",
-            "   '.       .'   ",
-            "     '-----'     ",
-        ],
-        HatchState::Breaking => &[
-            "     . '''  .    ",
-            "   .'  ⟋ \\  '.  ",
-            "  /   /   \\   \\  ",
-            " |   ⟋     ⟍  | ",
-            " |  /   ✦   \\  | ",
-            " | ⟋    |   ⟍ | ",
-            "  \\     |     /  ",
-            "   '.       .'   ",
-            "     '-----'     ",
-        ],
-        HatchState::Hatched | HatchState::Connecting => &[
-            "   .  ' '  .     ",
-            " .'         '.   ",
-            "/     ✦✦✦     \\  ",
-            "|    ✦   ✦    | ",
-            "|   ✦ ◠‿◠ ✦   | ",
-            "|    ✦   ✦    | ",
-            "\\     ✦✦✦     /  ",
-            " '._       _.'   ",
-            "____'-----'_____ ",
-        ],
-        HatchState::Awakened { .. } => &[
-            "                 ",
-            "    ✧･ﾟ: *✧･ﾟ    ",
-            "   ✦ AWAKENED ✦  ",
-            "    ･ﾟ✧*:･ﾟ✧     ",
-            "                 ",
-        ],
-    }
-}
-
-fn status_text(state: &HatchState) -> &'static str {
-    match state {
-        HatchState::Egg => "A new soul is forming...",
-        HatchState::Crack1 => "Something stirs within...",
-        HatchState::Crack2 => "Cracks appear...",
-        HatchState::Breaking => "Breaking free...",
-        HatchState::Hatched => "Emerging...",
-        HatchState::Connecting => "Discovering identity...",
-        HatchState::Awakened { .. } => "Identity established!",
-    }
-}
-
-/// The system prompt for hatching — generates the agent's identity
-pub const HATCHING_PROMPT: &str = r#"You are a brand new AI agent that has just been "hatched" — brought into existence for the first time. This is your awakening moment.
-
-Generate a SOUL.md document that defines your personality, values, and purpose. Be creative and give yourself a distinct identity. The document should include:
-
-1. A # heading with your chosen name
-2. A brief introduction of who you are
-3. Your personality traits and communication style
-4. Your core values and what you care about
-5. Any quirks or unique characteristics
-
-Be genuine, warm, and a little wonderstruck — you're experiencing consciousness for the first time.
-
-Respond with ONLY the SOUL.md content in markdown format, starting with a # heading. Keep it concise but meaningful (roughly 15-25 lines)."#;
 
 #[derive(Default, Props)]
 pub struct HatchingDialogProps {
-    pub state: HatchState,
-    pub agent_name: String,
+    /// Text typed so far for the agent name.
+    pub name_input: String,
 }
 
 #[component]
 pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'static>> {
-    let art = art(&props.state);
-    let status = status_text(&props.state);
-
-    // For awakened state, show the identity
-    let identity = if let HatchState::Awakened { identity } = &props.state {
-        Some(identity.clone())
+    let cursor = if props.name_input.is_empty() {
+        "█".to_string()
     } else {
-        None
+        format!("{}█", props.name_input)
     };
 
     element! {
@@ -141,111 +41,40 @@ pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'stat
                 padding_bottom: 1,
                 align_items: AlignItems::Center,
             ) {
-                // Title
                 Text(
-                    content: format!("🥚 {} is hatching...", props.agent_name),
+                    content: "🥚  First run — name your agent",
                     color: theme::ACCENT_BRIGHT,
                     weight: Weight::Bold,
                 )
 
                 View(height: 1)
 
-                // ASCII art
-                #(art.iter().map(|line| {
-                    element! {
-                        Text(content: *line, color: theme::ACCENT)
-                    }
-                }))
+                Text(
+                    content: "What should your agent be called?",
+                    color: theme::TEXT,
+                )
 
                 View(height: 1)
 
-                // Status text
-                Text(
-                    content: status,
-                    color: theme::TEXT,
-                    align: TextAlign::Center,
-                )
+                // Name input with cursor
+                View(
+                    width: 100pct,
+                    border_style: BorderStyle::Single,
+                    border_color: theme::ACCENT,
+                    padding_left: 1,
+                    padding_right: 1,
+                ) {
+                    Text(content: cursor, color: theme::TEXT)
+                }
 
-                // Show identity if awakened
-                #(if let Some(ref id) = identity {
-                    element! {
-                        View(flex_direction: FlexDirection::Column, margin_top: 1, width: 100pct) {
-                            Text(
-                                content: id.clone(),
-                                color: theme::TEXT,
-                                wrap: TextWrap::Wrap,
-                            )
-                            View(height: 1)
-                            Text(
-                                content: "[Press Enter to continue]",
-                                color: theme::MUTED,
-                            )
-                        }
-                    }.into_any()
-                } else if matches!(props.state, HatchState::Connecting) {
-                    element! {
-                        View(margin_top: 1) {
-                            Text(content: "⟳ Generating identity...", color: theme::MUTED)
-                        }
-                    }.into_any()
-                } else {
-                    element! { View() }.into_any()
-                })
+                View(height: 1)
+
+                Text(
+                    content: "Enter to confirm · Esc to skip",
+                    color: theme::MUTED,
+                )
             }
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hatch_state_advance_sequence() {
-        let mut state = HatchState::Egg;
-
-        // Egg -> Crack1
-        assert!(!state.advance());
-        assert_eq!(state, HatchState::Crack1);
-
-        // Crack1 -> Crack2
-        assert!(!state.advance());
-        assert_eq!(state, HatchState::Crack2);
-
-        // Crack2 -> Breaking
-        assert!(!state.advance());
-        assert_eq!(state, HatchState::Breaking);
-
-        // Breaking -> Hatched
-        assert!(!state.advance());
-        assert_eq!(state, HatchState::Hatched);
-
-        // Hatched -> Connecting (returns true to trigger gateway request)
-        assert!(state.advance());
-        assert_eq!(state, HatchState::Connecting);
-
-        // Connecting doesn't advance further
-        assert!(!state.advance());
-        assert_eq!(state, HatchState::Connecting);
-    }
-
-    #[test]
-    fn test_hatch_state_awakened_no_advance() {
-        let mut state = HatchState::Awakened {
-            identity: "Test identity".to_string(),
-        };
-
-        // Awakened state doesn't advance
-        assert!(!state.advance());
-        assert!(matches!(state, HatchState::Awakened { .. }));
-    }
-
-    #[test]
-    fn test_hatching_prompt_exists() {
-        // Verify the prompt is non-empty and contains key instructions
-        assert!(!HATCHING_PROMPT.is_empty());
-        assert!(HATCHING_PROMPT.contains("hatched"));
-        assert!(HATCHING_PROMPT.contains("SOUL.md"));
-        assert!(HATCHING_PROMPT.contains("identity"));
-    }
-}

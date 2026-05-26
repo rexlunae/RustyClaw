@@ -29,7 +29,7 @@ use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
 use crate::types::DisplayMessage;
 use rustyclaw_view::{
-    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState,
+    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData,
     ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
     SkillInfoData, TabBarData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
 };
@@ -130,8 +130,7 @@ pub struct RootProps {
 
     // hatching dialog overlay (first run)
     pub show_hatching: bool,
-    pub hatching_state: HatchState,
-    pub hatching_agent_name: String,
+    pub hatching_name_input: String,
 
     // provider selector dialog overlay
     pub show_provider_selector: bool,
@@ -192,8 +191,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let show_tool_perms = props.show_tool_perms_dialog;
 
     let show_hatching = props.show_hatching;
-    let hatching_state = props.hatching_state.clone();
-    let hatching_agent_name = props.hatching_agent_name.clone();
+    let hatching_name_input = props.hatching_name_input.clone();
 
     // Provider / model selection dialog state
     let show_provider_sel = props.show_provider_selector;
@@ -479,8 +477,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         HatchingDialog(
-                            state: hatching_state,
-                            agent_name: hatching_agent_name,
+                            name_input: hatching_name_input,
                         )
                     }
                 }.into_any()
