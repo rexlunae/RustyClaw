@@ -1,12 +1,9 @@
 //! SSH stdio client for gateway communication.
 
 use anyhow::{Context, Result, anyhow};
+use rustyclaw_core::gateway::protocol::event_log::{Direction, ProtocolEventLog, default_log_path};
 use rustyclaw_core::gateway::{
-    ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, SshConnection,
-    StatusType,
-};
-use rustyclaw_core::gateway::protocol::event_log::{
-    Direction, ProtocolEventLog, default_log_path,
+    ChatMessage, ClientFrame, ClientPayload, ServerFrame, ServerPayload, SshConnection, StatusType,
 };
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -28,8 +25,9 @@ impl GatewayClient {
     /// Connect to a gateway at the given URL.
     pub async fn connect(url: &str) -> Result<Self> {
         // ── Use shared SSH transport from rustyclaw_core ────────────────
-        let (_connection, mut writer, mut reader) =
-            SshConnection::connect(url).await.context("Failed to establish SSH transport")?;
+        let (_connection, mut writer, mut reader) = SshConnection::connect(url)
+            .await
+            .context("Failed to establish SSH transport")?;
 
         // Channels for communication
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
@@ -130,10 +128,7 @@ impl GatewayClient {
                             _ => {}
                         }
 
-                        if matches!(
-                            envelope.frame.payload,
-                            ServerPayload::ResponseDone { .. }
-                        ) {
+                        if matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. }) {
                             let active = active_stream_id_rx.load(Ordering::Relaxed);
                             if active == envelope.stream_id {
                                 active_stream_id_rx.store(0, Ordering::Relaxed);
@@ -377,9 +372,17 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::SecretsDelete,
             payload: ClientPayload::SecretsDelete { key },
         },
-        GatewayCommand::SecretsSetPolicy { name, policy, skills } => ClientFrame {
+        GatewayCommand::SecretsSetPolicy {
+            name,
+            policy,
+            skills,
+        } => ClientFrame {
             frame_type: ClientFrameType::SecretsSetPolicy,
-            payload: ClientPayload::SecretsSetPolicy { name, policy, skills },
+            payload: ClientPayload::SecretsSetPolicy {
+                name,
+                policy,
+                skills,
+            },
         },
         GatewayCommand::SecretsSetupTotp => ClientFrame {
             frame_type: ClientFrameType::SecretsSetupTotp,
@@ -516,12 +519,10 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
             thread_id,
             messages,
         }),
-        ServerPayload::SecretsListResult { ok, entries } => {
-            Some(GatewayEvent::SecretsListResult {
-                ok,
-                entries: entries.into_iter().map(Into::into).collect(),
-            })
-        }
+        ServerPayload::SecretsListResult { ok, entries } => Some(GatewayEvent::SecretsListResult {
+            ok,
+            entries: entries.into_iter().map(Into::into).collect(),
+        }),
         ServerPayload::SecretsStoreResult { ok, message } => {
             Some(GatewayEvent::SecretsStoreResult { ok, message })
         }

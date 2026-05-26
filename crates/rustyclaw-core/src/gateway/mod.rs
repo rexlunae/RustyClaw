@@ -30,11 +30,11 @@ pub mod protocol;
 mod providers;
 mod secrets_handler;
 mod skills_handler;
+pub mod ssh_connection;
 pub mod system_prompt;
 pub mod task_handler;
 pub mod thinking_clock;
 mod tool_executor;
-pub mod ssh_connection;
 pub mod transport;
 mod types;
 pub mod webhooks;
@@ -65,8 +65,8 @@ pub use messenger_handler::{SharedMessengerManager, create_messenger_manager, ru
 
 // Re-export transport types
 pub use transport::{
-    PeerInfo, ScopedTransportWriter, Transport, TransportAcceptor, TransportReader,
-    TransportType, TransportWriter,
+    PeerInfo, ScopedTransportWriter, Transport, TransportAcceptor, TransportReader, TransportType,
+    TransportWriter,
 };
 
 // Re-export SSH types
@@ -945,8 +945,8 @@ async fn handle_connection(
                 .await
                 .context("Failed to send credentials_loaded status")?;
             } else if crate_providers::secret_key_for_provider(&ctx.provider).is_some()
-                && crate_providers::provider_by_id(&ctx.provider)
-                    .map(|p| p.auth_method) != Some(crate_providers::AuthMethod::OptionalApiKey)
+                && crate_providers::provider_by_id(&ctx.provider).map(|p| p.auth_method)
+                    != Some(crate_providers::AuthMethod::OptionalApiKey)
             {
                 protocol::server::send_status(
                     &mut *writer,
@@ -1077,8 +1077,7 @@ async fn handle_connection(
     let credential_rx = Arc::new(Mutex::new(credential_rx));
 
     // Channel for DOM query responses (used by the client_dom_query tool).
-    let (dom_query_tx, dom_query_rx) =
-        tokio::sync::mpsc::channel::<(String, String, bool)>(4);
+    let (dom_query_tx, dom_query_rx) = tokio::sync::mpsc::channel::<(String, String, bool)>(4);
     let dom_query_rx = Arc::new(Mutex::new(dom_query_rx));
 
     // Channel for model task responses (concurrent execution).
@@ -2403,7 +2402,8 @@ async fn execute_dom_query(
         Ok(Some(_)) => ("Mismatched DOM query response ID.".to_string(), true),
         Ok(None) => ("DOM query channel closed.".to_string(), true),
         Err(_) => (
-            "DOM query timed out after 30 seconds. The client may not support DOM queries.".to_string(),
+            "DOM query timed out after 30 seconds. The client may not support DOM queries."
+                .to_string(),
             true,
         ),
     }
@@ -2583,8 +2583,19 @@ async fn dispatch_text_message(
             Err(err) => {
                 let traced = errors::GatewayError::TokenRefresh {
                     message: err.to_string(),
-                }.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
+                }
+                .into_traced();
+                match errors::handle(
+                    traced,
+                    writer,
+                    &mut resolved,
+                    &mut original_api_key,
+                    vault,
+                    credential_rx,
+                    tool_cancel,
+                )
+                .await?
+                {
                     std::ops::ControlFlow::Continue(()) => {
                         if crate::providers::needs_copilot_session(&resolved.provider)
                             && original_api_key.is_some()
@@ -2636,9 +2647,19 @@ async fn dispatch_text_message(
                 Err(err) => {
                     let traced = errors::GatewayError::ContextCompaction {
                         message: err.to_string(),
-                    }.into_traced();
+                    }
+                    .into_traced();
                     // Non-fatal — handle logs and continues.
-                    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await;
+                    let _ = errors::handle(
+                        traced,
+                        writer,
+                        &mut resolved,
+                        &mut original_api_key,
+                        vault,
+                        credential_rx,
+                        tool_cancel,
+                    )
+                    .await;
                 }
             }
         }
@@ -2701,14 +2722,34 @@ async fn dispatch_text_message(
             Ok(Some(r)) => r,
             Ok(None) => {
                 let traced = errors::GatewayError::Cancelled.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
+                match errors::handle(
+                    traced,
+                    writer,
+                    &mut resolved,
+                    &mut original_api_key,
+                    vault,
+                    credential_rx,
+                    tool_cancel,
+                )
+                .await?
+                {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             }
             Err(err) => {
                 let traced = errors::classify_model_error(err, &resolved.provider);
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
+                match errors::handle(
+                    traced,
+                    writer,
+                    &mut resolved,
+                    &mut original_api_key,
+                    vault,
+                    credential_rx,
+                    tool_cancel,
+                )
+                .await?
+                {
                     std::ops::ControlFlow::Continue(()) => {
                         if crate::providers::needs_copilot_session(&resolved.provider)
                             && original_api_key.is_some()
@@ -2804,7 +2845,9 @@ async fn dispatch_text_message(
                     let text = model_resp.text.clone();
                     tokio::spawn(async move {
                         if let Ok(mem) = crate::steel_memory::SteelMemory::new(&ws) {
-                            let _ = mem.add_memory(&text, "conversations", "assistant", None).await;
+                            let _ = mem
+                                .add_memory(&text, "conversations", "assistant", None)
+                                .await;
                         }
                     });
                 }
@@ -2815,15 +2858,36 @@ async fn dispatch_text_message(
                 return Ok(());
             } else if finish_reason == "length" {
                 let traced = errors::GatewayError::TokenLimit.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
+                match errors::handle(
+                    traced,
+                    writer,
+                    &mut resolved,
+                    &mut original_api_key,
+                    vault,
+                    credential_rx,
+                    tool_cancel,
+                )
+                .await?
+                {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             } else {
                 let traced = errors::GatewayError::UnexpectedFinish {
                     reason: finish_reason.to_string(),
-                }.into_traced();
-                match errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await? {
+                }
+                .into_traced();
+                match errors::handle(
+                    traced,
+                    writer,
+                    &mut resolved,
+                    &mut original_api_key,
+                    vault,
+                    credential_rx,
+                    tool_cancel,
+                )
+                .await?
+                {
                     std::ops::ControlFlow::Continue(()) => continue,
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
@@ -2959,7 +3023,9 @@ async fn dispatch_text_message(
                     let action = update.get("action").and_then(|v| v.as_str()).unwrap_or("");
                     match action {
                         "set_description" => {
-                            if let Some(description) = update.get("description").and_then(|v| v.as_str()) {
+                            if let Some(description) =
+                                update.get("description").and_then(|v| v.as_str())
+                            {
                                 thread_mgr.set_foreground_description(description);
                                 output = format!("Thread description set to: {}", description);
                                 send_threads_update(writer, thread_mgr, task_mgr, None).await?;
@@ -3046,8 +3112,20 @@ async fn dispatch_text_message(
     }
 
     // If we exhausted all rounds, send what we have and stop.
-    let traced = errors::GatewayError::ToolLoopExhausted { rounds: MAX_TOOL_ROUNDS }.into_traced();
-    let _ = errors::handle(traced, writer, &mut resolved, &mut original_api_key, vault, credential_rx, tool_cancel).await?;
+    let traced = errors::GatewayError::ToolLoopExhausted {
+        rounds: MAX_TOOL_ROUNDS,
+    }
+    .into_traced();
+    let _ = errors::handle(
+        traced,
+        writer,
+        &mut resolved,
+        &mut original_api_key,
+        vault,
+        credential_rx,
+        tool_cancel,
+    )
+    .await?;
     Ok(())
 }
 
@@ -3364,5 +3442,4 @@ mod tests {
 
         Ok(())
     }
-
 }
