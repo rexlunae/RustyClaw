@@ -1414,7 +1414,7 @@ struct EventBuffer {
 /// Connect to the gateway.
 async fn connect_to_gateway_candidates(
     urls: Vec<String>,
-    state: Signal<AppState>,
+    mut state: Signal<AppState>,
     gateway: Signal<Option<Arc<GatewayClient>>>,
 ) -> bool {
     for url in urls {
