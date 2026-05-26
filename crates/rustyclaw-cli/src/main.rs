@@ -652,7 +652,9 @@ async fn main() -> Result<()> {
     // For all other commands, log to stderr as usual.
     #[cfg(feature = "tui")]
     let _is_tui = matches!(
-        cli.command.as_ref().unwrap_or(&Commands::Tui(TuiArgs::default())),
+        cli.command
+            .as_ref()
+            .unwrap_or(&Commands::Tui(TuiArgs::default())),
         Commands::Tui(_)
     );
     #[cfg(not(feature = "tui"))]
@@ -1450,11 +1452,18 @@ async fn main() -> Result<()> {
                     let m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                     let swarms = m.list();
                     if swarms.is_empty() {
-                        println!("{}", t::muted("No swarms defined. Use `rustyclaw swarm create` to create one."));
+                        println!(
+                            "{}",
+                            t::muted(
+                                "No swarms defined. Use `rustyclaw swarm create` to create one."
+                            )
+                        );
                     } else {
                         for inst in swarms {
                             let status = match inst.status {
-                                rustyclaw_core::swarm::SwarmStatus::Running => t::icon_ok("Running"),
+                                rustyclaw_core::swarm::SwarmStatus::Running => {
+                                    t::icon_ok("Running")
+                                }
                                 rustyclaw_core::swarm::SwarmStatus::Idle => t::info("Idle"),
                                 rustyclaw_core::swarm::SwarmStatus::Paused => t::info("Paused"),
                                 rustyclaw_core::swarm::SwarmStatus::Stopped => t::muted("Stopped"),
@@ -1513,8 +1522,7 @@ async fn main() -> Result<()> {
 
                     // Phase 1: validate swarm/agent and extract info.
                     let (agent_name, agent_instructions, existing_session) = {
-                        let mut m =
-                            mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
+                        let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                         let inst = m
                             .get_mut(&swarm)
                             .ok_or_else(|| anyhow::anyhow!("Swarm '{}' not found", swarm))?;
@@ -1560,16 +1568,13 @@ async fn main() -> Result<()> {
                             "[Swarm: {} | Agent: {}]\n\n{}\n\nSystem Instructions:\n{}",
                             swarm, agent_name, msg, agent_instructions
                         );
-                        let key =
-                            sess_mgr.spawn_subagent(target, &task, Some(label), None);
+                        let key = sess_mgr.spawn_subagent(target, &task, Some(label), None);
                         drop(sess_mgr);
 
                         // Phase 3: store session key back.
-                        let mut m =
-                            mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
+                        let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                         if let Some(inst) = m.get_mut(&swarm) {
-                            inst.agent_sessions
-                                .insert(target.to_string(), key.clone());
+                            inst.agent_sessions.insert(target.to_string(), key.clone());
                         }
                         key
                     };
