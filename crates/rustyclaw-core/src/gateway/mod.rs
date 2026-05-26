@@ -298,6 +298,48 @@ pub async fn run_gateway(
     // Create model registry if not provided
     let model_registry = model_registry.unwrap_or_else(crate::models::create_model_registry);
 
+    // Populate the registry from the configured provider's live model
+    // list so the catalog is a single source of truth (same data the
+    // `/model` slash command and onboarding see).
+    if let Some(ref ctx) = model_ctx {
+        let base = if ctx.base_url.is_empty() {
+            None
+        } else {
+            Some(ctx.base_url.as_str())
+        };
+        let mut reg = model_registry.write().await;
+        match reg
+            .populate_from_provider(&ctx.provider, ctx.api_key.as_deref(), base)
+            .await
+        {
+            Ok(n) => {
+                tracing::info!(
+                    target: "rustyclaw::models",
+                    provider = %ctx.provider,
+                    count = n,
+                    "Populated model registry from provider"
+                );
+                // Mark the configured model as active (if present).
+                if !ctx.model.is_empty() {
+                    let qualified = if ctx.model.starts_with(&format!("{}/", ctx.provider)) {
+                        ctx.model.clone()
+                    } else {
+                        format!("{}/{}", ctx.provider, ctx.model)
+                    };
+                    let _ = reg.set_active(&qualified);
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    target: "rustyclaw::models",
+                    provider = %ctx.provider,
+                    error = %format!("{:#}", e),
+                    "Failed to populate model registry from provider; registry will be empty until a successful fetch"
+                );
+            }
+        }
+    }
+
     // Register the credentials directory so file-access tools can enforce
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());
@@ -352,6 +394,7 @@ pub async fn run_gateway(
             vault,
             skill_mgr,
             task_mgr,
+            model_registry,
             observer,
             rate_limiter,
             cancel,
@@ -494,6 +537,7 @@ pub async fn run_gateway(
                         let vault_clone = vault.clone();
                         let skill_clone = skill_mgr.clone();
                         let task_mgr_clone = task_mgr.clone();
+                        let model_reg_clone = model_registry.clone();
                         let observer_clone = observer.clone();
                         let rate_limiter_clone = rate_limiter.clone();
                         let child_cancel = cancel.child_token();
@@ -507,6 +551,7 @@ pub async fn run_gateway(
                                 vault_clone,
                                 skill_clone,
                                 task_mgr_clone,
+                                model_reg_clone,
                                 observer_clone,
                                 rate_limiter_clone,
                                 child_cancel,
@@ -538,6 +583,7 @@ async fn handle_transport_connection(
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: SharedTaskManager,
+    model_registry: SharedModelRegistry,
     observer: Option<SharedObserver>,
     rate_limiter: auth::RateLimiter,
     cancel: CancellationToken,
@@ -550,6 +596,7 @@ async fn handle_transport_connection(
         vault,
         skill_mgr,
         task_mgr,
+        model_registry,
         observer,
         rate_limiter,
         cancel,
@@ -742,6 +789,7 @@ async fn handle_connection(
     vault: SharedVault,
     skill_mgr: SharedSkillManager,
     task_mgr: SharedTaskManager,
+    model_registry: SharedModelRegistry,
     observer: Option<SharedObserver>,
     rate_limiter: auth::RateLimiter,
     cancel: CancellationToken,
@@ -1369,6 +1417,42 @@ async fn handle_connection(
                                             ).await;
                                             let mut session = shared_copilot_session.write().await;
                                             *session = new_session;
+                                        }
+
+                                        // Refresh the model registry from the new provider so
+                                        // the catalog matches the active connection.
+                                        if let Some(ref ctx) = new_model_ctx {
+                                            let base = if ctx.base_url.is_empty() {
+                                                None
+                                            } else {
+                                                Some(ctx.base_url.as_str())
+                                            };
+                                            let mut reg = model_registry.write().await;
+                                            if let Err(e) = reg
+                                                .populate_from_provider(
+                                                    &ctx.provider,
+                                                    ctx.api_key.as_deref(),
+                                                    base,
+                                                )
+                                                .await
+                                            {
+                                                tracing::warn!(
+                                                    target: "rustyclaw::models",
+                                                    provider = %ctx.provider,
+                                                    error = %format!("{:#}", e),
+                                                    "Failed to refresh model registry after Reload"
+                                                );
+                                            } else if !ctx.model.is_empty() {
+                                                let qualified = if ctx
+                                                    .model
+                                                    .starts_with(&format!("{}/", ctx.provider))
+                                                {
+                                                    ctx.model.clone()
+                                                } else {
+                                                    format!("{}/{}", ctx.provider, ctx.model)
+                                                };
+                                                let _ = reg.set_active(&qualified);
+                                            }
                                         }
 
                                         {
@@ -2973,7 +3057,7 @@ pub async fn run_stdio_gateway(
     let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
 
     // Create model registry
-    let _model_registry = crate::models::create_model_registry();
+    let model_registry = crate::models::create_model_registry();
 
     // Register the credentials directory for sandbox enforcement
     tools::set_credentials_dir(config.credentials_dir());
@@ -3024,6 +3108,7 @@ pub async fn run_stdio_gateway(
         vault,
         skill_mgr,
         task_mgr,
+        model_registry,
         None, // no observer
         rate_limiter,
         cancel,
@@ -3187,6 +3272,7 @@ mod tests {
         let skill_mgr: SharedSkillManager =
             Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
         let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
+        let model_registry = crate::models::create_model_registry();
 
         handle_transport_connection(
             Box::new(mock_transport),
@@ -3196,6 +3282,7 @@ mod tests {
             vault,
             skill_mgr,
             task_mgr,
+            model_registry,
             None,
             auth::new_rate_limiter(),
             CancellationToken::new(),
@@ -3238,6 +3325,7 @@ mod tests {
         let skill_mgr: SharedSkillManager =
             Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
         let task_mgr: SharedTaskManager = Arc::new(crate::tasks::TaskManager::new());
+        let model_registry = crate::models::create_model_registry();
 
         handle_transport_connection(
             Box::new(mock_transport),
@@ -3247,6 +3335,7 @@ mod tests {
             vault,
             skill_mgr,
             task_mgr,
+            model_registry,
             None,
             auth::new_rate_limiter(),
             CancellationToken::new(),
