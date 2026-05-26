@@ -283,8 +283,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 model_label: props.model_label.clone(),
             )
 
-            // ── Hatching dialog overlay (first run, rendered before auth so auth is on top) ──
-            #(if show_hatching {
+            // ── Hatching dialog overlay (first run) ─────────────────────
+            #(if show_hatching && !show_auth {
                 element! {
                     View(
                         width: props.width,

@@ -24,7 +24,7 @@ pub async fn connect_and_pair(host: &str, port: u16, public_key: &str) -> Result
 
     // Connect to the gateway
     let addr = format!("{}:{}", host, port);
-    tracing::info!("Connecting to gateway at {}", addr);
+    tracing::debug!("Connecting to gateway at {}", addr);
 
     // Create a client handler
     struct PairingHandler;
@@ -62,7 +62,7 @@ pub async fn connect_and_pair(host: &str, port: u16, public_key: &str) -> Result
         anyhow::bail!("Authentication failed - key not authorized on gateway");
     }
 
-    tracing::info!("Successfully paired with gateway at {}", host);
+    tracing::debug!("Successfully paired with gateway at {}", host);
 
     // For now, use the host as the gateway name
     // In the future, we could query the gateway for its actual name

@@ -1024,7 +1024,7 @@ impl App {
                     if let Err(e) = std::fs::write(&soul_path, &content) {
                         tracing::warn!("Failed to write SOUL.md: {}", e);
                     } else {
-                        tracing::info!("Saved SOUL.md for agent {:?} to {:?}", name, soul_path);
+                        tracing::debug!("Saved SOUL.md for agent {:?} to {:?}", name, soul_path);
                     }
                 }
                 Ok(UserInput::SelectProvider(provider_id)) => {

@@ -226,6 +226,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 GwEvent::AuthChallenge => {
                                     // Gateway wants TOTP — show the dialog
                                     gw_status.set(rustyclaw_core::types::GatewayStatus::AuthRequired);
+                                    show_hatching.set(false);
                                     show_auth_dialog.set(true);
                                     auth_code.set(String::new());
                                     auth_error.set(String::new());
@@ -253,10 +254,6 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                         if let Some(ref tx) = *guard {
                                             let _ = tx.send(UserInput::RefreshThreads);
                                         }
-                                    }
-                                    // Show hatching if needed (no TOTP required path).
-                                    if needs_hatching && !show_hatching.get() {
-                                        show_hatching.set(true);
                                     }
                                 }
                                 GwEvent::Authenticated => {
@@ -601,7 +598,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     foreground_id,
                                 } => {
                                     let previous_foreground = foreground_thread_id.get();
-                                    tracing::info!(
+                                    tracing::debug!(
                                         total_threads = thread_list.len(),
                                         foreground_id = ?foreground_id,
                                         captions = ?thread_list
@@ -622,7 +619,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     if foreground_id != previous_foreground {
                                         foreground_thread_id.set(foreground_id);
                                         if let Some(thread_id) = foreground_id {
-                                            tracing::info!(
+                                            tracing::debug!(
                                                 thread_id,
                                                 previous_foreground = ?previous_foreground,
                                                 "TUI requesting thread history after ThreadsUpdate"
@@ -640,6 +637,15 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     let count = threads.read().len();
                                     if count > 0 && tab_selected.get() >= count {
                                         tab_selected.set(count - 1);
+                                    }
+                                    // Show first-run hatching only after the gateway
+                                    // is usable enough to provide thread state. This
+                                    // avoids racing with a later TOTP AuthChallenge.
+                                    if needs_hatching
+                                        && !show_auth_dialog.get()
+                                        && !show_hatching.get()
+                                    {
+                                        show_hatching.set(true);
                                     }
                                 }
                                 GwEvent::ThreadMessages {
@@ -739,7 +745,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                             messages.set(m);
                                         }
                                     } else {
-                                        tracing::info!(
+                                        tracing::debug!(
                                             thread_id,
                                             incoming_messages = history.len(),
                                             foreground = ?foreground_thread_id.get(),
@@ -747,7 +753,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                         );
                                         let converted: Vec<DisplayMessage> =
                                             rustyclaw_view::convert_history(&history);
-                                        tracing::info!(
+                                        tracing::debug!(
                                             thread_id,
                                             converted_messages = converted.len(),
                                             "TUI thread history converted"
