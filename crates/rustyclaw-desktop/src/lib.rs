@@ -88,5 +88,6 @@ fn normalize_gateway_url(gateway_url: Option<String>) -> Option<String> {
 /// Re-export shared client preference helpers from `rustyclaw-core` so the
 /// desktop and TUI clients stay in lock-step.
 pub use rustyclaw_core::client_prefs::{
-    DEFAULT_GATEWAY_URL, load_saved_gateway_url, save_gateway_url,
+    DEFAULT_GATEWAY_URL, load_auto_connect_gateway_urls, load_saved_gateway_url,
+    should_bypass_connection_dialog, save_gateway_url,
 };
