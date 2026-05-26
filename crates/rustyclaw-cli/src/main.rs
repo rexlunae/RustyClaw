@@ -749,6 +749,7 @@ async fn main() -> Result<()> {
                 run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
                 // Optional agent setup step
                 let ws_dir = config.workspace_dir();
+                println!("  Setting up agent infrastructure (uv, exo, ollama) — this may take a moment…");
                 match rustyclaw_core::tools::agent_setup::exec_agent_setup(
                     &serde_json::json!({}),
                     &ws_dir,
@@ -774,6 +775,7 @@ async fn main() -> Result<()> {
             run_import(&args, &mut config)?;
             // Optional agent setup step
             let ws_dir = config.workspace_dir();
+            println!("  Setting up agent infrastructure (uv, exo, ollama) — this may take a moment…");
             match rustyclaw_core::tools::agent_setup::exec_agent_setup(
                 &serde_json::json!({}),
                 &ws_dir,
