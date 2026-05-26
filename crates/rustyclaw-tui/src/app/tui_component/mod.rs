@@ -80,7 +80,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut vault_error = hooks.use_state(String::new);
 
     // ── Hatching dialog state ───────────────────────────────────────
-    let mut show_hatching = hooks.use_state(|| props.needs_hatching);
+    // Start hidden; revealed after connection/auth succeeds so it
+    // never competes with the TOTP dialog for screen space.
+    let needs_hatching = props.needs_hatching;
+    let mut show_hatching = hooks.use_state(|| false);
     let mut hatching_name_input: State<String> = hooks.use_state(String::new);
     let mut hatching_personality_input: State<String> = hooks.use_state(String::new);
     let mut hatching_focus_name: State<bool> = hooks.use_state(|| true);
@@ -251,6 +254,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                             let _ = tx.send(UserInput::RefreshThreads);
                                         }
                                     }
+                                    // Show hatching if needed (no TOTP required path).
+                                    if needs_hatching && !show_hatching.get() {
+                                        show_hatching.set(true);
+                                    }
                                 }
                                 GwEvent::Authenticated => {
                                     gw_status.set(rustyclaw_core::types::GatewayStatus::Connected);
@@ -265,6 +272,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                         if let Some(ref tx) = *guard {
                                             let _ = tx.send(UserInput::RefreshThreads);
                                         }
+                                    }
+                                    // Show hatching now that auth is complete.
+                                    if needs_hatching && !show_hatching.get() {
+                                        show_hatching.set(true);
                                     }
                                 }
                                 GwEvent::Info(s) => {

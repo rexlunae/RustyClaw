@@ -646,11 +646,35 @@ enum ClawHubAuthCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize structured logging from environment variables.
-    // Set RUSTYCLAW_LOG=debug or RUST_LOG=debug for verbose output.
-    rustyclaw_core::logging::init_from_env();
-
     let cli = Cli::parse();
+
+    // For TUI mode, redirect logs to a file so they don't corrupt the terminal.
+    // For all other commands, log to stderr as usual.
+    #[cfg(feature = "tui")]
+    let _is_tui = matches!(
+        cli.command.as_ref().unwrap_or(&Commands::Tui(TuiArgs::default())),
+        Commands::Tui(_)
+    );
+    #[cfg(not(feature = "tui"))]
+    let _is_tui = false;
+
+    if _is_tui {
+        #[cfg(feature = "tui")]
+        {
+            let log_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".rustyclaw")
+                .join("tui.log");
+            if let Some(parent) = log_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            rustyclaw_core::logging::init_for_tui(&log_path);
+        }
+    } else {
+        // Initialize structured logging from environment variables.
+        // Set RUSTYCLAW_LOG=debug or RUST_LOG=debug for verbose output.
+        rustyclaw_core::logging::init_from_env();
+    }
 
     // Initialise colour output (respects --no-color / NO_COLOR).
     rustyclaw_core::theme::init_color(cli.common.no_color);
