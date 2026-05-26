@@ -13,9 +13,13 @@ pub struct SettingsDialogProps {
     pub visible: bool,
     pub theme: Theme,
     pub gateway_url: String,
+    pub gateway_config_toml: String,
     pub on_theme_change: EventHandler<Theme>,
     pub on_gateway_url_change: EventHandler<String>,
+    pub on_gateway_config_change: EventHandler<String>,
+    pub on_apply_gateway_config: EventHandler<String>,
     pub on_reconnect: EventHandler<()>,
+    pub on_setup_totp: EventHandler<()>,
     pub on_credential_save: EventHandler<CredentialUpdate>,
     pub on_close: EventHandler<()>,
 }
@@ -23,6 +27,7 @@ pub struct SettingsDialogProps {
 #[component]
 pub fn SettingsDialog(props: SettingsDialogProps) -> Element {
     let mut url = use_signal(|| props.gateway_url.clone());
+    let mut gateway_config_toml = use_signal(|| props.gateway_config_toml.clone());
     let mut editing_provider: Signal<Option<String>> = use_signal(|| None);
     let mut key_input = use_signal(String::new);
 
@@ -220,8 +225,39 @@ pub fn SettingsDialog(props: SettingsDialogProps) -> Element {
                                 "RustyClaw connects to your gateway over SSH."
                             }
                         }
+                        div { class: "field",
+                            span { class: "field-label", "Gateway Config (TOML)" }
+                            textarea {
+                                class: "input",
+                                style: "min-height: 140px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;",
+                                value: "{gateway_config_toml}",
+                                placeholder: "# Optional: full gateway config TOML pushed via this client",
+                                oninput: move |evt| {
+                                    let v = evt.value();
+                                    gateway_config_toml.set(v.clone());
+                                    props.on_gateway_config_change.call(v);
+                                }
+                            }
+                            span { class: "field-help",
+                                "Apply full gateway config updates (messengers, ports, tool permissions, etc.)."
+                            }
+                        }
                         div {
-                            style: "margin-top: 10px; display: flex; justify-content: flex-end;",
+                            style: "margin-top: 10px; display: flex; justify-content: flex-end; gap: 8px;",
+                            button {
+                                class: "btn btn-ghost btn-sm",
+                                onclick: move |_| props.on_setup_totp.call(()),
+                                "Setup TOTP key"
+                            }
+                            button {
+                                class: "btn btn-primary btn-sm",
+                                onclick: move |_| {
+                                    props
+                                        .on_apply_gateway_config
+                                        .call(gateway_config_toml.read().to_string());
+                                },
+                                "Apply config"
+                            }
                             button {
                                 class: "btn btn-subtle btn-sm",
                                 onclick: move |_| props.on_reconnect.call(()),

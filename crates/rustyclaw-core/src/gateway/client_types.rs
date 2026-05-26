@@ -167,6 +167,21 @@ pub enum GatewayEvent {
         ok: bool,
         message: Option<String>,
     },
+
+    /// Gateway reload/apply-config result.
+    ReloadResult {
+        ok: bool,
+        provider: String,
+        model: String,
+        message: Option<String>,
+    },
+
+    /// TOTP setup result from gateway vault.
+    SecretsSetupTotpResult {
+        ok: bool,
+        uri: Option<String>,
+        message: Option<String>,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -260,6 +275,10 @@ pub enum GatewayCommand {
     #[serde(rename = "set_working_directory")]
     SetWorkingDirectory { path: String },
 
+    /// Apply full gateway configuration TOML from client settings.
+    #[serde(rename = "apply_gateway_config")]
+    ApplyGatewayConfig { config_toml: String },
+
     /// Store a secret (API key) in the gateway vault
     #[serde(rename = "secrets_store")]
     SecretsStore { key: String, value: String },
@@ -275,6 +294,10 @@ pub enum GatewayCommand {
         policy: String,
         skills: Vec<String>,
     },
+
+    /// Request TOTP setup URI generation.
+    #[serde(rename = "secrets_setup_totp")]
+    SecretsSetupTotp,
 }
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────

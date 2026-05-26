@@ -1015,12 +1015,43 @@ pub fn App() -> Element {
                 visible: *show_settings.read(),
                 theme: state.read().theme,
                 gateway_url: state.read().gateway_url.clone(),
+                gateway_config_toml: state.read().gateway_config_toml.clone(),
                 on_theme_change: move |t: Theme| state.write().theme = t,
                 on_gateway_url_change: move |v: String| state.write().gateway_url = v,
+                on_gateway_config_change: move |v: String| {
+                    crate::save_gateway_config_toml(&v);
+                    state.write().gateway_config_toml = v;
+                },
+                on_apply_gateway_config: move |config_toml: String| {
+                    crate::save_gateway_config_toml(&config_toml);
+                    state.write().gateway_config_toml = config_toml.clone();
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::ApplyGatewayConfig { config_toml })
+                                .await;
+                        });
+                    } else {
+                        state.write().status_message =
+                            Some("Connect to a gateway before applying config.".to_string());
+                    }
+                },
                 on_reconnect: move |_| {
                     let url = state.read().gateway_url.clone();
                     crate::save_gateway_url(&url);
                     do_reconnect();
+                },
+                on_setup_totp: move |_| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::SecretsSetupTotp).await;
+                        });
+                    } else {
+                        state.write().status_message =
+                            Some("Connect to a gateway before setting up TOTP.".to_string());
+                    }
                 },
                 on_credential_save: move |(provider_id, api_key): (String, String)| {
                     let secret_key = rustyclaw_core::providers::secret_key_for_provider(&provider_id)
@@ -1695,6 +1726,39 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             } else {
                 state.write().status_message = Some(format!(
                     "Failed to set policy: {}",
+                    message.unwrap_or_default()
+                ));
+            }
+        }
+        GatewayEvent::ReloadResult {
+            ok,
+            provider,
+            model,
+            message,
+        } => {
+            if ok {
+                let detail = if provider == "(none)" || model == "(none)" {
+                    "Gateway config applied.".to_string()
+                } else {
+                    format!("Gateway config applied ({} / {}).", provider, model)
+                };
+                state.write().status_message = Some(detail);
+            } else {
+                state.write().status_message = Some(format!(
+                    "Failed to apply gateway config: {}",
+                    message.unwrap_or_default()
+                ));
+            }
+        }
+        GatewayEvent::SecretsSetupTotpResult { ok, uri, message } => {
+            if ok {
+                let detail = uri
+                    .map(|u| format!("TOTP key generated. Add this URI in your authenticator: {}", u))
+                    .unwrap_or_else(|| "TOTP key generated.".to_string());
+                state.write().status_message = Some(detail);
+            } else {
+                state.write().status_message = Some(format!(
+                    "Failed to setup TOTP key: {}",
                     message.unwrap_or_default()
                 ));
             }

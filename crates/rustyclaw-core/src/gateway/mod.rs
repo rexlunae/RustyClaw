@@ -1344,6 +1344,101 @@ async fn handle_connection(
                                     Err(e) => send_secrets_remove_totp_result(&mut *writer, false, Some(&format!("Failed: {}", e))).await?,
                                 };
                             }
+                            ClientPayload::ApplyGatewayConfig { config_toml } => {
+                                let mut doc: toml::Value = match toml::from_str(&config_toml) {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        protocol::server::send_error(
+                                            &mut *writer,
+                                            &format!("Failed to parse gateway config: {}", e),
+                                        ).await?;
+                                        continue;
+                                    }
+                                };
+
+                                if let Some(table) = doc.as_table_mut()
+                                    && !table.contains_key("settings_dir")
+                                {
+                                    table.insert(
+                                        "settings_dir".to_string(),
+                                        toml::Value::String(config.settings_dir.display().to_string()),
+                                    );
+                                }
+
+                                let mut parsed_config: Config = match doc.try_into() {
+                                    Ok(cfg) => cfg,
+                                    Err(e) => {
+                                        protocol::server::send_error(
+                                            &mut *writer,
+                                            &format!("Failed to decode gateway config: {}", e),
+                                        ).await?;
+                                        continue;
+                                    }
+                                };
+
+                                // Prevent remote clients from rewriting the gateway root path.
+                                parsed_config.settings_dir = config.settings_dir.clone();
+                                let config_path = config.settings_dir.join("config.toml");
+                                if let Err(e) = parsed_config.save(Some(config_path.clone())) {
+                                    protocol::server::send_error(
+                                        &mut *writer,
+                                        &format!("Failed to save gateway config: {}", e),
+                                    ).await?;
+                                    continue;
+                                }
+
+                                match Config::load(Some(config_path)) {
+                                    Ok(new_config) => {
+                                        let new_model_ctx = {
+                                            let mut v = vault.lock().await;
+                                            ModelContext::resolve(&new_config, &mut v).ok().map(Arc::new)
+                                        };
+
+                                        let (provider, model) = if let Some(ref ctx) = new_model_ctx {
+                                            (ctx.provider.clone(), ctx.model.clone())
+                                        } else {
+                                            ("(none)".to_string(), "(none)".to_string())
+                                        };
+
+                                        if let Some(ref ctx) = new_model_ctx {
+                                            let new_session = init_copilot_session(
+                                                &ctx.provider,
+                                                ctx.api_key.as_deref(),
+                                                &vault,
+                                            ).await;
+                                            let mut session = shared_copilot_session.write().await;
+                                            *session = new_session;
+                                        }
+
+                                        {
+                                            let mut cfg = shared_config.write().await;
+                                            *cfg = new_config;
+                                        }
+                                        {
+                                            let mut ctx = shared_model_ctx.write().await;
+                                            *ctx = new_model_ctx.clone();
+                                        }
+
+                                        send_reload_result(&mut *writer, true, &provider, &model, None).await?;
+
+                                        if let Some(ref ctx) = new_model_ctx {
+                                            let display = crate_providers::display_name_for_provider(&ctx.provider);
+                                            let detail = format!("{} / {} (reloaded)", display, ctx.model);
+                                            protocol::server::send_status(
+                                                &mut *writer,
+                                                StatusType::ModelConfigured,
+                                                &detail,
+                                            ).await?;
+                                        }
+                                    }
+                                    Err(e) => {
+                                        protocol::server::send_error(
+                                            &mut *writer,
+                                            &format!("Failed to reload config: {}", e),
+                                        ).await?;
+                                    }
+                                }
+                            }
                             ClientPayload::Reload => {
                                 let settings_dir = config.settings_dir.clone();
                                 let config_path = settings_dir.join("config.toml");

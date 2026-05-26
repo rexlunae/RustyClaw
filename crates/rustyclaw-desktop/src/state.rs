@@ -38,6 +38,9 @@ pub struct AppState {
     /// Gateway URL
     pub gateway_url: String,
 
+    /// Gateway configuration payload (TOML) to push to gateway.
+    pub gateway_config_toml: String,
+
     /// Chat messages for the current thread
     pub messages: VecDeque<ChatMessage>,
 
@@ -151,6 +154,7 @@ impl Default for AppState {
             gateway_url: crate::configured_gateway_url()
                 .or_else(crate::load_saved_gateway_url)
                 .unwrap_or_else(|| crate::DEFAULT_GATEWAY_URL.to_string()),
+            gateway_config_toml: crate::load_saved_gateway_config_toml().unwrap_or_default(),
             messages: VecDeque::new(),
             thread_messages: HashMap::new(),
             input: String::new(),

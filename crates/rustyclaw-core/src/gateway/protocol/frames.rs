@@ -70,6 +70,8 @@ pub enum ClientFrameType {
     SetWorkingDirectory = 29,
     /// Request the persisted conversation history for a thread.
     ThreadHistoryRequest = 30,
+    /// Apply a full gateway configuration from the client.
+    ApplyGatewayConfig = 31,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -346,6 +348,10 @@ pub enum ClientPayload {
     /// Request the gateway-persisted conversation history for a thread.
     ThreadHistoryRequest {
         thread_id: u64,
+    },
+    /// Apply a full gateway configuration TOML payload.
+    ApplyGatewayConfig {
+        config_toml: String,
     },
 }
 
@@ -716,6 +722,7 @@ mod tests {
             assert_eq!(ClientFrameType::SetAgentName as u8, 28);
             assert_eq!(ClientFrameType::SetWorkingDirectory as u8, 29);
             assert_eq!(ClientFrameType::ThreadHistoryRequest as u8, 30);
+            assert_eq!(ClientFrameType::ApplyGatewayConfig as u8, 31);
         }
 
         #[test]

@@ -355,6 +355,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
             frame_type: ClientFrameType::SetWorkingDirectory,
             payload: ClientPayload::SetWorkingDirectory { path },
         },
+        GatewayCommand::ApplyGatewayConfig { config_toml } => ClientFrame {
+            frame_type: ClientFrameType::ApplyGatewayConfig,
+            payload: ClientPayload::ApplyGatewayConfig { config_toml },
+        },
         GatewayCommand::SecretsStore { key, value } => ClientFrame {
             frame_type: ClientFrameType::SecretsStore,
             payload: ClientPayload::SecretsStore { key, value },
@@ -376,6 +380,10 @@ fn command_to_frame(cmd: GatewayCommand) -> ClientFrame {
         GatewayCommand::SecretsSetPolicy { name, policy, skills } => ClientFrame {
             frame_type: ClientFrameType::SecretsSetPolicy,
             payload: ClientPayload::SecretsSetPolicy { name, policy, skills },
+        },
+        GatewayCommand::SecretsSetupTotp => ClientFrame {
+            frame_type: ClientFrameType::SecretsSetupTotp,
+            payload: ClientPayload::SecretsSetupTotp,
         },
     }
 }
@@ -522,6 +530,20 @@ fn frame_to_event(frame: ServerFrame) -> Option<GatewayEvent> {
         }
         ServerPayload::SecretsSetPolicyResult { ok, message } => {
             Some(GatewayEvent::SecretsSetPolicyResult { ok, message })
+        }
+        ServerPayload::ReloadResult {
+            ok,
+            provider,
+            model,
+            message,
+        } => Some(GatewayEvent::ReloadResult {
+            ok,
+            provider,
+            model,
+            message,
+        }),
+        ServerPayload::SecretsSetupTotpResult { ok, uri, message } => {
+            Some(GatewayEvent::SecretsSetupTotpResult { ok, uri, message })
         }
         ServerPayload::Error { message, .. } => Some(GatewayEvent::Error { message }),
         ServerPayload::Info { message } => Some(GatewayEvent::Info { message }),
