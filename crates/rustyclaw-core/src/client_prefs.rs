@@ -179,7 +179,8 @@ pub fn save_client_preferences(prefs: &ClientPreferences) {
 /// Read the previously-saved startup gateway URL, if any.
 pub fn load_saved_gateway_url() -> Option<String> {
     let prefs = load_client_preferences();
-    prefs.connections
+    prefs
+        .connections
         .iter()
         .find(|conn| conn.default_on_startup)
         .or_else(|| prefs.connections.first())
@@ -366,5 +367,4 @@ mod tests {
             Some("ssh://b:2222")
         );
     }
-}
 }
