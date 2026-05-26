@@ -13,6 +13,36 @@ use crate::error_details::{ErrorLike, RequestDetails};
 use crate::providers;
 use crate::tools;
 
+// ── Error helpers ───────────────────────────────────────────────────────────
+
+/// Parse a provider HTTP error response body and return a user-friendly
+/// `anyhow::Error`.
+///
+/// Handles the OpenAI error envelope `{"error":{"message":"...","code":"..."}}`.
+/// For the `unsupported_api_for_model` code, the message is rewritten so users
+/// know to pick a different model rather than seeing a raw JSON dump.
+pub(crate) fn provider_error(prefix: &str, status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(err_obj) = json.get("error") {
+            let code = err_obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
+            let msg = err_obj
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or(body);
+            if code == "unsupported_api_for_model" {
+                return anyhow::anyhow!(
+                    "{}: model is not accessible via the chat/completions endpoint. \
+                     Choose a different model. ({})",
+                    prefix,
+                    msg
+                );
+            }
+            return anyhow::anyhow!("{} returned {} — {}", prefix, status, msg);
+        }
+    }
+    anyhow::anyhow!("{} returned {} — {}", prefix, status, body)
+}
+
 // ── Connection retry helper ─────────────────────────────────────────────────
 
 /// Send an HTTP request with automatic retry on connection errors.
@@ -1265,7 +1295,7 @@ pub async fn call_openai_with_tools(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Provider returned {} — {}", status, text);
+        return Err(provider_error("Provider", status, &text));
     }
 
     // Check if the server returned a streaming response (SSE) despite us
@@ -1444,7 +1474,7 @@ pub async fn call_anthropic_with_tools(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Anthropic returned {} — {}", status, text);
+        return Err(provider_error("Anthropic", status, &text));
     }
 
     // Non-streaming path (for internal calls like compaction)
@@ -1736,7 +1766,7 @@ pub async fn call_google_with_tools(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Google returned {} — {}", status, text);
+        return Err(provider_error("Google", status, &text));
     }
 
     let data: serde_json::Value = resp.json().await.context("Invalid JSON from Google")?;
