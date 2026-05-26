@@ -747,19 +747,6 @@ async fn main() -> Result<()> {
                     non_interactive: _args.non_interactive,
                 };
                 run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
-                // Optional agent setup step
-                let ws_dir = config.workspace_dir();
-                println!("  Setting up agent infrastructure (uv, exo, ollama) — this may take a moment…");
-                match rustyclaw_core::tools::agent_setup::exec_agent_setup(
-                    &serde_json::json!({}),
-                    &ws_dir,
-                ) {
-                    Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                    Err(e) => println!(
-                        "{}",
-                        rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
-                    ),
-                }
             }
             #[cfg(not(feature = "tui"))]
             {
@@ -773,19 +760,6 @@ async fn main() -> Result<()> {
         // ── Import ──────────────────────────────────────────────
         Commands::Import(args) => {
             run_import(&args, &mut config)?;
-            // Optional agent setup step
-            let ws_dir = config.workspace_dir();
-            println!("  Setting up agent infrastructure (uv, exo, ollama) — this may take a moment…");
-            match rustyclaw_core::tools::agent_setup::exec_agent_setup(
-                &serde_json::json!({}),
-                &ws_dir,
-            ) {
-                Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                Err(e) => println!(
-                    "{}",
-                    rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
-                ),
-            }
         }
 
         // ── RefreshToken ────────────────────────────────────────
