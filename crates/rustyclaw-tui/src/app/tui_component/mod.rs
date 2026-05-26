@@ -82,6 +82,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     // ── Hatching dialog state ───────────────────────────────────────
     let mut show_hatching = hooks.use_state(|| props.needs_hatching);
     let mut hatching_name_input: State<String> = hooks.use_state(String::new);
+    let mut hatching_personality_input: State<String> = hooks.use_state(String::new);
+    let mut hatching_focus_name: State<bool> = hooks.use_state(|| true);
 
     // ── Pairing dialog state ────────────────────────────────────────
     let mut show_pairing = hooks.use_state(|| false);
@@ -1359,15 +1361,24 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 m.push(DisplayMessage::info("Hatching skipped. You can customize SOUL.md manually."));
                                 messages.set(m);
                             } else {
+                                let personality = hatching_personality_input.read().trim().to_string();
+                                let payload = if personality.is_empty() {
+                                    name.clone()
+                                } else {
+                                    format!("{}\t{}", name, personality)
+                                };
                                 if let Ok(guard) = tx_for_keys.lock() {
                                     if let Some(ref tx) = *guard {
-                                        let _ = tx.send(UserInput::HatchingComplete(name.clone()));
+                                        let _ = tx.send(UserInput::HatchingComplete(payload));
                                     }
                                 }
                                 let mut m = messages.read().clone();
                                 m.push(DisplayMessage::success(format!("Welcome, {}! SOUL.md saved.", name)));
                                 messages.set(m);
                             }
+                        }
+                        KeyCode::Tab => {
+                            hatching_focus_name.set(!hatching_focus_name.get());
                         }
                         KeyCode::Esc => {
                             show_hatching.set(false);
@@ -1376,14 +1387,26 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             messages.set(m);
                         }
                         KeyCode::Char(c) => {
-                            let mut name = hatching_name_input.read().clone();
-                            name.push(c);
-                            hatching_name_input.set(name);
+                            if hatching_focus_name.get() {
+                                let mut name = hatching_name_input.read().clone();
+                                name.push(c);
+                                hatching_name_input.set(name);
+                            } else {
+                                let mut p = hatching_personality_input.read().clone();
+                                p.push(c);
+                                hatching_personality_input.set(p);
+                            }
                         }
                         KeyCode::Backspace => {
-                            let mut name = hatching_name_input.read().clone();
-                            name.pop();
-                            hatching_name_input.set(name);
+                            if hatching_focus_name.get() {
+                                let mut name = hatching_name_input.read().clone();
+                                name.pop();
+                                hatching_name_input.set(name);
+                            } else {
+                                let mut p = hatching_personality_input.read().clone();
+                                p.pop();
+                                hatching_personality_input.set(p);
+                            }
                         }
                         _ => {}
                     }
@@ -2426,6 +2449,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             tool_perms_scroll_offset: tool_perms_scroll_offset.get(),
             show_hatching: show_hatching.get(),
             hatching_name_input: hatching_name_input.read().clone(),
+            hatching_personality_input: hatching_personality_input.read().clone(),
+            hatching_focus_name: hatching_focus_name.get(),
             show_provider_selector: show_provider_selector.get(),
             provider_selector: rustyclaw_view::ProviderSelectorData {
                 providers: provider_selector_items

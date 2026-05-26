@@ -1003,18 +1003,24 @@ impl App {
                         }
                     }
                 }
-                Ok(UserInput::HatchingComplete(name)) => {
-                    // Save a personalised SOUL.md using the default template
-                    // with the user-supplied agent name as the heading.
+                Ok(UserInput::HatchingComplete(payload)) => {
+                    // Parse "name\tpersonality" or just "name"
+                    let (name, personality) = if let Some((n, p)) = payload.split_once('\t') {
+                        (n.trim().to_string(), Some(p.trim().to_string()))
+                    } else {
+                        (payload.trim().to_string(), None)
+                    };
                     let soul_path = config.soul_path();
-                    let content = format!(
-                        "# {}\n\n{}",
-                        name,
-                        // Strip the generic placeholder heading from the default.
-                        rustyclaw_core::soul::DEFAULT_SOUL_CONTENT
-                            .trim_start_matches("# SOUL.md - Who You Are")
-                            .trim_start_matches('\n'),
-                    );
+                    // Build personalised SOUL.md: heading with name, then optional
+                    // personality section, then the default template body.
+                    let default_body = rustyclaw_core::soul::DEFAULT_SOUL_CONTENT
+                        .trim_start_matches("# SOUL.md - Who You Are")
+                        .trim_start_matches('\n');
+                    let content = if let Some(ref p) = personality {
+                        format!("# {}\n\n## Personality\n\n{}\n\n{}", name, p, default_body)
+                    } else {
+                        format!("# {}\n\n{}", name, default_body)
+                    };
                     if let Err(e) = std::fs::write(&soul_path, &content) {
                         tracing::warn!("Failed to write SOUL.md: {}", e);
                     } else {

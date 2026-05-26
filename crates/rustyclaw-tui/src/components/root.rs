@@ -131,6 +131,8 @@ pub struct RootProps {
     // hatching dialog overlay (first run)
     pub show_hatching: bool,
     pub hatching_name_input: String,
+    pub hatching_personality_input: String,
+    pub hatching_focus_name: bool,
 
     // provider selector dialog overlay
     pub show_provider_selector: bool,
@@ -192,6 +194,12 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
 
     let show_hatching = props.show_hatching;
     let hatching_name_input = props.hatching_name_input.clone();
+    let hatching_personality_input = props.hatching_personality_input.clone();
+    let hatching_focus = if props.hatching_focus_name {
+        crate::components::hatching_dialog::HatchFocus::Name
+    } else {
+        crate::components::hatching_dialog::HatchFocus::Personality
+    };
 
     // Provider / model selection dialog state
     let show_provider_sel = props.show_provider_selector;
@@ -478,6 +486,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         HatchingDialog(
                             name_input: hatching_name_input,
+                            personality_input: hatching_personality_input,
+                            focus: hatching_focus,
                         )
                     }
                 }.into_any()

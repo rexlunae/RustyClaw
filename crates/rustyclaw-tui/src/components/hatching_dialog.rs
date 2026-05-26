@@ -1,25 +1,50 @@
-// ── Hatching dialog — first-run agent naming ────────────────────────────────
+// ── Hatching dialog — first-run agent setup ─────────────────────────────────
 //
 // Shown on first launch when SOUL.md has not yet been customised.
-// A single prompt asks the user to name their agent; pressing Enter
-// saves a personalised SOUL.md and dismisses the dialog.
+// One screen with two fields: agent name (required) and a brief personality
+// description (optional).  Tab switches focus; Enter on either field confirms.
 
 use crate::theme;
 use iocraft::prelude::*;
+
+/// Which field currently has focus in the hatching dialog.
+#[derive(Default, Debug, Clone, PartialEq)]
+pub enum HatchFocus {
+    #[default]
+    Name,
+    Personality,
+}
 
 #[derive(Default, Props)]
 pub struct HatchingDialogProps {
     /// Text typed so far for the agent name.
     pub name_input: String,
+    /// Text typed so far for the personality description.
+    pub personality_input: String,
+    /// Which field has keyboard focus.
+    pub focus: HatchFocus,
+}
+
+fn field_with_cursor(text: &str, focused: bool) -> String {
+    if focused {
+        if text.is_empty() {
+            "█".to_string()
+        } else {
+            format!("{}█", text)
+        }
+    } else {
+        text.to_string()
+    }
 }
 
 #[component]
 pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'static>> {
-    let cursor = if props.name_input.is_empty() {
-        "█".to_string()
-    } else {
-        format!("{}█", props.name_input)
-    };
+    let name_focused = props.focus == HatchFocus::Name;
+    let name_text = field_with_cursor(&props.name_input, name_focused);
+    let personality_text = field_with_cursor(&props.personality_input, !name_focused);
+
+    let name_border_color = if name_focused { theme::ACCENT } else { theme::MUTED };
+    let personality_border_color = if !name_focused { theme::ACCENT } else { theme::MUTED };
 
     element! {
         View(
@@ -30,7 +55,7 @@ pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'stat
             background_color: theme::BG_MAIN,
         ) {
             View(
-                width: 60,
+                width: 62,
                 flex_direction: FlexDirection::Column,
                 border_style: BorderStyle::Round,
                 border_color: theme::ACCENT,
@@ -39,38 +64,53 @@ pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'stat
                 padding_right: 2,
                 padding_top: 1,
                 padding_bottom: 1,
-                align_items: AlignItems::Center,
             ) {
                 Text(
-                    content: "🥚  First run — name your agent",
+                    content: "🥚  Set up your agent",
                     color: theme::ACCENT_BRIGHT,
                     weight: Weight::Bold,
                 )
 
                 View(height: 1)
 
-                Text(
-                    content: "What should your agent be called?",
-                    color: theme::TEXT,
-                )
-
-                View(height: 1)
-
-                // Name input with cursor
+                // Name field
+                Text(content: "Name  (required)", color: theme::TEXT)
+                View(height: 0)
                 View(
                     width: 100pct,
                     border_style: BorderStyle::Single,
-                    border_color: theme::ACCENT,
+                    border_color: name_border_color,
                     padding_left: 1,
                     padding_right: 1,
                 ) {
-                    Text(content: cursor, color: theme::TEXT)
+                    Text(content: name_text, color: theme::TEXT)
+                }
+
+                View(height: 1)
+
+                // Personality field
+                Text(content: "Personality  (optional)", color: theme::TEXT)
+                View(height: 0)
+                View(
+                    width: 100pct,
+                    border_style: BorderStyle::Single,
+                    border_color: personality_border_color,
+                    padding_left: 1,
+                    padding_right: 1,
+                    padding_top: 0,
+                    padding_bottom: 0,
+                ) {
+                    Text(
+                        content: personality_text,
+                        color: theme::TEXT,
+                        wrap: TextWrap::Wrap,
+                    )
                 }
 
                 View(height: 1)
 
                 Text(
-                    content: "Enter to confirm · Esc to skip",
+                    content: "Tab to switch field · Enter to confirm · Esc to skip",
                     color: theme::MUTED,
                 )
             }
