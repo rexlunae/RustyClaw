@@ -10,7 +10,10 @@ use std::io::{self, BufRead, Write};
 
 use anyhow::Result;
 
-use rustyclaw_core::client_prefs::{DEFAULT_GATEWAY_URL, load_saved_gateway_url, save_gateway_url};
+use rustyclaw_core::client_prefs::{
+    DEFAULT_GATEWAY_URL, load_auto_connect_gateway_urls, load_default_startup_gateway_urls,
+    load_saved_gateway_url, save_gateway_url, should_bypass_connection_dialog,
+};
 use rustyclaw_core::gateway::{SshConnection, SshReader, SshWriter};
 use rustyclaw_core::theme as t;
 
@@ -38,40 +41,57 @@ pub async fn prompt_and_connect(
     explicit_url: Option<String>,
     skip_dialog: bool,
 ) -> Result<Option<ConnectionResult>> {
-    // Resolve a URL to use without prompting when either an explicit URL was
-    // supplied or the caller asked us to skip the dialog.
-    let direct_url = explicit_url.clone().or_else(|| {
-        if skip_dialog {
-            Some(load_saved_gateway_url().unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string()))
-        } else {
-            None
+    let mut direct_urls = if let Some(url) = explicit_url.clone() {
+        vec![url]
+    } else {
+        Vec::new()
+    };
+    let bypass_dialog = skip_dialog || should_bypass_connection_dialog();
+    if direct_urls.is_empty() && bypass_dialog {
+        direct_urls = load_auto_connect_gateway_urls();
+        if direct_urls.is_empty() && skip_dialog {
+            direct_urls = load_default_startup_gateway_urls();
         }
-    });
+        if direct_urls.is_empty() && skip_dialog {
+            direct_urls.push(load_saved_gateway_url().unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string()));
+        }
+    }
 
-    if let Some(url) = direct_url {
-        let pb = t::spinner(&format!("Connecting to {}…", url));
-        match SshConnection::connect(&url).await {
-            Ok((connection, writer, reader)) => {
-                t::spinner_ok(&pb, &format!("Connected to {}", url));
-                save_gateway_url(&url);
-                return Ok(Some(ConnectionResult {
-                    connection,
-                    writer,
-                    reader,
-                    url,
-                }));
+    if !direct_urls.is_empty() {
+        let mut last_error: Option<String> = None;
+        for url in direct_urls {
+            let pb = t::spinner(&format!("Connecting to {}…", url));
+            match SshConnection::connect(&url).await {
+                Ok((connection, writer, reader)) => {
+                    t::spinner_ok(&pb, &format!("Connected to {}", url));
+                    save_gateway_url(&url);
+                    return Ok(Some(ConnectionResult {
+                        connection,
+                        writer,
+                        reader,
+                        url,
+                    }));
+                }
+                Err(e) => {
+                    t::spinner_fail(&pb, &format!("SSH connection failed: {}", e));
+                    last_error = Some(e.to_string());
+                }
             }
-            Err(e) => {
-                t::spinner_fail(&pb, &format!("SSH connection failed: {}", e));
-                // Mirror the previous behaviour: bubble the error path up so
-                // the gateway-event channel reports it.
-                return Err(anyhow::anyhow!("SSH connection failed: {}", e));
-            }
+        }
+
+        if let Some(err) = last_error {
+            // Mirror the previous behaviour: bubble the error path up so
+            // the gateway-event channel reports it.
+            return Err(anyhow::anyhow!("SSH connection failed: {}", err));
         }
     }
 
     // Interactive prompt loop.
-    let default_url = load_saved_gateway_url().unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string());
+    let default_url = load_default_startup_gateway_urls()
+        .into_iter()
+        .next()
+        .or_else(load_saved_gateway_url)
+        .unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string());
     let mut current = default_url;
     let stdin = io::stdin();
     let mut reader = stdin.lock();

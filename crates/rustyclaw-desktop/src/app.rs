@@ -78,13 +78,27 @@ pub fn App() -> Element {
     // Initialize directory chooser state once.
     let mut did_init_directories = use_signal(|| false);
 
-    // Connection dialog: shown on startup so the user can pick or
-    // confirm the gateway URL. Auto-skipped when a URL was provided
-    // on the command line (preserves the old "just connect" behavior
-    // for scripted launches), or when --no-dialog was passed.
-    let mut show_connection = use_signal(|| {
-        crate::configured_gateway_url().is_none() && !crate::skip_connection_dialog()
-    });
+    let configured_gateway_url = crate::configured_gateway_url();
+    let skip_dialog = crate::skip_connection_dialog();
+    let bypass_dialog = crate::should_bypass_connection_dialog();
+    let startup_auto_connect_urls = if let Some(url) = configured_gateway_url.clone() {
+        vec![url]
+    } else if skip_dialog {
+        let mut urls = crate::load_auto_connect_gateway_urls();
+        if urls.is_empty() {
+            urls.push(state.read().gateway_url.clone());
+        }
+        urls
+    } else if bypass_dialog {
+        crate::load_auto_connect_gateway_urls()
+    } else {
+        Vec::new()
+    };
+
+    // Connection dialog is shown only when startup configuration does not
+    // request bypass and no explicit CLI override is provided.
+    let mut show_connection =
+        use_signal(move || configured_gateway_url.is_none() && !skip_dialog && !bypass_dialog);
 
     // Auto-connect on mount
     use_effect(move || {
@@ -98,9 +112,12 @@ pub fn App() -> Element {
         }
         did_auto_connect.set(true);
 
-        let url = state.read().gateway_url.clone();
+        let startup_urls = startup_auto_connect_urls.clone();
         spawn(async move {
-            connect_to_gateway(&url, state, gateway).await;
+            if startup_urls.is_empty() {
+                return;
+            }
+            let _ = connect_to_gateway_candidates(startup_urls, state, gateway).await;
         });
     });
 
@@ -1392,6 +1409,26 @@ enum BufferEntry {
 #[derive(Default)]
 struct EventBuffer {
     entries: Vec<BufferEntry>,
+}
+
+/// Connect to the gateway.
+async fn connect_to_gateway_candidates(
+    urls: Vec<String>,
+    state: Signal<AppState>,
+    gateway: Signal<Option<Arc<GatewayClient>>>,
+) -> bool {
+    for url in urls {
+        state.write().gateway_url = url.clone();
+        connect_to_gateway(&url, state, gateway).await;
+        if matches!(
+            state.read().connection,
+            ConnectionStatus::Connected | ConnectionStatus::Authenticated
+        ) {
+            crate::save_gateway_url(&url);
+            return true;
+        }
+    }
+    false
 }
 
 /// Connect to the gateway.
