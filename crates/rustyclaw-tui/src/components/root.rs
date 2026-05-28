@@ -29,7 +29,7 @@ use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
 use crate::types::DisplayMessage;
 use rustyclaw_view::{
-    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData,
+    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchingDialogData,
     ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
     SkillInfoData, TabBarData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
 };
@@ -129,10 +129,7 @@ pub struct RootProps {
     pub tool_perms_scroll_offset: usize,
 
     // hatching dialog overlay (first run)
-    pub show_hatching: bool,
-    pub hatching_name_input: String,
-    pub hatching_personality_input: String,
-    pub hatching_focus_name: bool,
+    pub hatching_dialog: HatchingDialogData,
 
     // provider selector dialog overlay
     pub show_provider_selector: bool,
@@ -192,14 +189,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     #[allow(unused_variables)]
     let show_tool_perms = props.show_tool_perms_dialog;
 
-    let show_hatching = props.show_hatching;
-    let hatching_name_input = props.hatching_name_input.clone();
-    let hatching_personality_input = props.hatching_personality_input.clone();
-    let hatching_focus = if props.hatching_focus_name {
-        crate::components::hatching_dialog::HatchFocus::Name
-    } else {
-        crate::components::hatching_dialog::HatchFocus::Personality
-    };
+    let hatching_dialog = props.hatching_dialog.clone();
+    let show_hatching = hatching_dialog.should_render(show_auth);
 
     // Provider / model selection dialog state
     let show_provider_sel = props.show_provider_selector;
@@ -284,7 +275,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
             )
 
             // ── Hatching dialog overlay (first run) ─────────────────────
-            #(if show_hatching && !show_auth {
+            #(if show_hatching {
                 element! {
                     View(
                         width: props.width,
@@ -294,9 +285,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         left: 0,
                     ) {
                         HatchingDialog(
-                            name_input: hatching_name_input,
-                            personality_input: hatching_personality_input,
-                            focus: hatching_focus,
+                            data: hatching_dialog,
                         )
                     }
                 }.into_any()

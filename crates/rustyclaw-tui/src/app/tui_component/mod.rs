@@ -80,13 +80,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut vault_error = hooks.use_state(String::new);
 
     // ── Hatching dialog state ───────────────────────────────────────
-    // Start hidden; revealed after connection/auth succeeds so it
+    // Start hidden; the shared view model reveals it after auth succeeds so it
     // never competes with the TOTP dialog for screen space.
     let needs_hatching = props.needs_hatching;
-    let mut show_hatching = hooks.use_state(|| false);
-    let mut hatching_name_input: State<String> = hooks.use_state(String::new);
-    let mut hatching_personality_input: State<String> = hooks.use_state(String::new);
-    let mut hatching_focus_name: State<bool> = hooks.use_state(|| true);
+    let mut hatching_dialog: State<rustyclaw_view::HatchingDialogData> =
+        hooks.use_state(rustyclaw_view::HatchingDialogData::default);
 
     // ── Pairing dialog state ────────────────────────────────────────
     let mut show_pairing = hooks.use_state(|| false);
@@ -226,7 +224,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 GwEvent::AuthChallenge => {
                                     // Gateway wants TOTP — show the dialog
                                     gw_status.set(rustyclaw_core::types::GatewayStatus::AuthRequired);
-                                    show_hatching.set(false);
+                                    let mut hatching = hatching_dialog.read().clone();
+                                    hatching.hide_temporarily();
+                                    hatching_dialog.set(hatching);
                                     show_auth_dialog.set(true);
                                     auth_code.set(String::new());
                                     auth_error.set(String::new());
@@ -271,9 +271,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                         }
                                     }
                                     // Show hatching now that auth is complete.
-                                    if needs_hatching && !show_hatching.get() {
-                                        show_hatching.set(true);
-                                    }
+                                    let mut hatching = hatching_dialog.read().clone();
+                                    hatching.show_if_needed(needs_hatching);
+                                    hatching_dialog.set(hatching);
                                 }
                                 GwEvent::Info(s) => {
                                     // Check for "Model ready" or similar to upgrade status
@@ -643,9 +643,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     // avoids racing with a later TOTP AuthChallenge.
                                     if needs_hatching
                                         && !show_auth_dialog.get()
-                                        && !show_hatching.get()
                                     {
-                                        show_hatching.set(true);
+                                        let mut hatching = hatching_dialog.read().clone();
+                                        hatching.show_if_needed(needs_hatching);
+                                        hatching_dialog.set(hatching);
                                     }
                                 }
                                 GwEvent::ThreadMessages {
@@ -1368,64 +1369,45 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 }
 
                 // ── Hatching dialog ─────────────────────────────
-                if show_hatching.get() {
-                    match code {
-                        KeyCode::Enter => {
-                            let name = hatching_name_input.read().trim().to_string();
-                            show_hatching.set(false);
-                            if name.is_empty() {
-                                let mut m = messages.read().clone();
-                                m.push(DisplayMessage::info("Hatching skipped. You can customize SOUL.md manually."));
-                                messages.set(m);
-                            } else {
-                                let personality = hatching_personality_input.read().trim().to_string();
-                                let payload = if personality.is_empty() {
-                                    name.clone()
-                                } else {
-                                    format!("{}\t{}", name, personality)
-                                };
+                if hatching_dialog.read().visible {
+                    let key = match code {
+                        KeyCode::Enter => Some(rustyclaw_view::HatchingKey::Enter),
+                        KeyCode::Tab => Some(rustyclaw_view::HatchingKey::Tab),
+                        KeyCode::Esc => Some(rustyclaw_view::HatchingKey::Escape),
+                        KeyCode::Backspace => Some(rustyclaw_view::HatchingKey::Backspace),
+                        KeyCode::Char(c) => Some(rustyclaw_view::HatchingKey::Char(c)),
+                        _ => None,
+                    };
+
+                    if let Some(key) = key {
+                        let mut hatching = hatching_dialog.read().clone();
+                        match hatching.handle_key(key) {
+                            rustyclaw_view::HatchingEvent::Completed(result) => {
+                                let payload = result.as_payload();
+                                let name = result.name.clone();
                                 if let Ok(guard) = tx_for_keys.lock() {
                                     if let Some(ref tx) = *guard {
                                         let _ = tx.send(UserInput::HatchingComplete(payload));
                                     }
                                 }
                                 let mut m = messages.read().clone();
-                                m.push(DisplayMessage::success(format!("Welcome, {}! SOUL.md saved.", name)));
+                                m.push(DisplayMessage::success(format!(
+                                    "Welcome, {}! SOUL.md saved.",
+                                    name
+                                )));
                                 messages.set(m);
                             }
-                        }
-                        KeyCode::Tab => {
-                            hatching_focus_name.set(!hatching_focus_name.get());
-                        }
-                        KeyCode::Esc => {
-                            show_hatching.set(false);
-                            let mut m = messages.read().clone();
-                            m.push(DisplayMessage::info("Hatching skipped. You can customize SOUL.md manually."));
-                            messages.set(m);
-                        }
-                        KeyCode::Char(c) => {
-                            if hatching_focus_name.get() {
-                                let mut name = hatching_name_input.read().clone();
-                                name.push(c);
-                                hatching_name_input.set(name);
-                            } else {
-                                let mut p = hatching_personality_input.read().clone();
-                                p.push(c);
-                                hatching_personality_input.set(p);
+                            rustyclaw_view::HatchingEvent::Skipped => {
+                                let mut m = messages.read().clone();
+                                m.push(DisplayMessage::info(
+                                    "Hatching skipped. You can customize SOUL.md manually.",
+                                ));
+                                messages.set(m);
                             }
+                            rustyclaw_view::HatchingEvent::Updated
+                            | rustyclaw_view::HatchingEvent::Ignored => {}
                         }
-                        KeyCode::Backspace => {
-                            if hatching_focus_name.get() {
-                                let mut name = hatching_name_input.read().clone();
-                                name.pop();
-                                hatching_name_input.set(name);
-                            } else {
-                                let mut p = hatching_personality_input.read().clone();
-                                p.pop();
-                                hatching_personality_input.set(p);
-                            }
-                        }
-                        _ => {}
+                        hatching_dialog.set(hatching);
                     }
                     return;
                 }
@@ -2386,7 +2368,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_secrets_dialog.get()
                 && !show_skills_dialog.get()
                 && !show_tool_perms_dialog.get()
-                && !show_hatching.get()
+                && !hatching_dialog.read().visible
                 && !show_provider_selector.get()
                 && !show_api_key_dialog.get()
                 && !show_device_flow.get()
@@ -2464,10 +2446,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             tool_perms_data: tool_perms_dialog_data.read().clone(),
             tool_perms_selected: tool_perms_selected.get(),
             tool_perms_scroll_offset: tool_perms_scroll_offset.get(),
-            show_hatching: show_hatching.get(),
-            hatching_name_input: hatching_name_input.read().clone(),
-            hatching_personality_input: hatching_personality_input.read().clone(),
-            hatching_focus_name: hatching_focus_name.get(),
+            hatching_dialog: hatching_dialog.read().clone(),
             show_provider_selector: show_provider_selector.get(),
             provider_selector: rustyclaw_view::ProviderSelectorData {
                 providers: provider_selector_items

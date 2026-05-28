@@ -6,23 +6,11 @@
 
 use crate::theme;
 use iocraft::prelude::*;
-
-/// Which field currently has focus in the hatching dialog.
-#[derive(Default, Debug, Clone, PartialEq)]
-pub enum HatchFocus {
-    #[default]
-    Name,
-    Personality,
-}
+use rustyclaw_view::HatchingDialogData;
 
 #[derive(Default, Props)]
 pub struct HatchingDialogProps {
-    /// Text typed so far for the agent name.
-    pub name_input: String,
-    /// Text typed so far for the personality description.
-    pub personality_input: String,
-    /// Which field has keyboard focus.
-    pub focus: HatchFocus,
+    pub data: HatchingDialogData,
 }
 
 fn field_with_cursor(text: &str, focused: bool) -> String {
@@ -39,12 +27,20 @@ fn field_with_cursor(text: &str, focused: bool) -> String {
 
 #[component]
 pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'static>> {
-    let name_focused = props.focus == HatchFocus::Name;
-    let name_text = field_with_cursor(&props.name_input, name_focused);
-    let personality_text = field_with_cursor(&props.personality_input, !name_focused);
+    let name_focused = props.data.name_focused();
+    let name_text = field_with_cursor(&props.data.name_input, name_focused);
+    let personality_text = field_with_cursor(&props.data.personality_input, !name_focused);
 
-    let name_border_color = if name_focused { theme::ACCENT } else { theme::MUTED };
-    let personality_border_color = if !name_focused { theme::ACCENT } else { theme::MUTED };
+    let name_border_color = if name_focused {
+        theme::ACCENT
+    } else {
+        theme::MUTED
+    };
+    let personality_border_color = if !name_focused {
+        theme::ACCENT
+    } else {
+        theme::MUTED
+    };
 
     element! {
         View(
@@ -117,4 +113,3 @@ pub fn HatchingDialog(props: &HatchingDialogProps) -> impl Into<AnyElement<'stat
         }
     }
 }
-
