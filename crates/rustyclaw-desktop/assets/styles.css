@@ -1995,3 +1995,29 @@ p { margin: 0; }
     color: var(--rc-accent, #4f8cff);
     background: var(--rc-accent-bg, rgba(79, 140, 255, 0.08));
 }
+
+/* ── Message action bar ─────────────────────────────────────────────────── */
+.msg-actions {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.5rem;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+}
+.msg-row:hover .msg-actions {
+  opacity: 1;
+}
+.msg-action-btn {
+  padding: 0.15rem 0.5rem;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  border: 1px solid var(--border, #444);
+  background: var(--bg-raised, #2a2a2a);
+  color: var(--text-muted, #aaa);
+  cursor: pointer;
+  line-height: 1.4;
+}
+.msg-action-btn:hover {
+  background: var(--bg-hover, #3a3a3a);
+  color: var(--text, #eee);
+}

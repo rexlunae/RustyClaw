@@ -8,10 +8,9 @@ use rustyclaw_view::MessageBubbleData;
 #[derive(Default, Props)]
 pub struct MessageBubbleProps {
     /// Shared component data from `rustyclaw-view`.
-    ///
-    /// This is the single source of truth — role, content, streaming
-    /// status, agent name, and details flag all come from here.
     pub data: MessageBubbleData,
+    /// Whether this bubble is the currently selected one.
+    pub is_selected: bool,
 }
 
 #[component]
@@ -21,15 +20,21 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
     let bg = theme::role_bg(role);
     let border = theme::role_border(role);
 
-    // Display logic uses the shared methods:
-    //   - label / icon come from the data struct
-    //   - markdown rendering is renderer-specific (TUI → ANSI)
-    //   - thinking truncation is handled by display_content()
+    let render_content = props.data.content_for_render();
     let display = if props.data.should_render_markdown() {
-        markdown::render_ansi(&props.data.content)
+        markdown::render_ansi(&render_content)
     } else {
-        props.data.display_content().to_string()
+        render_content
     };
+
+    let action_color = if props.is_selected {
+        theme::MUTED
+    } else {
+        theme::TEXT_DIM
+    };
+
+    let expand_label = if props.data.collapsed { "expand" } else { "collapse" };
+    let action_bar = format!("[Ctrl+E] {}  [Ctrl+Y] copy  [Ctrl+S] save", expand_label);
 
     element! {
         View(
@@ -54,6 +59,16 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
                     Text(
                         content: "↵ press Ctrl-D for details".to_string(),
                         color: theme::TEXT_DIM,
+                    )
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+            #(if !props.data.is_streaming {
+                element! {
+                    Text(
+                        content: action_bar,
+                        color: action_color,
                     )
                 }.into_any()
             } else {

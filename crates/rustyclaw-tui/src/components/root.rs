@@ -52,6 +52,7 @@ pub struct RootProps {
     // messages
     pub messages: Vec<DisplayMessage>,
     pub scroll_offset: i32,
+    pub selected_message_idx: Option<usize>,
 
     // command menu (slash completions)
     pub command_completions: Vec<String>,
@@ -242,6 +243,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         } else {
                             Some(props.soul_name.clone())
                         },
+                        selected_idx: props.selected_message_idx,
                     )
                     CommandMenu(
                         completions: props.command_completions.clone(),

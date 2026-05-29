@@ -7,9 +7,6 @@ use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::format_chat_timestamp;
 
 /// Props for [`MessageBubble`].
-///
-/// Wraps [`MessageBubbleData`] from `rustyclaw-view` with the Dioxus-specific
-/// event handlers that this component needs.
 #[derive(Props, Clone, PartialEq)]
 pub struct MessageBubbleProps {
     /// Shared component data (role, content, timestamp, streaming, agent name).
@@ -20,8 +17,8 @@ pub struct MessageBubbleProps {
 
 #[component]
 pub fn MessageBubble(props: MessageBubbleProps) -> Element {
-    // CSS class and avatar emoji are desktop-specific.  The display name,
-    // markdown decision, and content transformations come from shared methods.
+    let mut collapsed = use_signal(|| props.data.collapsed);
+
     let (row_class, avatar) = match props.data.role {
         MessageRole::User => ("msg-row is-user", "🧑"),
         MessageRole::Assistant => ("msg-row is-assistant", "🦞"),
@@ -43,14 +40,22 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
         .map(|ts| ts.format("%Y-%m-%d %H:%M:%S").to_string())
         .unwrap_or_default();
 
-    // Shared markdown decision.  Display content already accounts for
-    // thinking-truncation; markdown rendering is renderer-specific.
-    let rendered = if props.data.should_render_markdown() {
-        Some(markdown::render(&props.data.content))
+    // Build a temporary view model with local collapsed state for rendering
+    let mut render_data = props.data.clone();
+    render_data.collapsed = collapsed();
+
+    let rendered = if render_data.should_render_markdown() {
+        Some(markdown::render(&render_data.content_for_render()))
     } else {
         None
     };
-    let display = props.data.display_content();
+    let display = render_data.content_for_render();
+
+    let can_collapse = props.data.is_collapsible();
+    let is_collapsed = collapsed();
+    let content_to_copy = props.data.content.clone();
+    let content_to_save = props.data.content.clone();
+    let is_streaming = props.data.is_streaming;
 
     rsx! {
         div { class: "{row_class}",
@@ -69,8 +74,52 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                 } else {
                     div { class: "msg-content is-plain",
                         "{display}"
-                        if props.data.is_streaming {
+                        if is_streaming {
                             span { class: "streaming-cursor" }
+                        }
+                    }
+                }
+
+                if !is_streaming {
+                    div { class: "msg-actions",
+                        if can_collapse {
+                            button {
+                                class: "msg-action-btn",
+                                onclick: move |_| {
+                                    let current = *collapsed.read();
+                                    collapsed.set(!current);
+                                },
+                                if is_collapsed { "⊞ Expand" } else { "⊟ Collapse" }
+                            }
+                        }
+                        button {
+                            class: "msg-action-btn",
+                            onclick: move |_| {
+                                let text = content_to_copy.clone();
+                                spawn(async move {
+                                    let js = format!("navigator.clipboard.writeText({:?})", text);
+                                    let _ = document::eval(&js).await;
+                                });
+                            },
+                            "⎘ Copy"
+                        }
+                        button {
+                            class: "msg-action-btn",
+                            onclick: move |_| {
+                                let text = content_to_save.clone();
+                                spawn(async move {
+                                    if let Some(dir) = dirs::home_dir() {
+                                        let dir = dir.join(".rustyclaw").join("messages");
+                                        let _ = tokio::fs::create_dir_all(&dir).await;
+                                        let filename = format!(
+                                            "{}.md",
+                                            chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+                                        );
+                                        let _ = tokio::fs::write(dir.join(&filename), &text).await;
+                                    }
+                                });
+                            },
+                            "↓ Save"
                         }
                     }
                 }

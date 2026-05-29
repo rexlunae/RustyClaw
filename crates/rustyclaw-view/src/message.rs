@@ -50,6 +50,7 @@ pub struct MessageBubbleData {
     /// (request URL, headers, body excerpt) accessible via a
     /// "show details" action.
     pub has_details: bool,
+    pub collapsed: bool,
 }
 
 impl Default for MessageBubbleData {
@@ -61,6 +62,7 @@ impl Default for MessageBubbleData {
             is_streaming: false,
             agent_name: None,
             has_details: false,
+            collapsed: false,
         }
     }
 }
@@ -79,6 +81,7 @@ impl MessageBubbleData {
             is_streaming: msg.is_streaming,
             agent_name,
             has_details: false,
+            collapsed: false,
         }
     }
 
@@ -147,6 +150,43 @@ impl MessageBubbleData {
             format!("{}…", &self.content[..thinking_max_chars]).into()
         } else {
             self.content.as_str().into()
+        }
+    }
+
+    pub const AUTO_COLLAPSE_LINES: usize = 40;
+    pub const AUTO_COLLAPSE_CHARS: usize = 2000;
+    /// Lines to show when collapsed.
+    pub const COLLAPSED_PREVIEW_LINES: usize = 8;
+
+    /// How many lines are in the full content.
+    pub fn total_line_count(&self) -> usize {
+        self.content.lines().count()
+    }
+
+    /// How many lines are hidden when collapsed.
+    pub fn hidden_line_count(&self) -> usize {
+        self.total_line_count().saturating_sub(Self::COLLAPSED_PREVIEW_LINES)
+    }
+
+    /// Whether this message is long enough to be collapsible.
+    pub fn is_collapsible(&self) -> bool {
+        self.total_line_count() > Self::AUTO_COLLAPSE_LINES
+            || self.content.len() > Self::AUTO_COLLAPSE_CHARS
+    }
+
+    /// Content to actually render — truncated when collapsed, full otherwise.
+    pub fn content_for_render(&self) -> String {
+        if self.collapsed && self.is_collapsible() {
+            let preview: String = self
+                .content
+                .lines()
+                .take(Self::COLLAPSED_PREVIEW_LINES)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let hidden = self.hidden_line_count();
+            format!("{preview}\n\n… {hidden} lines hidden (Ctrl+E to expand)")
+        } else {
+            self.content.clone()
         }
     }
 }

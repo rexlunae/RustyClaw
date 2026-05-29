@@ -61,6 +61,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut streaming_buf = hooks.use_state(String::new);
     let mut dynamic_model_label: State<Option<String>> = hooks.use_state(|| None);
     let mut dynamic_provider_id: State<Option<String>> = hooks.use_state(|| None);
+    let selected_message_idx: State<Option<usize>> = hooks.use_state(|| None);
 
     // ── Auth dialog state ───────────────────────────────────────────
     let mut show_auth_dialog = hooks.use_state(|| false);
@@ -2319,6 +2320,73 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             show_pairing.set(true);
                         }
                     }
+                    KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let mut m = messages.read().clone();
+                        let idx = selected_message_idx.get().unwrap_or_else(|| m.len().saturating_sub(1));
+                        if let Some(msg) = m.get_mut(idx) {
+                            msg.toggle_collapse();
+                        }
+                        messages.set(m);
+                    }
+                    KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let m = messages.read();
+                        let idx = selected_message_idx.get().unwrap_or_else(|| m.len().saturating_sub(1));
+                        if let Some(msg) = m.get(idx) {
+                            let content = msg.content.clone();
+                            drop(m);
+                            let copied = std::process::Command::new("wl-copy")
+                                .stdin(std::process::Stdio::piped())
+                                .spawn()
+                                .and_then(|mut child| {
+                                    use std::io::Write;
+                                    child.stdin.as_mut().unwrap().write_all(content.as_bytes())?;
+                                    child.wait().map(|_| ())
+                                })
+                                .or_else(|_| {
+                                    std::process::Command::new("xclip")
+                                        .args(["-selection", "clipboard"])
+                                        .stdin(std::process::Stdio::piped())
+                                        .spawn()
+                                        .and_then(|mut child| {
+                                            use std::io::Write;
+                                            child.stdin.as_mut().unwrap().write_all(content.as_bytes())?;
+                                            child.wait().map(|_| ())
+                                        })
+                                });
+                            let mut m2 = messages.read().clone();
+                            if copied.is_ok() {
+                                m2.push(DisplayMessage::success("✓ Copied to clipboard"));
+                            } else {
+                                m2.push(DisplayMessage::error("Could not copy: install wl-copy or xclip"));
+                            }
+                            messages.set(m2);
+                        }
+                    }
+                    KeyCode::Char('s') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let m = messages.read();
+                        let idx = selected_message_idx.get().unwrap_or_else(|| m.len().saturating_sub(1));
+                        if let Some(msg) = m.get(idx) {
+                            let content = msg.content.clone();
+                            drop(m);
+                            let dir = dirs::home_dir()
+                                .map(|h| h.join(".rustyclaw").join("messages"))
+                                .unwrap_or_else(|| std::path::PathBuf::from("."));
+                            let _ = std::fs::create_dir_all(&dir);
+                            let filename = format!(
+                                "{}.md",
+                                chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+                            );
+                            let path = dir.join(&filename);
+                            let saved = std::fs::write(&path, &content);
+                            let mut m2 = messages.read().clone();
+                            if saved.is_ok() {
+                                m2.push(DisplayMessage::success(format!("✓ Saved to ~/.rustyclaw/messages/{filename}")));
+                            } else {
+                                m2.push(DisplayMessage::error("Could not save file"));
+                            }
+                            messages.set(m2);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2358,6 +2426,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             gateway_color: gw_color,
             messages: messages.read().clone(),
             scroll_offset: scroll_offset.get(),
+            selected_message_idx: selected_message_idx.get(),
             command_completions: command_completions.read().clone(),
             command_selected: command_selected.get(),
             composer: rustyclaw_view::ComposerData {
