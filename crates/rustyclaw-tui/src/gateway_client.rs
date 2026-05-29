@@ -1,254 +1,121 @@
-//! Client-side protocol helpers.
+//! Client-side protocol adapter.
 //!
-//! This module provides helpers for the TUI client to convert server frames
-//! into application actions.
+//! Wire-frame parsing is shared in `rustyclaw_core::gateway`
+//! ([`GatewayEvent::from_server_frame`]); the core [`GatewayClient`] produces
+//! [`GatewayEvent`]s, and this module adapts those into the TUI's UI-level
+//! [`GwEvent`]s (dialog prompts, render updates, status messages). It is the
+//! single translation between the shared event model and the TUI.
+//!
+//! [`GatewayClient`]: rustyclaw_core::gateway::GatewayClient
 
-use crate::action::Action;
-use rustyclaw_core::gateway::{GatewayEvent, SecretEntryDto, ServerFrame, ServerPayload};
+use crate::app::GwEvent;
+use rustyclaw_core::gateway::{GatewayEvent, SecretEntryDto};
 
-/// Result of processing a server frame - includes optional action and whether to update UI.
-pub struct FrameAction {
-    pub action: Option<Action>,
-    pub update_ui: bool,
-}
-
-impl FrameAction {
-    pub fn none() -> Self {
-        Self {
-            action: None,
-            update_ui: false,
-        }
-    }
-    pub fn update(action: Action) -> Self {
-        Self {
-            action: Some(action),
-            update_ui: true,
-        }
-    }
-    pub fn just_action(action: Action) -> Self {
-        Self {
-            action: Some(action),
-            update_ui: false,
-        }
-    }
-}
-
-/// Convert a server frame into TUI actions.
+/// Adapt a shared gateway event into a TUI UI event.
 ///
-/// Wire-frame parsing is delegated to the shared
-/// [`GatewayEvent::from_server_frame`] so the TUI and desktop clients agree on
-/// exactly one mapping from the binary protocol to client-facing events. This
-/// function only adapts that shared [`GatewayEvent`] into the TUI's [`Action`]
-/// enum (see [`event_to_action`]).
-///
-/// `ThreadsUpdate` is the one exception: its frame carries the rich wire
-/// [`rustyclaw_core::gateway::protocol::ThreadInfoDto`] (kind/status icons,
-/// summary flag) that the client-facing event DTO drops, and the TUI sidebar
-/// renders those fields. So it is handled directly from the frame to keep them.
-pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
-    if let ServerPayload::ThreadsUpdate {
-        threads,
-        foreground_id,
-    } = &frame.payload
-    {
-        return FrameAction::just_action(Action::ThreadsUpdate {
-            threads: threads.clone(),
-            foreground_id: *foreground_id,
-        });
-    }
-
-    match GatewayEvent::from_server_frame(frame.clone()) {
-        Some(event) => event_to_action(event),
-        None => FrameAction::none(),
-    }
-}
-
-/// Adapt a shared [`GatewayEvent`] into the TUI's [`Action`] enum.
-///
-/// This is the TUI-specific presentation mapping; it deliberately has no
-/// knowledge of the wire protocol. The `update_ui` flag is set only for the
-/// connection-lifecycle events that previously forced an immediate redraw.
-fn event_to_action(event: GatewayEvent) -> FrameAction {
+/// Returns `None` for events the TUI does not surface (e.g. DOM queries, which
+/// require a webview the TUI does not have).
+pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> {
     use GatewayEvent as E;
 
-    match event {
-        E::Connected { .. } => FrameAction::update(Action::GatewayConnected),
-        E::Disconnected { reason } => {
-            FrameAction::just_action(Action::GatewayDisconnected(reason.unwrap_or_default()))
-        }
-        E::AuthRequired => FrameAction::just_action(Action::GatewayAuthChallenge),
-        E::AuthSuccess => FrameAction::update(Action::GatewayAuthenticated),
+    let ev = match event {
+        // ── Connection lifecycle ────────────────────────────────────────
+        E::Connected { .. } => GwEvent::Connected,
+        E::Disconnected { reason } => GwEvent::Disconnected(reason.unwrap_or_default()),
+        E::AuthRequired => GwEvent::AuthChallenge,
+        E::AuthSuccess => GwEvent::Authenticated,
         E::AuthFailed { message, retry } => {
             if retry {
-                FrameAction::just_action(Action::Warning(if message.is_empty() {
-                    "Invalid code. Try again.".into()
+                GwEvent::warning(if message.is_empty() {
+                    "Invalid code. Try again.".to_string()
                 } else {
                     message
-                }))
+                })
             } else {
-                FrameAction::just_action(Action::Error(if message.is_empty() {
-                    "Authentication failed.".into()
+                GwEvent::error(if message.is_empty() {
+                    "Authentication failed.".to_string()
                 } else {
                     message
-                }))
+                })
             }
         }
-        E::VaultLocked => FrameAction::just_action(Action::GatewayVaultLocked),
-        E::VaultUnlocked => FrameAction::update(Action::GatewayVaultUnlocked),
-        E::ModelReady { model } => FrameAction::just_action(Action::Success(model)),
-        E::ModelError { message } => FrameAction::just_action(Action::Error(message)),
-        E::ModelReloaded { provider, model } => {
-            FrameAction::just_action(Action::GatewayReloaded { provider, model })
-        }
-        E::StreamStart => FrameAction::just_action(Action::GatewayStreamStart),
-        E::ThinkingStart => FrameAction::just_action(Action::GatewayThinkingStart),
-        E::ThinkingDelta => FrameAction::just_action(Action::GatewayThinkingDelta),
-        E::ThinkingEnd => FrameAction::just_action(Action::GatewayThinkingEnd),
-        E::Chunk { delta } => FrameAction::just_action(Action::GatewayChunk(delta)),
-        E::ResponseDone => FrameAction::just_action(Action::GatewayResponseDone),
+        E::VaultLocked => GwEvent::VaultLocked,
+        E::VaultUnlocked => GwEvent::VaultUnlocked,
+
+        // ── Model status ────────────────────────────────────────────────
+        // `ModelReady` updates the status-bar model label, so it maps to the
+        // dedicated event rather than a transient success toast.
+        E::ModelReady { model } => GwEvent::ModelReady(model),
+        E::ModelError { message } => GwEvent::error(message),
+        E::ModelReloaded { provider, model } => GwEvent::ModelReloaded { provider, model },
+
+        // ── Streaming ───────────────────────────────────────────────────
+        E::StreamStart => GwEvent::StreamStart,
+        E::ThinkingStart => GwEvent::ThinkingStart,
+        E::ThinkingDelta => GwEvent::ThinkingDelta,
+        E::ThinkingEnd => GwEvent::ThinkingEnd,
+        E::Chunk { delta } => GwEvent::Chunk(delta),
+        E::ResponseDone => GwEvent::ResponseDone,
+
+        // ── Tool calls ──────────────────────────────────────────────────
         E::ToolCall {
             id,
             name,
             arguments,
-        } => FrameAction::just_action(Action::GatewayToolCall {
+        } => GwEvent::ToolCall {
             id,
             name,
             arguments,
-        }),
+        },
         E::ToolResult {
             id,
             name,
             result,
             is_error,
-        } => FrameAction::just_action(Action::GatewayToolResult {
+        } => GwEvent::ToolResult {
             id,
             name,
             result,
             is_error,
-        }),
+        },
         E::ToolApprovalRequest {
             id,
             name,
             arguments,
-        } => FrameAction::just_action(Action::ToolApprovalRequest {
+        } => GwEvent::ToolApprovalRequest {
             id,
             name,
             arguments,
-        }),
-        E::UserPromptRequest { prompt, .. } => {
-            FrameAction::just_action(Action::UserPromptRequest(prompt))
-        }
+        },
+
+        // ── Interactive prompts ─────────────────────────────────────────
+        E::UserPromptRequest { prompt, .. } => GwEvent::UserPromptRequest(prompt),
         E::CredentialRequest {
             id,
             provider,
             secret_name,
             message,
-        } => FrameAction::just_action(Action::CredentialRequest {
+        } => GwEvent::CredentialRequest {
             id,
             provider,
             secret_name,
             message,
-        }),
-        E::DeviceFlowStart { url, code, .. } => {
-            FrameAction::just_action(Action::DeviceFlowCodeReady { url, code })
-        }
-        E::DeviceFlowComplete => FrameAction::just_action(Action::DeviceFlowComplete),
-        E::ThreadMessages {
-            thread_id,
-            messages,
-        } => FrameAction::just_action(Action::ThreadMessages {
-            thread_id,
-            messages,
-        }),
-        E::ThreadSwitched {
-            thread_id,
-            context_summary,
-        } => FrameAction::just_action(Action::ThreadSwitched {
-            thread_id,
-            context_summary,
-        }),
-        E::ThreadHistory {
-            thread_id,
-            ok,
-            messages,
-            error,
-        } => FrameAction::just_action(Action::ThreadHistory {
-            thread_id,
-            ok,
-            messages,
-            error,
-        }),
-        E::Error { message } => FrameAction::just_action(Action::Error(message)),
-        E::Info { message } => FrameAction::just_action(Action::Info(message)),
-        E::Warning { message } => FrameAction::just_action(Action::Warning(message)),
-        // DOM queries require a webview; the TUI cannot evaluate JS, so ignore.
-        E::DomQuery { .. } => FrameAction::none(),
-        E::SecretsListResult { entries, .. } => FrameAction::just_action(Action::SecretsListResult {
-            // `SecretEntryInfo` and the wire `SecretEntryDto` are field-for-field
-            // identical, so this round-trips losslessly.
-            entries: entries
-                .into_iter()
-                .map(|e| SecretEntryDto {
-                    name: e.name,
-                    label: e.label,
-                    kind: e.kind,
-                    policy: e.policy,
-                    disabled: e.disabled,
-                })
-                .collect(),
-        }),
-        E::SecretsStoreResult { ok, message } => {
-            FrameAction::just_action(Action::SecretsStoreResult { ok, message })
-        }
-        E::SecretsGetResult { key, value } => {
-            FrameAction::just_action(Action::SecretsGetResult { key, value })
-        }
-        E::SecretsDeleteResult { ok, .. } | E::SecretsDeleteCredentialResult { ok } => {
-            FrameAction::just_action(Action::SecretsDeleteCredentialResult {
-                ok,
-                cred_name: String::new(),
-            })
-        }
-        E::SecretsPeekResult {
-            ok,
-            fields,
-            message,
-        } => FrameAction::just_action(Action::SecretsPeekResult {
-            name: String::new(),
-            ok,
-            fields,
-            message,
-        }),
-        E::SecretsSetPolicyResult { ok, message } => {
-            FrameAction::just_action(Action::SecretsSetPolicyResult { ok, message })
-        }
-        E::SecretsSetDisabledResult { ok } => {
-            FrameAction::just_action(Action::SecretsSetDisabledResult {
-                ok,
-                cred_name: String::new(),
-                disabled: false,
-            })
-        }
-        E::SecretsHasTotpResult { has_totp } => {
-            FrameAction::just_action(Action::SecretsHasTotpResult { has_totp })
-        }
-        E::SecretsSetupTotpResult { ok, uri, message } => {
-            FrameAction::just_action(Action::SecretsSetupTotpResult { ok, uri, message })
-        }
-        E::SecretsVerifyTotpResult { ok } => {
-            FrameAction::just_action(Action::SecretsVerifyTotpResult { ok })
-        }
-        E::SecretsRemoveTotpResult { ok } => {
-            FrameAction::just_action(Action::SecretsRemoveTotpResult { ok })
-        }
-        // `ThreadsUpdate` is intercepted at the frame level in
-        // `server_frame_to_action` to preserve the rich wire DTO, so this arm
-        // is unreachable in practice. Kept (with a best-effort, icon-less
-        // conversion) only to keep the match exhaustive.
+        },
+        E::DeviceFlowStart { url, code, .. } => GwEvent::DeviceFlowCode {
+            // Provider context is shown via the preceding Info message.
+            provider: String::new(),
+            url,
+            code,
+        },
+        E::DeviceFlowComplete => GwEvent::DeviceFlowDone,
+
+        // ── Threads ─────────────────────────────────────────────────────
+        // The TUI tab bar renders id/label/is_foreground/message_count only,
+        // so the client DTO is sufficient; the icon/summary fields are unused.
         E::ThreadsUpdate {
             threads,
             foreground_id,
-        } => FrameAction::just_action(Action::ThreadsUpdate {
+        } => GwEvent::ThreadsUpdate {
             threads: threads
                 .into_iter()
                 .map(|t| crate::action::ThreadInfo {
@@ -268,221 +135,295 @@ fn event_to_action(event: GatewayEvent) -> FrameAction {
                 })
                 .collect(),
             foreground_id,
+        },
+        E::ThreadMessages {
+            thread_id,
+            messages,
+        } => GwEvent::ThreadMessages {
+            thread_id,
+            messages,
+        },
+        E::ThreadSwitched {
+            thread_id,
+            context_summary,
+        } => GwEvent::ThreadSwitched {
+            thread_id,
+            context_summary,
+        },
+        E::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
+        } => GwEvent::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
+        },
+
+        // ── Generic messages ────────────────────────────────────────────
+        E::Error { message } => GwEvent::error(message),
+        E::Info { message } => GwEvent::Info(message),
+        E::Warning { message } => GwEvent::warning(message),
+
+        // DOM queries require a webview; the TUI cannot evaluate JS.
+        E::DomQuery { .. } => return None,
+
+        // ── Secrets results ─────────────────────────────────────────────
+        E::SecretsListResult { entries, .. } => {
+            let secrets: Vec<rustyclaw_view::SecretInfoData> = entries
+                .into_iter()
+                .map(|e| {
+                    // `SecretEntryInfo` and the wire `SecretEntryDto` are
+                    // field-for-field identical.
+                    rustyclaw_view::SecretInfoData::from_dto(SecretEntryDto {
+                        name: e.name,
+                        label: e.label,
+                        kind: e.kind,
+                        policy: e.policy,
+                        disabled: e.disabled,
+                    })
+                })
+                .collect();
+            GwEvent::ShowSecrets {
+                secrets,
+                agent_access: false,
+                has_totp: false,
+            }
+        }
+        E::SecretsStoreResult { ok, message } => {
+            if ok {
+                GwEvent::RefreshSecrets
+            } else {
+                GwEvent::error(format!("Failed to store secret: {}", message))
+            }
+        }
+        E::SecretsGetResult { key, value } => {
+            let display = value.as_deref().unwrap_or("(not found)");
+            GwEvent::Info(format!("Secret [{}]: {}", key, display))
+        }
+        E::SecretsDeleteResult { ok, .. } | E::SecretsDeleteCredentialResult { ok } => {
+            if ok {
+                GwEvent::RefreshSecrets
+            } else {
+                GwEvent::error("Failed to delete credential".to_string())
+            }
+        }
+        E::SecretsPeekResult {
+            ok,
+            fields,
+            message,
+        } => {
+            if ok {
+                let field_strs: Vec<String> =
+                    fields.iter().map(|(k, v)| format!("  {}: {}", k, v)).collect();
+                GwEvent::Info(format!("Credential:\n{}", field_strs.join("\n")))
+            } else {
+                GwEvent::error(message.unwrap_or_else(|| "Failed to peek credential".to_string()))
+            }
+        }
+        E::SecretsSetPolicyResult { ok, message } => {
+            if ok {
+                GwEvent::RefreshSecrets
+            } else {
+                GwEvent::error(message.unwrap_or_else(|| "Failed to update policy".to_string()))
+            }
+        }
+        E::SecretsSetDisabledResult { ok } => {
+            if ok {
+                GwEvent::RefreshSecrets
+            } else {
+                GwEvent::error("Failed to update credential".to_string())
+            }
+        }
+        E::SecretsHasTotpResult { has_totp } => GwEvent::Info(if has_totp {
+            "TOTP is configured".to_string()
+        } else {
+            "TOTP is not configured".to_string()
         }),
-    }
+        E::SecretsSetupTotpResult { ok, uri, message } => {
+            if ok {
+                GwEvent::Success(format!(
+                    "TOTP setup complete{}",
+                    uri.map(|u| format!(" — URI: {}", u)).unwrap_or_default()
+                ))
+            } else {
+                GwEvent::error(message.unwrap_or_else(|| "TOTP setup failed".to_string()))
+            }
+        }
+        E::SecretsVerifyTotpResult { ok } => {
+            if ok {
+                GwEvent::Success("TOTP verified".to_string())
+            } else {
+                GwEvent::error("TOTP verification failed")
+            }
+        }
+        E::SecretsRemoveTotpResult { ok } => {
+            if ok {
+                GwEvent::Success("TOTP removed".to_string())
+            } else {
+                GwEvent::error("TOTP removal failed")
+            }
+        }
+    };
+
+    Some(ev)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::Action;
+    use rustyclaw_core::gateway::{
+        SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload, StatusType,
+    };
 
-    #[test]
-    fn test_frame_action_none() {
-        let action = FrameAction::none();
-        assert!(action.action.is_none());
-        assert!(!action.update_ui);
+    /// Run a server frame through the shared parser and the TUI adapter, the
+    /// same path the gateway reader takes at runtime.
+    fn adapt(frame: ServerFrame) -> Option<GwEvent> {
+        GatewayEvent::from_server_frame(frame).and_then(gateway_event_to_gw_event)
     }
 
     #[test]
-    fn test_frame_action_update() {
-        let action = FrameAction::update(Action::Update);
-        assert!(matches!(action.action, Some(Action::Update)));
-        assert!(action.update_ui);
+    fn hello_frame_maps_to_connected() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Hello,
+            payload: ServerPayload::Hello {
+                agent: "test".into(),
+                settings_dir: "/tmp".into(),
+                vault_locked: false,
+                provider: None,
+                model: None,
+            },
+        };
+        assert!(matches!(adapt(frame), Some(GwEvent::Connected)));
     }
 
     #[test]
-    fn test_frame_action_just_action() {
-        let action = FrameAction::just_action(Action::Tick);
-        assert!(matches!(action.action, Some(Action::Tick)));
-        assert!(!action.update_ui);
+    fn status_model_ready_maps_to_model_ready() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Status {
+                status: StatusType::ModelReady,
+                detail: "Claude".into(),
+            },
+        };
+        match adapt(frame) {
+            Some(GwEvent::ModelReady(m)) => assert_eq!(m, "Claude"),
+            other => panic!("expected ModelReady, got {other:?}"),
+        }
     }
 
-    mod action_conversion {
-        use super::*;
-        use crate::action::Action;
-        use rustyclaw_core::gateway::{SecretEntryDto, ServerFrameType, StatusType};
+    #[test]
+    fn status_vault_locked_maps_to_vault_locked() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Status {
+                status: StatusType::VaultLocked,
+                detail: String::new(),
+            },
+        };
+        assert!(matches!(adapt(frame), Some(GwEvent::VaultLocked)));
+    }
 
-        #[test]
-        fn test_hello_frame_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::Hello,
-                payload: ServerPayload::Hello {
-                    agent: "test".into(),
-                    settings_dir: "/tmp".into(),
-                    vault_locked: false,
-                    provider: None,
-                    model: None,
-                },
-            };
-
-            let result = server_frame_to_action(&frame);
-            assert!(matches!(result.action, Some(Action::GatewayConnected)));
+    #[test]
+    fn chunk_frame_maps_to_chunk() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Chunk,
+            payload: ServerPayload::Chunk {
+                delta: "Hello".into(),
+            },
+        };
+        match adapt(frame) {
+            Some(GwEvent::Chunk(t)) => assert_eq!(t, "Hello"),
+            other => panic!("expected Chunk, got {other:?}"),
         }
+    }
 
-        #[test]
-        fn test_status_model_ready_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::Status,
-                payload: ServerPayload::Status {
-                    status: StatusType::ModelReady,
-                    detail: "Claude 3.5 Sonnet".into(),
-                },
-            };
-
-            let result = server_frame_to_action(&frame);
-            assert!(matches!(result.action, Some(Action::Success(_))));
-        }
-
-        #[test]
-        fn test_status_vault_locked_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::Status,
-                payload: ServerPayload::Status {
-                    status: StatusType::VaultLocked,
-                    detail: "Vault is locked".into(),
-                },
-            };
-
-            let result = server_frame_to_action(&frame);
-            assert!(matches!(result.action, Some(Action::GatewayVaultLocked)));
-        }
-
-        #[test]
-        fn test_chunk_frame_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::Chunk,
-                payload: ServerPayload::Chunk {
-                    delta: "Hello".into(),
-                },
-            };
-
-            let result = server_frame_to_action(&frame);
-            match result.action {
-                Some(Action::GatewayChunk(text)) => assert_eq!(text, "Hello"),
-                _ => panic!("Expected GatewayChunk action"),
+    #[test]
+    fn tool_call_frame_maps_to_tool_call() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ToolCall,
+            payload: ServerPayload::ToolCall {
+                id: "call_001".into(),
+                name: "read_file".into(),
+                arguments: r#"{"path":"/tmp/test"}"#.into(),
+            },
+        };
+        match adapt(frame) {
+            Some(GwEvent::ToolCall { id, name, .. }) => {
+                assert_eq!(id, "call_001");
+                assert_eq!(name, "read_file");
             }
+            other => panic!("expected ToolCall, got {other:?}"),
         }
+    }
 
-        #[test]
-        fn test_tool_call_frame_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::ToolCall,
-                payload: ServerPayload::ToolCall {
-                    id: "call_001".into(),
-                    name: "read_file".into(),
-                    arguments: r#"{"path":"/tmp/test"}"#.into(),
-                },
-            };
-
-            let result = server_frame_to_action(&frame);
-            match result.action {
-                Some(Action::GatewayToolCall {
-                    id,
-                    name,
-                    arguments: _,
-                }) => {
-                    assert_eq!(id, "call_001");
-                    assert_eq!(name, "read_file");
-                }
-                _ => panic!("Expected GatewayToolCall action"),
-            }
+    #[test]
+    fn error_frame_maps_to_error() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: "Connection failed".into(),
+            },
+        };
+        match adapt(frame) {
+            Some(GwEvent::Error { summary, .. }) => assert_eq!(summary, "Connection failed"),
+            other => panic!("expected Error, got {other:?}"),
         }
+    }
 
-        #[test]
-        fn test_error_frame_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::Error,
-                payload: ServerPayload::Error {
-                    ok: false,
-                    message: "Connection failed".into(),
-                },
-            };
-
-            let result = server_frame_to_action(&frame);
-            match result.action {
-                Some(Action::Error(msg)) => assert_eq!(msg, "Connection failed"),
-                _ => panic!("Expected Error action"),
-            }
+    #[test]
+    fn secrets_list_result_maps_to_show_secrets() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::SecretsListResult,
+            payload: ServerPayload::SecretsListResult {
+                ok: true,
+                entries: vec![SecretEntryDto {
+                    name: "api_key".into(),
+                    label: "API Key".into(),
+                    kind: "ApiKey".into(),
+                    policy: "always".into(),
+                    disabled: false,
+                }],
+            },
+        };
+        match adapt(frame) {
+            Some(GwEvent::ShowSecrets { secrets, .. }) => assert_eq!(secrets.len(), 1),
+            other => panic!("expected ShowSecrets, got {other:?}"),
         }
+    }
 
-        #[test]
-        fn test_secrets_list_result_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::SecretsListResult,
-                payload: ServerPayload::SecretsListResult {
-                    ok: true,
-                    entries: vec![SecretEntryDto {
-                        name: "api_key".into(),
-                        label: "API Key".into(),
-                        kind: "ApiKey".into(),
-                        policy: "always".into(),
-                        disabled: false,
-                    }],
-                },
-            };
+    #[test]
+    fn auth_challenge_maps_to_auth_challenge() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::AuthChallenge,
+            payload: ServerPayload::AuthChallenge {
+                method: "totp".into(),
+            },
+        };
+        assert!(matches!(adapt(frame), Some(GwEvent::AuthChallenge)));
+    }
 
-            let result = server_frame_to_action(&frame);
-            match result.action {
-                Some(Action::SecretsListResult { entries }) => {
-                    assert_eq!(entries.len(), 1);
-                }
-                _ => panic!("Expected SecretsListResult action"),
-            }
-        }
+    #[test]
+    fn streaming_frames_map_to_streaming_events() {
+        let start = ServerFrame {
+            frame_type: ServerFrameType::StreamStart,
+            payload: ServerPayload::StreamStart,
+        };
+        assert!(matches!(adapt(start), Some(GwEvent::StreamStart)));
 
-        #[test]
-        fn test_auth_challenge_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::AuthChallenge,
-                payload: ServerPayload::AuthChallenge {
-                    method: "totp".into(),
-                },
-            };
+        let thinking = ServerFrame {
+            frame_type: ServerFrameType::ThinkingStart,
+            payload: ServerPayload::ThinkingStart,
+        };
+        assert!(matches!(adapt(thinking), Some(GwEvent::ThinkingStart)));
 
-            let result = server_frame_to_action(&frame);
-            assert!(matches!(result.action, Some(Action::GatewayAuthChallenge)));
-        }
-
-        #[test]
-        fn test_response_done_to_action() {
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::ResponseDone,
-                payload: ServerPayload::ResponseDone { ok: true },
-            };
-
-            let result = server_frame_to_action(&frame);
-            assert!(matches!(result.action, Some(Action::GatewayResponseDone)));
-        }
-
-        #[test]
-        fn test_streaming_frames_to_actions() {
-            let start_frame = ServerFrame {
-                frame_type: ServerFrameType::StreamStart,
-                payload: ServerPayload::StreamStart,
-            };
-            assert!(matches!(
-                server_frame_to_action(&start_frame).action,
-                Some(Action::GatewayStreamStart)
-            ));
-
-            let thinking_frame = ServerFrame {
-                frame_type: ServerFrameType::ThinkingStart,
-                payload: ServerPayload::ThinkingStart,
-            };
-            assert!(matches!(
-                server_frame_to_action(&thinking_frame).action,
-                Some(Action::GatewayThinkingStart)
-            ));
-
-            let end_frame = ServerFrame {
-                frame_type: ServerFrameType::ThinkingEnd,
-                payload: ServerPayload::ThinkingEnd,
-            };
-            assert!(matches!(
-                server_frame_to_action(&end_frame).action,
-                Some(Action::GatewayThinkingEnd)
-            ));
-        }
+        let done = ServerFrame {
+            frame_type: ServerFrameType::ResponseDone,
+            payload: ServerPayload::ResponseDone { ok: true },
+        };
+        assert!(matches!(adapt(done), Some(GwEvent::ResponseDone)));
     }
 }

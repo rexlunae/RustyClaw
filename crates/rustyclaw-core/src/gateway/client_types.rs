@@ -326,6 +326,18 @@ pub enum GatewayCommand {
         policy: String,
         skills: Vec<String>,
     },
+
+    /// Delete a full credential from the gateway vault
+    #[serde(rename = "secrets_delete_credential")]
+    SecretsDeleteCredential { name: String },
+
+    /// Reload gateway configuration (apply provider/model changes without restart)
+    #[serde(rename = "reload")]
+    Reload,
+
+    /// Request the current task list (optionally filtered by session)
+    #[serde(rename = "tasks_request")]
+    TasksRequest { session: Option<String> },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -469,6 +481,18 @@ impl GatewayCommand {
                     policy,
                     skills,
                 },
+            },
+            GatewayCommand::SecretsDeleteCredential { name } => ClientFrame {
+                frame_type: ClientFrameType::SecretsDeleteCredential,
+                payload: ClientPayload::SecretsDeleteCredential { name },
+            },
+            GatewayCommand::Reload => ClientFrame {
+                frame_type: ClientFrameType::Reload,
+                payload: ClientPayload::Reload,
+            },
+            GatewayCommand::TasksRequest { session } => ClientFrame {
+                frame_type: ClientFrameType::TasksRequest,
+                payload: ClientPayload::TasksRequest { session },
             },
         }
     }

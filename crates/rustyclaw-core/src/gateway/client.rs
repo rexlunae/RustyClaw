@@ -1,33 +1,59 @@
-//! SSH stdio client for gateway communication.
+//! Async gateway client over the SSH stdio transport.
+//!
+//! This is the shared connection abstraction used by every RustyClaw client
+//! (desktop, TUI, …). It owns the SSH transport plus a reader and writer task,
+//! translating between the binary wire frames and the client-facing
+//! [`GatewayCommand`]/[`GatewayEvent`] enums (via their `into_frame` /
+//! `from_server_frame` conversions). Clients drive it purely through
+//! [`GatewayCommand`]s and consume [`GatewayEvent`]s — they never touch the
+//! wire protocol or stream-id bookkeeping directly.
 
 use anyhow::{Context, Result, anyhow};
-use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
-use rustyclaw_core::gateway::{ServerPayload, SshConnection};
-use rustyclaw_core::gateway::protocol::event_log::{
-    Direction, ProtocolEventLog, default_log_path,
-};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::{Mutex, mpsc};
 
+use crate::gateway::client_types::{GatewayCommand, GatewayEvent};
+use crate::gateway::protocol::event_log::{
+    Direction, ProtocolEvent, ProtocolEventLog, default_log_path,
+};
+use crate::gateway::{ServerPayload, SshConnection, SshReader, SshWriter};
+
 /// Client for communicating with the RustyClaw gateway.
 pub struct GatewayClient {
-    /// Channel to send commands to the gateway
+    /// Channel to send commands to the gateway.
     cmd_tx: mpsc::Sender<GatewayCommand>,
-    /// Channel to receive events from the gateway
+    /// Channel to receive events from the gateway.
     event_rx: Arc<Mutex<mpsc::Receiver<GatewayEvent>>>,
-    /// Whether we're connected
+    /// Whether we're connected.
     connected: Arc<std::sync::atomic::AtomicBool>,
+    /// The underlying SSH connection, held to keep the transport alive for the
+    /// lifetime of the client.
+    _connection: SshConnection,
 }
 
 impl GatewayClient {
-    /// Connect to a gateway at the given URL.
+    /// Connect to a gateway at the given URL, establishing the SSH transport.
     pub async fn connect(url: &str) -> Result<Self> {
-        // ── Use shared SSH transport from rustyclaw_core ────────────────
-        let (_connection, mut writer, mut reader) =
-            SshConnection::connect(url).await.context("Failed to establish SSH transport")?;
+        let (connection, writer, reader) = SshConnection::connect(url)
+            .await
+            .context("Failed to establish SSH transport")?;
+        Ok(Self::from_transport(connection, writer, reader, Some(url)))
+    }
 
-        // Channels for communication
+    /// Build a client over an already-established SSH transport.
+    ///
+    /// Clients that establish the SSH connection themselves (e.g. via an
+    /// interactive connection dialog) can hand the transport parts here rather
+    /// than reconnecting from a URL. `log_label` is recorded in the protocol
+    /// event log as the connection target, if known.
+    pub fn from_transport(
+        connection: SshConnection,
+        mut writer: SshWriter,
+        mut reader: SshReader,
+        log_label: Option<&str>,
+    ) -> Self {
+        // Channels for communication.
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
         let (event_tx, event_rx) = mpsc::channel::<GatewayEvent>(1024);
 
@@ -36,15 +62,13 @@ impl GatewayClient {
         let next_stream_id = Arc::new(AtomicU64::new(1));
         let active_stream_id = Arc::new(AtomicU64::new(0));
 
-        // Create protocol event log
+        // Create protocol event log.
         let event_log = default_log_path()
             .map(ProtocolEventLog::new)
             .unwrap_or_else(ProtocolEventLog::noop);
-        event_log.log(
-            rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::Connection {
-                message: format!("connecting to {}", url),
-            },
-        );
+        event_log.log(ProtocolEvent::Connection {
+            message: format!("connecting to {}", log_label.unwrap_or("gateway")),
+        });
         let event_log_tx = event_log.clone();
         let event_log_rx = event_log.clone();
 
@@ -67,16 +91,14 @@ impl GatewayClient {
                 let frame = cmd.into_frame();
                 let frame_type_name = format!("{:?}", frame.frame_type);
 
-                // Log before sending
+                // Log before sending.
                 event_log_tx.log_frame(Direction::Sent, &frame_type_name, stream_id, 0);
 
                 if let Err(err) = writer.send_frame(stream_id, &frame).await {
-                    event_log_tx.log(
-                        rustyclaw_core::gateway::protocol::event_log::ProtocolEvent::EncodeError {
-                            frame_type: frame_type_name.clone(),
-                            error: err.to_string(),
-                        },
-                    );
+                    event_log_tx.log(ProtocolEvent::EncodeError {
+                        frame_type: frame_type_name.clone(),
+                        error: err.to_string(),
+                    });
                     let _ = event_tx_clone
                         .send(GatewayEvent::Disconnected {
                             reason: Some(err.to_string()),
@@ -126,10 +148,7 @@ impl GatewayClient {
                             _ => {}
                         }
 
-                        if matches!(
-                            envelope.frame.payload,
-                            ServerPayload::ResponseDone { .. }
-                        ) {
+                        if matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. }) {
                             let active = active_stream_id_rx.load(Ordering::Relaxed);
                             if active == envelope.stream_id {
                                 active_stream_id_rx.store(0, Ordering::Relaxed);
@@ -143,7 +162,7 @@ impl GatewayClient {
                         }
                     }
                     Ok(None) => {
-                        // EOF — drain stderr for diagnostic info
+                        // EOF — drain stderr for diagnostic info.
                         let ssh_err = reader.drain_stderr().await;
                         let reason = ssh_err
                             .lines()
@@ -189,11 +208,12 @@ impl GatewayClient {
             connected_clone.store(false, std::sync::atomic::Ordering::SeqCst);
         });
 
-        Ok(Self {
+        Self {
             cmd_tx,
             event_rx: Arc::new(Mutex::new(event_rx)),
             connected,
-        })
+            _connection: connection,
+        }
     }
 
     /// Send a command to the gateway.
@@ -231,21 +251,17 @@ impl GatewayClient {
     }
 
     /// Authenticate with TOTP code.
-    #[allow(dead_code)]
     pub async fn authenticate(&self, code: String) -> Result<()> {
         self.send(GatewayCommand::Auth { code }).await
     }
 
     /// Unlock the vault.
-    #[allow(dead_code)]
     pub async fn unlock_vault(&self, password: String) -> Result<()> {
         self.send(GatewayCommand::VaultUnlock { password }).await
     }
 
     /// Approve or deny a tool call.
-    #[allow(dead_code)]
     pub async fn respond_tool_approval(&self, id: String, approved: bool) -> Result<()> {
-        self.send(GatewayCommand::ToolApprove { id, approved })
-            .await
+        self.send(GatewayCommand::ToolApprove { id, approved }).await
     }
 }

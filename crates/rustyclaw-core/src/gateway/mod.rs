@@ -16,6 +16,7 @@
 
 mod auth;
 pub mod canvas_handler;
+pub mod client;
 pub mod client_types;
 mod command_wrapper;
 pub mod concurrent;
@@ -42,6 +43,7 @@ pub mod webhooks;
 pub mod ssh;
 
 // Re-export client-facing types
+pub use client::GatewayClient;
 pub use client_types::{GatewayCommand, GatewayEvent, ThreadInfoDto};
 
 // Re-export SSH connection transport (client-side)

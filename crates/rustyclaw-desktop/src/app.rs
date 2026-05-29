@@ -11,11 +11,11 @@ use crate::components::{
     VaultUnlockDialog, generate_qr_code,
 };
 
-use crate::gateway_client::GatewayClient;
 use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
+use rustyclaw_core::gateway::GatewayClient;
 
 use rustyclaw_view::{
     CredentialRequestData, DeviceFlowData, HatchingDialogData, PairingDialogData, PromptAttachment,
