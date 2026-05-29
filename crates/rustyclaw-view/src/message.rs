@@ -158,35 +158,33 @@ impl MessageBubbleData {
     /// Lines to show when collapsed.
     pub const COLLAPSED_PREVIEW_LINES: usize = 8;
 
-    /// How many lines are in the full content.
-    pub fn total_line_count(&self) -> usize {
-        self.content.lines().count()
-    }
-
-    /// How many lines are hidden when collapsed.
-    pub fn hidden_line_count(&self) -> usize {
-        self.total_line_count().saturating_sub(Self::COLLAPSED_PREVIEW_LINES)
-    }
-
     /// Whether this message is long enough to be collapsible.
+    ///
+    /// Checks byte length first (O(1)) before counting lines (O(N)).
     pub fn is_collapsible(&self) -> bool {
-        self.total_line_count() > Self::AUTO_COLLAPSE_LINES
-            || self.content.len() > Self::AUTO_COLLAPSE_CHARS
+        self.content.len() > Self::AUTO_COLLAPSE_CHARS
+            || self.content.lines().count() > Self::AUTO_COLLAPSE_LINES
     }
 
     /// Content to actually render — truncated when collapsed, full otherwise.
-    pub fn content_for_render(&self) -> String {
+    ///
+    /// Returns a borrow in the common (uncollapsed) case to avoid allocation.
+    pub fn content_for_render(&self) -> Cow<'_, str> {
         if self.collapsed && self.is_collapsible() {
-            let preview: String = self
+            let lines: Vec<&str> = self
                 .content
                 .lines()
                 .take(Self::COLLAPSED_PREVIEW_LINES)
-                .collect::<Vec<_>>()
-                .join("\n");
-            let hidden = self.hidden_line_count();
-            format!("{preview}\n\n… {hidden} lines hidden (Ctrl+E to expand)")
+                .collect();
+            let preview = lines.join("\n");
+            let hidden = self
+                .content
+                .lines()
+                .count()
+                .saturating_sub(Self::COLLAPSED_PREVIEW_LINES);
+            format!("{preview}\n\n… {hidden} lines hidden (Ctrl+E to expand)").into()
         } else {
-            self.content.clone()
+            Cow::Borrowed(&self.content)
         }
     }
 }
