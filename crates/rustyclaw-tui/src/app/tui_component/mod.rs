@@ -1375,7 +1375,18 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         KeyCode::Tab => Some(rustyclaw_view::HatchingKey::Tab),
                         KeyCode::Esc => Some(rustyclaw_view::HatchingKey::Escape),
                         KeyCode::Backspace => Some(rustyclaw_view::HatchingKey::Backspace),
-                        KeyCode::Char(c) => Some(rustyclaw_view::HatchingKey::Char(c)),
+                        KeyCode::Char(c) => {
+                            // Some terminals deliver Shift+<letter> as the lowercase char
+                            // plus SHIFT modifier instead of pre-shifting the codepoint.
+                            let c = if modifiers.contains(KeyModifiers::SHIFT)
+                                && c.is_ascii_lowercase()
+                            {
+                                c.to_ascii_uppercase()
+                            } else {
+                                c
+                            };
+                            Some(rustyclaw_view::HatchingKey::Char(c))
+                        }
                         _ => None,
                     };
 
