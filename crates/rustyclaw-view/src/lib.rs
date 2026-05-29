@@ -37,6 +37,7 @@
 //! require touching event-processing code.
 
 pub mod app_menu;
+pub mod client;
 pub mod command_menu;
 pub mod composer;
 pub mod conversation;
@@ -50,6 +51,7 @@ pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
+pub use client::ClientState;
 pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use composer::{
     BottomBarData, ComposerData, DirectoryOption, DirectorySelectorState, PromptAttachment,
