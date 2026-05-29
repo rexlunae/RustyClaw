@@ -50,11 +50,17 @@ pub enum GatewayEvent {
     /// Model error
     ModelError { message: String },
 
+    /// Provider/model reloaded (config change applied without restart)
+    ModelReloaded { provider: String, model: String },
+
     /// Stream starting
     StreamStart,
 
     /// Thinking started (extended thinking)
     ThinkingStart,
+
+    /// A thinking delta was received (used to keep the thinking clock alive)
+    ThinkingDelta,
 
     /// Thinking ended
     ThinkingEnd,
@@ -132,11 +138,21 @@ pub enum GatewayEvent {
         messages: Vec<crate::gateway::protocol::types::ChatMessage>,
     },
 
+    /// Thread switch confirmed — clear the live view and optionally show a
+    /// context summary for the thread being switched to.
+    ThreadSwitched {
+        thread_id: u64,
+        context_summary: Option<String>,
+    },
+
     /// Error from gateway
     Error { message: String },
 
     /// Info message
     Info { message: String },
+
+    /// Non-fatal warning message
+    Warning { message: String },
 
     /// DOM query request — evaluate JS in webview
     DomQuery {
@@ -167,6 +183,41 @@ pub enum GatewayEvent {
         ok: bool,
         message: Option<String>,
     },
+
+    /// Result of fetching a single secret's value
+    SecretsGetResult {
+        key: String,
+        value: Option<String>,
+    },
+
+    /// Result of peeking at a credential's fields
+    SecretsPeekResult {
+        ok: bool,
+        fields: Vec<(String, String)>,
+        message: Option<String>,
+    },
+
+    /// Result of enabling/disabling a credential
+    SecretsSetDisabledResult { ok: bool },
+
+    /// Result of deleting a full credential
+    SecretsDeleteCredentialResult { ok: bool },
+
+    /// Whether TOTP is configured for the vault
+    SecretsHasTotpResult { has_totp: bool },
+
+    /// Result of setting up TOTP (returns the provisioning URI on success)
+    SecretsSetupTotpResult {
+        ok: bool,
+        uri: Option<String>,
+        message: Option<String>,
+    },
+
+    /// Result of verifying a TOTP code
+    SecretsVerifyTotpResult { ok: bool },
+
+    /// Result of removing TOTP
+    SecretsRemoveTotpResult { ok: bool },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -275,6 +326,368 @@ pub enum GatewayCommand {
         policy: String,
         skills: Vec<String>,
     },
+}
+
+// ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
+//
+// These conversions are the single shared translation between the
+// client-facing command/event enums and the binary frame protocol.
+// Both the TUI and desktop clients use them so the mapping lives in
+// exactly one place.
+
+use crate::gateway::{
+    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerPayload,
+    StatusType,
+};
+
+impl GatewayCommand {
+    /// Convert this command into the wire frame the gateway expects.
+    pub fn into_frame(self) -> ClientFrame {
+        match self {
+            GatewayCommand::Chat { message } => ClientFrame {
+                frame_type: ClientFrameType::Chat,
+                payload: ClientPayload::Chat {
+                    messages: vec![ChatMessage::text("user", &message)],
+                },
+            },
+            GatewayCommand::Auth { code } => ClientFrame {
+                frame_type: ClientFrameType::AuthResponse,
+                payload: ClientPayload::AuthResponse { code },
+            },
+            GatewayCommand::VaultUnlock { password } => ClientFrame {
+                frame_type: ClientFrameType::UnlockVault,
+                payload: ClientPayload::UnlockVault { password },
+            },
+            GatewayCommand::ToolApprove { id, approved } => ClientFrame {
+                frame_type: ClientFrameType::ToolApprovalResponse,
+                payload: ClientPayload::ToolApprovalResponse { id, approved },
+            },
+            GatewayCommand::ThreadSwitch { thread_id } => ClientFrame {
+                frame_type: ClientFrameType::ThreadSwitch,
+                payload: ClientPayload::ThreadSwitch { thread_id },
+            },
+            GatewayCommand::ThreadCreate { label } => ClientFrame {
+                frame_type: ClientFrameType::ThreadCreate,
+                payload: ClientPayload::ThreadCreate {
+                    label: label.unwrap_or_default(),
+                },
+            },
+            GatewayCommand::ThreadList => ClientFrame {
+                frame_type: ClientFrameType::ThreadList,
+                payload: ClientPayload::ThreadList,
+            },
+            GatewayCommand::ThreadHistoryRequest { thread_id } => ClientFrame {
+                frame_type: ClientFrameType::ThreadHistoryRequest,
+                payload: ClientPayload::ThreadHistoryRequest { thread_id },
+            },
+            GatewayCommand::ThreadClose { thread_id } => ClientFrame {
+                frame_type: ClientFrameType::ThreadClose,
+                payload: ClientPayload::ThreadClose { thread_id },
+            },
+            GatewayCommand::ThreadRename {
+                thread_id,
+                new_label,
+            } => ClientFrame {
+                frame_type: ClientFrameType::ThreadRename,
+                payload: ClientPayload::ThreadRename {
+                    thread_id,
+                    new_label,
+                },
+            },
+            GatewayCommand::UserPromptResponse {
+                id,
+                dismissed,
+                value,
+            } => ClientFrame {
+                frame_type: ClientFrameType::UserPromptResponse,
+                payload: ClientPayload::UserPromptResponse {
+                    id,
+                    dismissed,
+                    value,
+                },
+            },
+            GatewayCommand::CredentialResponse {
+                id,
+                dismissed,
+                value,
+            } => ClientFrame {
+                frame_type: ClientFrameType::CredentialResponse,
+                payload: ClientPayload::CredentialResponse {
+                    id,
+                    dismissed,
+                    value,
+                },
+            },
+            GatewayCommand::SecretsList => ClientFrame {
+                frame_type: ClientFrameType::SecretsList,
+                payload: ClientPayload::SecretsList,
+            },
+            GatewayCommand::Cancel => ClientFrame {
+                frame_type: ClientFrameType::Cancel,
+                payload: ClientPayload::Empty,
+            },
+            GatewayCommand::ModelSwitch { provider, model } => ClientFrame {
+                frame_type: ClientFrameType::ModelSwitch,
+                payload: ClientPayload::ModelSwitch { provider, model },
+            },
+            GatewayCommand::DomQueryResponse {
+                id,
+                result,
+                is_error,
+            } => ClientFrame {
+                frame_type: ClientFrameType::DomQueryResponse,
+                payload: ClientPayload::DomQueryResponse {
+                    id,
+                    result,
+                    is_error,
+                },
+            },
+            GatewayCommand::SetAgentName { name } => ClientFrame {
+                frame_type: ClientFrameType::SetAgentName,
+                payload: ClientPayload::SetAgentName { name },
+            },
+            GatewayCommand::SetWorkingDirectory { path } => ClientFrame {
+                frame_type: ClientFrameType::SetWorkingDirectory,
+                payload: ClientPayload::SetWorkingDirectory { path },
+            },
+            GatewayCommand::SecretsStore { key, value } => ClientFrame {
+                frame_type: ClientFrameType::SecretsStore,
+                payload: ClientPayload::SecretsStore { key, value },
+            },
+            GatewayCommand::SecretsDelete { key } => ClientFrame {
+                frame_type: ClientFrameType::SecretsDelete,
+                payload: ClientPayload::SecretsDelete { key },
+            },
+            GatewayCommand::SecretsSetPolicy {
+                name,
+                policy,
+                skills,
+            } => ClientFrame {
+                frame_type: ClientFrameType::SecretsSetPolicy,
+                payload: ClientPayload::SecretsSetPolicy {
+                    name,
+                    policy,
+                    skills,
+                },
+            },
+        }
+    }
+}
+
+impl GatewayEvent {
+    /// Convert a server frame into the client-facing event, if any.
+    ///
+    /// Returns `None` for frames that carry no client-visible state
+    /// (e.g. `Empty`, legacy `TasksUpdate`, or `ThreadCreated`, which is
+    /// always followed by a `ThreadsUpdate`).
+    pub fn from_server_frame(frame: ServerFrame) -> Option<Self> {
+        match frame.payload {
+            ServerPayload::Hello {
+                agent,
+                vault_locked,
+                provider,
+                model,
+                ..
+            } => Some(GatewayEvent::Connected {
+                agent: Some(agent),
+                vault_locked,
+                provider,
+                model,
+            }),
+            ServerPayload::Status { status, detail } => Some(match status {
+                StatusType::ModelReady => GatewayEvent::ModelReady { model: detail },
+                StatusType::ModelError => GatewayEvent::ModelError { message: detail },
+                StatusType::VaultLocked => GatewayEvent::VaultLocked,
+                StatusType::ModelConfigured => GatewayEvent::Info {
+                    message: format!("Model: {detail}"),
+                },
+                StatusType::CredentialsLoaded => GatewayEvent::Info { message: detail },
+                StatusType::ModelConnecting => GatewayEvent::Info { message: detail },
+                StatusType::CredentialsMissing => GatewayEvent::Warning { message: detail },
+                StatusType::NoModel => GatewayEvent::Warning { message: detail },
+            }),
+            ServerPayload::AuthChallenge { .. } => Some(GatewayEvent::AuthRequired),
+            ServerPayload::AuthResult { ok, message, retry } => Some(if ok {
+                GatewayEvent::AuthSuccess
+            } else {
+                GatewayEvent::AuthFailed {
+                    message: message.unwrap_or_default(),
+                    retry: retry.unwrap_or(false),
+                }
+            }),
+            ServerPayload::AuthLocked { message, .. } => Some(GatewayEvent::Error { message }),
+            ServerPayload::VaultUnlocked { ok, message } => Some(if ok {
+                GatewayEvent::VaultUnlocked
+            } else {
+                GatewayEvent::Error {
+                    message: message.unwrap_or_else(|| "Failed to unlock vault".into()),
+                }
+            }),
+            ServerPayload::ReloadResult {
+                ok,
+                provider,
+                model,
+                message,
+            } => Some(if ok {
+                GatewayEvent::ModelReloaded { provider, model }
+            } else {
+                GatewayEvent::Error {
+                    message: format!(
+                        "Reload failed: {}",
+                        message.as_deref().unwrap_or("Unknown error")
+                    ),
+                }
+            }),
+            ServerPayload::StreamStart => Some(GatewayEvent::StreamStart),
+            ServerPayload::ThinkingStart => Some(GatewayEvent::ThinkingStart),
+            ServerPayload::ThinkingDelta { .. } => Some(GatewayEvent::ThinkingDelta),
+            ServerPayload::ThinkingEnd => Some(GatewayEvent::ThinkingEnd),
+            ServerPayload::Chunk { delta } => Some(GatewayEvent::Chunk { delta }),
+            ServerPayload::ResponseDone { .. } => Some(GatewayEvent::ResponseDone),
+            ServerPayload::ToolCall {
+                id,
+                name,
+                arguments,
+            } => Some(GatewayEvent::ToolCall {
+                id,
+                name,
+                arguments,
+            }),
+            ServerPayload::ToolResult {
+                id,
+                name,
+                result,
+                is_error,
+            } => Some(GatewayEvent::ToolResult {
+                id,
+                name,
+                result,
+                is_error,
+            }),
+            ServerPayload::ToolApprovalRequest {
+                id,
+                name,
+                arguments,
+            } => Some(GatewayEvent::ToolApprovalRequest {
+                id,
+                name,
+                arguments,
+            }),
+            ServerPayload::UserPromptRequest { id, mut prompt } => {
+                prompt.id = id.clone();
+                Some(GatewayEvent::UserPromptRequest { id, prompt })
+            }
+            ServerPayload::CredentialRequest {
+                id,
+                provider,
+                secret_name,
+                message,
+            } => Some(GatewayEvent::CredentialRequest {
+                id,
+                provider,
+                secret_name,
+                message,
+            }),
+            ServerPayload::DeviceFlowStart { url, code, message } => {
+                Some(GatewayEvent::DeviceFlowStart { url, code, message })
+            }
+            ServerPayload::DeviceFlowComplete => Some(GatewayEvent::DeviceFlowComplete),
+            ServerPayload::ThreadsUpdate {
+                threads,
+                foreground_id,
+            } => Some(GatewayEvent::ThreadsUpdate {
+                threads: threads
+                    .into_iter()
+                    .map(|t| ThreadInfoDto {
+                        id: t.id,
+                        label: Some(t.label),
+                        description: t.description,
+                        status: t.status.unwrap_or_default(),
+                        is_foreground: t.is_foreground,
+                        message_count: t.message_count,
+                    })
+                    .collect(),
+                foreground_id,
+            }),
+            ServerPayload::ThreadSwitched {
+                thread_id,
+                context_summary,
+            } => Some(GatewayEvent::ThreadSwitched {
+                thread_id,
+                context_summary,
+            }),
+            ServerPayload::ThreadHistoryReply {
+                thread_id,
+                ok,
+                messages,
+                error,
+            } => Some(GatewayEvent::ThreadHistory {
+                thread_id,
+                ok,
+                messages,
+                error,
+            }),
+            ServerPayload::ThreadMessages {
+                thread_id,
+                messages,
+            } => Some(GatewayEvent::ThreadMessages {
+                thread_id,
+                messages,
+            }),
+            ServerPayload::SecretsListResult { ok, entries } => {
+                Some(GatewayEvent::SecretsListResult {
+                    ok,
+                    entries: entries.into_iter().map(Into::into).collect(),
+                })
+            }
+            ServerPayload::SecretsStoreResult { ok, message } => {
+                Some(GatewayEvent::SecretsStoreResult { ok, message })
+            }
+            ServerPayload::SecretsGetResult { key, value, .. } => {
+                Some(GatewayEvent::SecretsGetResult { key, value })
+            }
+            ServerPayload::SecretsDeleteResult { ok, message } => {
+                Some(GatewayEvent::SecretsDeleteResult { ok, message })
+            }
+            ServerPayload::SecretsPeekResult {
+                ok,
+                fields,
+                message,
+            } => Some(GatewayEvent::SecretsPeekResult {
+                ok,
+                fields,
+                message,
+            }),
+            ServerPayload::SecretsSetPolicyResult { ok, message } => {
+                Some(GatewayEvent::SecretsSetPolicyResult { ok, message })
+            }
+            ServerPayload::SecretsSetDisabledResult { ok, .. } => {
+                Some(GatewayEvent::SecretsSetDisabledResult { ok })
+            }
+            ServerPayload::SecretsDeleteCredentialResult { ok, .. } => {
+                Some(GatewayEvent::SecretsDeleteCredentialResult { ok })
+            }
+            ServerPayload::SecretsHasTotpResult { has_totp } => {
+                Some(GatewayEvent::SecretsHasTotpResult { has_totp })
+            }
+            ServerPayload::SecretsSetupTotpResult { ok, uri, message } => {
+                Some(GatewayEvent::SecretsSetupTotpResult { ok, uri, message })
+            }
+            ServerPayload::SecretsVerifyTotpResult { ok, .. } => {
+                Some(GatewayEvent::SecretsVerifyTotpResult { ok })
+            }
+            ServerPayload::SecretsRemoveTotpResult { ok, .. } => {
+                Some(GatewayEvent::SecretsRemoveTotpResult { ok })
+            }
+            ServerPayload::Error { message, .. } => Some(GatewayEvent::Error { message }),
+            ServerPayload::Info { message } => Some(GatewayEvent::Info { message }),
+            ServerPayload::DomQuery { id, js } => Some(GatewayEvent::DomQuery { id, js }),
+            // Frames with no client-visible state.
+            ServerPayload::Empty
+            | ServerPayload::TasksUpdate { .. }
+            | ServerPayload::ThreadCreated { .. } => None,
+        }
+    }
 }
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────

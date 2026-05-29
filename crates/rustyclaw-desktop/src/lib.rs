@@ -8,7 +8,7 @@ use url::Url;
 
 pub mod app;
 mod components;
-mod gateway;
+pub(crate) mod gateway_client;
 mod markdown;
 pub(crate) mod menu;
 mod state;

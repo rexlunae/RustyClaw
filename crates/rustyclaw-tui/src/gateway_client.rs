@@ -4,7 +4,7 @@
 //! into application actions.
 
 use crate::action::Action;
-use rustyclaw_core::gateway::{ServerFrame, ServerPayload, StatusType};
+use rustyclaw_core::gateway::{GatewayEvent, SecretEntryDto, ServerFrame, ServerPayload};
 
 /// Result of processing a server frame - includes optional action and whether to update UI.
 pub struct FrameAction {
@@ -34,271 +34,241 @@ impl FrameAction {
 }
 
 /// Convert a server frame into TUI actions.
-/// This encapsulates all the protocol parsing logic in one place.
+///
+/// Wire-frame parsing is delegated to the shared
+/// [`GatewayEvent::from_server_frame`] so the TUI and desktop clients agree on
+/// exactly one mapping from the binary protocol to client-facing events. This
+/// function only adapts that shared [`GatewayEvent`] into the TUI's [`Action`]
+/// enum (see [`event_to_action`]).
+///
+/// `ThreadsUpdate` is the one exception: its frame carries the rich wire
+/// [`rustyclaw_core::gateway::protocol::ThreadInfoDto`] (kind/status icons,
+/// summary flag) that the client-facing event DTO drops, and the TUI sidebar
+/// renders those fields. So it is handled directly from the frame to keep them.
 pub fn server_frame_to_action(frame: &ServerFrame) -> FrameAction {
-    use ServerPayload;
+    if let ServerPayload::ThreadsUpdate {
+        threads,
+        foreground_id,
+    } = &frame.payload
+    {
+        return FrameAction::just_action(Action::ThreadsUpdate {
+            threads: threads.clone(),
+            foreground_id: *foreground_id,
+        });
+    }
 
-    match &frame.payload {
-        ServerPayload::Hello { .. } => {
-            FrameAction::update(Action::GatewayConnected)
+    match GatewayEvent::from_server_frame(frame.clone()) {
+        Some(event) => event_to_action(event),
+        None => FrameAction::none(),
+    }
+}
+
+/// Adapt a shared [`GatewayEvent`] into the TUI's [`Action`] enum.
+///
+/// This is the TUI-specific presentation mapping; it deliberately has no
+/// knowledge of the wire protocol. The `update_ui` flag is set only for the
+/// connection-lifecycle events that previously forced an immediate redraw.
+fn event_to_action(event: GatewayEvent) -> FrameAction {
+    use GatewayEvent as E;
+
+    match event {
+        E::Connected { .. } => FrameAction::update(Action::GatewayConnected),
+        E::Disconnected { reason } => {
+            FrameAction::just_action(Action::GatewayDisconnected(reason.unwrap_or_default()))
         }
-        ServerPayload::Status { status, detail } => {
-            use StatusType::*;
-            match status {
-                ModelConfigured => {
-                    FrameAction::just_action(Action::Info(format!("Model: {detail}")))
-                }
-                CredentialsLoaded => FrameAction::just_action(Action::Info(detail.clone())),
-                CredentialsMissing => FrameAction::just_action(Action::Warning(detail.clone())),
-                ModelConnecting => FrameAction::just_action(Action::Info(detail.clone())),
-                ModelReady => FrameAction::just_action(Action::Success(detail.clone())),
-                ModelError => FrameAction::just_action(Action::Error(detail.clone())),
-                NoModel => FrameAction::just_action(Action::Warning(detail.clone())),
-                VaultLocked => FrameAction::just_action(Action::GatewayVaultLocked),
-            }
-        }
-        ServerPayload::AuthChallenge { .. } => {
-            FrameAction::just_action(Action::GatewayAuthChallenge)
-        }
-        ServerPayload::AuthResult { ok, message, retry } => {
-            if *ok {
-                FrameAction::update(Action::GatewayAuthenticated)
-            } else if retry.unwrap_or(false) {
-                FrameAction::just_action(Action::Warning(
+        E::AuthRequired => FrameAction::just_action(Action::GatewayAuthChallenge),
+        E::AuthSuccess => FrameAction::update(Action::GatewayAuthenticated),
+        E::AuthFailed { message, retry } => {
+            if retry {
+                FrameAction::just_action(Action::Warning(if message.is_empty() {
+                    "Invalid code. Try again.".into()
+                } else {
                     message
-                        .clone()
-                        .unwrap_or_else(|| "Invalid code. Try again.".into()),
-                ))
+                }))
             } else {
-                FrameAction::just_action(Action::Error(
+                FrameAction::just_action(Action::Error(if message.is_empty() {
+                    "Authentication failed.".into()
+                } else {
                     message
-                        .clone()
-                        .unwrap_or_else(|| "Authentication failed.".into()),
-                ))
+                }))
             }
         }
-        ServerPayload::AuthLocked { message, .. } => {
-            FrameAction::just_action(Action::Error(message.clone()))
+        E::VaultLocked => FrameAction::just_action(Action::GatewayVaultLocked),
+        E::VaultUnlocked => FrameAction::update(Action::GatewayVaultUnlocked),
+        E::ModelReady { model } => FrameAction::just_action(Action::Success(model)),
+        E::ModelError { message } => FrameAction::just_action(Action::Error(message)),
+        E::ModelReloaded { provider, model } => {
+            FrameAction::just_action(Action::GatewayReloaded { provider, model })
         }
-        ServerPayload::VaultUnlocked { ok, message } => {
-            if *ok {
-                FrameAction::update(Action::GatewayVaultUnlocked)
-            } else {
-                FrameAction::just_action(Action::Error(
-                    message
-                        .clone()
-                        .unwrap_or_else(|| "Failed to unlock vault.".into()),
-                ))
-            }
-        }
-        ServerPayload::ReloadResult {
-            ok,
-            provider,
-            model,
-            message,
-        } => {
-            if *ok {
-                FrameAction::just_action(Action::GatewayReloaded {
-                    provider: provider.clone(),
-                    model: model.clone(),
-                })
-            } else {
-                FrameAction::just_action(Action::Error(format!(
-                    "Reload failed: {}",
-                    message.as_deref().unwrap_or("Unknown error")
-                )))
-            }
-        }
-        ServerPayload::SecretsListResult { ok: _, entries } => {
-            FrameAction::just_action(Action::SecretsListResult {
-                entries: entries.clone(),
-            })
-        }
-        ServerPayload::SecretsStoreResult { ok, message } => {
-            FrameAction::just_action(Action::SecretsStoreResult {
-                ok: *ok,
-                message: message.clone(),
-            })
-        }
-        ServerPayload::SecretsGetResult {
-            ok: _, key, value, ..
-        } => FrameAction::just_action(Action::SecretsGetResult {
-            key: key.clone(),
-            value: value.clone(),
-        }),
-        ServerPayload::SecretsPeekResult {
-            ok,
-            fields,
-            message,
-        } => FrameAction::just_action(Action::SecretsPeekResult {
-            name: String::new(),
-            ok: *ok,
-            fields: fields.clone(),
-            message: message.clone(),
-        }),
-        ServerPayload::SecretsSetPolicyResult { ok, message } => {
-            FrameAction::just_action(Action::SecretsSetPolicyResult {
-                ok: *ok,
-                message: message.clone(),
-            })
-        }
-        ServerPayload::SecretsSetDisabledResult { ok, message: _, .. } => {
-            FrameAction::just_action(Action::SecretsSetDisabledResult {
-                ok: *ok,
-                cred_name: String::new(),
-                disabled: false,
-            })
-        }
-        ServerPayload::SecretsDeleteResult { ok, .. } => {
-            FrameAction::just_action(Action::SecretsDeleteCredentialResult {
-                ok: *ok,
-                cred_name: String::new(),
-            })
-        }
-        ServerPayload::SecretsDeleteCredentialResult { ok, .. } => {
-            FrameAction::just_action(Action::SecretsDeleteCredentialResult {
-                ok: *ok,
-                cred_name: String::new(),
-            })
-        }
-        ServerPayload::SecretsHasTotpResult { has_totp } => {
-            FrameAction::just_action(Action::SecretsHasTotpResult {
-                has_totp: *has_totp,
-            })
-        }
-        ServerPayload::SecretsSetupTotpResult { ok, uri, message } => {
-            FrameAction::just_action(Action::SecretsSetupTotpResult {
-                ok: *ok,
-                uri: uri.clone(),
-                message: message.clone(),
-            })
-        }
-        ServerPayload::SecretsVerifyTotpResult { ok, .. } => {
-            FrameAction::just_action(Action::SecretsVerifyTotpResult { ok: *ok })
-        }
-        ServerPayload::SecretsRemoveTotpResult { ok, .. } => {
-            FrameAction::just_action(Action::SecretsRemoveTotpResult { ok: *ok })
-        }
-        ServerPayload::StreamStart => FrameAction::just_action(Action::GatewayStreamStart),
-        ServerPayload::ThinkingStart => FrameAction::just_action(Action::GatewayThinkingStart),
-        ServerPayload::ThinkingDelta { .. } => {
-            FrameAction::just_action(Action::GatewayThinkingDelta)
-        }
-        ServerPayload::ThinkingEnd => FrameAction::just_action(Action::GatewayThinkingEnd),
-        ServerPayload::Chunk { delta } => {
-            FrameAction::just_action(Action::GatewayChunk(delta.clone()))
-        }
-        ServerPayload::ResponseDone { .. } => FrameAction::just_action(Action::GatewayResponseDone),
-        ServerPayload::ToolCall {
+        E::StreamStart => FrameAction::just_action(Action::GatewayStreamStart),
+        E::ThinkingStart => FrameAction::just_action(Action::GatewayThinkingStart),
+        E::ThinkingDelta => FrameAction::just_action(Action::GatewayThinkingDelta),
+        E::ThinkingEnd => FrameAction::just_action(Action::GatewayThinkingEnd),
+        E::Chunk { delta } => FrameAction::just_action(Action::GatewayChunk(delta)),
+        E::ResponseDone => FrameAction::just_action(Action::GatewayResponseDone),
+        E::ToolCall {
             id,
             name,
             arguments,
         } => FrameAction::just_action(Action::GatewayToolCall {
-            id: id.clone(),
-            name: name.clone(),
-            arguments: arguments.clone(),
+            id,
+            name,
+            arguments,
         }),
-        ServerPayload::ToolResult {
+        E::ToolResult {
             id,
             name,
             result,
             is_error,
         } => FrameAction::just_action(Action::GatewayToolResult {
-            id: id.clone(),
-            name: name.clone(),
-            result: result.clone(),
-            is_error: *is_error,
+            id,
+            name,
+            result,
+            is_error,
         }),
-        ServerPayload::Error { message, .. } => {
-            FrameAction::just_action(Action::Error(message.clone()))
-        }
-        ServerPayload::Info { message } => FrameAction::just_action(Action::Info(message.clone())),
-        ServerPayload::ToolApprovalRequest {
+        E::ToolApprovalRequest {
             id,
             name,
             arguments,
         } => FrameAction::just_action(Action::ToolApprovalRequest {
-            id: id.clone(),
-            name: name.clone(),
-            arguments: arguments.clone(),
+            id,
+            name,
+            arguments,
         }),
-        ServerPayload::UserPromptRequest { id, prompt } => {
-            let mut prompt = prompt.clone();
-            prompt.id = id.clone();
+        E::UserPromptRequest { prompt, .. } => {
             FrameAction::just_action(Action::UserPromptRequest(prompt))
         }
-        ServerPayload::TasksUpdate { tasks: _ } => {
-            // Legacy — tasks are now unified with threads
-            FrameAction::none()
-        }
-        ServerPayload::ThreadsUpdate {
-            threads,
-            foreground_id,
-        } => FrameAction::just_action(Action::ThreadsUpdate {
-            threads: threads.clone(),
-            foreground_id: *foreground_id,
-        }),
-        ServerPayload::ThreadMessages {
-            thread_id,
-            messages,
-        } => FrameAction::just_action(Action::ThreadMessages {
-            thread_id: *thread_id,
-            messages: messages.clone(),
-        }),
-        ServerPayload::ThreadCreated {
-            thread_id: _,
-            label: _,
-        } => {
-            // Thread was created — we'll get a ThreadsUpdate too
-            FrameAction::none()
-        }
-        ServerPayload::ThreadSwitched {
-            thread_id,
-            context_summary,
-        } => {
-            // Thread was switched — clear messages and show context summary if available
-            FrameAction::just_action(Action::ThreadSwitched {
-                thread_id: *thread_id,
-                context_summary: context_summary.clone(),
-            })
-        }
-        ServerPayload::ThreadHistoryReply {
-            thread_id,
-            ok,
-            messages,
-            error,
-        } => FrameAction::just_action(Action::ThreadHistory {
-            thread_id: *thread_id,
-            ok: *ok,
-            messages: messages.clone(),
-            error: error.clone(),
-        }),
-        ServerPayload::CredentialRequest {
+        E::CredentialRequest {
             id,
             provider,
             secret_name,
             message,
         } => FrameAction::just_action(Action::CredentialRequest {
-            id: id.clone(),
-            provider: provider.clone(),
-            secret_name: secret_name.clone(),
-            message: message.clone(),
+            id,
+            provider,
+            secret_name,
+            message,
         }),
-        ServerPayload::DeviceFlowStart { url, code, message: _ } => {
-            FrameAction::just_action(Action::DeviceFlowCodeReady {
-                url: url.clone(),
-                code: code.clone(),
+        E::DeviceFlowStart { url, code, .. } => {
+            FrameAction::just_action(Action::DeviceFlowCodeReady { url, code })
+        }
+        E::DeviceFlowComplete => FrameAction::just_action(Action::DeviceFlowComplete),
+        E::ThreadMessages {
+            thread_id,
+            messages,
+        } => FrameAction::just_action(Action::ThreadMessages {
+            thread_id,
+            messages,
+        }),
+        E::ThreadSwitched {
+            thread_id,
+            context_summary,
+        } => FrameAction::just_action(Action::ThreadSwitched {
+            thread_id,
+            context_summary,
+        }),
+        E::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
+        } => FrameAction::just_action(Action::ThreadHistory {
+            thread_id,
+            ok,
+            messages,
+            error,
+        }),
+        E::Error { message } => FrameAction::just_action(Action::Error(message)),
+        E::Info { message } => FrameAction::just_action(Action::Info(message)),
+        E::Warning { message } => FrameAction::just_action(Action::Warning(message)),
+        // DOM queries require a webview; the TUI cannot evaluate JS, so ignore.
+        E::DomQuery { .. } => FrameAction::none(),
+        E::SecretsListResult { entries, .. } => FrameAction::just_action(Action::SecretsListResult {
+            // `SecretEntryInfo` and the wire `SecretEntryDto` are field-for-field
+            // identical, so this round-trips losslessly.
+            entries: entries
+                .into_iter()
+                .map(|e| SecretEntryDto {
+                    name: e.name,
+                    label: e.label,
+                    kind: e.kind,
+                    policy: e.policy,
+                    disabled: e.disabled,
+                })
+                .collect(),
+        }),
+        E::SecretsStoreResult { ok, message } => {
+            FrameAction::just_action(Action::SecretsStoreResult { ok, message })
+        }
+        E::SecretsGetResult { key, value } => {
+            FrameAction::just_action(Action::SecretsGetResult { key, value })
+        }
+        E::SecretsDeleteResult { ok, .. } | E::SecretsDeleteCredentialResult { ok } => {
+            FrameAction::just_action(Action::SecretsDeleteCredentialResult {
+                ok,
+                cred_name: String::new(),
             })
         }
-        ServerPayload::DeviceFlowComplete => {
-            FrameAction::just_action(Action::DeviceFlowComplete)
+        E::SecretsPeekResult {
+            ok,
+            fields,
+            message,
+        } => FrameAction::just_action(Action::SecretsPeekResult {
+            name: String::new(),
+            ok,
+            fields,
+            message,
+        }),
+        E::SecretsSetPolicyResult { ok, message } => {
+            FrameAction::just_action(Action::SecretsSetPolicyResult { ok, message })
         }
-        ServerPayload::DomQuery { .. } => {
-            // DOM queries are only meaningful for the desktop client's
-            // webview.  The TUI cannot evaluate JS, so ignore.
-            FrameAction::none()
+        E::SecretsSetDisabledResult { ok } => {
+            FrameAction::just_action(Action::SecretsSetDisabledResult {
+                ok,
+                cred_name: String::new(),
+                disabled: false,
+            })
         }
-        ServerPayload::Empty => FrameAction::none(),
+        E::SecretsHasTotpResult { has_totp } => {
+            FrameAction::just_action(Action::SecretsHasTotpResult { has_totp })
+        }
+        E::SecretsSetupTotpResult { ok, uri, message } => {
+            FrameAction::just_action(Action::SecretsSetupTotpResult { ok, uri, message })
+        }
+        E::SecretsVerifyTotpResult { ok } => {
+            FrameAction::just_action(Action::SecretsVerifyTotpResult { ok })
+        }
+        E::SecretsRemoveTotpResult { ok } => {
+            FrameAction::just_action(Action::SecretsRemoveTotpResult { ok })
+        }
+        // `ThreadsUpdate` is intercepted at the frame level in
+        // `server_frame_to_action` to preserve the rich wire DTO, so this arm
+        // is unreachable in practice. Kept (with a best-effort, icon-less
+        // conversion) only to keep the match exhaustive.
+        E::ThreadsUpdate {
+            threads,
+            foreground_id,
+        } => FrameAction::just_action(Action::ThreadsUpdate {
+            threads: threads
+                .into_iter()
+                .map(|t| crate::action::ThreadInfo {
+                    id: t.id,
+                    label: t.label.unwrap_or_default(),
+                    description: t.description,
+                    status: if t.status.is_empty() {
+                        None
+                    } else {
+                        Some(t.status)
+                    },
+                    kind_icon: None,
+                    status_icon: None,
+                    is_foreground: t.is_foreground,
+                    message_count: t.message_count,
+                    has_summary: false,
+                })
+                .collect(),
+            foreground_id,
+        }),
     }
 }
 
@@ -331,7 +301,7 @@ mod tests {
     mod action_conversion {
         use super::*;
         use crate::action::Action;
-        use rustyclaw_core::gateway::{SecretEntryDto, ServerFrameType};
+        use rustyclaw_core::gateway::{SecretEntryDto, ServerFrameType, StatusType};
 
         #[test]
         fn test_hello_frame_to_action() {

@@ -10,10 +10,13 @@ use crate::components::{
     ToolApprovalDialog, UserPromptDialog,
     VaultUnlockDialog, generate_qr_code,
 };
-use crate::gateway::{GatewayClient, GatewayCommand, GatewayEvent};
+
+use crate::gateway_client::GatewayClient;
 use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
+use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
+
 use rustyclaw_view::{
     CredentialRequestData, DeviceFlowData, HatchingDialogData, PairingDialogData, PromptAttachment,
     SecretInfoData, SecretsDialogData, SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData,
@@ -1745,6 +1748,29 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
                 ));
             }
         }
+        GatewayEvent::ModelReloaded { provider, model } => {
+            state.write().status_message = Some(format!("Model reloaded: {provider}/{model}"));
+        }
+        GatewayEvent::ThinkingDelta => {
+            // Keeps the thinking clock alive server-side; the desktop tracks
+            // thinking state via ThinkingStart/ThinkingEnd, so nothing to do.
+        }
+        GatewayEvent::ThreadSwitched { .. } => {
+            // Thread state syncs via ThreadsUpdate/ThreadHistory.
+        }
+        GatewayEvent::Warning { message } => {
+            state.write().status_message = Some(message);
+        }
+        // Secrets-management results without a desktop UI surface. These are
+        // driven from the TUI's secrets manager; the desktop ignores them.
+        GatewayEvent::SecretsGetResult { .. }
+        | GatewayEvent::SecretsPeekResult { .. }
+        | GatewayEvent::SecretsSetDisabledResult { .. }
+        | GatewayEvent::SecretsDeleteCredentialResult { .. }
+        | GatewayEvent::SecretsHasTotpResult { .. }
+        | GatewayEvent::SecretsSetupTotpResult { .. }
+        | GatewayEvent::SecretsVerifyTotpResult { .. }
+        | GatewayEvent::SecretsRemoveTotpResult { .. } => {}
         GatewayEvent::Error { message } => {
             state.write().status_message = Some(message);
             state.write().is_processing = false;
