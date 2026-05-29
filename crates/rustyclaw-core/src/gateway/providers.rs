@@ -13,6 +13,36 @@ use crate::error_details::{ErrorLike, RequestDetails};
 use crate::providers;
 use crate::tools;
 
+// ── Error helpers ───────────────────────────────────────────────────────────
+
+/// Parse a provider HTTP error response body and return a user-friendly
+/// `anyhow::Error`.
+///
+/// Handles the OpenAI error envelope `{"error":{"message":"...","code":"..."}}`.
+/// For the `unsupported_api_for_model` code, the message is rewritten so users
+/// know to pick a different model rather than seeing a raw JSON dump.
+pub(crate) fn provider_error(prefix: &str, status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
+        if let Some(err_obj) = json.get("error") {
+            let code = err_obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
+            let msg = err_obj
+                .get("message")
+                .and_then(|v| v.as_str())
+                .unwrap_or(body);
+            if code == "unsupported_api_for_model" {
+                return anyhow::anyhow!(
+                    "{}: model is not accessible via the chat/completions endpoint. \
+                     Choose a different model. ({})",
+                    prefix,
+                    msg
+                );
+            }
+            return anyhow::anyhow!("{} returned {} — {}", prefix, status, msg);
+        }
+    }
+    anyhow::anyhow!("{} returned {} — {}", prefix, status, body)
+}
+
 // ── Connection retry helper ─────────────────────────────────────────────────
 
 /// Send an HTTP request with automatic retry on connection errors.
@@ -831,6 +861,255 @@ fn format_probe_error(err: &anyhow_tracing::Error) -> String {
     }
 }
 
+// ── OpenAI Responses API ─────────────────────────────────────────────────────
+
+/// Convert our internal `ChatMessage` slice into the `input` array expected by
+/// the OpenAI Responses API (`POST /v1/responses`).
+///
+/// Handles all four cases that appear in multi-turn tool loops:
+/// * `system`/`user` — passed through unchanged.
+/// * `assistant` with plain text — passed through unchanged.
+/// * `assistant` stored as JSON with `tool_calls` (Chat Completions format)
+///   — each tool call becomes a `{"type":"function_call",...}` item.
+/// * `tool` stored as JSON with `tool_call_id`/`content`
+///   — converted to `{"type":"function_call_output",...}`.
+fn messages_to_responses_input(messages: &[ChatMessage]) -> Vec<serde_json::Value> {
+    let mut input: Vec<serde_json::Value> = Vec::with_capacity(messages.len());
+
+    for msg in messages {
+        match msg.role.as_str() {
+            "system" | "user" => {
+                input.push(json!({"role": msg.role, "content": msg.content}));
+            }
+            "assistant" => {
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    if let Some(tool_calls) = parsed.get("tool_calls").and_then(|v| v.as_array()) {
+                        // Emit any preceding text content.
+                        let text = parsed
+                            .get("content")
+                            .and_then(|v| v.as_str())
+                            .filter(|s| !s.trim().is_empty());
+                        if let Some(text) = text {
+                            input.push(json!({"role": "assistant", "content": text}));
+                        }
+                        // One function_call item per tool call.
+                        for tc in tool_calls {
+                            let call_id = tc["id"].as_str().unwrap_or("");
+                            let name =
+                                tc["function"]["name"].as_str().unwrap_or("");
+                            let arguments =
+                                tc["function"]["arguments"].as_str().unwrap_or("{}");
+                            input.push(json!({
+                                "type": "function_call",
+                                "call_id": call_id,
+                                "name": name,
+                                "arguments": arguments,
+                            }));
+                        }
+                        continue;
+                    }
+                    // JSON-wrapped plain assistant message (has "role" key).
+                    if parsed.get("role").is_some() {
+                        let text = parsed["content"].as_str().unwrap_or("");
+                        input.push(json!({"role": "assistant", "content": text}));
+                        continue;
+                    }
+                }
+                input.push(json!({"role": "assistant", "content": msg.content}));
+            }
+            "tool" => {
+                // {"role":"tool","tool_call_id":"call_xxx","content":"result"}
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    let call_id = parsed["tool_call_id"].as_str().unwrap_or("");
+                    let output = parsed["content"].as_str().unwrap_or("");
+                    input.push(json!({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": output,
+                    }));
+                } else {
+                    input.push(json!({
+                        "type": "function_call_output",
+                        "call_id": "",
+                        "output": msg.content,
+                    }));
+                }
+            }
+            _ => {
+                input.push(json!({"role": msg.role, "content": msg.content}));
+            }
+        }
+    }
+
+    input
+}
+
+/// Consume a streaming Responses API SSE response and return a `ModelResponse`.
+async fn consume_responses_api_sse(
+    resp: reqwest::Response,
+    mut writer: Option<&mut dyn TransportWriter>,
+) -> Result<ModelResponse> {
+    use futures_util::StreamExt;
+
+    let mut stream = resp.bytes_stream();
+    let mut buffer = String::new();
+    let mut result = ModelResponse::default();
+    // item_id → (call_id, name, accumulated_arguments)
+    let mut func_calls: std::collections::HashMap<String, (String, String, String)> =
+        std::collections::HashMap::new();
+    let mut stream_started = false;
+
+    while let Some(chunk_result) = stream.next().await {
+        let chunk = chunk_result.context("Responses API stream read error")?;
+        buffer.push_str(&String::from_utf8_lossy(&chunk));
+
+        while let Some((event_end, skip)) = find_event_boundary(&buffer) {
+            let event = buffer[..event_end].to_string();
+            buffer = buffer[event_end + skip..].to_string();
+
+            let mut event_type = String::new();
+            let mut event_data = String::new();
+
+            for line in event.lines() {
+                if let Some(t) = line.strip_prefix("event: ") {
+                    event_type = t.to_string();
+                } else if let Some(d) = line.strip_prefix("data: ") {
+                    event_data = d.to_string();
+                }
+            }
+
+            if event_data.is_empty() || event_data == "[DONE]" {
+                continue;
+            }
+
+            let Ok(json) = serde_json::from_str::<serde_json::Value>(&event_data) else {
+                continue;
+            };
+
+            trace!(event_type = %event_type, "Responses API SSE event");
+
+            match event_type.as_str() {
+                "response.output_text.delta" => {
+                    let delta = json["delta"].as_str().unwrap_or("");
+                    if !delta.is_empty() {
+                        if !stream_started {
+                            if let Some(w) = writer.as_deref_mut() {
+                                server::send_stream_start(w).await?;
+                            }
+                            stream_started = true;
+                        }
+                        result.text.push_str(delta);
+                        if let Some(w) = writer.as_deref_mut() {
+                            send_chunk(w, delta).await?;
+                        }
+                    }
+                }
+                "response.output_item.added" => {
+                    let item = &json["item"];
+                    if item["type"].as_str() == Some("function_call") {
+                        let item_id = item["id"].as_str().unwrap_or("").to_string();
+                        let call_id = item["call_id"].as_str().unwrap_or("").to_string();
+                        let name = item["name"].as_str().unwrap_or("").to_string();
+                        func_calls.insert(item_id, (call_id, name, String::new()));
+                    }
+                }
+                "response.function_call_arguments.delta" => {
+                    let item_id = json["item_id"].as_str().unwrap_or("");
+                    let delta = json["delta"].as_str().unwrap_or("");
+                    if let Some(entry) = func_calls.get_mut(item_id) {
+                        entry.2.push_str(delta);
+                    }
+                }
+                "response.output_item.done" => {
+                    let item = &json["item"];
+                    if item["type"].as_str() == Some("function_call") {
+                        let item_id = item["id"].as_str().unwrap_or("");
+                        if let Some((call_id, name, args)) = func_calls.remove(item_id) {
+                            let final_args =
+                                item["arguments"].as_str().unwrap_or(args.as_str());
+                            let arguments =
+                                serde_json::from_str(final_args).unwrap_or(json!({}));
+                            if !call_id.is_empty() && !name.is_empty() {
+                                result.tool_calls.push(ParsedToolCall {
+                                    id: call_id,
+                                    name,
+                                    arguments,
+                                });
+                            }
+                        }
+                    }
+                }
+                "response.completed" => {
+                    let usage = &json["response"]["usage"];
+                    result.prompt_tokens = usage["input_tokens"].as_u64();
+                    result.completion_tokens = usage["output_tokens"].as_u64();
+                    result.finish_reason = Some(
+                        json["response"]["status"]
+                            .as_str()
+                            .unwrap_or("stop")
+                            .to_string(),
+                    );
+                }
+                "response.failed" | "error" => {
+                    let msg = json["error"]["message"]
+                        .as_str()
+                        .or_else(|| json["message"].as_str())
+                        .unwrap_or("Unknown error from Responses API");
+                    anyhow::bail!("Responses API error: {}", msg);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(result)
+}
+
+/// Call the OpenAI Responses API (`POST .../responses`) with tool support.
+///
+/// This is used automatically as a fallback when a model refuses `/chat/completions`
+/// with `code: "unsupported_api_for_model"` (e.g. `gpt-5.5`).
+pub async fn call_openai_responses_api(
+    http: &reqwest::Client,
+    req: &ProviderRequest,
+    writer: Option<&mut dyn TransportWriter>,
+) -> Result<ModelResponse> {
+    let url = format!("{}/responses", req.base_url.trim_end_matches('/'));
+
+    let input = messages_to_responses_input(&req.messages);
+
+    let tool_defs = if std::env::var("RUSTYCLAW_SKIP_TOOLS").is_ok() {
+        vec![]
+    } else {
+        tools::tools_openai()
+    };
+
+    let mut body = json!({
+        "model": req.model,
+        "input": input,
+        "stream": true,
+    });
+    if !tool_defs.is_empty() {
+        body["tools"] = json!(tool_defs);
+    }
+
+    let mut builder = http.post(&url).json(&body);
+    if let Some(ref key) = req.api_key {
+        builder = builder.bearer_auth(key);
+    }
+    builder = apply_copilot_headers(builder, &req.provider, &req.messages);
+
+    let resp = send_with_retry(builder).await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let text = resp.text().await.unwrap_or_default();
+        return Err(provider_error("Provider (Responses API)", status, &text));
+    }
+
+    consume_responses_api_sse(resp, writer).await
+}
+
 // ── Provider-specific callers ───────────────────────────────────────────────
 
 /// Parse SSE text that was already fully received (not streaming).
@@ -1265,7 +1544,20 @@ pub async fn call_openai_with_tools(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Provider returned {} — {}", status, text);
+
+        // Transparently retry via the Responses API for models that only
+        // support that endpoint (e.g. gpt-5.5).
+        if let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) {
+            if json["error"]["code"].as_str() == Some("unsupported_api_for_model") {
+                debug!(
+                    model = %req.model,
+                    "Model requires Responses API; retrying via /responses"
+                );
+                return call_openai_responses_api(http, req, writer).await;
+            }
+        }
+
+        return Err(provider_error("Provider", status, &text));
     }
 
     // Check if the server returned a streaming response (SSE) despite us
@@ -1444,7 +1736,7 @@ pub async fn call_anthropic_with_tools(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Anthropic returned {} — {}", status, text);
+        return Err(provider_error("Anthropic", status, &text));
     }
 
     // Non-streaming path (for internal calls like compaction)
@@ -1736,7 +2028,7 @@ pub async fn call_google_with_tools(
     if !resp.status().is_success() {
         let status = resp.status();
         let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Google returned {} — {}", status, text);
+        return Err(provider_error("Google", status, &text));
     }
 
     let data: serde_json::Value = resp.json().await.context("Invalid JSON from Google")?;

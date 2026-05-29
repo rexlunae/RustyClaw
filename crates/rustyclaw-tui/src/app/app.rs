@@ -103,9 +103,7 @@ pub(crate) enum UserInput {
     ThreadSwitch(u64),
     /// Request the gateway-persisted history for a thread (cross-session/client).
     RequestThreadHistory(u64),
-    /// Request identity generation for hatching
-    HatchingRequest,
-    /// Hatching response received - save to SOUL.md
+    /// Hatching name entered - save personalised SOUL.md
     HatchingComplete(String),
     /// User selected a provider from the selector dialog
     SelectProvider(String),
@@ -1005,30 +1003,28 @@ impl App {
                         }
                     }
                 }
-                Ok(UserInput::HatchingRequest) => {
-                    // Send hatching prompt to gateway as a special chat
-                    if let Some(ref mut sink) = gw_writer {
-                        let hatching_prompt = crate::components::hatching_dialog::HATCHING_PROMPT;
-                        let messages = vec![
-                            ChatMessage::text("system", hatching_prompt),
-                            ChatMessage::text("user", "Generate my identity."),
-                        ];
-                        let frame = ClientFrame {
-                            frame_type: ClientFrameType::Chat,
-                            payload: ClientPayload::Chat { messages },
-                        };
-                        if let Ok(data) = serialize_frame(&frame) {
-                            let _ = sink.send_raw(&data).await;
-                        }
-                    }
-                }
-                Ok(UserInput::HatchingComplete(identity)) => {
-                    // Save identity to SOUL.md
+                Ok(UserInput::HatchingComplete(payload)) => {
+                    // Parse "name\tpersonality" or just "name"
+                    let (name, personality) = if let Some((n, p)) = payload.split_once('\t') {
+                        (n.trim().to_string(), Some(p.trim().to_string()))
+                    } else {
+                        (payload.trim().to_string(), None)
+                    };
                     let soul_path = config.soul_path();
-                    if let Err(e) = std::fs::write(&soul_path, &identity) {
+                    // Build personalised SOUL.md: heading with name, then optional
+                    // personality section, then the default template body.
+                    let default_body = rustyclaw_core::soul::DEFAULT_SOUL_CONTENT
+                        .trim_start_matches("# SOUL.md - Who You Are")
+                        .trim_start_matches('\n');
+                    let content = if let Some(ref p) = personality {
+                        format!("# {}\n\n## Personality\n\n{}\n\n{}", name, p, default_body)
+                    } else {
+                        format!("# {}\n\n{}", name, default_body)
+                    };
+                    if let Err(e) = std::fs::write(&soul_path, &content) {
                         tracing::warn!("Failed to write SOUL.md: {}", e);
                     } else {
-                        tracing::info!("Saved hatched identity to {:?}", soul_path);
+                        tracing::debug!("Saved SOUL.md for agent {:?} to {:?}", name, soul_path);
                     }
                 }
                 Ok(UserInput::SelectProvider(provider_id)) => {

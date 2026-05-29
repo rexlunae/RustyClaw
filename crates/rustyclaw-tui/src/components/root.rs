@@ -29,7 +29,7 @@ use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
 use crate::types::DisplayMessage;
 use rustyclaw_view::{
-    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchState,
+    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchingDialogData,
     ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
     SkillInfoData, TabBarData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
 };
@@ -52,6 +52,7 @@ pub struct RootProps {
     // messages
     pub messages: Vec<DisplayMessage>,
     pub scroll_offset: i32,
+    pub selected_message_idx: Option<usize>,
 
     // command menu (slash completions)
     pub command_completions: Vec<String>,
@@ -129,9 +130,7 @@ pub struct RootProps {
     pub tool_perms_scroll_offset: usize,
 
     // hatching dialog overlay (first run)
-    pub show_hatching: bool,
-    pub hatching_state: HatchState,
-    pub hatching_agent_name: String,
+    pub hatching_dialog: HatchingDialogData,
 
     // provider selector dialog overlay
     pub show_provider_selector: bool,
@@ -191,9 +190,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     #[allow(unused_variables)]
     let show_tool_perms = props.show_tool_perms_dialog;
 
-    let show_hatching = props.show_hatching;
-    let hatching_state = props.hatching_state.clone();
-    let hatching_agent_name = props.hatching_agent_name.clone();
+    let hatching_dialog = props.hatching_dialog.clone();
+    let show_hatching = hatching_dialog.should_render(show_auth);
 
     // Provider / model selection dialog state
     let show_provider_sel = props.show_provider_selector;
@@ -245,6 +243,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         } else {
                             Some(props.soul_name.clone())
                         },
+                        selected_idx: props.selected_message_idx,
                     )
                     CommandMenu(
                         completions: props.command_completions.clone(),
@@ -276,6 +275,25 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 soul_name: props.soul_name.clone(),
                 model_label: props.model_label.clone(),
             )
+
+            // ── Hatching dialog overlay (first run) ─────────────────────
+            #(if show_hatching {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        HatchingDialog(
+                            data: hatching_dialog,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
 
             // ── Auth dialog overlay ─────────────────────────────────────
             #(if show_auth {
@@ -461,26 +479,6 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             tools: tool_perms_data,
                             selected: tool_perms_selected,
                             scroll_offset: tool_perms_scroll,
-                        )
-                    }
-                }.into_any()
-            } else {
-                element! { View() }.into_any()
-            })
-
-            // ── Hatching dialog overlay (first run) ─────────────────────
-            #(if show_hatching {
-                element! {
-                    View(
-                        width: props.width,
-                        height: props.height,
-                        position: Position::Absolute,
-                        top: 0,
-                        left: 0,
-                    ) {
-                        HatchingDialog(
-                            state: hatching_state,
-                            agent_name: hatching_agent_name,
                         )
                     }
                 }.into_any()

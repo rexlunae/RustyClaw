@@ -24,6 +24,7 @@ pub struct MessagesProps {
     pub surface: rustyclaw_view::ChatSurfaceData,
     /// Custom name to display for assistant messages.
     pub assistant_name: Option<String>,
+    pub selected_idx: Option<usize>,
 }
 
 #[component]
@@ -62,6 +63,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                         ) {
                             MessageBubble(
                                 data: bubble_data,
+                                is_selected: props.selected_idx == Some(i),
                             )
                             #(msg.tool_calls.iter().enumerate().map(|(ti, tool)| {
                                 element! {

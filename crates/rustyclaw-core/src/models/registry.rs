@@ -233,129 +233,10 @@ impl ModelRegistry {
 
     /// Populate with default models from known providers.
     fn populate_defaults(&mut self) {
-        // Anthropic
-        self.register(
-            ModelEntry::new("anthropic/claude-opus-4", "anthropic", CostTier::Premium)
-                .with_context(200_000)
-                .with_vision()
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("anthropic/claude-sonnet-4", "anthropic", CostTier::Standard)
-                .with_context(200_000)
-                .with_vision()
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("anthropic/claude-haiku-4", "anthropic", CostTier::Economy)
-                .with_context(200_000)
-                .with_vision(),
-        );
+        // Model catalog is populated dynamically from providers::fetch_models.
+        // This method only seeds the subagent recommendation defaults.
 
-        // OpenAI
-        self.register(
-            ModelEntry::new("openai/gpt-4.1", "openai", CostTier::Standard)
-                .with_context(128_000)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("openai/gpt-4.1-mini", "openai", CostTier::Economy)
-                .with_context(128_000)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("openai/gpt-4.1-nano", "openai", CostTier::Economy)
-                .with_context(128_000),
-        );
-        self.register(
-            ModelEntry::new("openai/o3", "openai", CostTier::Premium)
-                .with_context(200_000)
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("openai/o4-mini", "openai", CostTier::Standard)
-                .with_context(200_000)
-                .with_thinking(),
-        );
-
-        // Google
-        self.register(
-            ModelEntry::new("google/gemini-2.5-pro", "google", CostTier::Standard)
-                .with_context(1_000_000)
-                .with_vision()
-                .with_thinking(),
-        );
-        self.register(
-            ModelEntry::new("google/gemini-2.5-flash", "google", CostTier::Economy)
-                .with_context(1_000_000)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("google/gemini-2.0-flash", "google", CostTier::Economy)
-                .with_context(1_000_000)
-                .with_vision(),
-        );
-
-        // xAI
-        self.register(
-            ModelEntry::new("xai/grok-3", "xai", CostTier::Standard)
-                .with_context(131_072)
-                .with_vision(),
-        );
-        self.register(
-            ModelEntry::new("xai/grok-3-mini", "xai", CostTier::Economy)
-                .with_context(131_072)
-                .with_thinking(),
-        );
-
-        // GitHub Copilot (via proxy)
-        self.register(
-            ModelEntry::new(
-                "github-copilot/claude-opus-4",
-                "github-copilot",
-                CostTier::Free,
-            )
-            .with_context(200_000)
-            .with_vision()
-            .with_thinking()
-            .with_notes("Via Copilot subscription"),
-        );
-        self.register(
-            ModelEntry::new(
-                "github-copilot/claude-sonnet-4",
-                "github-copilot",
-                CostTier::Free,
-            )
-            .with_context(200_000)
-            .with_vision()
-            .with_thinking()
-            .with_notes("Via Copilot subscription"),
-        );
-        self.register(
-            ModelEntry::new("github-copilot/gpt-4.1", "github-copilot", CostTier::Free)
-                .with_context(128_000)
-                .with_vision()
-                .with_notes("Via Copilot subscription"),
-        );
-
-        // Local (Ollama)
-        self.register(
-            ModelEntry::new("ollama/llama3.1", "ollama", CostTier::Free)
-                .with_context(128_000)
-                .with_notes("Local inference"),
-        );
-        self.register(
-            ModelEntry::new("ollama/llama3.2:3b", "ollama", CostTier::Free)
-                .with_context(128_000)
-                .with_notes("Lightweight local"),
-        );
-        self.register(
-            ModelEntry::new("ollama/qwen2.5-coder", "ollama", CostTier::Free)
-                .with_context(32_000)
-                .with_notes("Code-focused local"),
-        );
-
-        // Set default subagent models
+        // Set default subagent models (policy-only — populated dynamically).
         self.subagent_defaults
             .insert(TaskComplexity::Simple, "ollama/llama3.2:3b".to_string());
         self.subagent_defaults.insert(
@@ -381,6 +262,79 @@ impl ModelRegistry {
     /// Get a model by ID.
     pub fn get(&self, id: &str) -> Option<&ModelEntry> {
         self.models.get(id)
+    }
+
+    /// Populate the registry from a provider's live model list.
+    ///
+    /// This is the single source of truth for the model catalog: it
+    /// calls [`crate::providers::fetch_models_detailed`] (which already
+    /// merges live API results with any curated static fallback) and
+    /// registers each returned model with an inferred [`CostTier`] and
+    /// capability flags.
+    ///
+    /// Existing entries for the same provider are replaced.  Errors
+    /// from the provider API are returned to the caller; on success
+    /// the number of registered models is returned.
+    pub async fn populate_from_provider(
+        &mut self,
+        provider_id: &str,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+    ) -> Result<usize, anyhow::Error> {
+        let models =
+            crate::providers::fetch_models_detailed(provider_id, api_key, base_url).await?;
+
+        // Drop existing entries for this provider so the registry
+        // exactly mirrors what the provider currently offers.
+        self.models
+            .retain(|_, entry| entry.provider != provider_id);
+
+        let count = models.len();
+        for info in models {
+            // Normalize to a fully-qualified id ("provider/model") so
+            // the registry stays consistent regardless of how the
+            // provider names its entries.
+            let qualified_id = if info.id.starts_with(&format!("{}/", provider_id)) {
+                info.id.clone()
+            } else {
+                format!("{}/{}", provider_id, info.id)
+            };
+
+            let tier = infer_cost_tier(provider_id, &info.id);
+            let mut entry = ModelEntry::new(qualified_id.clone(), provider_id, tier);
+            if let Some(name) = info.name {
+                entry.display_name = name;
+            }
+            if let Some(ctx) = info.context_length {
+                entry.context_window = Some(ctx.min(u32::MAX as u64) as u32);
+            }
+            // Mark available — we found it in the provider list.
+            entry.available = true;
+            // Capability inference from id patterns.
+            let lower = info.id.to_lowercase();
+            if lower.contains("vision")
+                || lower.contains("claude")
+                || lower.contains("gpt-4")
+                || lower.contains("gpt-5")
+                || lower.contains("gemini")
+                || lower.contains("o3")
+                || lower.contains("o4")
+            {
+                entry.supports_vision = true;
+            }
+            if lower.contains("thinking")
+                || lower.contains("opus")
+                || lower.contains("sonnet")
+                || lower.contains("o3")
+                || lower.contains("o4")
+                || lower.contains("reasoning")
+            {
+                entry.supports_thinking = true;
+            }
+            self.register(entry);
+        }
+
+        Ok(count)
     }
 
     /// Get a mutable model by ID.
@@ -506,6 +460,44 @@ pub fn create_model_registry() -> SharedModelRegistry {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Infer the [`CostTier`] for a model based on provider and id heuristics.
+///
+/// Used when populating the registry from a provider's live model list,
+/// since the live API doesn't carry tier metadata.
+pub fn infer_cost_tier(provider_id: &str, model_id: &str) -> CostTier {
+    let lower = model_id.to_lowercase();
+
+    // Local / subscription providers are always free at point-of-use.
+    if matches!(provider_id, "ollama" | "lmstudio" | "exo" | "github-copilot") {
+        return CostTier::Free;
+    }
+
+    // Premium: flagship models from each provider.
+    if lower.contains("opus")
+        || lower.contains("o3")
+        || lower.contains("gpt-5")
+        || lower.contains("gemini-2.5-pro")
+        || lower.contains("gemini-3-pro")
+        || lower.contains("gemini-3.1-pro")
+    {
+        return CostTier::Premium;
+    }
+
+    // Economy: explicit small/mini/flash/haiku/nano variants.
+    if lower.contains("haiku")
+        || lower.contains("mini")
+        || lower.contains("nano")
+        || lower.contains("flash")
+        || lower.contains("3b")
+        || lower.contains("8b")
+    {
+        return CostTier::Economy;
+    }
+
+    // Everything else (sonnet, gpt-4.x, gemini pro non-flagship, grok) → Standard.
+    CostTier::Standard
+}
 
 /// Format a model name for display.
 fn format_display_name(name: &str) -> String {

@@ -646,11 +646,37 @@ enum ClawHubAuthCommands {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize structured logging from environment variables.
-    // Set RUSTYCLAW_LOG=debug or RUST_LOG=debug for verbose output.
-    rustyclaw_core::logging::init_from_env();
-
     let cli = Cli::parse();
+
+    // For TUI mode, redirect logs to a file so they don't corrupt the terminal.
+    // For all other commands, log to stderr as usual.
+    #[cfg(feature = "tui")]
+    let _is_tui = matches!(
+        cli.command
+            .as_ref()
+            .unwrap_or(&Commands::Tui(TuiArgs::default())),
+        Commands::Tui(_)
+    );
+    #[cfg(not(feature = "tui"))]
+    let _is_tui = false;
+
+    if _is_tui {
+        #[cfg(feature = "tui")]
+        {
+            let log_path = dirs::home_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+                .join(".rustyclaw")
+                .join("tui.log");
+            if let Some(parent) = log_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            rustyclaw_core::logging::init_for_tui(&log_path);
+        }
+    } else {
+        // Initialize structured logging from environment variables.
+        // Set RUSTYCLAW_LOG=debug or RUST_LOG=debug for verbose output.
+        rustyclaw_core::logging::init_from_env();
+    }
 
     // Initialise colour output (respects --no-color / NO_COLOR).
     rustyclaw_core::theme::init_color(cli.common.no_color);
@@ -747,18 +773,6 @@ async fn main() -> Result<()> {
                     non_interactive: _args.non_interactive,
                 };
                 run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
-                // Optional agent setup step
-                let ws_dir = config.workspace_dir();
-                match rustyclaw_core::tools::agent_setup::exec_agent_setup(
-                    &serde_json::json!({}),
-                    &ws_dir,
-                ) {
-                    Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                    Err(e) => println!(
-                        "{}",
-                        rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
-                    ),
-                }
             }
             #[cfg(not(feature = "tui"))]
             {
@@ -772,18 +786,6 @@ async fn main() -> Result<()> {
         // ── Import ──────────────────────────────────────────────
         Commands::Import(args) => {
             run_import(&args, &mut config)?;
-            // Optional agent setup step
-            let ws_dir = config.workspace_dir();
-            match rustyclaw_core::tools::agent_setup::exec_agent_setup(
-                &serde_json::json!({}),
-                &ws_dir,
-            ) {
-                Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                Err(e) => println!(
-                    "{}",
-                    rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
-                ),
-            }
         }
 
         // ── RefreshToken ────────────────────────────────────────
@@ -1450,11 +1452,18 @@ async fn main() -> Result<()> {
                     let m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                     let swarms = m.list();
                     if swarms.is_empty() {
-                        println!("{}", t::muted("No swarms defined. Use `rustyclaw swarm create` to create one."));
+                        println!(
+                            "{}",
+                            t::muted(
+                                "No swarms defined. Use `rustyclaw swarm create` to create one."
+                            )
+                        );
                     } else {
                         for inst in swarms {
                             let status = match inst.status {
-                                rustyclaw_core::swarm::SwarmStatus::Running => t::icon_ok("Running"),
+                                rustyclaw_core::swarm::SwarmStatus::Running => {
+                                    t::icon_ok("Running")
+                                }
                                 rustyclaw_core::swarm::SwarmStatus::Idle => t::info("Idle"),
                                 rustyclaw_core::swarm::SwarmStatus::Paused => t::info("Paused"),
                                 rustyclaw_core::swarm::SwarmStatus::Stopped => t::muted("Stopped"),
@@ -1513,8 +1522,7 @@ async fn main() -> Result<()> {
 
                     // Phase 1: validate swarm/agent and extract info.
                     let (agent_name, agent_instructions, existing_session) = {
-                        let mut m =
-                            mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
+                        let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                         let inst = m
                             .get_mut(&swarm)
                             .ok_or_else(|| anyhow::anyhow!("Swarm '{}' not found", swarm))?;
@@ -1560,16 +1568,13 @@ async fn main() -> Result<()> {
                             "[Swarm: {} | Agent: {}]\n\n{}\n\nSystem Instructions:\n{}",
                             swarm, agent_name, msg, agent_instructions
                         );
-                        let key =
-                            sess_mgr.spawn_subagent(target, &task, Some(label), None);
+                        let key = sess_mgr.spawn_subagent(target, &task, Some(label), None);
                         drop(sess_mgr);
 
                         // Phase 3: store session key back.
-                        let mut m =
-                            mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
+                        let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
                         if let Some(inst) = m.get_mut(&swarm) {
-                            inst.agent_sessions
-                                .insert(target.to_string(), key.clone());
+                            inst.agent_sessions.insert(target.to_string(), key.clone());
                         }
                         key
                     };

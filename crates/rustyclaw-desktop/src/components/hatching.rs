@@ -1,65 +1,46 @@
 //! First-run "hatching" wizard for naming and personality setup.
 
 use dioxus::prelude::*;
+use rustyclaw_view::{HatchingDialogData, HatchingResult};
 
 #[derive(Props, Clone, PartialEq)]
 pub struct HatchingDialogProps {
-    pub visible: bool,
+    pub data: HatchingDialogData,
+    pub on_update: EventHandler<HatchingDialogData>,
     pub on_complete: EventHandler<HatchingResult>,
     pub on_cancel: EventHandler<()>,
 }
 
-/// Result of the hatching process.
-#[derive(Clone, Debug)]
-pub struct HatchingResult {
-    pub name: String,
-    pub personality: Option<String>,
-}
-
 #[component]
 pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
-    let mut name = use_signal(String::new);
-    let mut personality = use_signal(String::new);
-    let mut step = use_signal(|| 1u8);
-
-    if !props.visible {
+    let data = props.data.clone();
+    if !data.visible {
         return rsx! {};
     }
 
-    let current_step = *step.read();
-    let is_next_disabled = current_step == 1 && name.read().trim().is_empty();
+    let is_complete_disabled = data.name_input.trim().is_empty();
+    let name_input = data.name_input.clone();
+    let personality_input = data.personality_input.clone();
+    let on_update = props.on_update;
     let on_complete = props.on_complete;
-
-    let go_next = move || {
-        let s = *step.read();
-        if s == 1 {
-            if !name.read().trim().is_empty() {
-                step.set(2);
-            }
-        } else if s == 2 {
-            on_complete.call(HatchingResult {
-                name: name.read().trim().to_string(),
-                personality: {
-                    let p = personality.read().trim().to_string();
-                    if p.is_empty() { None } else { Some(p) }
-                },
-            });
-        }
-    };
-
-    let go_back = move || {
-        let s = *step.read();
-        if s > 1 {
-            step.set(s - 1);
-        }
-    };
+    let on_cancel = props.on_cancel;
+    let data_backdrop = data.clone();
+    let data_close = data.clone();
+    let data_name_input = data.clone();
+    let data_name_enter = data.clone();
+    let data_personality_input = data.clone();
+    let data_cancel = data.clone();
+    let data_complete = data.clone();
 
     rsx! {
         div { class: "modal-backdrop",
             onclick: move |evt| {
                 // Click outside the panel cancels.
                 evt.stop_propagation();
-                props.on_cancel.call(());
+                let mut data = data_backdrop.clone();
+                data.dismiss();
+                on_update.call(data);
+                on_cancel.call(());
             },
 
             div {
@@ -68,87 +49,94 @@ pub fn HatchingDialog(props: HatchingDialogProps) -> Element {
                 onclick: move |evt| evt.stop_propagation(),
 
                 div { class: "modal-head",
-                    span { class: "modal-title", "🥚 Hatching" }
+                    span { class: "modal-title", "🥚 Set up your agent" }
                     button {
                         class: "modal-close",
                         title: "Close",
-                        onclick: move |_| props.on_cancel.call(()),
+                        onclick: move |_| {
+                            let mut data = data_close.clone();
+                            data.dismiss();
+                            on_update.call(data);
+                            on_cancel.call(());
+                        },
                         "✕"
                     }
                 }
 
                 div { class: "modal-body",
-                    div { class: "steps",
-                        span { class: if current_step >= 1 { "step is-active" } else { "step" }, "1" }
-                        span { class: "step-bar" }
-                        span { class: if current_step >= 2 { "step is-active" } else { "step" }, "2" }
-                    }
-
-                    if current_step == 1 {
-                        div { class: "field",
-                            span { class: "field-label", "Agent name" }
-                            input {
-                                class: "input",
-                                r#type: "text",
-                                placeholder: "Give your agent a name",
-                                value: "{name}",
-                                autofocus: true,
-                                oninput: move |evt| name.set(evt.value()),
-                                onkeydown: move |evt: KeyboardEvent| {
-                                    if evt.key() == Key::Enter && !name.read().trim().is_empty() {
-                                        evt.prevent_default();
-                                        let mut g = go_next;
-                                        g();
+                    div { class: "field",
+                        span { class: "field-label", "Agent name" }
+                        input {
+                            class: "input",
+                            r#type: "text",
+                            placeholder: "Give your agent a name",
+                            value: name_input,
+                            autofocus: true,
+                            oninput: move |evt| {
+                                let mut data = data_name_input.clone();
+                                data.name_input = evt.value();
+                                on_update.call(data);
+                            },
+                            onkeydown: move |evt: KeyboardEvent| {
+                                if evt.key() == Key::Enter && !data_name_enter.name_input.trim().is_empty() {
+                                    evt.prevent_default();
+                                    if let Some(result) = data_name_enter.completion() {
+                                        let mut next_data = data_name_enter.clone();
+                                        next_data.dismiss();
+                                        on_update.call(next_data);
+                                        on_complete.call(result);
                                     }
                                 }
                             }
-                            span { class: "field-help",
-                                "This is how RustyClaw will refer to your agent in the UI."
-                            }
                         }
-                    } else if current_step == 2 {
-                        div { class: "field",
-                            span { class: "field-label", "Personality (optional)" }
-                            textarea {
-                                class: "textarea",
-                                placeholder: "e.g. Friendly and curious, with a dry sense of humour",
-                                rows: "4",
-                                value: "{personality}",
-                                oninput: move |evt| personality.set(evt.value()),
-                            }
-                            span { class: "field-help",
-                                "Leave blank to use the default. You can change this later."
-                            }
+                        span { class: "field-help",
+                            "This is how RustyClaw will refer to your agent in the UI."
+                        }
+                    }
+
+                    div { class: "field",
+                        span { class: "field-label", "Personality (optional)" }
+                        textarea {
+                            class: "textarea",
+                            placeholder: "e.g. Friendly and curious, with a dry sense of humour",
+                            rows: "4",
+                            value: personality_input,
+                            oninput: move |evt| {
+                                let mut data = data_personality_input.clone();
+                                data.personality_input = evt.value();
+                                on_update.call(data);
+                            },
+                        }
+                        span { class: "field-help",
+                            "Leave blank to use the default. You can change this later."
                         }
                     }
                 }
 
                 div { class: "modal-foot is-split",
-                    if current_step > 1 {
-                        button {
-                            class: "btn btn-ghost",
-                            onclick: move |_| {
-                                let mut g = go_back;
-                                g();
-                            },
-                            "‹ Back"
-                        }
-                    } else {
-                        button {
-                            class: "btn btn-ghost",
-                            onclick: move |_| props.on_cancel.call(()),
-                            "Cancel"
-                        }
+                    button {
+                        class: "btn btn-ghost",
+                        onclick: move |_| {
+                            let mut data = data_cancel.clone();
+                            data.dismiss();
+                            on_update.call(data);
+                            on_cancel.call(());
+                        },
+                        "Cancel"
                     }
 
                     button {
                         class: "btn btn-primary",
-                        disabled: is_next_disabled,
+                        disabled: is_complete_disabled,
                         onclick: move |_| {
-                            let mut g = go_next;
-                            g();
+                            if let Some(result) = data_complete.completion() {
+                                let mut next_data = data_complete.clone();
+                                next_data.dismiss();
+                                on_update.call(next_data);
+                                on_complete.call(result);
+                            }
                         },
-                        if current_step == 2 { "✓ Complete" } else { "Next ›" }
+                        "✓ Complete"
                     }
                 }
             }

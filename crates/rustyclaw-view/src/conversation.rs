@@ -15,6 +15,7 @@ pub struct DisplayMessageData {
     pub content: String,
     pub details: Option<String>,
     pub tool_calls: Vec<ToolCallData>,
+    pub collapsed: bool,
 }
 
 impl DisplayMessageData {
@@ -24,6 +25,7 @@ impl DisplayMessageData {
             content: content.into(),
             details: None,
             tool_calls: Vec::new(),
+            collapsed: false,
         }
     }
 
@@ -38,6 +40,7 @@ impl DisplayMessageData {
             content: content.into(),
             details: Some(details.into()),
             tool_calls: Vec::new(),
+            collapsed: false,
         }
     }
 
@@ -100,6 +103,25 @@ impl DisplayMessageData {
         }
     }
 
+    pub const AUTO_COLLAPSE_LINES: usize = 40;
+    pub const AUTO_COLLAPSE_CHARS: usize = 2000;
+
+    /// Set collapsed=true if this is a long assistant/tool message.
+    pub fn auto_collapse_if_needed(&mut self) {
+        if matches!(self.role, MessageRole::Assistant | MessageRole::ToolResult) {
+            let line_count = self.content.lines().count();
+            if line_count > Self::AUTO_COLLAPSE_LINES || self.content.len() > Self::AUTO_COLLAPSE_CHARS {
+                self.collapsed = true;
+            }
+        }
+    }
+
+    /// Toggle collapsed state. Returns new state.
+    pub fn toggle_collapse(&mut self) -> bool {
+        self.collapsed = !self.collapsed;
+        self.collapsed
+    }
+
     /// Convert into a reusable message-bubble view model.
     pub fn to_bubble_data(&self, agent_name: Option<String>, has_details: bool) -> MessageBubbleData {
         MessageBubbleData {
@@ -109,6 +131,7 @@ impl DisplayMessageData {
             is_streaming: false,
             agent_name,
             has_details,
+            collapsed: self.collapsed,
         }
     }
 

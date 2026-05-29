@@ -61,6 +61,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut streaming_buf = hooks.use_state(String::new);
     let mut dynamic_model_label: State<Option<String>> = hooks.use_state(|| None);
     let mut dynamic_provider_id: State<Option<String>> = hooks.use_state(|| None);
+    let selected_message_idx: State<Option<usize>> = hooks.use_state(|| None);
 
     // ── Auth dialog state ───────────────────────────────────────────
     let mut show_auth_dialog = hooks.use_state(|| false);
@@ -80,11 +81,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mut vault_error = hooks.use_state(String::new);
 
     // ── Hatching dialog state ───────────────────────────────────────
-    let mut show_hatching = hooks.use_state(|| props.needs_hatching);
-    let mut hatching_state: State<rustyclaw_view::HatchState> =
-        hooks.use_state(|| rustyclaw_view::HatchState::Egg);
-    let mut hatching_tick = hooks.use_state(|| 0usize);
-    let mut hatching_pending = hooks.use_state(|| false); // True when waiting for hatching response
+    // Start hidden; the shared view model reveals it after auth succeeds so it
+    // never competes with the TOTP dialog for screen space.
+    let needs_hatching = props.needs_hatching;
+    let mut hatching_dialog: State<rustyclaw_view::HatchingDialogData> =
+        hooks.use_state(rustyclaw_view::HatchingDialogData::default);
 
     // ── Pairing dialog state ────────────────────────────────────────
     let mut show_pairing = hooks.use_state(|| false);
@@ -213,7 +214,6 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     hooks.use_future({
         let rx_handle = Arc::clone(&gw_rx);
         let tx_for_history = Arc::clone(&user_tx);
-        let tx_for_ticker = Arc::clone(&user_tx);
         async move {
             loop {
                 smol::Timer::after(Duration::from_millis(30)).await;
@@ -225,6 +225,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                 GwEvent::AuthChallenge => {
                                     // Gateway wants TOTP — show the dialog
                                     gw_status.set(rustyclaw_core::types::GatewayStatus::AuthRequired);
+                                    let mut hatching = hatching_dialog.read().clone();
+                                    hatching.hide_temporarily();
+                                    hatching_dialog.set(hatching);
                                     show_auth_dialog.set(true);
                                     auth_code.set(String::new());
                                     auth_error.set(String::new());
@@ -268,6 +271,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                             let _ = tx.send(UserInput::RefreshThreads);
                                         }
                                     }
+                                    // Show hatching now that auth is complete.
+                                    let mut hatching = hatching_dialog.read().clone();
+                                    hatching.show_if_needed(needs_hatching);
+                                    hatching_dialog.set(hatching);
                                 }
                                 GwEvent::Info(s) => {
                                     // Check for "Model ready" or similar to upgrade status
@@ -357,21 +364,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     // appended to the conversation history.
                                     let completed_text = streaming_buf.read().clone();
 
-                                    // Check if this was a hatching response
-                                    if hatching_pending.get() {
-                                        hatching_pending.set(false);
-                                        // Set hatching state to Awakened with the identity
-                                        hatching_state
-                                            .set(rustyclaw_view::HatchState::Awakened {
-                                                identity: completed_text.clone(),
-                                            });
-                                        // Save to SOUL.md
-                                        if let Ok(guard) = tx_for_history.lock() {
-                                            if let Some(ref tx) = *guard {
-                                                let _ = tx.send(UserInput::HatchingComplete(completed_text));
-                                            }
-                                        }
-                                    } else if !completed_text.is_empty() {
+                                    if !completed_text.is_empty() {
                                         if let Ok(guard) = tx_for_history.lock() {
                                             if let Some(ref tx) = *guard {
                                                 let _ = tx.send(UserInput::AssistantResponse(completed_text));
@@ -382,12 +375,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     stream_start.set(None);
                                     elapsed.set(String::new());
                                     streaming_buf.set(String::new());
-                                    // Refresh task list after response (not for hatching)
-                                    if !hatching_pending.get() {
-                                        if let Ok(guard) = tx_for_history.lock() {
-                                            if let Some(ref tx) = *guard {
-                                                let _ = tx.send(UserInput::RefreshTasks);
-                                            }
+                                    if let Ok(guard) = tx_for_history.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.send(UserInput::RefreshTasks);
                                         }
                                     }
                                 }
@@ -609,7 +599,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     foreground_id,
                                 } => {
                                     let previous_foreground = foreground_thread_id.get();
-                                    tracing::info!(
+                                    tracing::debug!(
                                         total_threads = thread_list.len(),
                                         foreground_id = ?foreground_id,
                                         captions = ?thread_list
@@ -630,7 +620,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     if foreground_id != previous_foreground {
                                         foreground_thread_id.set(foreground_id);
                                         if let Some(thread_id) = foreground_id {
-                                            tracing::info!(
+                                            tracing::debug!(
                                                 thread_id,
                                                 previous_foreground = ?previous_foreground,
                                                 "TUI requesting thread history after ThreadsUpdate"
@@ -648,6 +638,16 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     let count = threads.read().len();
                                     if count > 0 && tab_selected.get() >= count {
                                         tab_selected.set(count - 1);
+                                    }
+                                    // Show first-run hatching only after the gateway
+                                    // is usable enough to provide thread state. This
+                                    // avoids racing with a later TOTP AuthChallenge.
+                                    if needs_hatching
+                                        && !show_auth_dialog.get()
+                                    {
+                                        let mut hatching = hatching_dialog.read().clone();
+                                        hatching.show_if_needed(needs_hatching);
+                                        hatching_dialog.set(hatching);
                                     }
                                 }
                                 GwEvent::ThreadMessages {
@@ -747,7 +747,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                             messages.set(m);
                                         }
                                     } else {
-                                        tracing::info!(
+                                        tracing::debug!(
                                             thread_id,
                                             incoming_messages = history.len(),
                                             foreground = ?foreground_thread_id.get(),
@@ -755,7 +755,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                         );
                                         let converted: Vec<DisplayMessage> =
                                             rustyclaw_view::convert_history(&history);
-                                        tracing::info!(
+                                        tracing::debug!(
                                             thread_id,
                                             converted_messages = converted.len(),
                                             "TUI thread history converted"
@@ -907,25 +907,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                     device_flow_tick.set(device_flow_tick.get().wrapping_add(1));
                 }
 
-                // Animate hatching sequence (advance every 8 ticks ≈ 2 seconds)
-                if show_hatching.get() && !hatching_pending.get() {
-                    let tick = hatching_tick.get().wrapping_add(1);
-                    hatching_tick.set(tick);
-                    if tick % 8 == 0 {
-                        let mut state = hatching_state.read().clone();
-                        let should_connect = state.advance();
-                        hatching_state.set(state);
-                        if should_connect {
-                            // Send hatching request to gateway
-                            hatching_pending.set(true);
-                            if let Ok(guard) = tx_for_ticker.lock() {
-                                if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::HatchingRequest);
-                                }
-                            }
-                        }
-                    }
-                }
+                // (hatching is handled synchronously by keyboard input)
 
                 if let Some(start) = stream_start.get() {
                     let d = start.elapsed();
@@ -1388,29 +1370,56 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 }
 
                 // ── Hatching dialog ─────────────────────────────
-                if show_hatching.get() {
-                    match code {
-                        KeyCode::Enter => {
-                            // If awakened, close the dialog
-                            let state = hatching_state.read().clone();
-                            if matches!(
-                                state,
-                                rustyclaw_view::HatchState::Awakened { .. }
-                            ) {
-                                show_hatching.set(false);
+                if hatching_dialog.read().visible {
+                    let key = match code {
+                        KeyCode::Enter => Some(rustyclaw_view::HatchingKey::Enter),
+                        KeyCode::Tab => Some(rustyclaw_view::HatchingKey::Tab),
+                        KeyCode::Esc => Some(rustyclaw_view::HatchingKey::Escape),
+                        KeyCode::Backspace => Some(rustyclaw_view::HatchingKey::Backspace),
+                        KeyCode::Char(c) => {
+                            // Some terminals deliver Shift+<letter> as the lowercase char
+                            // plus SHIFT modifier instead of pre-shifting the codepoint.
+                            let c = if modifiers.contains(KeyModifiers::SHIFT)
+                                && c.is_ascii_lowercase()
+                            {
+                                c.to_ascii_uppercase()
+                            } else {
+                                c
+                            };
+                            Some(rustyclaw_view::HatchingKey::Char(c))
+                        }
+                        _ => None,
+                    };
+
+                    if let Some(key) = key {
+                        let mut hatching = hatching_dialog.read().clone();
+                        match hatching.handle_key(key) {
+                            rustyclaw_view::HatchingEvent::Completed(result) => {
+                                let payload = result.as_payload();
+                                let name = result.name.clone();
+                                if let Ok(guard) = tx_for_keys.lock() {
+                                    if let Some(ref tx) = *guard {
+                                        let _ = tx.send(UserInput::HatchingComplete(payload));
+                                    }
+                                }
                                 let mut m = messages.read().clone();
-                                m.push(DisplayMessage::success("Identity established! Welcome to RustyClaw."));
+                                m.push(DisplayMessage::success(format!(
+                                    "Welcome, {}! SOUL.md saved.",
+                                    name
+                                )));
                                 messages.set(m);
                             }
+                            rustyclaw_view::HatchingEvent::Skipped => {
+                                let mut m = messages.read().clone();
+                                m.push(DisplayMessage::info(
+                                    "Hatching skipped. You can customize SOUL.md manually.",
+                                ));
+                                messages.set(m);
+                            }
+                            rustyclaw_view::HatchingEvent::Updated
+                            | rustyclaw_view::HatchingEvent::Ignored => {}
                         }
-                        KeyCode::Esc => {
-                            // Allow skipping hatching
-                            show_hatching.set(false);
-                            let mut m = messages.read().clone();
-                            m.push(DisplayMessage::info("Hatching skipped. You can customize SOUL.md manually."));
-                            messages.set(m);
-                        }
-                        _ => {}
+                        hatching_dialog.set(hatching);
                     }
                     return;
                 }
@@ -2311,6 +2320,73 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                             show_pairing.set(true);
                         }
                     }
+                    KeyCode::Char('e') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let mut m = messages.read().clone();
+                        let idx = selected_message_idx.get().unwrap_or_else(|| m.len().saturating_sub(1));
+                        if let Some(msg) = m.get_mut(idx) {
+                            msg.toggle_collapse();
+                        }
+                        messages.set(m);
+                    }
+                    KeyCode::Char('y') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let m = messages.read();
+                        let idx = selected_message_idx.get().unwrap_or_else(|| m.len().saturating_sub(1));
+                        if let Some(msg) = m.get(idx) {
+                            let content = msg.content.clone();
+                            drop(m);
+                            let copied = std::process::Command::new("wl-copy")
+                                .stdin(std::process::Stdio::piped())
+                                .spawn()
+                                .and_then(|mut child| {
+                                    use std::io::Write;
+                                    child.stdin.as_mut().unwrap().write_all(content.as_bytes())?;
+                                    child.wait().map(|_| ())
+                                })
+                                .or_else(|_| {
+                                    std::process::Command::new("xclip")
+                                        .args(["-selection", "clipboard"])
+                                        .stdin(std::process::Stdio::piped())
+                                        .spawn()
+                                        .and_then(|mut child| {
+                                            use std::io::Write;
+                                            child.stdin.as_mut().unwrap().write_all(content.as_bytes())?;
+                                            child.wait().map(|_| ())
+                                        })
+                                });
+                            let mut m2 = messages.read().clone();
+                            if copied.is_ok() {
+                                m2.push(DisplayMessage::success("✓ Copied to clipboard"));
+                            } else {
+                                m2.push(DisplayMessage::error("Could not copy: install wl-copy or xclip"));
+                            }
+                            messages.set(m2);
+                        }
+                    }
+                    KeyCode::Char('s') if modifiers.contains(KeyModifiers::CONTROL) => {
+                        let m = messages.read();
+                        let idx = selected_message_idx.get().unwrap_or_else(|| m.len().saturating_sub(1));
+                        if let Some(msg) = m.get(idx) {
+                            let content = msg.content.clone();
+                            drop(m);
+                            let dir = dirs::home_dir()
+                                .map(|h| h.join(".rustyclaw").join("messages"))
+                                .unwrap_or_else(|| std::path::PathBuf::from("."));
+                            let _ = std::fs::create_dir_all(&dir);
+                            let filename = format!(
+                                "{}.md",
+                                chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
+                            );
+                            let path = dir.join(&filename);
+                            let saved = std::fs::write(&path, &content);
+                            let mut m2 = messages.read().clone();
+                            if saved.is_ok() {
+                                m2.push(DisplayMessage::success(format!("✓ Saved to ~/.rustyclaw/messages/{filename}")));
+                            } else {
+                                m2.push(DisplayMessage::error("Could not save file"));
+                            }
+                            messages.set(m2);
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -2335,7 +2411,6 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
 
     // Clone props into owned values so closures below don't borrow `props`.
     let prop_soul_name = props.soul_name.clone();
-    let prop_soul_name_for_hatching = props.soul_name.clone();
     let prop_model_label = props.model_label.clone();
     let prop_provider_id = props.provider_id.clone();
     let prop_hint = props.hint.clone();
@@ -2351,6 +2426,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             gateway_color: gw_color,
             messages: messages.read().clone(),
             scroll_offset: scroll_offset.get(),
+            selected_message_idx: selected_message_idx.get(),
             command_completions: command_completions.read().clone(),
             command_selected: command_selected.get(),
             composer: rustyclaw_view::ComposerData {
@@ -2372,7 +2448,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_secrets_dialog.get()
                 && !show_skills_dialog.get()
                 && !show_tool_perms_dialog.get()
-                && !show_hatching.get()
+                && !hatching_dialog.read().visible
                 && !show_provider_selector.get()
                 && !show_api_key_dialog.get()
                 && !show_device_flow.get()
@@ -2450,9 +2526,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             tool_perms_data: tool_perms_dialog_data.read().clone(),
             tool_perms_selected: tool_perms_selected.get(),
             tool_perms_scroll_offset: tool_perms_scroll_offset.get(),
-            show_hatching: show_hatching.get(),
-            hatching_state: hatching_state.read().clone(),
-            hatching_agent_name: prop_soul_name_for_hatching,
+            hatching_dialog: hatching_dialog.read().clone(),
             show_provider_selector: show_provider_selector.get(),
             provider_selector: rustyclaw_view::ProviderSelectorData {
                 providers: provider_selector_items

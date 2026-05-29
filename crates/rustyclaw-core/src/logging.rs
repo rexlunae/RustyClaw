@@ -190,6 +190,35 @@ pub fn init_from_env() {
     init(LogConfig::from_env());
 }
 
+/// Initialize logging to a file so that TUI output is not corrupted.
+///
+/// Writes compact log lines to `log_path` (appending). Any error opening
+/// the file is silently ignored; if the file cannot be opened logging is
+/// simply not initialised.
+pub fn init_for_tui(log_path: &std::path::Path) {
+    use std::fs::OpenOptions;
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    let Ok(file) = OpenOptions::new().create(true).append(true).open(log_path) else {
+        return;
+    };
+
+    let config = LogConfig::from_env();
+    let env_filter = EnvFilter::try_new(&config.filter)
+        .unwrap_or_else(|_| EnvFilter::new("rustyclaw=info,warn"));
+
+    let subscriber = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(
+            fmt::layer()
+                .compact()
+                .with_ansi(false)
+                .with_target(true)
+                .with_writer(std::sync::Mutex::new(file).with_max_level(tracing::Level::TRACE)),
+        );
+    let _ = tracing::subscriber::set_global_default(subscriber);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

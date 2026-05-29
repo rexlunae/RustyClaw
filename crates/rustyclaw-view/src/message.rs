@@ -50,6 +50,7 @@ pub struct MessageBubbleData {
     /// (request URL, headers, body excerpt) accessible via a
     /// "show details" action.
     pub has_details: bool,
+    pub collapsed: bool,
 }
 
 impl Default for MessageBubbleData {
@@ -61,6 +62,7 @@ impl Default for MessageBubbleData {
             is_streaming: false,
             agent_name: None,
             has_details: false,
+            collapsed: false,
         }
     }
 }
@@ -79,6 +81,7 @@ impl MessageBubbleData {
             is_streaming: msg.is_streaming,
             agent_name,
             has_details: false,
+            collapsed: false,
         }
     }
 
@@ -149,6 +152,41 @@ impl MessageBubbleData {
             self.content.as_str().into()
         }
     }
+
+    pub const AUTO_COLLAPSE_LINES: usize = 40;
+    pub const AUTO_COLLAPSE_CHARS: usize = 2000;
+    /// Lines to show when collapsed.
+    pub const COLLAPSED_PREVIEW_LINES: usize = 8;
+
+    /// Whether this message is long enough to be collapsible.
+    ///
+    /// Checks byte length first (O(1)) before counting lines (O(N)).
+    pub fn is_collapsible(&self) -> bool {
+        self.content.len() > Self::AUTO_COLLAPSE_CHARS
+            || self.content.lines().count() > Self::AUTO_COLLAPSE_LINES
+    }
+
+    /// Content to actually render — truncated when collapsed, full otherwise.
+    ///
+    /// Returns a borrow in the common (uncollapsed) case to avoid allocation.
+    pub fn content_for_render(&self) -> Cow<'_, str> {
+        if self.collapsed && self.is_collapsible() {
+            let lines: Vec<&str> = self
+                .content
+                .lines()
+                .take(Self::COLLAPSED_PREVIEW_LINES)
+                .collect();
+            let preview = lines.join("\n");
+            let hidden = self
+                .content
+                .lines()
+                .count()
+                .saturating_sub(Self::COLLAPSED_PREVIEW_LINES);
+            format!("{preview}\n\n… {hidden} lines hidden (Ctrl+E to expand)").into()
+        } else {
+            Cow::Borrowed(&self.content)
+        }
+    }
 }
 
 // ── Tool call panel ─────────────────────────────────────────────────────────
@@ -210,6 +248,16 @@ impl ToolCallData {
     /// character count and line count.
     pub fn arguments_preview(&self, max_chars: usize, max_lines: usize) -> String {
         rustyclaw_core::ui::truncate_content(&self.arguments, max_chars, max_lines)
+    }
+
+    /// The result string, truncated for display.
+    ///
+    /// Tool results can be arbitrarily large (e.g. shell output, file contents).
+    /// Rendering unbounded content freezes the TUI layout engine, so we cap it.
+    pub fn result_preview(&self, max_chars: usize, max_lines: usize) -> Option<String> {
+        self.result
+            .as_deref()
+            .map(|r| rustyclaw_core::ui::truncate_content(r, max_chars, max_lines))
     }
 }
 

@@ -5,7 +5,7 @@ use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{
-    Chat, ConnectionDialog, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog, HatchingResult,
+    Chat, ConnectionDialog, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog,
     PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar, SwarmPanel, TabBar,
     ToolApprovalDialog, UserPromptDialog,
     VaultUnlockDialog, generate_qr_code,
@@ -15,8 +15,8 @@ use crate::state::{AppState, Theme};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 use rustyclaw_view::{
-    CredentialRequestData, DeviceFlowData, PairingDialogData, PromptAttachment, SecretInfoData,
-    SecretsDialogData, SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData,
+    CredentialRequestData, DeviceFlowData, HatchingDialogData, PairingDialogData, PromptAttachment,
+    SecretInfoData, SecretsDialogData, SwarmAgentData, SwarmData, ToolApprovalData, UserPromptData,
     VaultUnlockData, build_prompt_with_attachments,
 };
 
@@ -39,7 +39,7 @@ pub fn App() -> Element {
 
     // Dialog visibility
     let mut show_pairing = use_signal(|| false);
-    let mut show_hatching = use_signal(|| state.read().needs_hatching);
+    let mut hatching_dialog = use_signal(|| HatchingDialogData::new(state.read().needs_hatching));
     let mut show_settings = use_signal(|| false);
     let mut show_swarm = use_signal(|| false);
     let mut swarm_creating = use_signal(|| false);
@@ -978,14 +978,23 @@ pub fn App() -> Element {
             }
 
             HatchingDialog {
-                visible: *show_hatching.read(),
-                on_complete: move |result: HatchingResult| {
+                data: {
+                    let mut data = hatching_dialog.read().clone();
+                    if !data.should_render(matches!(
+                        state.read().connection,
+                        ConnectionStatus::Authenticating
+                    )) {
+                        data.hide_temporarily();
+                    }
+                    data
+                },
+                on_update: move |data| hatching_dialog.set(data),
+                on_complete: move |result: rustyclaw_view::HatchingResult| {
                     if let Some(personality) = result.personality.clone() {
                         state.write().status_message = Some(format!("Personality set: {}", personality));
                     }
                     let name = result.name.clone();
                     state.write().agent_name = Some(result.name);
-                    show_hatching.set(false);
                     // Persist the name to the gateway config.
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
@@ -994,7 +1003,7 @@ pub fn App() -> Element {
                         });
                     }
                 },
-                on_cancel: move |_| show_hatching.set(false),
+                on_cancel: move |_| {},
             }
 
             PairingDialog {

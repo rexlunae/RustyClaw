@@ -511,84 +511,219 @@ impl PairingDialogData {
 
 // ── Hatching ────────────────────────────────────────────────────────────────
 
-/// Animation states for the first-run identity hatching sequence.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub enum HatchState {
+/// Which field currently has focus in the first-run hatching dialog.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HatchFocus {
     #[default]
-    Egg,
-    Crack1,
-    Crack2,
-    Breaking,
-    Hatched,
-    /// Waiting for model response.
-    Connecting,
-    /// Model generated its identity.
-    Awakened {
-        identity: String,
-    },
+    Name,
+    Personality,
 }
 
-impl HatchState {
-    /// Advance to the next animation state.
-    ///
-    /// Returns `true` once the sequence reaches `Connecting`, which callers
-    /// can use as a signal to trigger identity generation.
-    pub fn advance(&mut self) -> bool {
-        let next = match self {
-            HatchState::Egg => HatchState::Crack1,
-            HatchState::Crack1 => HatchState::Crack2,
-            HatchState::Crack2 => HatchState::Breaking,
-            HatchState::Breaking => HatchState::Hatched,
-            HatchState::Hatched => HatchState::Connecting,
-            HatchState::Connecting | HatchState::Awakened { .. } => return false,
-        };
-        *self = next;
-        matches!(self, HatchState::Connecting)
-    }
+/// Framework-neutral key input understood by the hatching view model.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HatchingKey {
+    Enter,
+    Escape,
+    Tab,
+    Backspace,
+    Char(char),
+}
 
-    /// Human-readable description of the current state.
-    pub fn label(&self) -> &'static str {
-        match self {
-            HatchState::Egg => "Egg",
-            HatchState::Crack1 => "Cracking…",
-            HatchState::Crack2 => "Almost there…",
-            HatchState::Breaking => "Breaking out!",
-            HatchState::Hatched => "Hatched!",
-            HatchState::Connecting => "Connecting…",
-            HatchState::Awakened { .. } => "Awakened!",
+/// Outcome of applying an input event to the hatching view model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HatchingEvent {
+    Updated,
+    Completed(HatchingResult),
+    Skipped,
+    Ignored,
+}
+
+/// Result of the first-run hatching process.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HatchingResult {
+    pub name: String,
+    pub personality: Option<String>,
+}
+
+impl HatchingResult {
+    /// Encode the result for the existing TUI persistence path.
+    pub fn as_payload(&self) -> String {
+        match &self.personality {
+            Some(personality) => format!("{}\t{}", self.name, personality),
+            None => self.name.clone(),
         }
     }
-
-    /// Whether the hatching sequence is active (before Awakened).
-    pub fn is_hatching(&self) -> bool {
-        matches!(
-            self,
-            HatchState::Egg
-                | HatchState::Crack1
-                | HatchState::Crack2
-                | HatchState::Breaking
-                | HatchState::Hatched
-        )
-    }
 }
 
-/// Data for the hatching dialog (first-run identity generation).
-#[derive(Clone, Debug, PartialEq)]
+/// Data and shared behaviour for the first-run hatching prompt.
+///
+/// This is intentionally a short input form, not an animation or model-driven
+/// conversation. Clients render it differently, but they share the same fields,
+/// focus handling, completion semantics, and visibility rules.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HatchingDialogData {
-    /// Current animation state.
-    pub state: HatchState,
+    /// Whether the dialog is currently eligible to render.
+    pub visible: bool,
+    /// Whether the user already completed or skipped this prompt in this client
+    /// session. Temporary hides for authentication do not set this.
+    pub dismissed: bool,
+    pub name_input: String,
+    pub personality_input: String,
+    pub focus: HatchFocus,
+}
 
-    /// Animation tick counter.
-    pub tick: usize,
-
-    /// Whether a hatching API request is in flight.
-    pub pending: bool,
+impl Default for HatchingDialogData {
+    fn default() -> Self {
+        Self {
+            visible: false,
+            dismissed: false,
+            name_input: String::new(),
+            personality_input: String::new(),
+            focus: HatchFocus::Name,
+        }
+    }
 }
 
 impl HatchingDialogData {
-    /// Whether the dialog should show the loading/spinner state.
-    pub fn is_busy(&self) -> bool {
-        self.pending || matches!(self.state, HatchState::Connecting)
+    pub fn new(visible: bool) -> Self {
+        Self {
+            visible,
+            ..Self::default()
+        }
+    }
+
+    /// Show the prompt if first-run setup is still needed and it has not been
+    /// completed or skipped in this UI session.
+    pub fn show_if_needed(&mut self, needs_hatching: bool) {
+        if needs_hatching && !self.dismissed {
+            self.visible = true;
+        }
+    }
+
+    /// Temporarily hide the prompt behind a higher-priority modal such as TOTP.
+    pub fn hide_temporarily(&mut self) {
+        self.visible = false;
+    }
+
+    /// Permanently dismiss the prompt for this UI session.
+    pub fn dismiss(&mut self) {
+        self.visible = false;
+        self.dismissed = true;
+    }
+
+    /// Whether the prompt should render after applying modal priority.
+    pub fn should_render(&self, blocked_by_auth: bool) -> bool {
+        self.visible && !blocked_by_auth
+    }
+
+    pub fn name_focused(&self) -> bool {
+        self.focus == HatchFocus::Name
+    }
+
+    pub fn completion(&self) -> Option<HatchingResult> {
+        let name = self.name_input.trim().to_string();
+        if name.is_empty() {
+            return None;
+        }
+        let personality = self.personality_input.trim().to_string();
+        Some(HatchingResult {
+            name,
+            personality: if personality.is_empty() {
+                None
+            } else {
+                Some(personality)
+            },
+        })
+    }
+
+    pub fn handle_key(&mut self, key: HatchingKey) -> HatchingEvent {
+        if !self.visible {
+            return HatchingEvent::Ignored;
+        }
+
+        match key {
+            HatchingKey::Enter => {
+                self.dismiss();
+                self.completion()
+                    .map(HatchingEvent::Completed)
+                    .unwrap_or(HatchingEvent::Skipped)
+            }
+            HatchingKey::Escape => {
+                self.dismiss();
+                HatchingEvent::Skipped
+            }
+            HatchingKey::Tab => {
+                self.focus = match self.focus {
+                    HatchFocus::Name => HatchFocus::Personality,
+                    HatchFocus::Personality => HatchFocus::Name,
+                };
+                HatchingEvent::Updated
+            }
+            HatchingKey::Backspace => {
+                if self.name_focused() {
+                    self.name_input.pop();
+                } else {
+                    self.personality_input.pop();
+                }
+                HatchingEvent::Updated
+            }
+            HatchingKey::Char(c) => {
+                if self.name_focused() {
+                    self.name_input.push(c);
+                } else {
+                    self.personality_input.push(c);
+                }
+                HatchingEvent::Updated
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod hatching_tests {
+    use super::{HatchFocus, HatchingDialogData, HatchingEvent, HatchingKey};
+
+    #[test]
+    fn hatching_does_not_render_while_auth_is_blocking() {
+        let data = HatchingDialogData::new(true);
+
+        assert!(!data.should_render(true));
+        assert!(data.should_render(false));
+    }
+
+    #[test]
+    fn skipped_hatching_does_not_reopen_in_same_session() {
+        let mut data = HatchingDialogData::new(true);
+
+        assert_eq!(data.handle_key(HatchingKey::Escape), HatchingEvent::Skipped);
+        data.show_if_needed(true);
+
+        assert!(!data.visible);
+        assert!(data.dismissed);
+    }
+
+    #[test]
+    fn hatching_collects_name_and_personality_in_one_prompt() {
+        let mut data = HatchingDialogData::new(true);
+
+        for c in "Ferris".chars() {
+            data.handle_key(HatchingKey::Char(c));
+        }
+        data.handle_key(HatchingKey::Tab);
+        assert_eq!(data.focus, HatchFocus::Personality);
+        for c in "curious".chars() {
+            data.handle_key(HatchingKey::Char(c));
+        }
+
+        match data.handle_key(HatchingKey::Enter) {
+            HatchingEvent::Completed(result) => {
+                assert_eq!(result.name, "Ferris");
+                assert_eq!(result.personality.as_deref(), Some("curious"));
+            }
+            other => panic!("expected completed hatching, got {other:?}"),
+        }
+        assert!(!data.visible);
+        assert!(data.dismissed);
     }
 }
 
