@@ -15,3 +15,6 @@ rustyclaw-core.workspace = true
 
 # Time
 chrono.workspace = true
+
+# IDs for assistant message bookkeeping
+uuid.workspace = true
