@@ -375,6 +375,13 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                                     stream_start.set(None);
                                     elapsed.set(String::new());
                                     streaming_buf.set(String::new());
+                                    // Auto-collapse the just-completed assistant message
+                                    // if it is long enough to warrant folding.
+                                    let mut m = messages.read().clone();
+                                    if let Some(last) = m.last_mut() {
+                                        last.auto_collapse_if_needed();
+                                    }
+                                    messages.set(m);
                                     if let Ok(guard) = tx_for_history.lock() {
                                         if let Some(ref tx) = *guard {
                                             let _ = tx.send(UserInput::RefreshTasks);

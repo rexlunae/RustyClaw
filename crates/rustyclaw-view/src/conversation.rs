@@ -194,7 +194,9 @@ pub fn convert_history(
                 }
             }
         }
-        out.push(DisplayMessageData::from_chat_message(m));
+        let mut msg = DisplayMessageData::from_chat_message(m);
+        msg.auto_collapse_if_needed();
+        out.push(msg);
     }
     out
 }
