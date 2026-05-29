@@ -211,6 +211,16 @@ impl ToolCallData {
     pub fn arguments_preview(&self, max_chars: usize, max_lines: usize) -> String {
         rustyclaw_core::ui::truncate_content(&self.arguments, max_chars, max_lines)
     }
+
+    /// The result string, truncated for display.
+    ///
+    /// Tool results can be arbitrarily large (e.g. shell output, file contents).
+    /// Rendering unbounded content freezes the TUI layout engine, so we cap it.
+    pub fn result_preview(&self, max_chars: usize, max_lines: usize) -> Option<String> {
+        self.result
+            .as_deref()
+            .map(|r| rustyclaw_core::ui::truncate_content(r, max_chars, max_lines))
+    }
 }
 
 impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {

@@ -19,6 +19,7 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
     };
 
     let args = props.data.arguments_preview(600, 12);
+    let result = props.data.result_preview(2000, 40);
 
     element! {
         View(
@@ -37,10 +38,10 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
                 weight: Weight::Bold,
             )
             Text(content: args, color: theme::TEXT_DIM, wrap: TextWrap::Wrap)
-            #(if let Some(result) = props.data.result.as_ref() {
+            #(if let Some(result) = result {
                 element! {
                     Text(
-                        content: result.clone(),
+                        content: result,
                         color: if props.data.is_error { theme::ERROR } else { theme::TEXT },
                         wrap: TextWrap::Wrap,
                     )
