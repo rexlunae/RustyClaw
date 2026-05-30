@@ -2,10 +2,22 @@
 //! existing OpenClaw installation into the RustyClaw vault.
 
 use anyhow::{Context, Result};
+use clap::Args;
 use rustyclaw_core::config::Config;
 use std::path::PathBuf;
 
-use crate::{RefreshTokenArgs, open_secrets};
+use crate::open_secrets;
+
+/// Arguments for `rustyclaw refresh-token`.
+#[derive(Debug, Args)]
+pub struct RefreshTokenArgs {
+    /// Path to the OpenClaw directory (default: ~/.openclaw)
+    #[arg(long, value_name = "PATH")]
+    pub openclaw_dir: Option<String>,
+    /// Restart the gateway after refreshing
+    #[arg(long)]
+    pub restart: bool,
+}
 
 pub(crate) fn run_refresh_token(args: &RefreshTokenArgs, config: &mut Config) -> Result<()> {
     use colored::Colorize;

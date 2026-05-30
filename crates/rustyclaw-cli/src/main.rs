@@ -26,6 +26,8 @@ use url::Url;
 
 mod commands;
 
+use commands::config::ConfigCommands;
+
 // ── Top-level CLI ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Parser)]
@@ -54,14 +56,14 @@ enum Commands {
     Onboard(OnboardArgs),
 
     /// Import an existing OpenClaw installation into RustyClaw
-    Import(ImportArgs),
+    Import(commands::import::ImportArgs),
 
     /// Interactive configuration wizard (models, gateway, skills)
     Configure,
 
     /// Config helpers: get / set / unset
     #[command(subcommand)]
-    Config(ConfigCommands),
+    Config(commands::config::ConfigCommands),
 
     /// Health checks + quick fixes for gateway and configuration
     Doctor(DoctorArgs),
@@ -94,7 +96,7 @@ enum Commands {
 
     /// Refresh the GitHub Copilot session token from OpenClaw
     #[command(alias = "refresh")]
-    RefreshToken(RefreshTokenArgs),
+    RefreshToken(commands::refresh_token::RefreshTokenArgs),
 
     /// ClawHub skill registry commands (search, install, publish, …)
     #[command(name = "clawhub", alias = "hub", alias = "registry")]
@@ -127,36 +129,6 @@ struct SetupArgs {
     /// Remote gateway token (optional)
     #[arg(long, value_name = "TOKEN")]
     remote_token: Option<String>,
-}
-
-// ── RefreshToken ────────────────────────────────────────────────────────────
-
-#[derive(Debug, Args)]
-pub(crate) struct RefreshTokenArgs {
-    /// Path to the OpenClaw directory (default: ~/.openclaw)
-    #[arg(long, value_name = "PATH")]
-    pub(crate) openclaw_dir: Option<String>,
-    /// Restart the gateway after refreshing
-    #[arg(long)]
-    pub(crate) restart: bool,
-}
-
-// ── Import ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Args)]
-pub(crate) struct ImportArgs {
-    /// Path to the OpenClaw directory to import (default: ~/.openclaw)
-    #[arg(value_name = "PATH")]
-    pub(crate) source: Option<String>,
-    /// RustyClaw settings directory (default: ~/.rustyclaw)
-    #[arg(long, value_name = "DIR")]
-    pub(crate) target: Option<String>,
-    /// Overwrite existing files without prompting
-    #[arg(long)]
-    pub(crate) force: bool,
-    /// Dry run — show what would be imported without making changes
-    #[arg(long)]
-    pub(crate) dry_run: bool,
 }
 
 // ── Onboard ─────────────────────────────────────────────────────────────────
@@ -277,31 +249,6 @@ struct OnboardArgs {
 }
 
 // ── Config ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Subcommand)]
-enum ConfigCommands {
-    /// Print a config value (dot path, e.g. model.provider)
-    Get {
-        /// Dot-separated config path
-        #[arg(value_name = "PATH")]
-        path: String,
-    },
-    /// Set a config value
-    Set {
-        /// Dot-separated config path
-        #[arg(value_name = "PATH")]
-        path: String,
-        /// Value to set
-        #[arg(value_name = "VALUE")]
-        value: String,
-    },
-    /// Remove a config value
-    Unset {
-        /// Dot-separated config path
-        #[arg(value_name = "PATH")]
-        path: String,
-    },
-}
 
 // ── Doctor ──────────────────────────────────────────────────────────────────
 

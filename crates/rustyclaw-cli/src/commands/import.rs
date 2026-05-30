@@ -2,11 +2,27 @@
 //! existing OpenClaw installation.
 
 use anyhow::{Context, Result};
+use clap::Args;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::providers;
 use rustyclaw_core::secrets::SecretsManager;
 
-use crate::ImportArgs;
+/// Arguments for `rustyclaw import`.
+#[derive(Debug, Args)]
+pub struct ImportArgs {
+    /// Path to the OpenClaw directory to import (default: ~/.openclaw)
+    #[arg(value_name = "PATH")]
+    pub source: Option<String>,
+    /// RustyClaw settings directory (default: ~/.rustyclaw)
+    #[arg(long, value_name = "DIR")]
+    pub target: Option<String>,
+    /// Overwrite existing files without prompting
+    #[arg(long)]
+    pub force: bool,
+    /// Dry run — show what would be imported without making changes
+    #[arg(long)]
+    pub dry_run: bool,
+}
 
 pub(crate) fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
     use colored::Colorize;

@@ -1,7 +1,34 @@
 //! `rustyclaw config get|set|unset` — read and mutate config values by path.
 
 use anyhow::Result;
+use clap::Subcommand;
 use rustyclaw_core::config::Config;
+
+/// `rustyclaw config` subcommands.
+#[derive(Debug, Subcommand)]
+pub enum ConfigCommands {
+    /// Print a config value (dot path, e.g. model.provider)
+    Get {
+        /// Dot-separated config path
+        #[arg(value_name = "PATH")]
+        path: String,
+    },
+    /// Set a config value
+    Set {
+        /// Dot-separated config path
+        #[arg(value_name = "PATH")]
+        path: String,
+        /// Value to set
+        #[arg(value_name = "VALUE")]
+        value: String,
+    },
+    /// Remove a config value
+    Unset {
+        /// Dot-separated config path
+        #[arg(value_name = "PATH")]
+        path: String,
+    },
+}
 
 pub(crate) fn config_get(config: &Config, path: &str) -> String {
     match path {
