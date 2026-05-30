@@ -25,6 +25,8 @@ rustyclaw-core.workspace = true
 chat-system.workspace = true
 
 anyhow.workspace = true
+clap.workspace = true
+rpassword.workspace = true
 anyhow-tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true

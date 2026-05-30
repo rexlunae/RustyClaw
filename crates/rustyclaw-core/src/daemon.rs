@@ -173,6 +173,42 @@ pub fn start(
     Ok(pid)
 }
 
+/// Run the `rustyclaw-gateway` binary in the foreground.
+///
+/// Unlike [`start`], this does not detach or redirect output: the gateway
+/// inherits the current terminal (so it can prompt for the vault password and
+/// stream logs to the console) and this call blocks until the gateway exits.
+///
+/// `args` are passed through verbatim after the `run` subcommand (e.g.
+/// `--bind`, `--port`, `--listen`). TLS paths and the settings dir are added
+/// automatically, mirroring [`start`].
+pub fn run_foreground(
+    settings_dir: &Path,
+    args: &[String],
+    tls_cert: Option<&Path>,
+    tls_key: Option<&Path>,
+) -> Result<std::process::ExitStatus> {
+    let gateway_bin = resolve_gateway_binary()?;
+
+    let mut cmd = Command::new(&gateway_bin);
+    cmd.arg("run").arg("--settings-dir").arg(settings_dir);
+
+    for a in args {
+        cmd.arg(a);
+    }
+
+    if let Some(cert) = tls_cert {
+        cmd.arg("--tls-cert").arg(cert);
+    }
+    if let Some(key) = tls_key {
+        cmd.arg("--tls-key").arg(key);
+    }
+
+    // Foreground: inherit stdio and wait for the gateway to exit.
+    cmd.status()
+        .with_context(|| format!("Failed to run {}", gateway_bin.display()))
+}
+
 /// Stop a running gateway by terminating the process.
 pub fn stop(settings_dir: &Path) -> Result<StopResult> {
     match status(settings_dir) {

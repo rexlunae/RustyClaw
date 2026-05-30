@@ -904,12 +904,14 @@ async fn main() -> Result<()> {
                 }
             }
             GatewayCommands::Run(args) => {
-                let host = match args.bind {
-                    GatewayBind::Loopback => "127.0.0.1",
-                    GatewayBind::Lan => "0.0.0.0",
-                    _ => "127.0.0.1",
+                let bind = match args.bind {
+                    GatewayBind::Loopback => "loopback",
+                    GatewayBind::Lan => "lan",
+                    GatewayBind::Tailnet => "tailnet",
+                    GatewayBind::Auto => "auto",
+                    GatewayBind::Custom => "custom",
                 };
-                commands::handle_run(config, host, args.port).await?;
+                commands::handle_run(&config, bind, args.port)?;
             }
         },
 
