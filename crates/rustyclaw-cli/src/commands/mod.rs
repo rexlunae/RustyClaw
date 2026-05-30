@@ -6,6 +6,8 @@ pub mod config;
 pub mod gateway;
 pub mod import;
 pub mod refresh_token;
+pub mod shared;
+pub mod status;
 
 // Re-export handlers for use in main.rs
 pub(crate) use config::{config_get, config_set, config_unset};

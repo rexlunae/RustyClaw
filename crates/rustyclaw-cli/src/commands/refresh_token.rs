@@ -6,7 +6,7 @@ use clap::Args;
 use rustyclaw_core::config::Config;
 use std::path::PathBuf;
 
-use crate::open_secrets;
+use crate::commands::shared::open_secrets;
 
 /// Arguments for `rustyclaw refresh-token`.
 #[derive(Debug, Args)]

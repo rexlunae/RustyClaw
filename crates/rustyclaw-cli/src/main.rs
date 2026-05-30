@@ -13,7 +13,6 @@ use rustyclaw_core::gateway::{
     ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerFrameType, ServerPayload,
     deserialize_frame, serialize_frame,
 };
-use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
 #[cfg(feature = "desktop")]
 use rustyclaw_desktop as desktop_app;
@@ -27,6 +26,7 @@ use url::Url;
 mod commands;
 
 use commands::config::ConfigCommands;
+use commands::shared::{extract_vault_password, open_secrets};
 
 // ── Top-level CLI ───────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ enum Commands {
     Ask(AskArgs),
 
     /// Show system status (gateway, model, workspace)
-    Status(StatusArgs),
+    Status(commands::status::StatusArgs),
 
     /// Gateway management (start / stop / restart / status)
     #[command(subcommand)]
@@ -368,24 +368,6 @@ struct AskArgs {
     temperature: Option<f32>,
 }
 
-// ── Status ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Args, Default)]
-struct StatusArgs {
-    /// Output JSON
-    #[arg(long)]
-    json: bool,
-    /// Show all available information
-    #[arg(long)]
-    all: bool,
-    /// Include usage statistics
-    #[arg(long)]
-    usage: bool,
-    /// Verbose output
-    #[arg(long, short)]
-    verbose: bool,
-}
-
 // ── Gateway subcommands ─────────────────────────────────────────────────────
 
 #[derive(Debug, Subcommand)]
@@ -641,9 +623,11 @@ async fn main() -> Result<()> {
                 || args.remote_token.is_some();
 
             if has_wizard_flags {
+                // The secrets vault is opened in every build; only the
+                // interactive wizard (TUI crate) is feature-gated.
+                let mut secrets = open_secrets(&config)?;
                 #[cfg(feature = "tui")]
                 {
-                    let mut secrets = open_secrets(&config)?;
                     let tui_args = TuiOnboardArgs {
                         openrouter_api_key: None,
                         anthropic_api_key: None,
@@ -669,6 +653,7 @@ async fn main() -> Result<()> {
                 }
                 #[cfg(not(feature = "tui"))]
                 {
+                    let _ = &mut secrets;
                     eprintln!(
                         "Onboarding wizard is not available in this build. Build with --features tui to enable."
                     );
@@ -705,9 +690,12 @@ async fn main() -> Result<()> {
 
         // ── Onboard ─────────────────────────────────────────────
         Commands::Onboard(_args) => {
+            // The secrets vault is opened in every build — onboarding stores
+            // provider API keys in it. The interactive wizard itself lives in
+            // the TUI crate, so only that call is feature-gated.
+            let mut secrets = open_secrets(&config)?;
             #[cfg(feature = "tui")]
             {
-                let mut secrets = open_secrets(&config)?;
                 let tui_args = TuiOnboardArgs {
                     openrouter_api_key: _args.openrouter_api_key.clone(),
                     anthropic_api_key: _args.anthropic_api_key.clone(),
@@ -721,6 +709,7 @@ async fn main() -> Result<()> {
             }
             #[cfg(not(feature = "tui"))]
             {
+                let _ = &mut secrets;
                 eprintln!(
                     "Onboarding wizard is not available in this build. Build with --features tui to enable."
                 );
@@ -898,7 +887,7 @@ async fn main() -> Result<()> {
 
         // ── Status ──────────────────────────────────────────────
         Commands::Status(args) => {
-            print_status(&config, &args);
+            commands::status::run(&config, &args);
         }
 
         // ── Gateway sub-commands ────────────────────────────────
@@ -1566,140 +1555,6 @@ async fn main() -> Result<()> {
 // ═══════════════════════════════════════════════════════════════════════════
 //  Helpers
 // ═══════════════════════════════════════════════════════════════════════════
-
-/// Parse the default gateway port and bind address from Config.
-/// If `gateway_url` is set (e.g. "ws://127.0.0.1:9001"), extract host/port
-/// from it.  Otherwise fall back to 127.0.0.1:9001.
-/// Extract the vault password for the gateway daemon.
-///
-/// If the vault is password-protected, prompt the user for it.  The
-/// password will be passed to the daemon via an environment variable
-/// so it can open the secrets vault on startup.
-fn extract_vault_password(config: &Config) -> Option<String> {
-    if !config.secrets_password_protected {
-        return None;
-    }
-    match prompt_password(&format!(
-        "{} Vault password (for gateway): ",
-        rustyclaw_core::theme::info("🔑"),
-    )) {
-        Ok(pw) if !pw.is_empty() => Some(pw),
-        _ => None,
-    }
-}
-
-/// Open the secrets vault, prompting for a password and TOTP if required.
-///
-/// NOTE: Under the new security model, TOTP is only verified by the
-/// gateway at WebSocket connect time.  The CLI `open_secrets` is only
-/// used during onboarding and ad-hoc CLI vault access.
-pub(crate) fn open_secrets(config: &Config) -> Result<SecretsManager> {
-    let mut manager = if config.secrets_password_protected {
-        let pw = prompt_password("Enter secrets vault password: ")?;
-        SecretsManager::with_password(config.credentials_dir(), pw)
-    } else {
-        SecretsManager::new(config.credentials_dir())
-    };
-
-    // If TOTP 2FA is enabled, verify before returning.
-    if config.totp_enabled {
-        loop {
-            let code = prompt_password("Enter your 2FA code: ")?;
-            match manager.verify_totp(code.trim()) {
-                Ok(true) => break,
-                Ok(false) => {
-                    eprintln!("Invalid code. Please try again.");
-                }
-                Err(e) => {
-                    anyhow::bail!("2FA verification failed: {}", e);
-                }
-            }
-        }
-    }
-
-    Ok(manager)
-}
-
-fn prompt_password(prompt: &str) -> Result<String> {
-    use std::io::{self, Write};
-    print!("{}", prompt);
-    io::stdout().flush()?;
-    let input = rpassword::read_password().context("Failed to read password")?;
-    Ok(input.trim().to_string())
-}
-
-// ── Status ──────────────────────────────────────────────────────────────────
-
-fn print_status(config: &Config, args: &StatusArgs) {
-    if args.json {
-        // Minimal JSON blob — extend as features land.
-        println!("{{");
-        println!("  \"settings_dir\": \"{}\",", config.settings_dir.display());
-        println!(
-            "  \"workspace_dir\": \"{}\",",
-            config.workspace_dir().display()
-        );
-        if let Some(m) = &config.model {
-            println!("  \"provider\": \"{}\",", m.provider);
-            if let Some(model) = &m.model {
-                println!("  \"model\": \"{}\",", model);
-            }
-        }
-        if let Some(gw) = &config.gateway_url {
-            println!("  \"gateway_url\": \"{}\"", gw);
-        }
-        println!("}}");
-    } else {
-        use rustyclaw_core::theme as t;
-        println!("{}\n", t::heading("RustyClaw status"));
-        println!(
-            "{}",
-            t::label_value("Settings dir", &config.settings_dir.display().to_string())
-        );
-        println!(
-            "{}",
-            t::label_value(
-                "Workspace   ",
-                &config.workspace_dir().display().to_string()
-            )
-        );
-        if let Some(m) = &config.model {
-            println!("{}", t::label_value("Provider    ", &m.provider));
-            if let Some(model) = &m.model {
-                println!("{}", t::label_value("Model       ", model));
-            }
-        } else {
-            println!(
-                "  {} : {}",
-                t::muted("Provider    "),
-                t::warn(&format!(
-                    "(not configured — run {})",
-                    t::accent_bright("`rustyclaw onboard`")
-                ))
-            );
-        }
-        if let Some(gw) = &config.gateway_url {
-            println!("{}", t::label_value("Gateway URL ", gw));
-        }
-        if args.verbose || args.all {
-            println!(
-                "{}",
-                t::label_value("SOUL.md     ", &config.soul_path().display().to_string())
-            );
-            println!(
-                "{}",
-                t::label_value("Skills dir  ", &config.skills_dir().display().to_string())
-            );
-            println!(
-                "{}",
-                t::label_value(
-                    "Credentials ",
-                    &config.credentials_dir().display().to_string()
-                )
-            );
-        }
-    }
-}
 
 // ── Local (offline) command execution ───────────────────────────────────────
 
