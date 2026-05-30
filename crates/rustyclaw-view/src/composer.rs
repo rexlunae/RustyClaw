@@ -79,7 +79,12 @@ impl PromptAttachment {
     }
 
     pub fn prompt_line(&self) -> String {
-        format!("- {} {}: {}", self.kind.icon(), self.kind.label(), self.path)
+        format!(
+            "- {} {}: {}",
+            self.kind.icon(),
+            self.kind.label(),
+            self.path
+        )
     }
 }
 
@@ -163,10 +168,7 @@ pub struct BottomBarData {
 }
 
 /// Build a prompt string that includes attached files/directories as context.
-pub fn build_prompt_with_attachments(
-    message: &str,
-    attachments: &[PromptAttachment],
-) -> String {
+pub fn build_prompt_with_attachments(message: &str, attachments: &[PromptAttachment]) -> String {
     if attachments.is_empty() {
         return message.to_string();
     }

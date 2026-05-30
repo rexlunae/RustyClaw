@@ -115,7 +115,7 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                                             "{}.md",
                                             chrono::Utc::now().format("%Y%m%dT%H%M%SZ")
                                         );
-                                        let _ = tokio::fs::write(dir.join(&filename), &text).await;
+                                        if let Err(e) = tokio::fs::write(dir.join(&filename), &text).await { tracing::warn!("failed to save message to file: {e}"); }
                                     }
                                 });
                             },

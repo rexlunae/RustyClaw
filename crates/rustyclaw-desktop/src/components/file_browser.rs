@@ -21,7 +21,9 @@ pub struct FileBrowserProps {
 
 #[component]
 pub fn FileBrowser(props: FileBrowserProps) -> Element {
-    let root_label: String = props.data.root
+    let root_label: String = props
+        .data
+        .root
         .file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| props.data.root.display().to_string());

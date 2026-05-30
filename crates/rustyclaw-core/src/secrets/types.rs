@@ -287,7 +287,10 @@ impl std::fmt::Debug for CredentialValue {
                 .field("private_key", &"[REDACTED]")
                 .field("public_key", &"[REDACTED]")
                 .finish(),
-            Self::FormFields(fields) => f.debug_struct("FormFields").field("fields", fields).finish(),
+            Self::FormFields(fields) => f
+                .debug_struct("FormFields")
+                .field("fields", fields)
+                .finish(),
             Self::PaymentCard { .. } => f
                 .debug_struct("PaymentCard")
                 .field("cardholder", &"[REDACTED]")

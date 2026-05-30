@@ -262,6 +262,7 @@ impl GatewayClient {
 
     /// Approve or deny a tool call.
     pub async fn respond_tool_approval(&self, id: String, approved: bool) -> Result<()> {
-        self.send(GatewayCommand::ToolApprove { id, approved }).await
+        self.send(GatewayCommand::ToolApprove { id, approved })
+            .await
     }
 }

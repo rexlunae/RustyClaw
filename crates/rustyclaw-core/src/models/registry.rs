@@ -286,8 +286,7 @@ impl ModelRegistry {
 
         // Drop existing entries for this provider so the registry
         // exactly mirrors what the provider currently offers.
-        self.models
-            .retain(|_, entry| entry.provider != provider_id);
+        self.models.retain(|_, entry| entry.provider != provider_id);
 
         let count = models.len();
         for info in models {
@@ -469,7 +468,10 @@ pub fn infer_cost_tier(provider_id: &str, model_id: &str) -> CostTier {
     let lower = model_id.to_lowercase();
 
     // Local / subscription providers are always free at point-of-use.
-    if matches!(provider_id, "ollama" | "lmstudio" | "exo" | "github-copilot") {
+    if matches!(
+        provider_id,
+        "ollama" | "lmstudio" | "exo" | "github-copilot"
+    ) {
         return CostTier::Free;
     }
 

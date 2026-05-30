@@ -127,9 +127,7 @@ pub async fn exec_gateway_async(args: &Value, workspace_dir: &Path) -> Result<St
             // Block modifications to security-sensitive config keys.
             // This prevents a compromised model from disabling sandboxing,
             // authentication, or other critical protections via config.patch.
-            if let Err(e) = check_protected_config(&patch, "") {
-                return Err(e);
-            }
+            check_protected_config(&patch, "")?;
 
             let merged = merge_json(existing, patch);
 
@@ -882,9 +880,7 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> Result<String, String
                 serde_json::json!({})
             };
 
-            if let Err(e) = check_protected_config(&patch, "") {
-                return Err(e);
-            }
+            check_protected_config(&patch, "")?;
 
             let merged = merge_json(existing, patch);
 

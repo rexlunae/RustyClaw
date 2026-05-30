@@ -12,7 +12,9 @@ use rustyclaw_view::SecretsDialogData;
 pub enum SecretsCommand {
     /// Request secrets list refresh from gateway.
     Refresh,
-    /// Store a new secret (used by add-secret flow).
+    /// Store a new secret. Reserved for the add-secret flow, which is not yet
+    /// wired up in the desktop client.
+    #[allow(dead_code)]
     Store { key: String, value: String },
     /// Delete a secret.
     Delete { key: String },
@@ -94,7 +96,12 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
             "Paste or type the value, then press Enter to save"
         };
         let input_type = if d.add_step == 2 { "password" } else { "text" };
-        Some((step_label.to_string(), input_val, hint.to_string(), input_type))
+        Some((
+            step_label.to_string(),
+            input_val,
+            hint.to_string(),
+            input_type,
+        ))
     } else {
         None
     };
@@ -111,7 +118,11 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                     is_selected: idx == sel_idx,
                     icon: s.type_icon(),
                     pclass: policy_class(&s.policy, s.disabled),
-                    plabel: if s.disabled { "OFF".into() } else { s.policy.clone() },
+                    plabel: if s.disabled {
+                        "OFF".into()
+                    } else {
+                        s.policy.clone()
+                    },
                     name: s.key.clone(),
                     label: s.label.clone(),
                     kind: s.kind.clone(),
@@ -126,63 +137,70 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
     // the local `rows` vector, satisfying the 'static requirement.
     let is_empty = rows.is_empty();
     let has_any = !d.secrets.is_empty();
-    let row_elements: Vec<_> = rows.into_iter().map(|row| {
-        let name = row.name.clone();
-        let policy = row.policy.clone();
-        let icon = row.icon;
-        let kind = row.kind.clone();
-        let pclass = row.pclass;
-        let plabel = row.plabel.clone();
-        let label = row.label.clone();
-        let is_selected = row.is_selected;
+    let row_elements: Vec<_> = rows
+        .into_iter()
+        .map(|row| {
+            let name = row.name.clone();
+            let policy = row.policy.clone();
+            let icon = row.icon;
+            let kind = row.kind.clone();
+            let pclass = row.pclass;
+            let plabel = row.plabel.clone();
+            let label = row.label.clone();
+            let is_selected = row.is_selected;
 
-        rsx! {
-            div {
-                class: if is_selected { "secrets-row selected" } else { "secrets-row" },
-                key: "{name}",
-                span { class: "secrets-col-kind", "{icon} {kind}" }
-                span { class: "secrets-col-policy",
-                    span { class: "badge {pclass}", "{plabel}" }
-                }
-                span { class: "secrets-col-label", "{label}" }
-                span { class: "secrets-col-name", "{name}" }
-                span { class: "secrets-col-actions",
-                    button {
-                        class: "btn btn-ghost btn-xs",
-                        title: "Cycle policy (OPEN ↔ ASK ↔ AUTH ↔ SKILL)",
-                        onclick: {
-                            let n = name.clone();
-                            let p = policy.clone();
-                            move |_| {
-                                props.on_command.call(
-                                    SecretsCommand::SetPolicy {
-                                        name: n.clone(),
-                                        policy: next_policy(&p).to_string(),
-                                    },
-                                );
-                            }
-                        },
-                        "↻"
+            rsx! {
+                div {
+                    class: if is_selected { "secrets-row selected" } else { "secrets-row" },
+                    key: "{name}",
+                    span { class: "secrets-col-kind", "{icon} {kind}" }
+                    span { class: "secrets-col-policy",
+                        span { class: "badge {pclass}", "{plabel}" }
                     }
-                    button {
-                        class: "btn btn-ghost btn-xs btn-danger-hover",
-                        title: "Delete secret",
-                        onclick: {
-                            let n = name.clone();
-                            move |_| {
-                                props.on_command.call(
-                                    SecretsCommand::Delete { key: n.clone() },
-                                );
-                            }
-                        },
-                        "\u{2715}"
+                    span { class: "secrets-col-label", "{label}" }
+                    span { class: "secrets-col-name", "{name}" }
+                    span { class: "secrets-col-actions",
+                        button {
+                            class: "btn btn-ghost btn-xs",
+                            title: "Cycle policy (OPEN ↔ ASK ↔ AUTH ↔ SKILL)",
+                            onclick: {
+                                let n = name.clone();
+                                let p = policy.clone();
+                                move |_| {
+                                    props.on_command.call(
+                                        SecretsCommand::SetPolicy {
+                                            name: n.clone(),
+                                            policy: next_policy(&p).to_string(),
+                                        },
+                                    );
+                                }
+                            },
+                            "↻"
+                        }
+                        button {
+                            class: "btn btn-ghost btn-xs btn-danger-hover",
+                            title: "Delete secret",
+                            onclick: {
+                                let n = name.clone();
+                                move |_| {
+                                    props.on_command.call(
+                                        SecretsCommand::Delete { key: n.clone() },
+                                    );
+                                }
+                            },
+                            "\u{2715}"
+                        }
                     }
                 }
             }
-        }
-    }).collect();
+        })
+        .collect();
 
-    let access_label = if d.agent_access { "Enabled" } else { "Disabled" };
+    let access_label = if d.agent_access {
+        "Enabled"
+    } else {
+        "Disabled"
+    };
     let totp_label = if d.has_totp { "On" } else { "Off" };
 
     rsx! {

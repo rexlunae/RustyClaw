@@ -155,10 +155,7 @@ pub enum GatewayEvent {
     Warning { message: String },
 
     /// DOM query request — evaluate JS in webview
-    DomQuery {
-        id: String,
-        js: String,
-    },
+    DomQuery { id: String, js: String },
 
     /// Secrets list result from gateway vault
     SecretsListResult {
@@ -167,28 +164,16 @@ pub enum GatewayEvent {
     },
 
     /// Secrets store result
-    SecretsStoreResult {
-        ok: bool,
-        message: String,
-    },
+    SecretsStoreResult { ok: bool, message: String },
 
     /// Secrets delete result
-    SecretsDeleteResult {
-        ok: bool,
-        message: Option<String>,
-    },
+    SecretsDeleteResult { ok: bool, message: Option<String> },
 
     /// Secrets set policy result
-    SecretsSetPolicyResult {
-        ok: bool,
-        message: Option<String>,
-    },
+    SecretsSetPolicyResult { ok: bool, message: Option<String> },
 
     /// Result of fetching a single secret's value
-    SecretsGetResult {
-        key: String,
-        value: Option<String>,
-    },
+    SecretsGetResult { key: String, value: Option<String> },
 
     /// Result of peeking at a credential's fields
     SecretsPeekResult {

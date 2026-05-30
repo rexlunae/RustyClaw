@@ -73,9 +73,12 @@ impl MessageBubbleData {
     /// Preserves role, content, timestamp, and streaming state.
     /// `agent_name` must be set by the caller (it depends on external
     /// state, not the message itself).
-    pub fn from_chat_message(msg: &rustyclaw_core::ui::ChatMessage, agent_name: Option<String>) -> Self {
+    pub fn from_chat_message(
+        msg: &rustyclaw_core::ui::ChatMessage,
+        agent_name: Option<String>,
+    ) -> Self {
         Self {
-            role: msg.role.clone(),
+            role: msg.role,
             content: msg.content.clone(),
             timestamp: Some(msg.timestamp),
             is_streaming: msg.is_streaming,

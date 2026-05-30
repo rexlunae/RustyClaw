@@ -14,10 +14,22 @@ pub struct SecretsDialogProps {
 #[component]
 pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static>> {
     let d = &props.data;
-    let access_label = if d.agent_access { "Enabled" } else { "Disabled" };
-    let access_color = if d.agent_access { crate::theme::SUCCESS } else { crate::theme::WARN };
+    let access_label = if d.agent_access {
+        "Enabled"
+    } else {
+        "Disabled"
+    };
+    let access_color = if d.agent_access {
+        crate::theme::SUCCESS
+    } else {
+        crate::theme::WARN
+    };
     let totp_label = if d.has_totp { "On" } else { "Off" };
-    let totp_color = if d.has_totp { crate::theme::SUCCESS } else { crate::theme::MUTED };
+    let totp_color = if d.has_totp {
+        crate::theme::SUCCESS
+    } else {
+        crate::theme::MUTED
+    };
     let count = d.secrets.len();
     let sel = d.selected.unwrap_or(0);
 
@@ -36,15 +48,26 @@ pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static
             } else {
                 crate::theme::TEXT
             };
-            let bg = if is_selected { Some(crate::theme::ACCENT_BRIGHT) } else { None };
+            let bg = if is_selected {
+                Some(crate::theme::ACCENT_BRIGHT)
+            } else {
+                None
+            };
             let pointer = if is_selected { "▸ " } else { "  " };
-            let status = if s.disabled { "OFF".to_string() } else { s.policy.clone() };
+            let status = if s.disabled {
+                "OFF".to_string()
+            } else {
+                s.policy.clone()
+            };
             let suffix = if !s.key.is_empty() && s.key != s.label {
                 format!(" — {}", s.key)
             } else {
                 String::new()
             };
-            let line = format!("{}{:10}  {:5}  {}{}", pointer, s.kind, status, s.label, suffix);
+            let line = format!(
+                "{}{:10}  {:5}  {}{}",
+                pointer, s.kind, status, s.label, suffix
+            );
             (idx, is_selected, fg, bg, line)
         })
         .collect();

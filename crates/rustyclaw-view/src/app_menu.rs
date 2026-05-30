@@ -106,17 +106,17 @@ impl AppMenuBar {
                         Item(MenuItem::new("New Thread", Some("Ctrl+Shift+E"), NewThread)),
                         Item(MenuItem::new("Close Thread", Some("Ctrl+W"), CloseThread)),
                         Separator,
-                        Item(MenuItem::new("Attach File…", Some("Ctrl+Shift+A"), AttachFile)),
+                        Item(MenuItem::new(
+                            "Attach File…",
+                            Some("Ctrl+Shift+A"),
+                            AttachFile,
+                        )),
                         Item(MenuItem::new(
                             "Attach Directory…",
                             Some("Ctrl+Shift+D"),
                             AttachDirectory,
                         )),
-                        Item(MenuItem::new(
-                            "Clear Attachments",
-                            None,
-                            ClearAttachments,
-                        )),
+                        Item(MenuItem::new("Clear Attachments", None, ClearAttachments)),
                         Separator,
                         Item(MenuItem::new(
                             "Change Directory…",
@@ -150,11 +150,7 @@ impl AppMenuBar {
                             Some("Ctrl+Shift+S"),
                             OpenSecrets,
                         )),
-                        Item(MenuItem::new(
-                            "Settings…",
-                            Some("Ctrl+,"),
-                            OpenSettings,
-                        )),
+                        Item(MenuItem::new("Settings…", Some("Ctrl+,"), OpenSettings)),
                         Separator,
                         Item(MenuItem::new("Swarm Manager…", None, OpenSwarm)),
                         Item(MenuItem::new("Skills…", None, OpenSkills)),
@@ -167,7 +163,11 @@ impl AppMenuBar {
                 Menu {
                     label: "Help",
                     entries: vec![
-                        Item(MenuItem::new("Keyboard Shortcuts", Some("?"), ShowShortcuts)),
+                        Item(MenuItem::new(
+                            "Keyboard Shortcuts",
+                            Some("?"),
+                            ShowShortcuts,
+                        )),
                         Item(MenuItem::new("Documentation", None, OpenDocs)),
                     ],
                 },

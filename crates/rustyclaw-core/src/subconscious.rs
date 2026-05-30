@@ -174,6 +174,10 @@ impl TaskRegistry {
     pub async fn len(&self) -> usize {
         self.tasks.read().await.len()
     }
+
+    pub async fn is_empty(&self) -> bool {
+        self.tasks.read().await.is_empty()
+    }
 }
 
 /// Builder for default system tasks. Embedders can extend the list before
@@ -298,7 +302,9 @@ impl SubconsciousEngine {
                 },
             },
             Ok(Decision::Escalate) => match self.actor.escalate(task, situation).await {
-                Ok(EscalationOutcome::AwaitingApproval { proposal }) if task.intent == TaskIntent::ReadOnly => {
+                Ok(EscalationOutcome::AwaitingApproval { proposal })
+                    if task.intent == TaskIntent::ReadOnly =>
+                {
                     TickResult {
                         task_id: task.id.clone(),
                         state: TickState::AwaitingApproval { proposal },

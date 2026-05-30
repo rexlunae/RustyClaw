@@ -132,7 +132,7 @@ fn check_file_permissions(path: &Path) -> Result<()> {
         let mode = metadata.permissions().mode();
         // Warn if file is group- or world-readable/writable (anything beyond 0700).
         // Permissions beyond owner-read/write for sensitive auth material are dangerous.
-        const PERMISSIVE_BITS: u32 = 0o077;  // group+other rwx bits
+        const PERMISSIVE_BITS: u32 = 0o077; // group+other rwx bits
         if mode & PERMISSIVE_BITS != 0 {
             warn!(
                 path = %path.display(),

@@ -511,11 +511,7 @@ pub async fn send_device_flow_complete(writer: &mut dyn TransportWriter) -> Resu
 ///
 /// Asks the desktop client to evaluate a JavaScript expression in its
 /// webview and return the result via a `DomQueryResponse` client frame.
-pub async fn send_dom_query(
-    writer: &mut dyn TransportWriter,
-    id: &str,
-    js: &str,
-) -> Result<()> {
+pub async fn send_dom_query(writer: &mut dyn TransportWriter, id: &str, js: &str) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::DomQuery,
         payload: ServerPayload::DomQuery {

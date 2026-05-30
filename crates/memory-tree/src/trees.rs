@@ -36,11 +36,7 @@ pub struct SourceTree {
 }
 
 impl SourceTree {
-    pub fn new(
-        store: Arc<Store>,
-        summarizer: Arc<dyn Summarizer>,
-        opts: TreeOptions,
-    ) -> Self {
+    pub fn new(store: Arc<Store>, summarizer: Arc<dyn Summarizer>, opts: TreeOptions) -> Self {
         Self {
             store,
             summarizer,
@@ -98,8 +94,7 @@ impl SourceTree {
         if buffered.is_empty() {
             return Ok(None);
         }
-        let entries: Vec<SummaryEntry> =
-            buffered.iter().map(SummaryEntry::from_chunk).collect();
+        let entries: Vec<SummaryEntry> = buffered.iter().map(SummaryEntry::from_chunk).collect();
         let summary_text = self
             .summarizer
             .summarize(&entries, SummaryKind::Leaf)
@@ -145,9 +140,7 @@ mod tests {
         let (store, tree) = tree();
         for i in 0..3 {
             let chunks = chunk(&format!("msg-{}", i), &format!("Body {}", i));
-            store
-                .insert_chunks("gmail/inbox", &chunks, &[0.7])
-                .unwrap();
+            store.insert_chunks("gmail/inbox", &chunks, &[0.7]).unwrap();
             tree.extract_and_buffer(&chunks[0].id).await.unwrap();
         }
         assert!(tree.ready_to_seal("gmail/inbox").unwrap());

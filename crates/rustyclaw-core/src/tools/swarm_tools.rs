@@ -18,8 +18,7 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> Result<String, 
     let custom_config = args.get("config");
 
     let config: SwarmConfig = if let Some(cfg_val) = custom_config {
-        serde_json::from_value(cfg_val.clone())
-            .map_err(|e| format!("Invalid swarm config: {e}"))?
+        serde_json::from_value(cfg_val.clone()).map_err(|e| format!("Invalid swarm config: {e}"))?
     } else {
         let tpl_name = template_name.unwrap_or("swarm");
         let templates = builtin_templates();
@@ -77,9 +76,7 @@ pub fn exec_swarm_list(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
     let swarms = mgr.list();
     if swarms.is_empty() {
-        return Ok(
-            "No swarms defined. Use swarm_create to create one (template: 'swarm').".into(),
-        );
+        return Ok("No swarms defined. Use swarm_create to create one (template: 'swarm').".into());
     }
 
     let mut output = String::from("Swarms:\n\n");
@@ -159,7 +156,10 @@ pub fn exec_swarm_status(args: &Value, _workspace_dir: &Path) -> Result<String, 
         .iter()
         .filter(|f| f.kind == crate::swarm::FlowKind::Handoff)
         .count();
-    output.push_str(&format!("  + {} bidirectional Handoff flows\n", handoff_count));
+    output.push_str(&format!(
+        "  + {} bidirectional Handoff flows\n",
+        handoff_count
+    ));
 
     Ok(output)
 }

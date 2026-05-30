@@ -206,11 +206,15 @@ jobs:
       
       - name: Check formatting
         run: cargo fmt --all -- --check
-        continue-on-error: true  # Treat as advisory for now
-      
+
       - name: Run Clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
-        continue-on-error: true  # Treat as advisory for now
+        # Lints the default-feature surface (what the rest of CI builds and tests).
+        # `--all-features`/`--features full` are NOT used: two optional features are
+        # currently broken and cannot compile —
+        #   - `qr`: qrcode 0.14 has no `Pixel` impl for image 0.25's `Luma<u8>`
+        #   - `browser`: chromiumoxide_cdp fails to build on current toolchains
+        # Restore broader feature coverage once those are resolved.
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   security-audit:
     name: Security Audit

@@ -181,7 +181,10 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
     let count = content.matches(old_string).count();
     if count == 0 {
         debug!(path = %canonical_path.display(), "old_string not found");
-        return Err(format!("old_string not found in {}", canonical_path.display()));
+        return Err(format!(
+            "old_string not found in {}",
+            canonical_path.display()
+        ));
     }
     if count > 1 {
         debug!(path = %canonical_path.display(), count, "old_string found multiple times");
@@ -516,7 +519,10 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
     let count = content.matches(old_string).count();
     if count == 0 {
-        return Err(format!("old_string not found in {}", canonical_path.display()));
+        return Err(format!(
+            "old_string not found in {}",
+            canonical_path.display()
+        ));
     }
     if count > 1 {
         return Err(format!(

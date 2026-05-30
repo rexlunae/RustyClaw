@@ -411,11 +411,7 @@ impl AgentThread {
     }
 
     /// Add a tool-result message linked to the originating call's id.
-    pub fn add_tool_result(
-        &mut self,
-        tool_call_id: impl Into<String>,
-        output: impl Into<String>,
-    ) {
+    pub fn add_tool_result(&mut self, tool_call_id: impl Into<String>, output: impl Into<String>) {
         self.messages.push_back(ThreadMessage {
             role: MessageRole::Tool,
             content: output.into(),

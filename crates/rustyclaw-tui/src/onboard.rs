@@ -552,7 +552,10 @@ pub fn run_onboard_wizard(
                     if reuse.trim().eq_ignore_ascii_case("n") {
                         let key = prompt_secret(
                             &mut reader,
-                            &format!("{} ", t::accent("Enter API key (or leave blank to remove):")),
+                            &format!(
+                                "{} ",
+                                t::accent("Enter API key (or leave blank to remove):")
+                            ),
                         )?;
                         if key.trim().is_empty() {
                             secrets.delete_secret(secret_key)?;

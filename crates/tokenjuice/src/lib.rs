@@ -132,9 +132,8 @@ impl TokenJuice {
         // Built-in rules are author-controlled; compile failures are bugs.
         let mut compiled = Vec::with_capacity(layered.len());
         for l in layered {
-            compiled.push(
-                CompiledRule::compile(l).expect("builtin tokenjuice rule failed to compile"),
-            );
+            compiled
+                .push(CompiledRule::compile(l).expect("builtin tokenjuice rule failed to compile"));
         }
         Self { rules: compiled }
     }

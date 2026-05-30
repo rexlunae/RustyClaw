@@ -37,14 +37,17 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
 
     // Show the action bar only for assistant messages; it is not useful
     // (and wastes render cycles) on short user/system/info messages.
-    let show_actions = !props.data.is_streaming
-        && props.data.role == MessageRole::Assistant;
+    let show_actions = !props.data.is_streaming && props.data.role == MessageRole::Assistant;
     let action_color = if props.is_selected {
         theme::MUTED
     } else {
         theme::TEXT_DIM
     };
-    let expand_label = if props.data.collapsed { "expand" } else { "collapse" };
+    let expand_label = if props.data.collapsed {
+        "expand"
+    } else {
+        "collapse"
+    };
     let action_bar = format!("[Ctrl+E] {}  [Ctrl+Y] copy  [Ctrl+S] save", expand_label);
 
     element! {

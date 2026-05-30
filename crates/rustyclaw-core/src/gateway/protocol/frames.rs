@@ -919,15 +919,22 @@ mod tests {
 
             // Serialize both independently and verify each roundtrips
             let df_bytes = serialize_frame(&df_frame).expect("serialize DeviceFlowStart");
-            let complete_bytes = serialize_frame(&complete_frame).expect("serialize DeviceFlowComplete");
+            let complete_bytes =
+                serialize_frame(&complete_frame).expect("serialize DeviceFlowComplete");
 
-            let decoded_df: ServerFrame = deserialize_frame(&df_bytes)
-                .expect("deserialize DeviceFlowStart should succeed");
+            let decoded_df: ServerFrame =
+                deserialize_frame(&df_bytes).expect("deserialize DeviceFlowStart should succeed");
             let decoded_complete: ServerFrame = deserialize_frame(&complete_bytes)
                 .expect("deserialize DeviceFlowComplete should succeed");
 
-            assert!(matches!(decoded_df.payload, ServerPayload::DeviceFlowStart { .. }));
-            assert!(matches!(decoded_complete.payload, ServerPayload::DeviceFlowComplete));
+            assert!(matches!(
+                decoded_df.payload,
+                ServerPayload::DeviceFlowStart { .. }
+            ));
+            assert!(matches!(
+                decoded_complete.payload,
+                ServerPayload::DeviceFlowComplete
+            ));
         }
 
         #[test]
@@ -1209,8 +1216,7 @@ mod frame_size_tests {
         };
 
         let bytes = serialize_frame(&frame).expect("serialize should succeed");
-        let decoded: ServerFrame =
-            deserialize_frame(&bytes).expect("deserialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
 
         assert_eq!(decoded.frame_type, ServerFrameType::CredentialRequest);
         match decoded.payload {
@@ -1244,8 +1250,7 @@ mod frame_size_tests {
         };
 
         let bytes = serialize_frame(&frame).expect("serialize should succeed");
-        let decoded: ClientFrame =
-            deserialize_frame(&bytes).expect("deserialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
 
         assert_eq!(decoded.frame_type, ClientFrameType::CredentialResponse);
         match decoded.payload {
@@ -1274,8 +1279,7 @@ mod frame_size_tests {
         };
 
         let bytes = serialize_frame(&frame).expect("serialize should succeed");
-        let decoded: ClientFrame =
-            deserialize_frame(&bytes).expect("deserialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
 
         assert_eq!(decoded.frame_type, ClientFrameType::CredentialResponse);
         match decoded.payload {

@@ -259,7 +259,7 @@ fn SessionRow(props: SessionRowProps) -> Element {
     let title_text = props.thread.title_text();
 
     let mut editing = use_signal(|| false);
-    let mut edit_value = use_signal(|| String::new());
+    let mut edit_value = use_signal(String::new);
     let thread_id = props.thread.id;
 
     rsx! {

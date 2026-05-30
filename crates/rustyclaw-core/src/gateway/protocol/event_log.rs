@@ -45,22 +45,13 @@ pub enum ProtocolEvent {
         error: String,
     },
     /// A frame failed to serialize.
-    EncodeError {
-        frame_type: String,
-        error: String,
-    },
+    EncodeError { frame_type: String, error: String },
     /// Connection event (connect, disconnect, auth).
-    Connection {
-        message: String,
-    },
+    Connection { message: String },
     /// Device flow specific event (for debugging the current issue).
-    DeviceFlow {
-        message: String,
-    },
+    DeviceFlow { message: String },
     /// Streaming progress summary.
-    Streaming {
-        message: String,
-    },
+    Streaming { message: String },
 }
 
 impl fmt::Display for ProtocolEvent {

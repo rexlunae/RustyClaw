@@ -67,37 +67,34 @@ impl FileBrowserData {
         let root: PathBuf = root_path.into();
         let mut entries = Vec::new();
 
-        match std::fs::read_dir(&root) {
-            Ok(dir) => {
-                let mut items: Vec<_> = dir.filter_map(|e| e.ok()).collect();
-                // Directories first, then files; alphabetical within each group.
-                items.sort_by(|a, b| {
-                    let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    let b_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    match (a_dir, b_dir) {
-                        (true, false) => std::cmp::Ordering::Less,
-                        (false, true) => std::cmp::Ordering::Greater,
-                        _ => a.file_name().cmp(&b.file_name()),
-                    }
-                });
-                for entry in &items {
-                    let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
-                    // Skip hidden entries (starting with ".").
-                    let name = entry.file_name().to_string_lossy().into_owned();
-                    if name.starts_with('.') {
-                        continue;
-                    }
-                    entries.push(FileBrowserEntry {
-                        path: entry.path(),
-                        name,
-                        is_dir,
-                        depth: 0,
-                        is_expanded: false,
-                        is_selected: false,
-                    });
+        if let Ok(dir) = std::fs::read_dir(&root) {
+            let mut items: Vec<_> = dir.filter_map(|e| e.ok()).collect();
+            // Directories first, then files; alphabetical within each group.
+            items.sort_by(|a, b| {
+                let a_dir = a.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                let b_dir = b.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                match (a_dir, b_dir) {
+                    (true, false) => std::cmp::Ordering::Less,
+                    (false, true) => std::cmp::Ordering::Greater,
+                    _ => a.file_name().cmp(&b.file_name()),
                 }
+            });
+            for entry in &items {
+                let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+                // Skip hidden entries (starting with ".").
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with('.') {
+                    continue;
+                }
+                entries.push(FileBrowserEntry {
+                    path: entry.path(),
+                    name,
+                    is_dir,
+                    depth: 0,
+                    is_expanded: false,
+                    is_selected: false,
+                });
             }
-            Err(_) => {}
         }
 
         Self {
@@ -118,9 +115,7 @@ impl FileBrowserData {
             // Collapse: remove all children deeper than this entry.
             let depth = self.entries[idx].depth;
             let mut remove_end = idx + 1;
-            while remove_end < self.entries.len()
-                && self.entries[remove_end].depth > depth
-            {
+            while remove_end < self.entries.len() && self.entries[remove_end].depth > depth {
                 remove_end += 1;
             }
             self.entries.drain(idx + 1..remove_end);

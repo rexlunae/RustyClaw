@@ -28,19 +28,11 @@ pub fn app_menu_ids() -> Option<&'static AppMenuIds> {
 /// Call this exactly once before launching the Dioxus app.
 pub fn build_app_menu() -> muda::Menu {
     // ── File ──────────────────────────────────────────────────────────────
-    let new_thread = muda::MenuItem::new(
-        "New Thread",
-        true,
-        "CmdOrCtrl+T".parse().ok(),
-    );
+    let new_thread = muda::MenuItem::new("New Thread", true, "CmdOrCtrl+T".parse().ok());
     let quit = muda::PredefinedMenuItem::quit(None);
 
     // ── View ──────────────────────────────────────────────────────────────
-    let toggle_left = muda::MenuItem::new(
-        "Toggle Left Sidebar",
-        true,
-        "CmdOrCtrl+B".parse().ok(),
-    );
+    let toggle_left = muda::MenuItem::new("Toggle Left Sidebar", true, "CmdOrCtrl+B".parse().ok());
     let toggle_right = muda::MenuItem::new(
         "Toggle Right Sidebar",
         true,
@@ -71,27 +63,17 @@ pub fn build_app_menu() -> muda::Menu {
     let file_sep = muda::PredefinedMenuItem::separator();
     let tools_sep = muda::PredefinedMenuItem::separator();
 
-    let file_menu = muda::Submenu::with_items("File", true, &[
-        &new_thread,
-        &file_sep,
-        &quit,
-    ])
-    .expect("failed to build File menu");
+    let file_menu = muda::Submenu::with_items("File", true, &[&new_thread, &file_sep, &quit])
+        .expect("failed to build File menu");
 
-    let view_menu = muda::Submenu::with_items("View", true, &[
-        &toggle_left,
-        &toggle_right,
-    ])
-    .expect("failed to build View menu");
+    let view_menu = muda::Submenu::with_items("View", true, &[&toggle_left, &toggle_right])
+        .expect("failed to build View menu");
 
-    let tools_menu = muda::Submenu::with_items("Tools", true, &[
-        &settings,
-        &secrets,
-        &pair,
-        &tools_sep,
-        &swarm,
-        &skills,
-    ])
+    let tools_menu = muda::Submenu::with_items(
+        "Tools",
+        true,
+        &[&settings, &secrets, &pair, &tools_sep, &swarm, &skills],
+    )
     .expect("failed to build Tools menu");
 
     let menu = muda::Menu::new();

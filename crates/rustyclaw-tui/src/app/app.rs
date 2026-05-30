@@ -239,10 +239,7 @@ impl App {
             }
             Err(e) => {
                 let _ = gw_tx.send(GwEvent::error(format!("SSH connection failed: {}", e)));
-                let _ = gw_tx.send(GwEvent::Disconnected(format!(
-                    "Failed to connect: {}",
-                    e
-                )));
+                let _ = gw_tx.send(GwEvent::Disconnected(format!("Failed to connect: {}", e)));
                 return Ok(());
             }
         };
@@ -426,7 +423,8 @@ impl App {
                         CommandAction::Quit => break,
                         CommandAction::AttachPromptFile(path) => {
                             if !prompt_attachments.iter().any(|item| item.path == path) {
-                                prompt_attachments.push(PromptAttachment::from_file_path(path.clone()));
+                                prompt_attachments
+                                    .push(PromptAttachment::from_file_path(path.clone()));
                             }
                             let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
                                 attachments: prompt_attachments.clone(),
@@ -434,9 +432,8 @@ impl App {
                         }
                         CommandAction::AttachPromptDirectory(path) => {
                             if !prompt_attachments.iter().any(|item| item.path == path) {
-                                prompt_attachments.push(PromptAttachment::from_directory_path(
-                                    path.clone(),
-                                ));
+                                prompt_attachments
+                                    .push(PromptAttachment::from_directory_path(path.clone()));
                             }
                             let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
                                 attachments: prompt_attachments.clone(),
@@ -877,7 +874,8 @@ impl App {
                                         .flatten()
                                         .or_else(|| std::env::var(sk).ok())
                                 });
-                                let is_optional = def.auth_method == rustyclaw_core::providers::AuthMethod::OptionalApiKey;
+                                let is_optional = def.auth_method
+                                    == rustyclaw_core::providers::AuthMethod::OptionalApiKey;
                                 if has_key.is_some() || is_optional {
                                     // Key exists, or key is optional — set provider and fetch models
                                     let existing_model =

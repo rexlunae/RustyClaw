@@ -25,17 +25,17 @@
 
 use std::fmt;
 use std::ops::ControlFlow;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Mutex;
 use tracing::{info, warn};
 
+use super::SharedVault;
 use super::protocol;
 use super::providers;
 use super::transport::TransportWriter;
 use super::types::ProviderRequest;
-use super::SharedVault;
 use crate::providers as crate_providers;
 
 // ── Error enum ──────────────────────────────────────────────────────────────
@@ -189,8 +189,9 @@ impl GatewayError {
     pub fn into_traced(self) -> anyhow_tracing::Error {
         let kind = self.kind();
         let provider = match &self {
-            Self::Auth { provider, .. }
-            | Self::DeviceFlow { provider, .. } => Some(provider.clone()),
+            Self::Auth { provider, .. } | Self::DeviceFlow { provider, .. } => {
+                Some(provider.clone())
+            }
             _ => None,
         };
         let mut err = anyhow_tracing::Error::from(anyhow::Error::from(self))
@@ -226,10 +227,7 @@ fn is_auth_error(error_msg: &str) -> bool {
 ///
 /// The returned [`anyhow_tracing::Error`] carries structured fields
 /// (`gateway_error_kind`, `provider`) suitable for JSON log output.
-pub fn classify_model_error(
-    err: anyhow::Error,
-    provider: &str,
-) -> anyhow_tracing::Error {
+pub fn classify_model_error(err: anyhow::Error, provider: &str) -> anyhow_tracing::Error {
     let msg = err.to_string();
     let gw = if is_auth_error(&msg) {
         let display = crate_providers::display_name_for_provider(provider);
@@ -293,7 +291,10 @@ pub async fn handle(
 
     match gw_err {
         // ── Auth errors ─────────────────────────────────────────────
-        GatewayError::Auth { ref provider, ref message } => {
+        GatewayError::Auth {
+            ref provider,
+            ref message,
+        } => {
             let provider_def = crate_providers::provider_by_id(provider);
             let secret_name =
                 crate_providers::secret_key_for_provider(provider).unwrap_or("API_KEY");
@@ -317,7 +318,9 @@ pub async fn handle(
                     )
                     .await
                 }
-                crate_providers::AuthMethod::ApiKey | crate_providers::AuthMethod::None | crate_providers::AuthMethod::OptionalApiKey => {
+                crate_providers::AuthMethod::ApiKey
+                | crate_providers::AuthMethod::None
+                | crate_providers::AuthMethod::OptionalApiKey => {
                     handle_credential_prompt(
                         writer,
                         resolved,
@@ -364,10 +367,8 @@ pub async fn handle(
             if auth_method == crate_providers::AuthMethod::DeviceFlow {
                 let provider_id = resolved.provider.clone();
                 let secret_name =
-                    crate_providers::secret_key_for_provider(&provider_id)
-                        .unwrap_or("API_KEY");
-                let display =
-                    crate_providers::display_name_for_provider(&provider_id);
+                    crate_providers::secret_key_for_provider(&provider_id).unwrap_or("API_KEY");
+                let display = crate_providers::display_name_for_provider(&provider_id);
                 handle_device_flow(
                     writer,
                     resolved,
@@ -381,11 +382,8 @@ pub async fn handle(
                 )
                 .await
             } else {
-                protocol::server::send_error(
-                    writer,
-                    &format!("Token refresh failed: {}", message),
-                )
-                .await?;
+                protocol::server::send_error(writer, &format!("Token refresh failed: {}", message))
+                    .await?;
                 providers::send_response_done(writer).await?;
                 Ok(ControlFlow::Break(()))
             }
@@ -443,10 +441,7 @@ pub async fn handle(
         GatewayError::UnexpectedFinish { ref reason } => {
             protocol::server::send_info(
                 writer,
-                &format!(
-                    "Model finished with reason '{}' but no tool calls.",
-                    reason
-                ),
+                &format!("Model finished with reason '{}' but no tool calls.", reason),
             )
             .await?;
             providers::send_response_done(writer).await?;
@@ -494,7 +489,10 @@ async fn handle_device_flow(
     // Send the provider's error message so the client can display it.
     let info_msg = match trigger_message {
         Some(msg) => format!("{}: {} \u{2014} starting device flow\u{2026}", display, msg),
-        None => format!("Authentication failed for {}. Starting device flow\u{2026}", display),
+        None => format!(
+            "Authentication failed for {}. Starting device flow\u{2026}",
+            display
+        ),
     };
     protocol::server::send_info(writer, &info_msg).await?;
 
@@ -534,7 +532,10 @@ async fn handle_device_flow(
         if tokio::time::Instant::now() >= deadline {
             let _ = protocol::server::send_info(
                 writer,
-                &format!("{}: device flow timed out after {} polls", display, poll_count),
+                &format!(
+                    "{}: device flow timed out after {} polls",
+                    display, poll_count
+                ),
             )
             .await;
             break;

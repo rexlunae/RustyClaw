@@ -207,6 +207,7 @@ fn invalid_json_args_are_passed_through() {
 #[test]
 fn direct_construction_no_timestamp() {
     let data = MessageBubbleData {
+        collapsed: false,
         role: MessageRole::Assistant,
         content: "Hello".into(),
         timestamp: None,

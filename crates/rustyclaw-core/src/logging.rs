@@ -207,15 +207,13 @@ pub fn init_for_tui(log_path: &std::path::Path) {
     let env_filter = EnvFilter::try_new(&config.filter)
         .unwrap_or_else(|_| EnvFilter::new("rustyclaw=info,warn"));
 
-    let subscriber = tracing_subscriber::registry()
-        .with(env_filter)
-        .with(
-            fmt::layer()
-                .compact()
-                .with_ansi(false)
-                .with_target(true)
-                .with_writer(std::sync::Mutex::new(file).with_max_level(tracing::Level::TRACE)),
-        );
+    let subscriber = tracing_subscriber::registry().with(env_filter).with(
+        fmt::layer()
+            .compact()
+            .with_ansi(false)
+            .with_target(true)
+            .with_writer(std::sync::Mutex::new(file).with_max_level(tracing::Level::TRACE)),
+    );
     let _ = tracing::subscriber::set_global_default(subscriber);
 }
 

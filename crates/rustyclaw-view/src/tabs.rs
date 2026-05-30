@@ -100,7 +100,11 @@ impl TabBarData {
     /// Create from a list of `ThreadInfo` references.
     pub fn from_threads(threads: &[rustyclaw_core::ui::ThreadInfo]) -> Self {
         let tabs: Vec<TabItemData> = threads.iter().map(TabItemData::from).collect();
-        let fg = tabs.iter().find(|t| t.is_foreground).map(|t| t.id).unwrap_or(0);
+        let fg = tabs
+            .iter()
+            .find(|t| t.is_foreground)
+            .map(|t| t.id)
+            .unwrap_or(0);
         Self {
             tabs,
             foreground_id: fg,
@@ -108,9 +112,15 @@ impl TabBarData {
     }
 
     /// Create from gateway protocol thread DTOs (used by the TUI).
-    pub fn from_gateway_threads(threads: &[rustyclaw_core::gateway::protocol::ThreadInfoDto]) -> Self {
+    pub fn from_gateway_threads(
+        threads: &[rustyclaw_core::gateway::protocol::ThreadInfoDto],
+    ) -> Self {
         let tabs: Vec<TabItemData> = threads.iter().map(TabItemData::from).collect();
-        let fg = tabs.iter().find(|t| t.is_foreground).map(|t| t.id).unwrap_or(0);
+        let fg = tabs
+            .iter()
+            .find(|t| t.is_foreground)
+            .map(|t| t.id)
+            .unwrap_or(0);
         Self {
             tabs,
             foreground_id: fg,

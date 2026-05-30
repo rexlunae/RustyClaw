@@ -150,10 +150,12 @@ struct DirectorySelectorBarProps {
 #[component]
 fn DirectorySelectorBar(props: DirectorySelectorBarProps) -> Element {
     let state = props.state.clone();
-    let display = state
-        .current_display
-        .clone()
-        .unwrap_or_else(|| state.current_path.clone().unwrap_or_else(|| "No directory".to_string()));
+    let display = state.current_display.clone().unwrap_or_else(|| {
+        state
+            .current_path
+            .clone()
+            .unwrap_or_else(|| "No directory".to_string())
+    });
 
     let arrow = if state.is_expanded { "v" } else { ">" };
 
@@ -172,11 +174,7 @@ fn DirectorySelectorBar(props: DirectorySelectorBarProps) -> Element {
                 div { class: "directory-selector-menu",
                     for dir in state.available_directories.clone().into_iter() {
                         button {
-                            class: if dir.is_selected { 
-                                "directory-item is-selected" 
-                            } else { 
-                                "directory-item" 
-                            },
+                            class: if dir.is_selected { "directory-item is-selected" } else { "directory-item" },
                             onclick: move |_| {
                                 props.on_select.call(dir.path.clone())
                             },
@@ -236,23 +234,24 @@ fn ModelBar(props: ModelBarProps) -> Element {
         current_provider.clone()
     };
     let models_for_provider = providers::models_for_provider(&provider_for_models);
-    let current_model = props
-        .current_model
-        .clone()
-        .unwrap_or_else(|| models_for_provider.first().copied().unwrap_or("").to_string());
+    let current_model = props.current_model.clone().unwrap_or_else(|| {
+        models_for_provider
+            .first()
+            .copied()
+            .unwrap_or("")
+            .to_string()
+    });
 
-    let mut provider_options: Vec<String> = provider_list.iter().map(|p| (*p).to_string()).collect();
-    if !current_provider.is_empty()
-        && !provider_options.iter().any(|p| p == &current_provider)
-    {
+    let mut provider_options: Vec<String> =
+        provider_list.iter().map(|p| (*p).to_string()).collect();
+    if !current_provider.is_empty() && !provider_options.iter().any(|p| p == &current_provider) {
         provider_options.insert(0, current_provider.clone());
     }
     let mut model_options: Vec<String> = models_for_provider
         .iter()
         .map(|m| (*m).to_string())
         .collect();
-    if !current_model.is_empty() && !model_options.iter().any(|m| m == &current_model)
-    {
+    if !current_model.is_empty() && !model_options.iter().any(|m| m == &current_model) {
         model_options.insert(0, current_model.clone());
     }
 
@@ -273,7 +272,7 @@ fn ModelBar(props: ModelBarProps) -> Element {
                         }
                         let models = providers::models_for_provider(&prov);
                         let next_model = if !selected_model.is_empty()
-                            && models.iter().any(|m| *m == selected_model.as_str())
+                            && models.contains(&selected_model.as_str())
                         {
                             selected_model.clone()
                         } else {

@@ -68,9 +68,7 @@ pub fn reduce(rule: &CompiledRule, raw: &str) -> ReduceOutput {
     let summarized = if let Some(s) = &rule.layered.rule.summarize {
         let head = s.head.unwrap_or(0);
         let tail = s.tail.unwrap_or(0);
-        if head == 0 && tail == 0 {
-            lines
-        } else if head + tail >= lines.len() {
+        if (head == 0 && tail == 0) || head + tail >= lines.len() {
             lines
         } else {
             let elided = lines.len() - head - tail;
@@ -171,18 +169,13 @@ fn pretty_print_json_lines(s: &str) -> String {
         first = false;
 
         let trimmed = line.trim();
-        if (trimmed.starts_with('{') && trimmed.ends_with('}'))
-            || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+        if ((trimmed.starts_with('{') && trimmed.ends_with('}'))
+            || (trimmed.starts_with('[') && trimmed.ends_with(']')))
+            && let Ok(v) = serde_json::from_str::<serde_json::Value>(trimmed)
+            && let Ok(pretty) = serde_json::to_string_pretty(&v)
         {
-            match serde_json::from_str::<serde_json::Value>(trimmed) {
-                Ok(v) => {
-                    if let Ok(pretty) = serde_json::to_string_pretty(&v) {
-                        out.push_str(&pretty);
-                        continue;
-                    }
-                }
-                Err(_) => {}
-            }
+            out.push_str(&pretty);
+            continue;
         }
         out.push_str(line);
     }

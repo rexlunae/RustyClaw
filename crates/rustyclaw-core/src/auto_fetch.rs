@@ -415,8 +415,10 @@ mod tests {
     async fn periodic_skips_when_not_due() {
         let store = Arc::new(MemoryStateStore::new());
         // Pre-populate state with last_sync = now.
-        let mut s = SyncState::default();
-        s.last_sync = Some(Utc::now());
+        let s = SyncState {
+            last_sync: Some(Utc::now()),
+            ..Default::default()
+        };
         store.put("slack", "ws1", s).await;
 
         let called = Arc::new(AtomicUsize::new(0));
@@ -442,8 +444,10 @@ mod tests {
     #[tokio::test]
     async fn manual_overrides_interval_skip() {
         let store = Arc::new(MemoryStateStore::new());
-        let mut s = SyncState::default();
-        s.last_sync = Some(Utc::now());
+        let s = SyncState {
+            last_sync: Some(Utc::now()),
+            ..Default::default()
+        };
         store.put("gh", "octocat", s).await;
 
         let called = Arc::new(AtomicUsize::new(0));

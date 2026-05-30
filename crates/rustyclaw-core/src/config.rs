@@ -159,7 +159,6 @@ pub struct Config {
     /// Workspace context injection configuration.
     #[serde(default)]
     pub workspace_context: WorkspaceContextConfig,
-
 }
 
 /// Configuration for a messenger backend.
@@ -312,7 +311,6 @@ impl Default for Config {
             ssh: None,
             memory_flush: MemoryFlushConfig::default(),
             workspace_context: WorkspaceContextConfig::default(),
-
         }
     }
 }

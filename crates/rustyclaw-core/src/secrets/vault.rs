@@ -5,7 +5,9 @@ use securestore::KeySource;
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
 use super::SecretsManager;
-use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString};
+use super::types::{
+    AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString,
+};
 
 impl SecretsManager {
     /// Ensure the vault is loaded (or created if it doesn't exist yet).
@@ -311,15 +313,19 @@ impl SecretsManager {
         // where credential values enter the process.
         let value = match entry.kind {
             SecretKind::UsernamePassword => {
-                let password = SecretString::new(self.get_secret(&val_key, true)?.unwrap_or_default());
+                let password =
+                    SecretString::new(self.get_secret(&val_key, true)?.unwrap_or_default());
                 let user_key = format!("val:{}:user", name);
-                let username = SecretString::new(self.get_secret(&user_key, true)?.unwrap_or_default());
+                let username =
+                    SecretString::new(self.get_secret(&user_key, true)?.unwrap_or_default());
                 CredentialValue::UserPass { username, password }
             }
             SecretKind::SshKey => {
-                let private_key = SecretString::new(self.get_secret(&val_key, true)?.unwrap_or_default());
+                let private_key =
+                    SecretString::new(self.get_secret(&val_key, true)?.unwrap_or_default());
                 let pub_key = format!("val:{}:pub", name);
-                let public_key = SecretString::new(self.get_secret(&pub_key, true)?.unwrap_or_default());
+                let public_key =
+                    SecretString::new(self.get_secret(&pub_key, true)?.unwrap_or_default());
                 CredentialValue::SshKeyPair {
                     private_key,
                     public_key,

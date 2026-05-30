@@ -110,7 +110,9 @@ impl DisplayMessageData {
     pub fn auto_collapse_if_needed(&mut self) {
         if matches!(self.role, MessageRole::Assistant | MessageRole::ToolResult) {
             let line_count = self.content.lines().count();
-            if line_count > Self::AUTO_COLLAPSE_LINES || self.content.len() > Self::AUTO_COLLAPSE_CHARS {
+            if line_count > Self::AUTO_COLLAPSE_LINES
+                || self.content.len() > Self::AUTO_COLLAPSE_CHARS
+            {
                 self.collapsed = true;
             }
         }
@@ -123,7 +125,11 @@ impl DisplayMessageData {
     }
 
     /// Convert into a reusable message-bubble view model.
-    pub fn to_bubble_data(&self, agent_name: Option<String>, has_details: bool) -> MessageBubbleData {
+    pub fn to_bubble_data(
+        &self,
+        agent_name: Option<String>,
+        has_details: bool,
+    ) -> MessageBubbleData {
         MessageBubbleData {
             role: self.role,
             content: self.content.clone(),
@@ -138,9 +144,7 @@ impl DisplayMessageData {
     /// Convert a wire `ChatMessage` (as carried in `ThreadHistoryReply`) into a
     /// renderer-facing `DisplayMessageData`. Unknown roles fall back to
     /// `MessageRole::System` so the message is still surfaced.
-    pub fn from_chat_message(
-        msg: &rustyclaw_core::gateway::protocol::types::ChatMessage,
-    ) -> Self {
+    pub fn from_chat_message(msg: &rustyclaw_core::gateway::protocol::types::ChatMessage) -> Self {
         let role = msg.to_core_message_role();
         let mut data = Self::new(role, msg.content.clone());
         // Surface tool calls embedded in an assistant turn so the

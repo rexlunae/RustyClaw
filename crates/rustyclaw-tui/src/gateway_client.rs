@@ -216,8 +216,10 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             message,
         } => {
             if ok {
-                let field_strs: Vec<String> =
-                    fields.iter().map(|(k, v)| format!("  {}: {}", k, v)).collect();
+                let field_strs: Vec<String> = fields
+                    .iter()
+                    .map(|(k, v)| format!("  {}: {}", k, v))
+                    .collect();
                 GwEvent::Info(format!("Credential:\n{}", field_strs.join("\n")))
             } else {
                 GwEvent::error(message.unwrap_or_else(|| "Failed to peek credential".to_string()))

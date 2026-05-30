@@ -1,7 +1,7 @@
 //! Pick the best matching rule for a `ToolInput`.
 
-use crate::compile::CompiledRule;
 use crate::ToolInput;
+use crate::compile::CompiledRule;
 use crate::rule::RuleMatch;
 
 /// Result of looking up a rule for the given input.
@@ -12,7 +12,10 @@ pub struct Classification<'a> {
 }
 
 /// Highest-priority matching rule, or `None`.
-pub fn classify<'a>(rules: &'a [CompiledRule], input: &ToolInput<'_>) -> Option<Classification<'a>> {
+pub fn classify<'a>(
+    rules: &'a [CompiledRule],
+    input: &ToolInput<'_>,
+) -> Option<Classification<'a>> {
     let mut best: Option<&CompiledRule> = None;
     for r in rules {
         if !matches(&r.layered.rule.r#match, input) {
@@ -78,9 +81,10 @@ fn matches(m: &RuleMatch, input: &ToolInput<'_>) -> bool {
     }
 
     if !m.argv_includes_any.is_empty() {
-        let any_match = m.argv_includes_any.iter().any(|group| {
-            group.iter().all(|tok| input.argv.iter().any(|a| a == tok))
-        });
+        let any_match = m
+            .argv_includes_any
+            .iter()
+            .any(|group| group.iter().all(|tok| input.argv.iter().any(|a| a == tok)));
         if !any_match {
             return false;
         }

@@ -2,9 +2,7 @@
 //! tool-output noise. Each rule is small and conservative — when in doubt,
 //! a user-layer rule should override.
 
-use crate::rule::{
-    JsonRule, RuleCounter, RuleFilters, RuleMatch, RuleSummarize, RuleTransforms,
-};
+use crate::rule::{JsonRule, RuleCounter, RuleFilters, RuleMatch, RuleSummarize, RuleTransforms};
 
 pub fn builtin_rules() -> Vec<JsonRule> {
     vec![
@@ -223,7 +221,9 @@ fn web_fetch_html() -> JsonRule {
     JsonRule {
         id: "tokenjuice.builtin.web_fetch".into(),
         family: "web".into(),
-        description: Some("Trim huge web-fetch results that already passed through html2md.".into()),
+        description: Some(
+            "Trim huge web-fetch results that already passed through html2md.".into(),
+        ),
         priority: 40,
         r#match: RuleMatch {
             tool_names: vec!["web_fetch".into()],

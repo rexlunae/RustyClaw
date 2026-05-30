@@ -46,11 +46,7 @@ pub trait Summarizer: Send + Sync {
     fn name(&self) -> &str;
 
     /// Summarize a slice of entries into a single string.
-    async fn summarize(
-        &self,
-        entries: &[SummaryEntry],
-        kind: SummaryKind,
-    ) -> Result<String>;
+    async fn summarize(&self, entries: &[SummaryEntry], kind: SummaryKind) -> Result<String>;
 }
 
 /// Deterministic fallback summarizer — concatenates inputs with head/tail
@@ -76,11 +72,7 @@ impl Summarizer for ConcatSummarizer {
         "concat"
     }
 
-    async fn summarize(
-        &self,
-        entries: &[SummaryEntry],
-        kind: SummaryKind,
-    ) -> Result<String> {
+    async fn summarize(&self, entries: &[SummaryEntry], kind: SummaryKind) -> Result<String> {
         let mut out = format!("[{:?}] {} items\n\n", kind, entries.len());
         for (i, e) in entries.iter().enumerate() {
             out.push_str(&format!("--- item {} ({}) ---\n", i, e.role));

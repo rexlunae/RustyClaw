@@ -24,7 +24,10 @@ pub fn fast_score(chunk: &Chunk) -> f64 {
     }
 
     // Reward for structure: bullet lists, headings, code blocks.
-    if text.lines().any(|l| l.starts_with("# ") || l.starts_with("## ")) {
+    if text
+        .lines()
+        .any(|l| l.starts_with("# ") || l.starts_with("## "))
+    {
         score += 0.1;
     }
     if text.lines().any(|l| l.trim_start().starts_with("- ")) {
@@ -36,7 +39,11 @@ pub fn fast_score(chunk: &Chunk) -> f64 {
 
     // Penalize obvious chrome / boilerplate.
     let lower = text.to_lowercase();
-    for marker in ["unsubscribe", "this message was sent automatically", "do not reply"] {
+    for marker in [
+        "unsubscribe",
+        "this message was sent automatically",
+        "do not reply",
+    ] {
         if lower.contains(marker) {
             score -= 0.2;
         }

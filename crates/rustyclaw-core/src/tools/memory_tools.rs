@@ -74,7 +74,6 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     })
 }
 
-
 /// Read content from a memory file.
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, String> {

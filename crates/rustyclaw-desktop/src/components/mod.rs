@@ -10,8 +10,8 @@
 //!   - `sidebar.rs`        — thread sidebar
 //!   - `tool_call.rs`      — tool call panel
 //!   - dialog modules      — credential, device_flow, hatching,
-//!                           pairing, settings, swarm, tool_approval,
-//!                           user_prompt, vault_unlock
+//!     pairing, settings, swarm, tool_approval,
+//!     user_prompt, vault_unlock
 
 mod chat;
 mod connection;

@@ -64,7 +64,9 @@ impl ToolRateLimiter {
         if count >= self.max_calls {
             return Err(format!(
                 "Rate limit exceeded: '{}' called {} times in {}ms window",
-                name, count + 1, self.window_ms,
+                name,
+                count + 1,
+                self.window_ms,
             ));
         }
 

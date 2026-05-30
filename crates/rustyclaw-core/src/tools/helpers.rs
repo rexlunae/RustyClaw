@@ -4,7 +4,7 @@ use crate::process_manager::{ProcessManager, SharedProcessManager};
 use crate::sandbox::{Sandbox, SandboxMode, SandboxPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
-use tracing::{debug, warn, error};
+use tracing::{debug, error, warn};
 
 // ── Global process manager ──────────────────────────────────────────────────
 
@@ -149,12 +149,12 @@ pub fn resolve_path_no_race(path: &Path) -> Result<PathBuf, String> {
         }
     } else {
         // Double-canonicalize to catch symlink swaps.
-        let canon1 = path.canonicalize().map_err(|e| {
-            format!("Path resolution failed: {}", e)
-        })?;
-        let canon2 = path.canonicalize().map_err(|e| {
-            format!("Path resolution failed (retry): {}", e)
-        })?;
+        let canon1 = path
+            .canonicalize()
+            .map_err(|e| format!("Path resolution failed: {}", e))?;
+        let canon2 = path
+            .canonicalize()
+            .map_err(|e| format!("Path resolution failed (retry): {}", e))?;
 
         if canon1 != canon2 {
             error!(
@@ -178,8 +178,7 @@ pub fn resolve_path_no_race(path: &Path) -> Result<PathBuf, String> {
 /// worrying about the path changing under them.
 pub fn open_file_read_safe(path: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
     // Step 1: resolve path safely, catching symlink races before opening.
-    let canonical = resolve_path_no_race(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    let canonical = resolve_path_no_race(path).map_err(std::io::Error::other)?;
 
     // Step 2: open with O_NOFOLLOW on Linux (fails if final component is a symlink).
     #[cfg(target_os = "linux")]
@@ -219,8 +218,7 @@ pub fn open_file_read_safe(path: &Path) -> std::io::Result<(std::fs::File, PathB
 pub fn open_file_write_safe(path: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
     // For writes, the file may not exist yet — resolve what we can.
     let canonical = if path.exists() {
-        resolve_path_no_race(path)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+        resolve_path_no_race(path).map_err(std::io::Error::other)?
     } else {
         // File doesn't exist — canonicalize the parent directory.
         let parent = path.parent().unwrap_or(Path::new("."));
@@ -228,8 +226,7 @@ pub fn open_file_write_safe(path: &Path) -> std::io::Result<(std::fs::File, Path
             .file_name()
             .map(|n| Path::new(n).to_path_buf())
             .unwrap_or_default();
-        let canon_parent = resolve_path_no_race(parent)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+        let canon_parent = resolve_path_no_race(parent).map_err(std::io::Error::other)?;
         canon_parent.join(filename)
     };
 
@@ -298,17 +295,8 @@ pub fn expand_tilde(p: &str) -> PathBuf {
     }
 }
 
-/// Decide how to present a path found during a search.
-///
-
-
 /// Blocked shell metacharacter patterns for command validation.
-const BLOCKED_COMMAND_PATTERNS: &[&str] = &[
-    "$(<",
-    "${HOME",
-    "${cred",
-    "${CRED",
-];
+const BLOCKED_COMMAND_PATTERNS: &[&str] = &["$(<", "${HOME", "${cred", "${CRED"];
 
 /// Blocked substrings in command strings indicating credential access attempts.
 const BLOCKED_CRED_SUBSTRINGS: &[&str] = &[
@@ -375,9 +363,7 @@ pub fn validate_command_safe(command: &str) -> Result<(), String> {
 
     // Check command length.
     if command.len() > 4096 {
-        return Err(
-            "Command too long (max 4096 characters) — blocked for security".to_string(),
-        );
+        return Err("Command too long (max 4096 characters) — blocked for security".to_string());
     }
 
     // Check for credential exfiltration patterns.

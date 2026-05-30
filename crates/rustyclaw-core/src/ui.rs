@@ -175,13 +175,16 @@ impl DialogState {
                 secret_name,
                 message,
             } => {
-                self.pending_credential_request =
-                    Some((id.clone(), provider.clone(), secret_name.clone(), message.clone()));
+                self.pending_credential_request = Some((
+                    id.clone(),
+                    provider.clone(),
+                    secret_name.clone(),
+                    message.clone(),
+                ));
                 true
             }
             crate::gateway::client_types::GatewayEvent::DeviceFlowStart { url, code, message } => {
-                self.pending_device_flow =
-                    Some((url.clone(), code.clone(), message.clone()));
+                self.pending_device_flow = Some((url.clone(), code.clone(), message.clone()));
                 true
             }
             crate::gateway::client_types::GatewayEvent::DeviceFlowComplete => {
@@ -214,9 +217,8 @@ pub fn pretty_print_json(input: &str) -> String {
 pub fn truncate_content(content: &str, max_chars: usize, max_lines: usize) -> String {
     let mut result = String::with_capacity(content.len().min(max_chars));
     let mut line_count = 0usize;
-    let mut char_count = 0usize;
 
-    for ch in content.chars() {
+    for (char_count, ch) in content.chars().enumerate() {
         if char_count >= max_chars {
             result.push('…');
             break;
@@ -230,7 +232,6 @@ pub fn truncate_content(content: &str, max_chars: usize, max_lines: usize) -> St
             }
         }
         result.push(ch);
-        char_count += 1;
     }
 
     result
@@ -252,9 +253,7 @@ pub fn format_tool_call(name: &str, arguments: &str) -> String {
 ///
 /// Truncates long results and marks errors.
 pub fn format_tool_result(result: &str, is_error: bool) -> String {
-    let preview = if result.len() > 500 {
-        truncate_content(&pretty_print_json(result), 500, 15)
-    } else if result.len() > 100 {
+    let preview = if result.len() > 100 {
         truncate_content(&pretty_print_json(result), 500, 15)
     } else {
         result.to_string()
@@ -316,7 +315,7 @@ use std::time::Instant;
 ///
 /// Both the TUI and desktop clients need to track similar streaming
 /// metrics. This struct consolidates that tracking in one place.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct StreamingState {
     /// Whether we are currently receiving a streaming response.
     pub is_streaming: bool,
@@ -332,18 +331,6 @@ pub struct StreamingState {
 
     /// When the current stream started.
     pub start_time: Option<Instant>,
-}
-
-impl Default for StreamingState {
-    fn default() -> Self {
-        Self {
-            is_streaming: false,
-            is_thinking: false,
-            chunks: 0,
-            bytes: 0,
-            start_time: None,
-        }
-    }
 }
 
 impl StreamingState {

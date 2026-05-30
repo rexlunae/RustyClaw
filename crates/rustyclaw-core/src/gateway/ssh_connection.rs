@@ -8,8 +8,8 @@ use anyhow::{Context, Result, anyhow};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
-use super::protocol::{ServerFrame, WireFrame, deserialize_wire_frame, serialize_wire_frame};
 use super::protocol::frames::ClientFrame;
+use super::protocol::{ServerFrame, WireFrame, deserialize_wire_frame, serialize_wire_frame};
 
 // ── SshReader / SshWriter (split halves) ──────────────────────────────────
 
@@ -88,10 +88,7 @@ impl SshWriter {
             .write_all(data)
             .await
             .context("Failed to write frame data")?;
-        self.stdin
-            .flush()
-            .await
-            .context("Failed to flush stdin")?;
+        self.stdin.flush().await.context("Failed to flush stdin")?;
         Ok(())
     }
 }
@@ -122,8 +119,8 @@ impl SshConnection {
     /// running `rustyclaw-gateway run --ssh-stdio`, and return split
     /// reader + writer halves.
     pub async fn connect(url: &str) -> Result<(Self, SshWriter, SshReader)> {
-        let parsed = url::Url::parse(url)
-            .map_err(|e| anyhow!("Invalid SSH URL '{}': {}", url, e))?;
+        let parsed =
+            url::Url::parse(url).map_err(|e| anyhow!("Invalid SSH URL '{}': {}", url, e))?;
 
         if parsed.scheme() != "ssh" {
             anyhow::bail!("Unsupported scheme '{}'; expected ssh://", parsed.scheme());

@@ -531,8 +531,13 @@ impl ProcessManager {
             .spawn()
             .map_err(|e| format!("Failed to spawn process: {}", e))?;
 
-        let session =
-            ExecSession::with_owner(command.to_string(), working_dir.to_string(), timeout, child, owner_id);
+        let session = ExecSession::with_owner(
+            command.to_string(),
+            working_dir.to_string(),
+            timeout,
+            child,
+            owner_id,
+        );
 
         let id = session.id.clone();
         self.sessions.insert(id.clone(), session);

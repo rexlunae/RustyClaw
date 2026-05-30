@@ -71,10 +71,7 @@ pub fn exec_ast_grep(args: &Value, workspace_dir: &Path) -> Result<String, Strin
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: name")?;
             let lang = args.get("lang").and_then(|v| v.as_str());
-            let base_dir = args
-                .get("base_dir")
-                .and_then(|v| v.as_str())
-                .unwrap_or(".");
+            let base_dir = args.get("base_dir").and_then(|v| v.as_str()).unwrap_or(".");
             let mut cmd = format!("ast-grep new {} {}", item_type, name);
             if let Some(l) = lang {
                 cmd.push_str(&format!(" -l {}", l));
@@ -106,10 +103,7 @@ fn do_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: pattern")?;
 
-    let lang_ext: &str = args
-        .get("lang")
-        .and_then(|v| v.as_str())
-        .unwrap_or("rs");
+    let lang_ext: &str = args.get("lang").and_then(|v| v.as_str()).unwrap_or("rs");
     let paths_str = args.get("paths").and_then(|v| v.as_str()).unwrap_or(".");
     let context = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
@@ -196,10 +190,7 @@ fn do_rewrite(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .ok_or("Missing required parameter: rewrite")?;
 
-    let lang_ext: &str = args
-        .get("lang")
-        .and_then(|v| v.as_str())
-        .unwrap_or("rs");
+    let lang_ext: &str = args.get("lang").and_then(|v| v.as_str()).unwrap_or("rs");
     let paths_str = args.get("paths").and_then(|v| v.as_str()).unwrap_or(".");
 
     let lang: SupportLang = parse_lang(lang_ext)?;
@@ -216,11 +207,7 @@ fn do_rewrite(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
-                return Err(format!(
-                    "Cannot read {}: {}",
-                    file_path.display(),
-                    e
-                ));
+                return Err(format!("Cannot read {}: {}", file_path.display(), e));
             }
         };
 
@@ -252,9 +239,8 @@ fn do_rewrite(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             new_source.replace_range(*start..*end, text);
         }
 
-        std::fs::write(file_path, &new_source).map_err(|e| {
-            format!("Cannot write {}: {}", file_path.display(), e)
-        })?;
+        std::fs::write(file_path, &new_source)
+            .map_err(|e| format!("Cannot write {}: {}", file_path.display(), e))?;
 
         modified_files.push(serde_json::json!({
             "file": file_path.display().to_string(),
@@ -332,10 +318,7 @@ fn parse_lang(s: &str) -> Result<SupportLang, String> {
 }
 
 /// Resolve a glob/file path string into absolute paths.
-fn resolve_files(
-    pattern: &str,
-    workspace_dir: &Path,
-) -> Result<Vec<std::path::PathBuf>, String> {
+fn resolve_files(pattern: &str, workspace_dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
     let _cwd = if Path::new(pattern).is_absolute() {
         std::path::PathBuf::from(".")
     } else {
@@ -345,9 +328,7 @@ fn resolve_files(
     let mut files: Vec<std::path::PathBuf> = Vec::new();
 
     // If it's a direct file path (no glob metacharacters), handle it directly
-    let has_glob_chars = pattern.contains('*')
-        || pattern.contains('?')
-        || pattern.contains('[');
+    let has_glob_chars = pattern.contains('*') || pattern.contains('?') || pattern.contains('[');
 
     if !has_glob_chars {
         let path = if Path::new(pattern).is_absolute() {
@@ -396,8 +377,7 @@ fn resolve_files(
 
 fn do_setup() -> Result<String, String> {
     if is_installed() {
-        let version = sh("ast-grep --version 2>&1")
-            .unwrap_or_else(|_| "unknown".into());
+        let version = sh("ast-grep --version 2>&1").unwrap_or_else(|_| "unknown".into());
         return Ok(format!(
             "ast-grep CLI is already installed ({}).\n\
              Library API is available for search/run actions without the CLI.\n\

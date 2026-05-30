@@ -146,7 +146,8 @@ impl ClientState {
     /// Start a new assistant message (streaming) and return its id.
     pub fn start_assistant_message(&mut self) -> String {
         let id = uuid::Uuid::new_v4().to_string();
-        self.messages.push_back(ChatMessage::start_assistant(id.clone()));
+        self.messages
+            .push_back(ChatMessage::start_assistant(id.clone()));
         self.is_streaming = true;
         self.streaming_chunks = 0;
         self.streaming_bytes = 0;

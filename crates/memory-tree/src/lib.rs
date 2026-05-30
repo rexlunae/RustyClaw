@@ -46,7 +46,7 @@ pub use queue::{Job, JobKind, Queue};
 pub use retrieval::{HitKind, Retrieval, Scope, SearchHit};
 pub use score::fast_score;
 pub use store::{LeafStatus, Store, StoredChunk, Summary};
-pub use summarizer::{ConcatSummarizer, SummaryEntry, Summarizer, SummaryKind};
+pub use summarizer::{ConcatSummarizer, Summarizer, SummaryEntry, SummaryKind};
 pub use trees::{SourceTree, TreeOptions};
 
 use std::path::Path;
@@ -99,12 +99,7 @@ impl MemoryTree {
     /// `source` is a stable identifier for the source (e.g. `gmail/inbox`,
     /// `slack/eng-discuss`). `source_id` is the document id within that
     /// source (e.g. message id).
-    pub fn ingest(
-        &self,
-        source: &str,
-        source_id: &str,
-        content: &str,
-    ) -> Result<IngestReport> {
+    pub fn ingest(&self, source: &str, source_id: &str, content: &str) -> Result<IngestReport> {
         let chunks = chunk(source_id, content);
         let scores: Vec<f64> = chunks.iter().map(fast_score).collect();
         let inserted = self.store.insert_chunks(source, &chunks, &scores)?;
@@ -154,9 +149,7 @@ impl MemoryTree {
                     .payload
                     .get("chunk_id")
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        MemoryTreeError::InvalidInput("missing chunk_id".into())
-                    })?;
+                    .ok_or_else(|| MemoryTreeError::InvalidInput("missing chunk_id".into()))?;
                 let status = self.tree.extract_and_buffer(chunk_id).await?;
                 if status == LeafStatus::Buffered {
                     // Did this buffer just become full? Enqueue a seal.
@@ -164,15 +157,11 @@ impl MemoryTree {
                         .payload
                         .get("source")
                         .and_then(|v| v.as_str())
-                        .ok_or_else(|| {
-                            MemoryTreeError::InvalidInput("missing source".into())
-                        })?;
+                        .ok_or_else(|| MemoryTreeError::InvalidInput("missing source".into()))?;
                     if self.tree.ready_to_seal(source)? {
                         let payload = serde_json::json!({"source": source});
                         let dedupe = format!("seal:{}", source);
-                        let _ = self
-                            .queue
-                            .enqueue(JobKind::Seal, payload, Some(&dedupe))?;
+                        let _ = self.queue.enqueue(JobKind::Seal, payload, Some(&dedupe))?;
                     }
                 }
             }
@@ -211,11 +200,8 @@ mod tests {
 
     #[tokio::test]
     async fn ingest_then_search_finds_chunk() {
-        let mt = MemoryTree::open(
-            Path::new(":memory:"),
-            Arc::new(ConcatSummarizer::default()),
-        )
-        .unwrap();
+        let mt =
+            MemoryTree::open(Path::new(":memory:"), Arc::new(ConcatSummarizer::default())).unwrap();
         let report = mt
             .ingest(
                 "notes/test",
@@ -226,26 +212,22 @@ mod tests {
         assert_eq!(report.chunks_inserted, 1);
         assert_eq!(report.jobs_enqueued, 1);
 
-        let hits = mt
-            .search("brown fox", &Scope::Global, 10)
-            .unwrap();
+        let hits = mt.search("brown fox", &Scope::Global, 10).unwrap();
         assert!(!hits.is_empty());
     }
 
     #[tokio::test]
     async fn end_to_end_ingest_extract_seal() {
-        let mt = MemoryTree::open(
-            Path::new(":memory:"),
-            Arc::new(ConcatSummarizer::default()),
-        )
-        .unwrap();
+        let mt =
+            MemoryTree::open(Path::new(":memory:"), Arc::new(ConcatSummarizer::default())).unwrap();
         // Ingest enough small docs to trigger a seal (default threshold = 8).
         for i in 0..8 {
             let body = format!(
                 "Document number {}. It has a heading\n# Title\nand a useful body about topics like alpha, beta, and gamma.\n\n## Subhead\nMore content goes here. Enough to clear the length penalty.",
                 i
             );
-            mt.ingest("gmail/inbox", &format!("msg-{}", i), &body).unwrap();
+            mt.ingest("gmail/inbox", &format!("msg-{}", i), &body)
+                .unwrap();
         }
         // Drain extract jobs first, then a seal will land on the queue.
         let mut processed = 0;

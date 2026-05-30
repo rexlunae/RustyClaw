@@ -171,8 +171,10 @@ pub fn save_client_preferences(prefs: &ClientPreferences) {
         }
     }
 
-    if let Ok(bytes) = serde_json::to_vec_pretty(&value) {
-        let _ = std::fs::write(&path, bytes);
+    if let Ok(bytes) = serde_json::to_vec_pretty(&value)
+        && let Err(e) = std::fs::write(&path, bytes)
+    {
+        tracing::warn!("failed to write client prefs to {}: {e}", path.display());
     }
 }
 

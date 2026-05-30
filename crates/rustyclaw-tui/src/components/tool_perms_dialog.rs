@@ -14,16 +14,8 @@ pub struct ToolPermsDialogProps {
 #[component]
 pub fn ToolPermsDialog(props: &ToolPermsDialogProps) -> impl Into<AnyElement<'static>> {
     let total = props.tools.len();
-    let allowed = props
-        .tools
-        .iter()
-        .filter(|t| t.is_allow())
-        .count();
-    let denied = props
-        .tools
-        .iter()
-        .filter(|t| t.is_deny())
-        .count();
+    let allowed = props.tools.iter().filter(|t| t.is_allow()).count();
+    let denied = props.tools.iter().filter(|t| t.is_deny()).count();
     let ask = props.tools.iter().filter(|t| t.is_ask()).count();
     let sel = props.selected.unwrap_or(0);
 

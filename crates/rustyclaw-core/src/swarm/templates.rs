@@ -4,9 +4,7 @@
 //! plus seven specialists covering research, data analysis, slides, docs,
 //! image generation, video generation, and general virtual-assistant tasks.
 
-use super::config::{
-    AgentRole, CommunicationFlow, FlowKind, SwarmAgent, SwarmConfig,
-};
+use super::config::{AgentRole, CommunicationFlow, FlowKind, SwarmAgent, SwarmConfig};
 
 /// Shared instructions injected into every agent in the default swarm.
 const DEFAULT_SHARED_INSTRUCTIONS: &str = "\
@@ -46,8 +44,7 @@ fn default_swarm_template() -> SwarmConfig {
                 - Use SendMessage (parallel) when subtasks are independent.\n\
                 - Use Handoff when a single specialist should take over."
                 .into(),
-            description: "Routes tasks to the right specialist(s); never executes directly."
-                .into(),
+            description: "Routes tasks to the right specialist(s); never executes directly.".into(),
             tools: vec![
                 "sessions_spawn".into(),
                 "sessions_send".into(),
@@ -71,9 +68,7 @@ fn default_swarm_template() -> SwarmConfig {
                 You have access to shell commands, web search, and file tools.\n\
                 For external integrations, use MCP servers or available skills."
                 .into(),
-            description:
-                "Handles admin workflows, external systems, messaging, scheduling."
-                    .into(),
+            description: "Handles admin workflows, external systems, messaging, scheduling.".into(),
             tools: vec![
                 "execute_command".into(),
                 "web_search".into(),
@@ -103,9 +98,7 @@ fn default_swarm_template() -> SwarmConfig {
                 Use web search extensively and cross-reference multiple sources.\n\
                 Return structured reports with sections and citations."
                 .into(),
-            description:
-                "Evidence-based web/academic research with citations and analysis."
-                    .into(),
+            description: "Evidence-based web/academic research with citations and analysis.".into(),
             tools: vec![
                 "web_search".into(),
                 "web_fetch".into(),
@@ -130,9 +123,7 @@ fn default_swarm_template() -> SwarmConfig {
                 Generate visualisations and save them as image files.\n\
                 Present actionable insights with clear KPIs."
                 .into(),
-            description:
-                "Data analysis, KPIs, charts, and statistical modelling."
-                    .into(),
+            description: "Data analysis, KPIs, charts, and statistical modelling.".into(),
             tools: vec![
                 "execute_command".into(),
                 "read_file".into(),
@@ -157,9 +148,7 @@ fn default_swarm_template() -> SwarmConfig {
                 appropriate imagery.  Save outputs as files and report paths.\n\
                 For images, use the image tool or web_fetch to download them."
                 .into(),
-            description:
-                "Slide deck creation, editing, and export (HTML → PPTX)."
-                    .into(),
+            description: "Slide deck creation, editing, and export (HTML → PPTX).".into(),
             tools: vec![
                 "execute_command".into(),
                 "read_file".into(),
@@ -186,9 +175,7 @@ fn default_swarm_template() -> SwarmConfig {
                 use command-line tools like pandoc or wkhtmltopdf via \
                 execute_command.  Save outputs and report file paths."
                 .into(),
-            description:
-                "Document creation and conversion (PDF, Markdown, DOCX)."
-                    .into(),
+            description: "Document creation and conversion (PDF, Markdown, DOCX).".into(),
             tools: vec![
                 "execute_command".into(),
                 "read_file".into(),
@@ -211,9 +198,7 @@ fn default_swarm_template() -> SwarmConfig {
                 Edit existing images, compose layouts, and create visual assets.\n\
                 Save all generated images as files and report their paths."
                 .into(),
-            description:
-                "AI image generation, editing, and composition."
-                    .into(),
+            description: "AI image generation, editing, and composition.".into(),
             tools: vec![
                 "image".into(),
                 "execute_command".into(),
@@ -236,9 +221,7 @@ fn default_swarm_template() -> SwarmConfig {
                 (ffmpeg, etc.).  Edit clips, add captions, combine footage.\n\
                 Save all generated videos as files and report their paths."
                 .into(),
-            description:
-                "AI video generation, editing, and assembly."
-                    .into(),
+            description: "AI video generation, editing, and assembly.".into(),
             tools: vec![
                 "execute_command".into(),
                 "read_file".into(),

@@ -18,7 +18,7 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
     // via early return.  Accumulate a mismatch bit for every byte.
     let len_match = a.len() == b.len();
     let min_len = a.len().min(b.len());
-    let mut result = (a.len() ^ b.len()) as u8;  // 0 iff lengths equal
+    let mut result = (a.len() ^ b.len()) as u8; // 0 iff lengths equal
     for i in 0..min_len {
         result |= a[i] ^ b[i];
     }

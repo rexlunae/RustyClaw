@@ -153,7 +153,11 @@ impl Retrieval {
             Ok(())
         })?;
 
-        hits.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         hits.truncate(limit);
         Ok(hits)
     }
@@ -166,7 +170,11 @@ fn escape_fts(q: &str) -> String {
     // Wrap each token in quotes and join.
     let tokens: Vec<String> = q
         .split_whitespace()
-        .map(|t| t.chars().filter(|c| c.is_alphanumeric()).collect::<String>())
+        .map(|t| {
+            t.chars()
+                .filter(|c| c.is_alphanumeric())
+                .collect::<String>()
+        })
         .filter(|t| !t.is_empty())
         .map(|t| format!("\"{}\"", t))
         .collect();
@@ -199,18 +207,10 @@ mod tests {
     fn source_scope_filters() {
         let store = Arc::new(Store::in_memory().unwrap());
         store
-            .insert_chunks(
-                "gmail",
-                &chunk("m1", "alpha beta gamma"),
-                &[0.5],
-            )
+            .insert_chunks("gmail", &chunk("m1", "alpha beta gamma"), &[0.5])
             .unwrap();
         store
-            .insert_chunks(
-                "slack",
-                &chunk("m2", "alpha beta gamma"),
-                &[0.5],
-            )
+            .insert_chunks("slack", &chunk("m2", "alpha beta gamma"), &[0.5])
             .unwrap();
         let r = Retrieval::new(Arc::clone(&store));
         let hits = r

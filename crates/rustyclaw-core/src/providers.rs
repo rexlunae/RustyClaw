@@ -456,7 +456,9 @@ pub async fn fetch_models_detailed(
         // GitHub Copilot exposes a Copilot-specific model list API.
         "github-copilot" => fetch_github_copilot_models_detailed(base, api_key).await,
         // Local providers — auth optional, OpenAI-compatible /v1/models
-        "ollama" | "lmstudio" | "exo" => fetch_openai_compatible_models_detailed(base, api_key).await,
+        "ollama" | "lmstudio" | "exo" => {
+            fetch_openai_compatible_models_detailed(base, api_key).await
+        }
         // Everything else is OpenAI-compatible
         _ => fetch_openai_compatible_models_detailed(base, api_key).await,
     };
@@ -1235,8 +1237,10 @@ pub async fn poll_device_token(
     let safe_preview = if body.contains("access_token") {
         "<redacted: contains access_token>".to_string()
     } else {
-        let end = body.len().min(120);
-        let end = body.floor_char_boundary(end);
+        let mut end = body.len().min(120);
+        while end > 0 && !body.is_char_boundary(end) {
+            end -= 1;
+        }
         body[..end].to_string()
     };
     tracing::info!(
@@ -1607,7 +1611,10 @@ mod tests {
         let raw = parse_form_encoded_token_response(body).unwrap();
         let response: TokenResponse = raw.into();
         match response {
-            TokenResponse::Pending { error, error_description } => {
+            TokenResponse::Pending {
+                error,
+                error_description,
+            } => {
                 assert_eq!(error, "authorization_pending");
                 assert_eq!(error_description, Some("waiting for user".to_string()));
             }

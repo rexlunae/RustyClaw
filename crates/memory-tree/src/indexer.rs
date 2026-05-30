@@ -67,8 +67,8 @@ impl Indexer for NoopIndexer {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Counting(Arc<AtomicUsize>);
 

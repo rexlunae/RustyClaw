@@ -115,10 +115,11 @@ impl MemoryVault {
             path: dest.display().to_string(),
             source: e,
         })?;
-        f.write_all(converted.as_bytes()).map_err(|e| VaultError::Io {
-            path: dest.display().to_string(),
-            source: e,
-        })?;
+        f.write_all(converted.as_bytes())
+            .map_err(|e| VaultError::Io {
+                path: dest.display().to_string(),
+                source: e,
+            })?;
         Ok(VaultEntry {
             basename: basename.to_string(),
             title: extract_title(&content).unwrap_or_else(|| basename.to_string()),
@@ -250,11 +251,7 @@ fn local_md_basename(target: &str) -> Option<&str> {
     // Path-component basename.
     let basename = core.rsplit('/').next().unwrap_or(core);
     let stem = &basename[..basename.len() - 3];
-    if stem.is_empty() {
-        None
-    } else {
-        Some(stem)
-    }
+    if stem.is_empty() { None } else { Some(stem) }
 }
 
 /// Extract a title from the first `# Heading` line, or from `name:` in YAML
@@ -299,15 +296,9 @@ fn url_encode_path(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for b in s.bytes() {
         match b {
-            b'A'..=b'Z'
-            | b'a'..=b'z'
-            | b'0'..=b'9'
-            | b'-'
-            | b'.'
-            | b'_'
-            | b'~'
-            | b'/'
-            | b':' => out.push(b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' | b'/' | b':' => {
+                out.push(b as char)
+            }
             _ => out.push_str(&format!("%{:02X}", b)),
         }
     }
@@ -358,10 +349,7 @@ mod tests {
     #[test]
     fn extract_title_from_frontmatter() {
         let in_str = "---\nname: Important Note\ntype: feedback\n---\n\n# Different heading\n";
-        assert_eq!(
-            extract_title(in_str),
-            Some("Important Note".to_string())
-        );
+        assert_eq!(extract_title(in_str), Some("Important Note".to_string()));
     }
 
     #[test]
@@ -387,11 +375,7 @@ mod tests {
             "---\nname: Feedback A\ntype: feedback\n---\n\nbody\n",
         )
         .unwrap();
-        fs::write(
-            ws.join("memory/another.md"),
-            "# Another Note\n\nbody.\n",
-        )
-        .unwrap();
+        fs::write(ws.join("memory/another.md"), "# Another Note\n\nbody.\n").unwrap();
 
         let v = MemoryVault::new(ws);
         let report = v.sync().unwrap();

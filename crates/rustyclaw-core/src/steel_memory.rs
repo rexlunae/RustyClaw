@@ -125,8 +125,7 @@ fn load_embedding_model() -> Result<TextEmbedding, String> {
         .join("fastembed");
     let _ = std::fs::create_dir_all(&cache_dir);
     let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir);
-    TextEmbedding::try_new(opts)
-        .map_err(|e| format!("Failed to load embedding model: {}", e))
+    TextEmbedding::try_new(opts).map_err(|e| format!("Failed to load embedding model: {}", e))
 }
 
 fn do_embed(
@@ -624,7 +623,7 @@ impl SteelMemory {
             Err(e) => return Err(format!("Wake up task panicked: {}", e)),
         };
 
-        let aaak_lines: Vec<String> = drawers.iter().map(|d| compress_to_aaak(d)).collect();
+        let aaak_lines: Vec<String> = drawers.iter().map(compress_to_aaak).collect();
 
         Ok(aaak_lines.join("\n---\n"))
     }

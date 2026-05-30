@@ -106,8 +106,7 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Add model selection guidance for sub-agents (when registry available)
     if let Some(registry) = model_registry {
-        let model_guidance =
-            super::model_handler::generate_model_prompt_section(registry).await;
+        let model_guidance = super::model_handler::generate_model_prompt_section(registry).await;
         parts.push(model_guidance);
     }
 

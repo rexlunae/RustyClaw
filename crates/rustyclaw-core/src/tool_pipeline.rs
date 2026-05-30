@@ -10,7 +10,7 @@
 use serde_json::Value;
 use std::path::Path;
 use std::sync::OnceLock;
-use tokenjuice::{CompactResult, TokenJuice, ToolInput, TokenJuiceError};
+use tokenjuice::{CompactResult, TokenJuice, TokenJuiceError, ToolInput};
 use tracing::debug;
 
 static GLOBAL: OnceLock<ToolPipeline> = OnceLock::new();
@@ -180,11 +180,7 @@ mod tests {
     fn pipeline_compresses_git_status() {
         let p = ToolPipeline::new(TokenJuice::builtin());
         let raw = "On branch main\n\tmodified:   src/lib.rs\n";
-        let out = p.compact(
-            "execute_command",
-            &json!({"command": "git status"}),
-            raw,
-        );
+        let out = p.compact("execute_command", &json!({"command": "git status"}), raw);
         assert_eq!(out.family.as_deref(), Some("git"));
         assert!(out.text.contains("modified:"));
         assert!(!out.text.contains("On branch"));
@@ -195,11 +191,7 @@ mod tests {
         // Note: cannot install in unit tests without poisoning other tests
         // (global state). Here we just verify the no-install path returns raw.
         // The install path is covered by an integration test.
-        let out = apply_global(
-            "some_tool",
-            &json!({}),
-            "the original text".to_string(),
-        );
+        let out = apply_global("some_tool", &json!({}), "the original text".to_string());
         // Either uninstalled (raw) or installed by another test - we accept either.
         assert!(out.contains("the original text") || !out.is_empty());
     }

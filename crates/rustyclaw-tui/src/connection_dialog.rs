@@ -53,7 +53,8 @@ pub async fn prompt_and_connect(
             direct_urls = load_default_startup_gateway_urls();
         }
         if direct_urls.is_empty() && skip_dialog {
-            direct_urls.push(load_saved_gateway_url().unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string()));
+            direct_urls
+                .push(load_saved_gateway_url().unwrap_or_else(|| DEFAULT_GATEWAY_URL.to_string()));
         }
     }
 

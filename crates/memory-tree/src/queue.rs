@@ -123,15 +123,7 @@ impl Queue {
                      ORDER BY scheduled_at ASC
                      LIMIT 1",
                     params![&now_s],
-                    |r| {
-                        Ok((
-                            r.get(0)?,
-                            r.get(1)?,
-                            r.get(2)?,
-                            r.get(3)?,
-                            r.get(4)?,
-                        ))
-                    },
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
                 )
                 .optional()?;
 
@@ -151,10 +143,7 @@ impl Queue {
             })?;
             let payload: serde_json::Value = serde_json::from_str(&payload_s)?;
             let scheduled_at = sched_s.parse::<DateTime<Utc>>().map_err(|e| {
-                crate::error::MemoryTreeError::InvalidInput(format!(
-                    "bad scheduled_at: {}",
-                    e
-                ))
+                crate::error::MemoryTreeError::InvalidInput(format!("bad scheduled_at: {}", e))
             })?;
             Ok(Some(Job {
                 id,
@@ -229,9 +218,7 @@ mod tests {
     #[test]
     fn dedupe_key_blocks_duplicate() {
         let q = q();
-        let a = q
-            .enqueue(JobKind::Seal, json!({}), Some("seal:x"))
-            .unwrap();
+        let a = q.enqueue(JobKind::Seal, json!({}), Some("seal:x")).unwrap();
         let b = q.enqueue(JobKind::Seal, json!({}), Some("seal:x")).unwrap();
         assert!(a.is_some());
         assert!(b.is_none());

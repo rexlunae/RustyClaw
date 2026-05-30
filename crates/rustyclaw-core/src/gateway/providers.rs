@@ -21,7 +21,11 @@ use crate::tools;
 /// Handles the OpenAI error envelope `{"error":{"message":"...","code":"..."}}`.
 /// For the `unsupported_api_for_model` code, the message is rewritten so users
 /// know to pick a different model rather than seeing a raw JSON dump.
-pub(crate) fn provider_error(prefix: &str, status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+pub(crate) fn provider_error(
+    prefix: &str,
+    status: reqwest::StatusCode,
+    body: &str,
+) -> anyhow::Error {
     if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
         if let Some(err_obj) = json.get("error") {
             let code = err_obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
@@ -427,10 +431,8 @@ pub fn thread_history_to_chat_messages(
                             .filter_map(|tc| {
                                 let id = tc.get("id")?.as_str()?.to_string();
                                 let name = tc.get("name")?.as_str()?.to_string();
-                                let arguments = tc
-                                    .get("arguments")
-                                    .cloned()
-                                    .unwrap_or_else(|| json!({}));
+                                let arguments =
+                                    tc.get("arguments").cloned().unwrap_or_else(|| json!({}));
                                 Some(ParsedToolCall {
                                     id,
                                     name,
@@ -452,9 +454,7 @@ pub fn thread_history_to_chat_messages(
                 // can attach a name (Google needs it) when available.
                 let mut j = i + 1;
                 let mut results: Vec<ToolCallResult> = Vec::new();
-                while j < history.len()
-                    && matches!(history[j].role, MessageRole::Tool)
-                {
+                while j < history.len() && matches!(history[j].role, MessageRole::Tool) {
                     let tm = &history[j];
                     let id = tm.tool_call_id.clone().unwrap_or_default();
                     // Recover the tool name from the matching call.
@@ -895,10 +895,8 @@ fn messages_to_responses_input(messages: &[ChatMessage]) -> Vec<serde_json::Valu
                         // One function_call item per tool call.
                         for tc in tool_calls {
                             let call_id = tc["id"].as_str().unwrap_or("");
-                            let name =
-                                tc["function"]["name"].as_str().unwrap_or("");
-                            let arguments =
-                                tc["function"]["arguments"].as_str().unwrap_or("{}");
+                            let name = tc["function"]["name"].as_str().unwrap_or("");
+                            let arguments = tc["function"]["arguments"].as_str().unwrap_or("{}");
                             input.push(json!({
                                 "type": "function_call",
                                 "call_id": call_id,
@@ -1025,10 +1023,8 @@ async fn consume_responses_api_sse(
                     if item["type"].as_str() == Some("function_call") {
                         let item_id = item["id"].as_str().unwrap_or("");
                         if let Some((call_id, name, args)) = func_calls.remove(item_id) {
-                            let final_args =
-                                item["arguments"].as_str().unwrap_or(args.as_str());
-                            let arguments =
-                                serde_json::from_str(final_args).unwrap_or(json!({}));
+                            let final_args = item["arguments"].as_str().unwrap_or(args.as_str());
+                            let arguments = serde_json::from_str(final_args).unwrap_or(json!({}));
                             if !call_id.is_empty() && !name.is_empty() {
                                 result.tool_calls.push(ParsedToolCall {
                                     id: call_id,
@@ -1602,7 +1598,7 @@ pub async fn call_openai_with_tools(
         }
     }
 
-    if let Some(w) = writer.as_deref_mut()
+    if let Some(w) = writer
         && !result.text.is_empty()
         && !is_sse_response
     {

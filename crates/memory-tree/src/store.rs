@@ -170,9 +170,8 @@ impl Store {
                     (id, source, source_id, chunk_index, content, status, fast_score, created_at)
                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             )?;
-            let mut fts = tx.prepare(
-                "INSERT INTO chunk_fts (id, source, content) VALUES (?1, ?2, ?3)",
-            )?;
+            let mut fts =
+                tx.prepare("INSERT INTO chunk_fts (id, source, content) VALUES (?1, ?2, ?3)")?;
             for (c, score) in chunks.iter().zip(fast_scores.iter()) {
                 let n = insert.execute(params![
                     &c.id,
@@ -220,16 +219,15 @@ impl Store {
                         status: LeafStatus::parse(&r.get::<_, String>(5)?)
                             .unwrap_or(LeafStatus::PendingExtraction),
                         fast_score: r.get(6)?,
-                        created_at: r
-                            .get::<_, String>(7)?
-                            .parse::<DateTime<Utc>>()
-                            .map_err(|e| {
+                        created_at: r.get::<_, String>(7)?.parse::<DateTime<Utc>>().map_err(
+                            |e| {
                                 rusqlite::Error::FromSqlConversionFailure(
                                     7,
                                     rusqlite::types::Type::Text,
                                     Box::new(e),
                                 )
-                            })?,
+                            },
+                        )?,
                     })
                 },
             )
@@ -304,10 +302,7 @@ impl Store {
 
     /// Run a closure with a locked connection. Escape hatch for the queue
     /// module without leaking rusqlite types in the public API.
-    pub(crate) fn with_conn<R>(
-        &self,
-        f: impl FnOnce(&mut Connection) -> Result<R>,
-    ) -> Result<R> {
+    pub(crate) fn with_conn<R>(&self, f: impl FnOnce(&mut Connection) -> Result<R>) -> Result<R> {
         let mut conn = self.conn.lock().unwrap();
         f(&mut conn)
     }
@@ -345,7 +340,9 @@ mod tests {
         let store = Store::in_memory().unwrap();
         let chunks = chunk("doc-1", "Hello world");
         store.insert_chunks("s", &chunks, &[0.0]).unwrap();
-        store.set_status(&chunks[0].id, LeafStatus::Admitted).unwrap();
+        store
+            .set_status(&chunks[0].id, LeafStatus::Admitted)
+            .unwrap();
         let got = store.get_chunk(&chunks[0].id).unwrap().unwrap();
         assert_eq!(got.status, LeafStatus::Admitted);
     }

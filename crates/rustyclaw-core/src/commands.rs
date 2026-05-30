@@ -366,63 +366,63 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 }
             }
         }
-        "attach" => {
-            match parts.get(1).copied() {
-                Some("file") => {
-                    let path = trimmed
-                        .strip_prefix("attach file")
-                        .map(str::trim_start)
-                        .unwrap_or_default()
-                        .to_string();
-                    if path.is_empty() {
-                        CommandResponse {
-                            messages: vec!["Usage: /attach file <path>".to_string()],
-                            action: CommandAction::None,
-                        }
-                    } else {
-                        CommandResponse {
-                            messages: vec![format!("Attached file: {}", path)],
-                            action: CommandAction::AttachPromptFile(path),
-                        }
+        "attach" => match parts.get(1).copied() {
+            Some("file") => {
+                let path = trimmed
+                    .strip_prefix("attach file")
+                    .map(str::trim_start)
+                    .unwrap_or_default()
+                    .to_string();
+                if path.is_empty() {
+                    CommandResponse {
+                        messages: vec!["Usage: /attach file <path>".to_string()],
+                        action: CommandAction::None,
+                    }
+                } else {
+                    CommandResponse {
+                        messages: vec![format!("Attached file: {}", path)],
+                        action: CommandAction::AttachPromptFile(path),
                     }
                 }
-                Some("dir") | Some("directory") => {
-                    let path = trimmed
-                        .strip_prefix("attach dir")
-                        .or_else(|| trimmed.strip_prefix("attach directory"))
-                        .map(str::trim_start)
-                        .unwrap_or_default()
-                        .to_string();
-                    if path.is_empty() {
-                        CommandResponse {
-                            messages: vec!["Usage: /attach dir <path>".to_string()],
-                            action: CommandAction::None,
-                        }
-                    } else {
-                        CommandResponse {
-                            messages: vec![format!("Attached directory: {}", path)],
-                            action: CommandAction::AttachPromptDirectory(path),
-                        }
-                    }
-                }
-                Some("clear") => CommandResponse {
-                    messages: vec!["Cleared prompt attachments.".to_string()],
-                    action: CommandAction::ClearPromptAttachments,
-                },
-                _ => CommandResponse {
-                    messages: vec![
-                        "Usage: /attach file <path>".to_string(),
-                        "Usage: /attach dir <path>".to_string(),
-                        "Usage: /attach clear".to_string(),
-                    ],
-                    action: CommandAction::None,
-                },
             }
-        }
+            Some("dir") | Some("directory") => {
+                let path = trimmed
+                    .strip_prefix("attach dir")
+                    .or_else(|| trimmed.strip_prefix("attach directory"))
+                    .map(str::trim_start)
+                    .unwrap_or_default()
+                    .to_string();
+                if path.is_empty() {
+                    CommandResponse {
+                        messages: vec!["Usage: /attach dir <path>".to_string()],
+                        action: CommandAction::None,
+                    }
+                } else {
+                    CommandResponse {
+                        messages: vec![format!("Attached directory: {}", path)],
+                        action: CommandAction::AttachPromptDirectory(path),
+                    }
+                }
+            }
+            Some("clear") => CommandResponse {
+                messages: vec!["Cleared prompt attachments.".to_string()],
+                action: CommandAction::ClearPromptAttachments,
+            },
+            _ => CommandResponse {
+                messages: vec![
+                    "Usage: /attach file <path>".to_string(),
+                    "Usage: /attach dir <path>".to_string(),
+                    "Usage: /attach clear".to_string(),
+                ],
+                action: CommandAction::None,
+            },
+        },
         "enable-access" => {
             context.secrets_manager.set_agent_access(true);
             context.config.agent_access = true;
-            let _ = context.config.save(None);
+            if let Err(e) = context.config.save(None) {
+                tracing::warn!("failed to persist config: {e}");
+            }
             CommandResponse {
                 messages: vec!["Agent access to secrets enabled.".to_string()],
                 action: CommandAction::None,
@@ -431,7 +431,9 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
         "disable-access" => {
             context.secrets_manager.set_agent_access(false);
             context.config.agent_access = false;
-            let _ = context.config.save(None);
+            if let Err(e) = context.config.save(None) {
+                tracing::warn!("failed to persist config: {e}");
+            }
             CommandResponse {
                 messages: vec!["Agent access to secrets disabled.".to_string()],
                 action: CommandAction::None,
@@ -887,7 +889,9 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
                     Ok(resp) if resp.ok => {
                         // Store token in config
                         context.config.clawhub_token = Some(token.to_string());
-                        let _ = context.config.save(None);
+                        if let Err(e) = context.config.save(None) {
+                            tracing::warn!("failed to persist config: {e}");
+                        }
                         let url = context.skill_manager.registry_url().to_string();
                         context
                             .skill_manager
@@ -920,7 +924,9 @@ fn handle_clawhub_subcommand(parts: &[&str], context: &mut CommandContext<'_>) -
             },
             Some("logout") => {
                 context.config.clawhub_token = None;
-                let _ = context.config.save(None);
+                if let Err(e) = context.config.save(None) {
+                    tracing::warn!("failed to persist config: {e}");
+                }
                 let url = context.skill_manager.registry_url().to_string();
                 context.skill_manager.set_registry(&url, None);
                 CommandResponse {

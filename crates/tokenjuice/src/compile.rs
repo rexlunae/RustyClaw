@@ -41,7 +41,7 @@ impl CompiledRule {
             .rule
             .counters
             .iter()
-            .map(|c| compile_counter(c))
+            .map(compile_counter)
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| CompileError::with_rule(&layered.rule.id, e))?;
 

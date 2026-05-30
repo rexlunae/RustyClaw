@@ -7,15 +7,14 @@ use std::sync::{Arc, Mutex as StdMutex};
 use crate::components::{
     Chat, ConnectionDialog, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog,
     PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar, SwarmPanel, TabBar,
-    ToolApprovalDialog, UserPromptDialog,
-    VaultUnlockDialog, generate_qr_code,
+    ToolApprovalDialog, UserPromptDialog, VaultUnlockDialog, generate_qr_code,
 };
 
 use crate::state::{AppState, Theme};
+use rustyclaw_core::gateway::GatewayClient;
+use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
-use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
-use rustyclaw_core::gateway::GatewayClient;
 
 use rustyclaw_view::{
     CredentialRequestData, DeviceFlowData, HatchingDialogData, PairingDialogData, PromptAttachment,
@@ -143,11 +142,11 @@ pub fn App() -> Element {
         }
         did_init_directories.set(true);
 
-        let current_dir = state
-            .read()
-            .working_directory
-            .clone()
-            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+        let current_dir = state.read().working_directory.clone().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+        });
         if let Some(path) = current_dir {
             let options = build_directory_options(&path);
             let mut s = state.write();
@@ -375,11 +374,11 @@ pub fn App() -> Element {
     };
 
     let on_add_file_attachment = move |_| {
-        let start_dir = state
-            .read()
-            .working_directory
-            .clone()
-            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+        let start_dir = state.read().working_directory.clone().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+        });
         spawn(async move {
             let mut dialog = rfd::AsyncFileDialog::new();
             if let Some(dir) = start_dir {
@@ -389,7 +388,11 @@ pub fn App() -> Element {
                 let path = file.path().display().to_string();
                 let attachment = PromptAttachment::from_file_path(path.clone());
                 let mut s = state.write();
-                if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+                if !s
+                    .prompt_attachments
+                    .iter()
+                    .any(|item| item.path == attachment.path)
+                {
                     s.prompt_attachments.push(attachment);
                 }
                 s.status_message = Some(format!("Attached file {}", path));
@@ -398,11 +401,11 @@ pub fn App() -> Element {
     };
 
     let on_add_directory_attachment = move |_| {
-        let start_dir = state
-            .read()
-            .working_directory
-            .clone()
-            .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
+        let start_dir = state.read().working_directory.clone().or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .map(|p| p.display().to_string())
+        });
         spawn(async move {
             let mut dialog = rfd::AsyncFileDialog::new();
             if let Some(dir) = start_dir {
@@ -412,7 +415,11 @@ pub fn App() -> Element {
                 let path = folder.path().display().to_string();
                 let attachment = PromptAttachment::from_directory_path(path.clone());
                 let mut s = state.write();
-                if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+                if !s
+                    .prompt_attachments
+                    .iter()
+                    .any(|item| item.path == attachment.path)
+                {
                     s.prompt_attachments.push(attachment);
                 }
                 s.status_message = Some(format!("Attached directory {}", path));
@@ -447,11 +454,11 @@ pub fn App() -> Element {
         // Save current thread's messages and start with empty chat.
         // The gateway will assign a new foreground via ThreadsUpdate.
         let mut s = state.write();
-        if let Some(current_id) = s.foreground_thread_id {
-            if !s.messages.is_empty() {
-                let msgs = s.messages.clone();
-                s.save_thread_messages(current_id, msgs);
-            }
+        if let Some(current_id) = s.foreground_thread_id
+            && !s.messages.is_empty()
+        {
+            let msgs = s.messages.clone();
+            s.save_thread_messages(current_id, msgs);
         }
         s.messages.clear();
     };
@@ -465,7 +472,10 @@ pub fn App() -> Element {
                     .await;
                 // Pull authoritative history from the gateway so this
                 // client reflects work done from any other session.
-                tracing::info!(thread_id, "Desktop requesting thread history after ThreadSwitch");
+                tracing::info!(
+                    thread_id,
+                    "Desktop requesting thread history after ThreadSwitch"
+                );
                 let _ = client
                     .send(GatewayCommand::ThreadHistoryRequest { thread_id })
                     .await;
@@ -492,9 +502,7 @@ pub fn App() -> Element {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let _ = client
-                    .send(GatewayCommand::ThreadClose { thread_id })
-                    .await;
+                let _ = client.send(GatewayCommand::ThreadClose { thread_id }).await;
             });
         }
     };
@@ -525,9 +533,7 @@ pub fn App() -> Element {
                             .await;
                     }
                     SecretsCommand::Delete { key } => {
-                        let _ = client
-                            .send(GatewayCommand::SecretsDelete { key })
-                            .await;
+                        let _ = client.send(GatewayCommand::SecretsDelete { key }).await;
                     }
                     SecretsCommand::SetPolicy { name, policy } => {
                         let _ = client
@@ -560,15 +566,17 @@ pub fn App() -> Element {
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
                     spawn(async move {
-                        let _ = client.send(GatewayCommand::ThreadCreate { label: None }).await;
+                        let _ = client
+                            .send(GatewayCommand::ThreadCreate { label: None })
+                            .await;
                     });
                 }
                 let mut s = state.write();
-                if let Some(current_id) = s.foreground_thread_id {
-                    if !s.messages.is_empty() {
-                        let msgs = s.messages.clone();
-                        s.save_thread_messages(current_id, msgs);
-                    }
+                if let Some(current_id) = s.foreground_thread_id
+                    && !s.messages.is_empty()
+                {
+                    let msgs = s.messages.clone();
+                    s.save_thread_messages(current_id, msgs);
                 }
                 s.messages.clear();
             } else if event.id == ids.toggle_left_sidebar {
@@ -608,7 +616,11 @@ pub fn App() -> Element {
         let path_str = path.to_string_lossy().into_owned();
         let attachment = rustyclaw_view::PromptAttachment::from_file_path(path_str.clone());
         let mut s = state.write();
-        if !s.prompt_attachments.iter().any(|item| item.path == attachment.path) {
+        if !s
+            .prompt_attachments
+            .iter()
+            .any(|item| item.path == attachment.path)
+        {
             s.prompt_attachments.push(attachment);
         }
         s.status_message = Some(format!("Attached {}", path.display()));
@@ -1412,7 +1424,11 @@ pub fn App() -> Element {
 /// while preserving the ordering of non-chunk events relative to chunks.
 enum BufferEntry {
     Event(GatewayEvent),
-    Chunks { text: String, count: u32, bytes: usize },
+    Chunks {
+        text: String,
+        count: u32,
+        bytes: usize,
+    },
 }
 
 /// Intermediate buffer between the tokio event-consumer worker and
@@ -1601,25 +1617,23 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
                 use rustyclaw_core::types::MessageRole;
                 use rustyclaw_core::ui::{ChatMessage as UiChatMessage, ToolCallInfo};
                 use std::collections::VecDeque;
-                let mut converted: VecDeque<UiChatMessage> = VecDeque::with_capacity(messages.len());
+                let mut converted: VecDeque<UiChatMessage> =
+                    VecDeque::with_capacity(messages.len());
                 for m in messages.into_iter() {
                     // Tool result: fold into the previous assistant turn's
                     // matching tool call rather than emit a standalone bubble.
-                    if m.role == "tool" {
-                        if let Some(call_id) = m.tool_call_id.as_deref() {
-                            if let Some(prev) = converted.iter_mut().rev().find(|c| {
-                                c.role == MessageRole::Assistant
-                                    && c.tool_calls.iter().any(|tc| tc.id == call_id)
-                            }) {
-                                if let Some(tc) =
-                                    prev.tool_calls.iter_mut().find(|tc| tc.id == call_id)
-                                {
-                                    tc.result = Some(m.content.clone());
-                                    tc.is_error = false;
-                                }
-                                continue;
-                            }
+                    if m.role == "tool"
+                        && let Some(call_id) = m.tool_call_id.as_deref()
+                        && let Some(prev) = converted.iter_mut().rev().find(|c| {
+                            c.role == MessageRole::Assistant
+                                && c.tool_calls.iter().any(|tc| tc.id == call_id)
+                        })
+                    {
+                        if let Some(tc) = prev.tool_calls.iter_mut().find(|tc| tc.id == call_id) {
+                            tc.result = Some(m.content.clone());
+                            tc.is_error = false;
                         }
+                        continue;
                     }
                     let role = match m.role.as_str() {
                         "user" => MessageRole::User,
@@ -1684,8 +1698,7 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
             secret_name,
             message,
         } => {
-            state.write().pending_credential_request =
-                Some((id, provider, secret_name, message));
+            state.write().pending_credential_request = Some((id, provider, secret_name, message));
         }
         GatewayEvent::DeviceFlowStart { url, code, message } => {
             state.write().pending_device_flow = Some((url, code, message));
@@ -1711,25 +1724,21 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
                 );
                 state.write().secrets_data = data;
             } else {
-                state.write().status_message =
-                    Some("Failed to list secrets.".to_string());
+                state.write().status_message = Some("Failed to list secrets.".to_string());
             }
         }
         GatewayEvent::SecretsStoreResult { ok, message } => {
             if ok {
-                state.write().status_message =
-                    Some("Secret stored successfully.".to_string());
+                state.write().status_message = Some("Secret stored successfully.".to_string());
                 // Trigger refresh to show new secret
                 // (parent doesn't have gateway handle here, so we just update status)
             } else {
-                state.write().status_message =
-                    Some(format!("Failed to store secret: {}", message));
+                state.write().status_message = Some(format!("Failed to store secret: {}", message));
             }
         }
         GatewayEvent::SecretsDeleteResult { ok, message } => {
             if ok {
-                state.write().status_message =
-                    Some("Secret deleted.".to_string());
+                state.write().status_message = Some("Secret deleted.".to_string());
             } else {
                 state.write().status_message = Some(format!(
                     "Failed to delete secret: {}",
@@ -1739,8 +1748,7 @@ fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
         }
         GatewayEvent::SecretsSetPolicyResult { ok, message } => {
             if ok {
-                state.write().status_message =
-                    Some("Policy updated.".to_string());
+                state.write().status_message = Some("Policy updated.".to_string());
             } else {
                 state.write().status_message = Some(format!(
                     "Failed to set policy: {}",
@@ -1840,7 +1848,10 @@ async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
                     tracing::warn!(attempt = attempts, error = %e, "DOM eval failed, retrying");
                     continue;
                 }
-                break (format!("eval error after {} attempts: {}", attempts, e), true);
+                break (
+                    format!("eval error after {} attempts: {}", attempts, e),
+                    true,
+                );
             }
         }
     };

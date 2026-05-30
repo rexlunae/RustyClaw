@@ -94,7 +94,13 @@ fn decode_client_wire_frame(data: &[u8]) -> Result<WireFrame<ClientFrame>> {
         Ok(frame) => Ok(frame),
         Err(wire_err) => deserialize_frame::<ClientFrame>(data)
             .map(WireFrame::control)
-            .map_err(|frame_err| anyhow::anyhow!("wire decode failed: {}; legacy decode failed: {}", wire_err, frame_err)),
+            .map_err(|frame_err| {
+                anyhow::anyhow!(
+                    "wire decode failed: {}; legacy decode failed: {}",
+                    wire_err,
+                    frame_err
+                )
+            }),
     }
 }
 
@@ -732,9 +738,7 @@ mod server {
                     data_rx,
                     recv_buffer,
                 }),
-                Box::new(SshWriter {
-                    channel_handle,
-                }),
+                Box::new(SshWriter { channel_handle }),
             )
         }
     }

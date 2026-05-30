@@ -17,8 +17,6 @@ mod config;
 mod manager;
 mod templates;
 
-pub use config::{
-    AgentRole, CommunicationFlow, FlowKind, SwarmAgent, SwarmConfig, SwarmStatus,
-};
+pub use config::{AgentRole, CommunicationFlow, FlowKind, SwarmAgent, SwarmConfig, SwarmStatus};
 pub use manager::{SharedSwarmManager, SwarmInstance, SwarmManager, swarm_manager};
 pub use templates::builtin_templates;
