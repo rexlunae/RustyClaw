@@ -21,7 +21,6 @@ rustyclaw-view.workspace = true
 # TUI framework
 iocraft.workspace = true
 smol.workspace = true
-crossterm.workspace = true
 
 # Also needed directly by TUI code
 anyhow.workspace = true
@@ -40,12 +39,10 @@ rpassword.workspace = true
 url.workspace = true
 strum.workspace = true
 chrono.workspace = true
-qrcode.workspace = true
 totp-rs.workspace = true
 dirs.workspace = true
 reqwest.workspace = true
 shellexpand.workspace = true
-nucleo-matcher.workspace = true
 
 
 [features]

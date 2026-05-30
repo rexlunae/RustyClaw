@@ -16,10 +16,9 @@ use rustyclaw_core::gateway::{
 use rustyclaw_core::skills::SkillManager;
 #[cfg(feature = "desktop")]
 use rustyclaw_desktop as desktop_app;
+use rustyclaw_onboard::{OnboardArgs as WizardArgs, run_onboard_wizard};
 #[cfg(feature = "tui")]
 use rustyclaw_tui::app::App;
-#[cfg(feature = "tui")]
-use rustyclaw_tui::onboard::{OnboardArgs as TuiOnboardArgs, run_onboard_wizard};
 use tokio_tungstenite::tungstenite::Message;
 use url::Url;
 
@@ -623,41 +622,28 @@ async fn main() -> Result<()> {
                 || args.remote_token.is_some();
 
             if has_wizard_flags {
-                // The secrets vault is opened in every build; only the
-                // interactive wizard (TUI crate) is feature-gated.
                 let mut secrets = open_secrets(&config)?;
-                #[cfg(feature = "tui")]
-                {
-                    let tui_args = TuiOnboardArgs {
-                        openrouter_api_key: None,
-                        anthropic_api_key: None,
-                        openai_api_key: None,
-                        gemini_api_key: None,
-                        xai_api_key: None,
-                        reset: false,
-                        non_interactive: args.non_interactive,
-                    };
-                    run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
-                    // Optional agent setup step
-                    let ws_dir = config.workspace_dir();
-                    match rustyclaw_core::tools::agent_setup::exec_agent_setup(
-                        &serde_json::json!({}),
-                        &ws_dir,
-                    ) {
-                        Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
-                        Err(e) => println!(
-                            "{}",
-                            rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
-                        ),
-                    }
-                }
-                #[cfg(not(feature = "tui"))]
-                {
-                    let _ = &mut secrets;
-                    eprintln!(
-                        "Onboarding wizard is not available in this build. Build with --features tui to enable."
-                    );
-                    std::process::exit(1);
+                let tui_args = WizardArgs {
+                    openrouter_api_key: None,
+                    anthropic_api_key: None,
+                    openai_api_key: None,
+                    gemini_api_key: None,
+                    xai_api_key: None,
+                    reset: false,
+                    non_interactive: args.non_interactive,
+                };
+                run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
+                // Optional agent setup step
+                let ws_dir = config.workspace_dir();
+                match rustyclaw_core::tools::agent_setup::exec_agent_setup(
+                    &serde_json::json!({}),
+                    &ws_dir,
+                ) {
+                    Ok(msg) => println!("{}", rustyclaw_core::theme::icon_ok(&msg)),
+                    Err(e) => println!(
+                        "{}",
+                        rustyclaw_core::theme::icon_fail(&format!("Agent setup failed: {}", e))
+                    ),
                 }
             } else {
                 // Minimal setup: ensure directory skeleton + default config.
@@ -689,32 +675,18 @@ async fn main() -> Result<()> {
         }
 
         // ── Onboard ─────────────────────────────────────────────
-        Commands::Onboard(_args) => {
-            // The secrets vault is opened in every build — onboarding stores
-            // provider API keys in it. The interactive wizard itself lives in
-            // the TUI crate, so only that call is feature-gated.
+        Commands::Onboard(args) => {
             let mut secrets = open_secrets(&config)?;
-            #[cfg(feature = "tui")]
-            {
-                let tui_args = TuiOnboardArgs {
-                    openrouter_api_key: _args.openrouter_api_key.clone(),
-                    anthropic_api_key: _args.anthropic_api_key.clone(),
-                    openai_api_key: _args.openai_api_key.clone(),
-                    gemini_api_key: _args.gemini_api_key.clone(),
-                    xai_api_key: _args.xai_api_key.clone(),
-                    reset: _args.reset,
-                    non_interactive: _args.non_interactive,
-                };
-                run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
-            }
-            #[cfg(not(feature = "tui"))]
-            {
-                let _ = &mut secrets;
-                eprintln!(
-                    "Onboarding wizard is not available in this build. Build with --features tui to enable."
-                );
-                std::process::exit(1);
-            }
+            let tui_args = WizardArgs {
+                openrouter_api_key: args.openrouter_api_key.clone(),
+                anthropic_api_key: args.anthropic_api_key.clone(),
+                openai_api_key: args.openai_api_key.clone(),
+                gemini_api_key: args.gemini_api_key.clone(),
+                xai_api_key: args.xai_api_key.clone(),
+                reset: args.reset,
+                non_interactive: args.non_interactive,
+            };
+            run_onboard_wizard(&mut config, &mut secrets, Some(tui_args))?;
         }
 
         // ── Import ──────────────────────────────────────────────
@@ -729,18 +701,8 @@ async fn main() -> Result<()> {
 
         // ── Configure ───────────────────────────────────────────
         Commands::Configure => {
-            #[cfg(feature = "tui")]
-            {
-                let mut secrets = open_secrets(&config)?;
-                run_onboard_wizard(&mut config, &mut secrets, None)?;
-            }
-            #[cfg(not(feature = "tui"))]
-            {
-                eprintln!(
-                    "Configuration wizard is not available in this build. Build with --features tui to enable."
-                );
-                std::process::exit(1);
-            }
+            let mut secrets = open_secrets(&config)?;
+            run_onboard_wizard(&mut config, &mut secrets, None)?;
         }
 
         // ── Config get / set / unset ────────────────────────────

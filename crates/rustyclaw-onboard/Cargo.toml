@@ -1,0 +1,22 @@
+[package]
+name = "rustyclaw-onboard"
+description = "Interactive onboarding wizard for RustyClaw — provider/model selection, API-key storage, and SOUL initialisation."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+rustyclaw-core.workspace = true
+
+anyhow.workspace = true
+crossterm.workspace = true
+qrcode.workspace = true
+tokio.workspace = true
+nucleo-matcher.workspace = true

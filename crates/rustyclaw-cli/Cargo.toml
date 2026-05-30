@@ -23,6 +23,7 @@ desktop = ["dep:rustyclaw-desktop"]
 
 [dependencies]
 rustyclaw-core.workspace = true
+rustyclaw-onboard.workspace = true
 rustyclaw-tui = { workspace = true, optional = true }
 rustyclaw-desktop = { path = "../rustyclaw-desktop", optional = true }
 
