@@ -1,6 +1,8 @@
 use tracing::{debug, instrument, warn};
 
-use crate::secrets::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
+use rustyclaw_core::secrets::{
+    AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind,
+};
 
 use super::SharedVault;
 

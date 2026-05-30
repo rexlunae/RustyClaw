@@ -4,13 +4,13 @@
 //! from configured messengers (Telegram, Discord, Matrix, etc.) and routes
 //! them through the model for processing with full tool loop support.
 
-use crate::config::{Config, MessengerConfig};
-use crate::messengers::{
-    GenericMessenger, MediaAttachment, Message, Messenger, MessengerManager, SendOptions,
-};
-use crate::tools;
 use anyhow::{Context, Result};
 use chat_system::config as chat_system_config;
+use rustyclaw_core::config::{Config, MessengerConfig};
+use rustyclaw_core::messengers::{
+    GenericMessenger, MediaAttachment, Message, Messenger, MessengerManager, SendOptions,
+};
+use rustyclaw_core::tools;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -20,15 +20,15 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
 use super::providers;
-use super::secrets_handler;
-use super::skills_handler;
 use super::{
     ChatMessage, MediaRef, ModelContext, ProviderRequest, SharedSkillManager, SharedVault,
     ToolCallResult,
 };
+use crate::secrets_handler;
+use crate::skills_handler;
 
 #[cfg(feature = "matrix")]
-use crate::messengers::MatrixMessenger;
+use rustyclaw_core::messengers::MatrixMessenger;
 
 /// Shared messenger manager for the gateway.
 pub type SharedMessengerManager = Arc<Mutex<MessengerManager>>;
@@ -229,7 +229,7 @@ fn whatsapp_state_dir(name: &str) -> Result<std::path::PathBuf> {
 }
 
 fn build_irc_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
-    let mut messenger = crate::messengers::IrcMessenger::new(
+    let mut messenger = rustyclaw_core::messengers::IrcMessenger::new(
         name,
         config.server.clone().context("IRC requires 'server'")?,
         config.port.unwrap_or(6697),
@@ -251,7 +251,7 @@ fn build_irc_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn
 }
 
 fn build_slack_messenger(config: &MessengerConfig, name: String) -> Result<Box<dyn Messenger>> {
-    let mut messenger = crate::messengers::SlackMessenger::new(
+    let mut messenger = rustyclaw_core::messengers::SlackMessenger::new(
         name,
         config.token.clone().context("Slack requires 'token'")?,
     );
@@ -275,7 +275,7 @@ fn build_google_chat_messenger(
             );
         }
         return Ok(Box::new(
-            crate::messengers::GoogleChatMessenger::with_credentials(
+            rustyclaw_core::messengers::GoogleChatMessenger::with_credentials(
                 name,
                 credentials_path,
                 config.spaces.clone(),
@@ -284,7 +284,8 @@ fn build_google_chat_messenger(
     }
 
     if let (Some(token), Some(space_id)) = (config.token.clone(), config.spaces.first().cloned()) {
-        let mut messenger = crate::messengers::GoogleChatMessenger::new_api(name, token, space_id);
+        let mut messenger =
+            rustyclaw_core::messengers::GoogleChatMessenger::new_api(name, token, space_id);
         if config.spaces.len() > 1 {
             messenger = messenger.with_spaces(config.spaces[1..].to_vec());
         }
@@ -300,7 +301,11 @@ fn build_teams_messenger(config: &MessengerConfig, name: String) -> Result<Box<d
     if let (Some(app_id), Some(app_password)) = (config.app_id.clone(), config.app_password.clone())
     {
         return Ok(Box::new(
-            crate::messengers::TeamsMessenger::with_bot_framework(name, app_id, app_password),
+            rustyclaw_core::messengers::TeamsMessenger::with_bot_framework(
+                name,
+                app_id,
+                app_password,
+            ),
         ));
     }
 
@@ -316,7 +321,7 @@ fn build_imessage_messenger(config: &MessengerConfig, name: String) -> Result<Bo
         );
     }
 
-    let mut messenger = crate::messengers::IMessageMessenger::new(name);
+    let mut messenger = rustyclaw_core::messengers::IMessageMessenger::new(name);
     if let Some(path) = config.server.clone() {
         if path.contains("://") {
             anyhow::bail!(
@@ -366,7 +371,7 @@ fn build_matrix_messenger(config: &MessengerConfig, name: String) -> Result<Box<
 
     // Set DM config if present
     if let Some(ref dm) = config.dm {
-        use crate::messengers::MatrixDmConfig;
+        use rustyclaw_core::messengers::MatrixDmConfig;
         let dm_config = MatrixDmConfig {
             enabled: dm.enabled,
             policy: dm.policy.clone().unwrap_or_else(|| "allowlist".to_string()),
@@ -689,7 +694,7 @@ async fn process_incoming_message(
     ));
 
     // Resolve effective bearer token (handles Copilot session exchange)
-    let effective_key = super::auth::resolve_bearer_token(
+    let effective_key = crate::auth::resolve_bearer_token(
         http,
         &model_ctx.provider,
         model_ctx.api_key.as_deref(),
@@ -754,7 +759,7 @@ async fn process_incoming_message(
                     Ok(text) => (text, false),
                     Err(err) => (err.to_string(), true),
                 }
-            } else if super::mcp_handler::is_mcp_tool(&tc.name) {
+            } else if crate::mcp_handler::is_mcp_tool(&tc.name) {
                 #[cfg(feature = "mcp")]
                 {
                     // MCP tools require the MCP manager - for now, return an error
@@ -784,9 +789,9 @@ async fn process_incoming_message(
                     ),
                     true,
                 )
-            } else if super::task_handler::is_task_tool(&tc.name) {
+            } else if crate::task_handler::is_task_tool(&tc.name) {
                 // Execute task tool with task manager
-                match super::task_handler::execute_task_tool(
+                match crate::task_handler::execute_task_tool(
                     &tc.name,
                     &tc.arguments,
                     task_mgr,
@@ -797,10 +802,10 @@ async fn process_incoming_message(
                     Ok(text) => (text, false),
                     Err(err) => (err.to_string(), true),
                 }
-            } else if super::command_wrapper::should_wrap_in_task(&tc.name) {
+            } else if crate::command_wrapper::should_wrap_in_task(&tc.name) {
                 // Wrap execute_command in a Task
                 let task_id =
-                    super::command_wrapper::start_command_task(task_mgr, &tc.arguments, &conv_key)
+                    crate::command_wrapper::start_command_task(task_mgr, &tc.arguments, &conv_key)
                         .await;
 
                 let result = tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await;
@@ -808,16 +813,16 @@ async fn process_incoming_message(
                 match result {
                     Ok(output) => {
                         // Check if it was backgrounded
-                        if let Some(session_id) = super::command_wrapper::parse_session_id(&output)
+                        if let Some(session_id) = crate::command_wrapper::parse_session_id(&output)
                         {
-                            super::command_wrapper::update_command_task_session(
+                            crate::command_wrapper::update_command_task_session(
                                 task_mgr,
                                 task_id,
                                 &session_id,
                             )
                             .await;
                         } else {
-                            super::command_wrapper::complete_command_task(
+                            crate::command_wrapper::complete_command_task(
                                 task_mgr, task_id, &output,
                             )
                             .await;
@@ -825,13 +830,13 @@ async fn process_incoming_message(
                         (output, false)
                     }
                     Err(err) => {
-                        super::command_wrapper::fail_command_task(task_mgr, task_id, &err).await;
+                        crate::command_wrapper::fail_command_task(task_mgr, task_id, &err).await;
                         (err, true)
                     }
                 }
-            } else if super::model_handler::is_model_tool(&tc.name) {
+            } else if crate::model_handler::is_model_tool(&tc.name) {
                 // Model management tools
-                match super::model_handler::execute_model_tool(
+                match crate::model_handler::execute_model_tool(
                     &tc.name,
                     &tc.arguments,
                     model_registry,
@@ -952,7 +957,7 @@ async fn build_messenger_system_prompt(
     skill_mgr: &SharedSkillManager,
     session_key: &str,
 ) -> String {
-    use crate::workspace_context::{SessionType, WorkspaceContext};
+    use rustyclaw_core::workspace_context::{SessionType, WorkspaceContext};
 
     let base_prompt = config
         .system_prompt
@@ -1011,13 +1016,13 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Add active tasks section if any
     if let Some(task_section) =
-        super::task_handler::generate_task_prompt_section(task_mgr, session_key).await
+        crate::task_handler::generate_task_prompt_section(task_mgr, session_key).await
     {
         parts.push(task_section);
     }
 
     // Add model selection guidance for sub-agents
-    let model_guidance = super::model_handler::generate_model_prompt_section(model_registry).await;
+    let model_guidance = crate::model_handler::generate_model_prompt_section(model_registry).await;
     parts.push(model_guidance);
 
     // Add comprehensive tool usage guidelines (inspired by OpenClaw's patterns)

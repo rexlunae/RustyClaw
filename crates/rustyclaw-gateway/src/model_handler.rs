@@ -5,7 +5,7 @@
 use serde_json::{Value, json};
 use tracing::instrument;
 
-use crate::models::{CostTier, SharedModelRegistry, TaskComplexity};
+use rustyclaw_core::models::{CostTier, SharedModelRegistry, TaskComplexity};
 
 /// Check if a tool name is a model tool.
 pub fn is_model_tool(name: &str) -> bool {
@@ -232,5 +232,5 @@ fn parse_model_id(args: &Value) -> Result<String, String> {
 /// Generate system prompt section for model selection guidance.
 pub async fn generate_model_prompt_section(model_registry: &SharedModelRegistry) -> String {
     let registry = model_registry.read().await;
-    crate::models::generate_subagent_guidance(&registry)
+    rustyclaw_core::models::generate_subagent_guidance(&registry)
 }

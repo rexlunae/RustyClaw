@@ -62,14 +62,16 @@
 //! [4 bytes: frame length (big-endian u32)][N bytes: bincode frame]
 //! ```
 
-use super::protocol::{
+use anyhow::Result;
+use async_trait::async_trait;
+use rustyclaw_core::gateway::protocol::{
     ClientFrame, ServerFrame, WireFrame, deserialize_frame, deserialize_wire_frame,
     serialize_wire_frame,
 };
-use super::transport::TransportAcceptor;
-use super::transport::{PeerInfo, Transport, TransportReader, TransportType, TransportWriter};
-use anyhow::Result;
-use async_trait::async_trait;
+use rustyclaw_core::gateway::transport::TransportAcceptor;
+use rustyclaw_core::gateway::transport::{
+    PeerInfo, Transport, TransportReader, TransportType, TransportWriter,
+};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 

@@ -52,7 +52,10 @@ pub async fn exec_gw_skill_list(
         .filter(|s| match filter {
             "enabled" => s.enabled,
             "disabled" => !s.enabled,
-            "registry" => matches!(s.source, crate::skills::SkillSource::Registry { .. }),
+            "registry" => matches!(
+                s.source,
+                rustyclaw_core::skills::SkillSource::Registry { .. }
+            ),
             _ => true, // "all"
         })
         .collect();
@@ -67,8 +70,8 @@ pub async fn exec_gw_skill_list(
     for s in &filtered {
         let status = if s.enabled { "✓" } else { "✗" };
         let source = match &s.source {
-            crate::skills::SkillSource::Local => "local".to_string(),
-            crate::skills::SkillSource::Registry { version, .. } => {
+            rustyclaw_core::skills::SkillSource::Local => "local".to_string(),
+            rustyclaw_core::skills::SkillSource::Registry { version, .. } => {
                 format!("registry v{}", version)
             }
         };

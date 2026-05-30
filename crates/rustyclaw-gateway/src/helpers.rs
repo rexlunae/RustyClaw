@@ -1,6 +1,6 @@
 use tracing::debug;
 
-use super::protocol::types::ChatMessage;
+use rustyclaw_core::gateway::ChatMessage;
 
 // ── Context window helpers ──────────────────────────────────────────────────
 

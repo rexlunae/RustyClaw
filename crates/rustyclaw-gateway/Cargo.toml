@@ -1,0 +1,59 @@
+[package]
+name = "rustyclaw-gateway"
+description = "RustyClaw gateway server — WebSocket/SSH session handling, model dispatch, messenger and tool orchestration. The client/protocol interface lives in rustyclaw-core."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+homepage.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = []
+mcp = ["rustyclaw-core/mcp"]
+matrix = ["rustyclaw-core/matrix", "chat-system/matrix"]
+whatsapp = ["rustyclaw-core/whatsapp", "chat-system/whatsapp"]
+signal-cli = ["rustyclaw-core/signal-cli", "chat-system/signal-cli"]
+all-messengers = ["matrix", "whatsapp", "signal-cli"]
+
+[dependencies]
+rustyclaw-core.workspace = true
+chat-system.workspace = true
+
+anyhow.workspace = true
+anyhow-tracing.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+async-trait.workspace = true
+futures-util.workspace = true
+reqwest.workspace = true
+url.workspace = true
+chrono.workspace = true
+base64.workspace = true
+bincode.workspace = true
+rand.workspace = true
+uuid.workspace = true
+regex.workspace = true
+sysinfo.workspace = true
+httpdate.workspace = true
+ipnetwork.workspace = true
+aho-corasick.workspace = true
+dirs.workspace = true
+directories.workspace = true
+
+# SSH transport
+ssh-key.workspace = true
+russh = { version = "0.52.1", features = ["async-trait"] }
+russh-keys = { version = "0.49.2" }
+rand_core = { version = "0.6.4" }
+sha2 = { version = "0.11.0" }
+
+[dev-dependencies]
+tempfile = "3"

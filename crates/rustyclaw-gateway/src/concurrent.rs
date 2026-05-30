@@ -10,11 +10,11 @@
 //! - The main loop selects between client messages and model responses
 //! - Thread switching is allowed while models are running
 
-use crate::gateway::protocol::frames::{ServerFrame, serialize_frame};
-use crate::gateway::transport::TransportWriter;
-use crate::threads::ThreadId;
 use anyhow::Result;
 use async_trait::async_trait;
+use rustyclaw_core::gateway::protocol::frames::{ServerFrame, serialize_frame};
+use rustyclaw_core::gateway::transport::TransportWriter;
+use rustyclaw_core::threads::ThreadId;
 use tokio::sync::mpsc;
 
 /// A message from a spawned model task back to the main connection handler.

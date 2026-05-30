@@ -4,7 +4,7 @@
 use tracing::{debug, instrument, warn};
 
 #[cfg(feature = "mcp")]
-use crate::mcp::McpManager;
+use rustyclaw_core::mcp::McpManager;
 #[cfg(feature = "mcp")]
 use std::sync::Arc;
 #[cfg(feature = "mcp")]

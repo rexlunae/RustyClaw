@@ -5,13 +5,13 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use tracing::{debug, trace, warn};
 
-use super::super::protocol::server;
-use super::super::transport::TransportWriter;
-use super::super::types::{ChatMessage, ModelResponse, ParsedToolCall, ProviderRequest};
 use super::{
     apply_copilot_headers, find_event_boundary, provider_error, send_chunk, send_with_retry,
 };
-use crate::tools;
+use rustyclaw_core::gateway::protocol::server;
+use rustyclaw_core::gateway::transport::TransportWriter;
+use rustyclaw_core::gateway::{ChatMessage, ModelResponse, ParsedToolCall, ProviderRequest};
+use rustyclaw_core::tools;
 
 // ── OpenAI Responses API ─────────────────────────────────────────────────────
 
@@ -674,7 +674,7 @@ pub async fn call_openai_with_tools(
     // stream_options is an OpenAI extension — only include for providers
     // known to support it.  Copilot and other proxies may reject or
     // mishandle unrecognised fields.
-    if !crate::providers::needs_copilot_session(&req.provider) {
+    if !rustyclaw_core::providers::needs_copilot_session(&req.provider) {
         body["stream_options"] = json!({ "include_usage": true });
     }
     if !tool_defs.is_empty() {

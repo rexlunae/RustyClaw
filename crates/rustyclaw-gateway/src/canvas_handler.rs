@@ -4,7 +4,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, instrument, warn};
 
-use crate::canvas::CanvasHost;
+use rustyclaw_core::canvas::CanvasHost;
 
 pub type SharedCanvasHost = Arc<Mutex<CanvasHost>>;
 
@@ -90,7 +90,7 @@ pub async fn execute_canvas_tool(
                 }
             } else if let Some(jsonl) = jsonl {
                 // Parse JSONL and push
-                let messages: Result<Vec<crate::canvas::A2UIMessage>, _> = jsonl
+                let messages: Result<Vec<rustyclaw_core::canvas::A2UIMessage>, _> = jsonl
                     .lines()
                     .filter(|l| !l.trim().is_empty())
                     .map(serde_json::from_str)

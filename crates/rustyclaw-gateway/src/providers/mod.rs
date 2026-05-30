@@ -2,15 +2,15 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use tracing::debug;
 
-use super::protocol::server;
-use super::transport::TransportWriter;
-use super::types::{
+use super::{ServerFrame, ServerFrameType, ServerPayload};
+use rustyclaw_core::error_details::{ErrorLike, RequestDetails};
+use rustyclaw_core::gateway::protocol::server;
+use rustyclaw_core::gateway::transport::TransportWriter;
+use rustyclaw_core::gateway::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProbeResult,
     ProviderRequest, ToolCallResult,
 };
-use super::{ServerFrame, ServerFrameType, ServerPayload};
-use crate::error_details::{ErrorLike, RequestDetails};
-use crate::providers;
+use rustyclaw_core::providers;
 
 // ── Error helpers ───────────────────────────────────────────────────────────
 
@@ -211,7 +211,7 @@ pub fn apply_copilot_headers(
 /// to the gateway defaults.  Returns an error message string if a required
 /// field cannot be resolved from either source.
 pub fn resolve_request(
-    req: super::types::ChatRequest,
+    req: rustyclaw_core::gateway::ChatRequest,
     ctx: Option<&ModelContext>,
 ) -> std::result::Result<ProviderRequest, String> {
     let provider = req
@@ -402,9 +402,9 @@ fn format_tool_results(provider: &str, results: &[ToolCallResult]) -> Vec<(Strin
 /// with 'tool_calls'`.
 pub fn thread_history_to_chat_messages(
     provider: &str,
-    history: &[crate::threads::ThreadMessage],
+    history: &[rustyclaw_core::threads::ThreadMessage],
 ) -> Vec<ChatMessage> {
-    use crate::threads::MessageRole;
+    use rustyclaw_core::threads::MessageRole;
 
     let mut out: Vec<ChatMessage> = Vec::with_capacity(history.len());
     let mut i = 0;
@@ -506,7 +506,7 @@ pub fn thread_history_to_chat_messages(
 
 // ── Context compaction ──────────────────────────────────────────────────────
 
-use super::helpers::estimate_tokens;
+use crate::helpers::estimate_tokens;
 
 /// After compaction, we aim to keep this fraction of the window for fresh context.
 const COMPACTION_TARGET: f64 = 0.40;
@@ -651,7 +651,7 @@ pub async fn compact_conversation(
 /// "fully ready", "connected with a warning", and "hard failure".
 ///
 /// On any failure path a structured `tracing::warn!` is emitted via
-/// [`crate::error_details::RequestDetails`] so that JSON log output
+/// [`rustyclaw_core::error_details::RequestDetails`] so that JSON log output
 /// carries the request method, URL, status, redacted request/response
 /// headers, and body excerpt as named fields — rather than a single
 /// pre-formatted string.  The wire-protocol [`ProbeResult`] strings
@@ -662,7 +662,7 @@ pub async fn validate_model_connection(
     copilot_session: Option<&CopilotSession>,
 ) -> ProbeResult {
     // Resolve the bearer token (session token for Copilot, raw key otherwise).
-    let effective_key = match super::auth::resolve_bearer_token(
+    let effective_key = match crate::auth::resolve_bearer_token(
         http,
         &ctx.provider,
         ctx.api_key.as_deref(),
