@@ -5,11 +5,7 @@
 use anyhow::Result;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::daemon;
-use rustyclaw_core::gateway::{GatewayOptions, ModelContext};
-use rustyclaw_core::secrets::SecretsManager;
-use rustyclaw_core::skills::SkillManager;
 use rustyclaw_core::theme as t;
-use tokio_util::sync::CancellationToken;
 
 /// Handle `gateway start` command.
 pub fn handle_start(config: &Config, vault_password: Option<&str>, ssh_listen: &str) -> Result<()> {
@@ -195,88 +191,28 @@ pub fn handle_reload_result(result: Result<(String, String), String>) {
 }
 
 /// Handle `gateway run` command (foreground mode).
-pub async fn handle_run(config: Config, host: &str, port: u16) -> Result<()> {
-    use rustyclaw_gateway::run_gateway;
+///
+/// Runs the `rustyclaw-gateway` binary in the foreground (inheriting the
+/// terminal so it can prompt for the vault password and stream logs). The
+/// gateway server itself lives entirely in the `rustyclaw-gateway` crate;
+/// the CLI only locates and launches its binary.
+pub fn handle_run(config: &Config, bind: &str, port: u16) -> Result<()> {
+    let args = vec![
+        "--bind".to_string(),
+        bind.to_string(),
+        "--port".to_string(),
+        port.to_string(),
+    ];
 
-    let listen = format!("{}:{}", host, port);
-    let tls_cert = config.tls_cert.clone();
-    let tls_key = config.tls_key.clone();
-    let scheme = if tls_cert.is_some() { "wss" } else { "ws" };
+    let status = daemon::run_foreground(
+        &config.settings_dir,
+        &args,
+        config.tls_cert.as_deref(),
+        config.tls_key.as_deref(),
+    )?;
 
-    println!(
-        "{}",
-        t::icon_ok(&format!(
-            "RustyClaw gateway listening on {}",
-            t::info(&format!("{}://{}", scheme, listen))
-        ))
-    );
-
-    // Open the secrets vault — the gateway owns it.
-    let creds_dir = config.credentials_dir();
-    let vault = if config.secrets_password_protected {
-        let password = rpassword::prompt_password(format!("{} Vault password: ", t::info("🔑")))
-            .unwrap_or_default();
-        SecretsManager::with_password(&creds_dir, password)
-    } else {
-        SecretsManager::new(&creds_dir)
-    };
-
-    let shared_vault: rustyclaw_gateway::SharedVault =
-        std::sync::Arc::new(tokio::sync::Mutex::new(vault));
-
-    // Resolve model context from the vault.
-    let model_ctx = {
-        let mut v = shared_vault.lock().await;
-        match ModelContext::resolve(&config, &mut v) {
-            Ok(ctx) => {
-                println!(
-                    "{} {} via {} ({})",
-                    t::icon_ok("Model:"),
-                    t::info(&ctx.model),
-                    t::info(&ctx.provider),
-                    t::muted(&ctx.base_url),
-                );
-                Some(ctx)
-            }
-            Err(err) => {
-                eprintln!("⚠ Could not resolve model context: {}", err);
-                None
-            }
-        }
-    };
-
-    let cancel = CancellationToken::new();
-
-    // Load skills for the gateway from multiple directories.
-    let skills_dirs = config.skills_dirs();
-
-    let mut sm = SkillManager::with_dirs(skills_dirs);
-    if let Err(e) = sm.load_skills() {
-        eprintln!("⚠ Could not load skills: {}", e);
+    if !status.success() {
+        anyhow::bail!("Gateway exited with status {}", status);
     }
-    if let Some(url) = config.clawhub_url.as_deref() {
-        sm.set_registry(url, config.clawhub_token.clone());
-    }
-    let shared_skills: rustyclaw_gateway::SharedSkillManager =
-        std::sync::Arc::new(tokio::sync::Mutex::new(sm));
-
-    run_gateway(
-        config,
-        GatewayOptions {
-            listen,
-            tls_cert,
-            tls_key,
-            ..Default::default()
-        },
-        model_ctx,
-        shared_vault,
-        shared_skills,
-        None,
-        None,
-        None, // observer
-        cancel,
-    )
-    .await?;
-
     Ok(())
 }
