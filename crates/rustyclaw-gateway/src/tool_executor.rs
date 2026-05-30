@@ -3,16 +3,16 @@
 //! This module provides a unified entry point for executing tools, handling
 //! the different tool types (user prompts, secrets, skills, standard tools).
 
-use crate::tools;
+use rustyclaw_core::tools;
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Instant;
 
-use super::secrets_handler;
-use super::skills_handler;
 use super::{SharedSkillManager, SharedVault};
+use crate::secrets_handler;
+use crate::skills_handler;
 
 // ── Rate limiting ───────────────────────────────────────────────────────────
 

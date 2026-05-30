@@ -6,9 +6,9 @@ use std::time::Instant;
 use tokio::sync::Mutex;
 use tracing::{debug, instrument, warn};
 
-use super::transport::TransportReader;
 use super::{ClientFrameType, ClientPayload, CopilotSession};
-use crate::providers;
+use rustyclaw_core::gateway::transport::TransportReader;
+use rustyclaw_core::providers;
 
 /// Maximum consecutive TOTP failures before lockout.
 const MAX_TOTP_FAILURES: u32 = 3;

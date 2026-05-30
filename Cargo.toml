@@ -4,6 +4,7 @@ members = [
     "crates/rustyclaw-cli",
     "crates/rustyclaw-tui",
     "crates/rustyclaw-onboard",
+    "crates/rustyclaw-gateway",
     "crates/rustyclaw-desktop",
     "crates/rustyclaw-view",
     "crates/tokenjuice",
@@ -43,6 +44,7 @@ desktop = { description = "Enable desktop GUI client (requires GTK system librar
 rustyclaw-core = { path = "crates/rustyclaw-core", version = "0.3.0" }
 rustyclaw-tui = { path = "crates/rustyclaw-tui", version = "0.3.0" }
 rustyclaw-onboard = { path = "crates/rustyclaw-onboard", version = "0.3.0" }
+rustyclaw-gateway = { path = "crates/rustyclaw-gateway", version = "0.3.0" }
 rustyclaw-view = { path = "crates/rustyclaw-view", version = "0.3.0" }
 tokenjuice = { path = "crates/tokenjuice", version = "0.3.0" }
 memory-tree = { path = "crates/memory-tree", version = "0.3.0" }

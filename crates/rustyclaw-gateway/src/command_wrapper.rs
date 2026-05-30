@@ -7,7 +7,7 @@ use serde_json::Value;
 use tracing::{debug, instrument};
 
 use super::SharedTaskManager;
-use crate::tasks::{TaskId, TaskKind};
+use rustyclaw_core::tasks::{TaskId, TaskKind};
 
 /// Check if a tool call should be wrapped in a Task.
 pub fn should_wrap_in_task(tool_name: &str) -> bool {
@@ -67,7 +67,7 @@ pub async fn update_command_task_session(
     task_mgr
         .update_status(
             task_id,
-            crate::tasks::TaskStatus::Background {
+            rustyclaw_core::tasks::TaskStatus::Background {
                 progress: None,
                 message: Some(format!("Session: {}", session_id)),
             },

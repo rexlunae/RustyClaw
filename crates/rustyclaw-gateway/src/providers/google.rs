@@ -3,9 +3,9 @@
 use anyhow::{Context, Result};
 use serde_json::json;
 
-use super::super::types::{ModelResponse, ParsedToolCall, ProviderRequest};
 use super::{provider_error, send_with_retry};
-use crate::tools;
+use rustyclaw_core::gateway::{ModelResponse, ParsedToolCall, ProviderRequest};
+use rustyclaw_core::tools;
 
 /// Call Google Gemini with function declarations (non-streaming).
 pub async fn call_google_with_tools(

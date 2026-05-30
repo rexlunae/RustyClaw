@@ -3,8 +3,8 @@
 //! Provides a unified way to build system prompts with all necessary context
 //! including workspace files (SOUL.md, etc.), skills, tasks, and guidelines.
 
-use crate::config::Config;
-use crate::workspace_context::{SessionType, WorkspaceContext};
+use rustyclaw_core::config::Config;
+use rustyclaw_core::workspace_context::{SessionType, WorkspaceContext};
 
 use super::{SharedModelRegistry, SharedSkillManager, SharedTaskManager};
 
@@ -98,7 +98,7 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
     // Add active tasks section if any
     if let Some(session_key) = ctx.session_key {
         if let Some(task_section) =
-            super::task_handler::generate_task_prompt_section(task_mgr, session_key).await
+            crate::task_handler::generate_task_prompt_section(task_mgr, session_key).await
         {
             parts.push(task_section);
         }
@@ -106,7 +106,7 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
 
     // Add model selection guidance for sub-agents (when registry available)
     if let Some(registry) = model_registry {
-        let model_guidance = super::model_handler::generate_model_prompt_section(registry).await;
+        let model_guidance = crate::model_handler::generate_model_prompt_section(registry).await;
         parts.push(model_guidance);
     }
 

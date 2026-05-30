@@ -32,11 +32,11 @@ use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use super::SharedVault;
-use super::protocol;
 use super::providers;
-use super::transport::TransportWriter;
-use super::types::ProviderRequest;
-use crate::providers as crate_providers;
+use rustyclaw_core::gateway::ProviderRequest;
+use rustyclaw_core::gateway::protocol;
+use rustyclaw_core::gateway::transport::TransportWriter;
+use rustyclaw_core::providers as crate_providers;
 
 // ── Error enum ──────────────────────────────────────────────────────────────
 

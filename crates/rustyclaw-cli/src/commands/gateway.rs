@@ -196,7 +196,7 @@ pub fn handle_reload_result(result: Result<(String, String), String>) {
 
 /// Handle `gateway run` command (foreground mode).
 pub async fn handle_run(config: Config, host: &str, port: u16) -> Result<()> {
-    use rustyclaw_core::gateway::run_gateway;
+    use rustyclaw_gateway::run_gateway;
 
     let listen = format!("{}:{}", host, port);
     let tls_cert = config.tls_cert.clone();
@@ -221,7 +221,7 @@ pub async fn handle_run(config: Config, host: &str, port: u16) -> Result<()> {
         SecretsManager::new(&creds_dir)
     };
 
-    let shared_vault: rustyclaw_core::gateway::SharedVault =
+    let shared_vault: rustyclaw_gateway::SharedVault =
         std::sync::Arc::new(tokio::sync::Mutex::new(vault));
 
     // Resolve model context from the vault.
@@ -257,7 +257,7 @@ pub async fn handle_run(config: Config, host: &str, port: u16) -> Result<()> {
     if let Some(url) = config.clawhub_url.as_deref() {
         sm.set_registry(url, config.clawhub_token.clone());
     }
-    let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
+    let shared_skills: rustyclaw_gateway::SharedSkillManager =
         std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
     run_gateway(

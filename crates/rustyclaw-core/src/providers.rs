@@ -494,11 +494,11 @@ const NON_CHAT_PATTERNS: &[&str] = &[
     "canary", // internal/experimental
 ];
 
-pub(crate) const COPILOT_API_ACCEPT: &str = "application/vnd.github+json";
-pub(crate) const COPILOT_API_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
-pub(crate) const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
-pub(crate) const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
-pub(crate) const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
+pub const COPILOT_API_ACCEPT: &str = "application/vnd.github+json";
+pub const COPILOT_API_USER_AGENT: &str = "GitHubCopilotChat/0.35.0";
+pub const COPILOT_EDITOR_VERSION: &str = "vscode/1.107.0";
+pub const COPILOT_EDITOR_PLUGIN_VERSION: &str = "copilot-chat/0.35.0";
+pub const COPILOT_INTEGRATION_ID: &str = "vscode-chat";
 const GITHUB_USER_AGENT: &str = "RustyClaw";
 
 /// Curated catalog of GitHub Copilot chat models.
@@ -914,7 +914,7 @@ pub(crate) fn redact_secret(value: &str) -> String {
     format!("<redacted len={}>", trimmed.len())
 }
 
-pub(crate) fn truncate_for_error(body: &str) -> String {
+pub fn truncate_for_error(body: &str) -> String {
     const MAX: usize = 512;
     if body.len() <= MAX {
         body.to_string()

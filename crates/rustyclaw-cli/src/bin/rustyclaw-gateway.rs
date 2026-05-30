@@ -5,9 +5,10 @@ use clap::{Parser, Subcommand, ValueEnum};
 use rustyclaw_core::args::CommonArgs;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::daemon;
-use rustyclaw_core::gateway::{GatewayOptions, ModelContext, run_gateway};
+use rustyclaw_core::gateway::{GatewayOptions, ModelContext};
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::theme as t;
+use rustyclaw_gateway::run_gateway;
 use tokio_util::sync::CancellationToken;
 
 // ── Gateway bind modes ──────────────────────────────────────────────────────
@@ -276,7 +277,7 @@ async fn main() -> Result<()> {
         }
     };
 
-    let shared_vault: rustyclaw_core::gateway::SharedVault =
+    let shared_vault: rustyclaw_gateway::SharedVault =
         std::sync::Arc::new(tokio::sync::Mutex::new(vault));
 
     // ── Resolve model context ────────────────────────────────────────────
@@ -395,7 +396,7 @@ async fn main() -> Result<()> {
         if let Some(url) = config.clawhub_url.as_deref() {
             sm.set_registry(url, config.clawhub_token.clone());
         }
-        let shared_skills: rustyclaw_core::gateway::SharedSkillManager =
+        let shared_skills: rustyclaw_gateway::SharedSkillManager =
             std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
         run_gateway(

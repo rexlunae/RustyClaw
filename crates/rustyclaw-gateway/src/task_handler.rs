@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use tracing::instrument;
 
 use super::SharedTaskManager;
-use crate::tasks::{
+use rustyclaw_core::tasks::{
     Task, TaskIcon, TaskId, TaskStatus, format_task_indicators, format_task_status,
 };
 
