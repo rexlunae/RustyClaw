@@ -3,10 +3,12 @@
 //! The sidebar shows brand info, connection status, the list of chat sessions
 //! with rename/delete UI, and footer action buttons.
 
+use std::collections::HashSet;
+
 use dioxus::prelude::*;
 
 use rustyclaw_core::ui::ConnectionStatus;
-use rustyclaw_view::SidebarItemData;
+use rustyclaw_view::{ProjectGroupData, SidebarItemData, SidebarTree};
 
 // ── Public top-level component ──────────────────────────────────────────────
 
@@ -19,14 +21,23 @@ pub struct SidebarProps {
     pub provider: Option<String>,
     pub collapsed: bool,
     pub on_toggle_collapse: EventHandler<()>,
-    pub on_new_thread: EventHandler<()>,
+    // Thread actions.
     pub on_switch_thread: EventHandler<u64>,
     pub on_rename_thread: EventHandler<(u64, String)>,
     pub on_delete_thread: EventHandler<u64>,
+    /// Create a new thread in the given project.
+    pub on_new_thread_in: EventHandler<u64>,
+    // Project actions.
+    pub on_new_project: EventHandler<()>,
+    pub on_switch_project: EventHandler<u64>,
+    pub on_rename_project: EventHandler<(u64, String)>,
+    pub on_delete_project: EventHandler<u64>,
+    // Footer.
     pub on_pair: EventHandler<()>,
     pub on_secrets: EventHandler<()>,
     pub on_settings: EventHandler<()>,
-    pub threads: Vec<SidebarItemData>,
+    /// The full project → thread tree.
+    pub tree: SidebarTree,
     pub foreground_id: Option<u64>,
 }
 
@@ -56,14 +67,18 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 }
             }
 
-            SessionsList {
-                threads: props.threads.clone(),
+            ProjectsList {
+                tree: props.tree.clone(),
                 foreground_id: props.foreground_id,
                 collapsed: collapsed,
-                on_new_thread: props.on_new_thread,
+                on_new_thread_in: props.on_new_thread_in,
                 on_switch_thread: props.on_switch_thread,
                 on_rename_thread: props.on_rename_thread,
                 on_delete_thread: props.on_delete_thread,
+                on_new_project: props.on_new_project,
+                on_switch_project: props.on_switch_project,
+                on_rename_project: props.on_rename_project,
+                on_delete_project: props.on_delete_project,
             }
 
             FooterActions {
@@ -174,57 +189,205 @@ fn StatusChips(props: StatusChipsProps) -> Element {
     }
 }
 
-// ── Sessions list ───────────────────────────────────────────────────────────
+// ── Projects list (two-level: projects → threads) ───────────────────────────
 
 #[derive(Props, Clone, PartialEq)]
-struct SessionsListProps {
-    threads: Vec<SidebarItemData>,
+struct ProjectsListProps {
+    tree: SidebarTree,
     foreground_id: Option<u64>,
     collapsed: bool,
-    on_new_thread: EventHandler<()>,
+    on_new_thread_in: EventHandler<u64>,
     on_switch_thread: EventHandler<u64>,
     on_rename_thread: EventHandler<(u64, String)>,
     on_delete_thread: EventHandler<u64>,
+    on_new_project: EventHandler<()>,
+    on_switch_project: EventHandler<u64>,
+    on_rename_project: EventHandler<(u64, String)>,
+    on_delete_project: EventHandler<u64>,
 }
 
-/// "New session" button and scrollable thread list.
+/// "New project" button and the scrollable list of project groups.
 #[component]
-fn SessionsList(props: SessionsListProps) -> Element {
+fn ProjectsList(props: ProjectsListProps) -> Element {
+    // Client-side collapse state for project groups (ids that are collapsed).
+    let collapsed_projects = use_signal(HashSet::<u64>::new);
+
     rsx! {
-        div { class: "sidebar-section-label", "Sessions" }
+        div { class: "sidebar-section-label", "Projects" }
         button {
             class: "sidebar-action is-primary",
-            onclick: move |_| props.on_new_thread.call(()),
-            title: "New session",
+            onclick: move |_| props.on_new_project.call(()),
+            title: "New project",
             span { class: "icon-only", "＋" }
-            if !props.collapsed { span { "New session" } }
+            if !props.collapsed { span { "New project" } }
         }
 
-        div { class: "sessions-list",
-            if props.threads.is_empty() {
-                if !props.collapsed {
-                    div { class: "sidebar-empty-sessions",
-                        "No sessions yet — start one to begin chatting."
+        div { class: "projects-list",
+            for group in props.tree.groups.iter() {
+                ProjectGroup {
+                    key: "{group.id}",
+                    group: group.clone(),
+                    foreground_id: props.foreground_id,
+                    sidebar_collapsed: props.collapsed,
+                    group_collapsed: collapsed_projects.read().contains(&group.id),
+                    collapsed_projects: collapsed_projects,
+                    on_new_thread_in: props.on_new_thread_in,
+                    on_switch_thread: props.on_switch_thread,
+                    on_rename_thread: props.on_rename_thread,
+                    on_delete_thread: props.on_delete_thread,
+                    on_switch_project: props.on_switch_project,
+                    on_rename_project: props.on_rename_project,
+                    on_delete_project: props.on_delete_project,
+                }
+            }
+        }
+    }
+}
+
+// ── Project group (header + nested threads) ─────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct ProjectGroupProps {
+    group: ProjectGroupData,
+    foreground_id: Option<u64>,
+    sidebar_collapsed: bool,
+    group_collapsed: bool,
+    collapsed_projects: Signal<HashSet<u64>>,
+    on_new_thread_in: EventHandler<u64>,
+    on_switch_thread: EventHandler<u64>,
+    on_rename_thread: EventHandler<(u64, String)>,
+    on_delete_thread: EventHandler<u64>,
+    on_switch_project: EventHandler<u64>,
+    on_rename_project: EventHandler<(u64, String)>,
+    on_delete_project: EventHandler<u64>,
+}
+
+#[component]
+fn ProjectGroup(props: ProjectGroupProps) -> Element {
+    let header_class = if props.group.is_active {
+        "project-header is-active"
+    } else {
+        "project-header"
+    };
+    let project_id = props.group.id;
+    let name = props.group.name.clone();
+    let path = props.group.path.clone();
+    let count = props.group.threads.len();
+    let chevron = if props.group_collapsed { "▸" } else { "▾" };
+
+    let mut editing = use_signal(|| false);
+    let mut edit_value = use_signal(String::new);
+    let mut collapsed_projects = props.collapsed_projects;
+
+    rsx! {
+        div { class: "project-group",
+            div {
+                class: "{header_class}",
+                title: "{path}",
+                onclick: move |_| {
+                    if !*editing.read() {
+                        props.on_switch_project.call(project_id);
+                    }
+                },
+                ondoubleclick: {
+                    let name = name.clone();
+                    move |evt| {
+                        if !props.sidebar_collapsed {
+                            evt.stop_propagation();
+                            edit_value.set(name.clone());
+                            editing.set(true);
+                        }
+                    }
+                },
+                button {
+                    class: "project-chevron",
+                    title: "Expand/collapse",
+                    onclick: move |evt| {
+                        evt.stop_propagation();
+                        let mut set = collapsed_projects.write();
+                        if !set.remove(&project_id) {
+                            set.insert(project_id);
+                        }
+                    },
+                    "{chevron}"
+                }
+                if !props.sidebar_collapsed {
+                    if *editing.read() {
+                        input {
+                            class: "session-rename-input",
+                            r#type: "text",
+                            value: "{edit_value}",
+                            autofocus: true,
+                            oninput: move |evt| edit_value.set(evt.value()),
+                            onkeydown: {
+                                let on_rename = props.on_rename_project;
+                                move |evt: KeyboardEvent| {
+                                    if evt.key() == Key::Enter {
+                                        let val = edit_value.read().trim().to_string();
+                                        if !val.is_empty() {
+                                            on_rename.call((project_id, val));
+                                        }
+                                        editing.set(false);
+                                    } else if evt.key() == Key::Escape {
+                                        editing.set(false);
+                                    }
+                                }
+                            },
+                            onfocusout: move |_| editing.set(false),
+                        }
+                    } else {
+                        span { class: "project-name", "{name}" }
+                        span { class: "project-count", "{count}" }
+                        button {
+                            class: "project-add-btn",
+                            title: "New thread in this project",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                props.on_new_thread_in.call(project_id);
+                            },
+                            "＋"
+                        }
+                        button {
+                            class: "project-delete-btn",
+                            title: "Delete project",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                props.on_delete_project.call(project_id);
+                            },
+                            "✕"
+                        }
                     }
                 }
-            } else {
-                for thread in props.threads.iter() {
-                    SessionRow {
-                        key: "{thread.id}",
-                        thread: thread.clone(),
-                        active: props.foreground_id == Some(thread.id),
-                        collapsed: props.collapsed,
-                        on_click: {
-                            let id = thread.id;
-                            let cb = props.on_switch_thread;
-                            move |_| cb.call(id)
-                        },
-                        on_rename: props.on_rename_thread,
-                        on_delete: {
-                            let id = thread.id;
-                            let cb = props.on_delete_thread;
-                            move |_| cb.call(id)
-                        },
+            }
+
+            if !props.group_collapsed {
+                div { class: "sessions-list is-nested",
+                    if props.group.threads.is_empty() {
+                        if !props.sidebar_collapsed {
+                            div { class: "sidebar-empty-sessions",
+                                "No threads yet."
+                            }
+                        }
+                    } else {
+                        for thread in props.group.threads.iter() {
+                            SessionRow {
+                                key: "{thread.id}",
+                                thread: thread.clone(),
+                                active: props.foreground_id == Some(thread.id),
+                                collapsed: props.sidebar_collapsed,
+                                on_click: {
+                                    let id = thread.id;
+                                    let cb = props.on_switch_thread;
+                                    move |_| cb.call(id)
+                                },
+                                on_rename: props.on_rename_thread,
+                                on_delete: {
+                                    let id = thread.id;
+                                    let cb = props.on_delete_thread;
+                                    move |_| cb.call(id)
+                                },
+                            }
+                        }
                     }
                 }
             }

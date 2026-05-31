@@ -59,6 +59,12 @@ pub struct AppState {
     /// Active threads/sessions
     pub threads: Vec<ThreadInfo>,
 
+    /// Known projects (the sidebar's top level)
+    pub projects: Vec<rustyclaw_core::ui::ProjectInfo>,
+
+    /// The active project's ID
+    pub active_project_id: u64,
+
     /// Current foreground thread ID
     pub foreground_thread_id: Option<u64>,
 
@@ -167,6 +173,8 @@ impl Default for AppState {
             is_processing: false,
             is_streaming: false,
             is_thinking: false,
+            projects: Vec::new(),
+            active_project_id: 0,
             threads: Vec::new(),
             foreground_thread_id: None,
             agent_name: None,
