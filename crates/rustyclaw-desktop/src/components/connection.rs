@@ -4,6 +4,10 @@
 //! and the user can edit the URL and retry.
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{
+    BulmaColor, Button, Control, Field, FieldLabel, Help, Modal, ModalCard, ModalCardBody,
+    ModalCardFoot, ModalCardHead, Notification,
+};
 use rustyclaw_core::ui::ConnectionStatus;
 
 #[derive(Props, Clone, PartialEq)]
@@ -41,37 +45,33 @@ pub fn ConnectionDialog(props: ConnectionDialogProps) -> Element {
     let trimmed_url = url.read().trim().to_string();
     let can_connect = !is_connecting && !trimmed_url.is_empty();
 
+    let on_connect = props.on_connect;
+    let on_cancel = props.on_cancel;
+    let cancel = move |_| {
+        if !is_connecting {
+            on_cancel.call(());
+        }
+    };
     let submit = move |_| {
         let v = url.read().trim().to_string();
         if !v.is_empty() {
-            props.on_connect.call(v);
+            on_connect.call(v);
         }
     };
 
     rsx! {
-        div { class: "modal-backdrop",
-            // Don't allow click-outside-to-dismiss while a connect
-            // attempt is in flight — keeps the user from accidentally
-            // losing the spinner.
-            onclick: move |_| {
-                if !is_connecting {
-                    props.on_cancel.call(());
+        Modal { active: true, onclose: cancel,
+            ModalCard { class: "rc-modal-narrow",
+                ModalCardHead { onclose: cancel,
+                    p { class: "modal-card-title", "Connect to gateway" }
                 }
-            },
-
-            div {
-                class: "modal",
-                style: "max-width: 460px;",
-                onclick: move |evt| evt.stop_propagation(),
-
-                div { class: "modal-head",
-                    span { class: "modal-title", "Connect to gateway" }
-                }
-
-                div { class: "modal-body",
-                    div { class: "settings-section",
-                        div { class: "field",
-                            span { class: "field-label", "Gateway URL" }
+                ModalCardBody {
+                    Field {
+                        FieldLabel { "Gateway URL" }
+                        Control {
+                            // Raw input: dioxus-bulma's `Input` has no onkeydown,
+                            // and we need Enter-to-connect. Bulma's `.input` class
+                            // (themed) still applies.
                             input {
                                 class: "input",
                                 r#type: "text",
@@ -83,46 +83,30 @@ pub fn ConnectionDialog(props: ConnectionDialogProps) -> Element {
                                     if evt.key() == Key::Enter && can_connect {
                                         let v = url.read().trim().to_string();
                                         if !v.is_empty() {
-                                            props.on_connect.call(v);
+                                            on_connect.call(v);
                                         }
                                     }
                                 },
                             }
-                            span { class: "field-help",
-                                "RustyClaw connects to your gateway over SSH (default port 2222)."
-                            }
                         }
+                        Help {
+                            "RustyClaw connects to your gateway over SSH (default port 2222)."
+                        }
+                    }
 
-                        if is_connecting {
-                            div {
-                                class: "connection-status connection-status-connecting",
-                                style: "display: flex; align-items: center; gap: 0.5rem; margin-top: 0.75rem;",
-                                span { class: "icon spin", "↻" }
-                                span { "Connecting to {trimmed_url}…" }
-                            }
+                    if is_connecting {
+                        Notification { color: BulmaColor::Info, class: "is-light",
+                            "Connecting to {trimmed_url}…"
                         }
+                    }
 
-                        if let Some(err) = error_text {
-                            div {
-                                class: "connection-status connection-status-error",
-                                style: "margin-top: 0.75rem; color: var(--rc-danger, #ff6b6b);",
-                                "🚫 {err}"
-                            }
-                        }
+                    if let Some(err) = error_text {
+                        Notification { color: BulmaColor::Danger, "🚫 {err}" }
                     }
                 }
-
-                div { class: "modal-foot",
-                    button {
-                        class: "btn btn-subtle",
-                        disabled: is_connecting,
-                        onclick: move |_| props.on_cancel.call(()),
-                        "Cancel"
-                    }
-                    button {
-                        class: "btn btn-primary",
-                        disabled: !can_connect,
-                        onclick: submit,
+                ModalCardFoot {
+                    Button { disabled: is_connecting, onclick: cancel, "Cancel" }
+                    Button { color: BulmaColor::Primary, disabled: !can_connect, onclick: submit,
                         if is_connecting { "Connecting…" } else { "Connect" }
                     }
                 }
