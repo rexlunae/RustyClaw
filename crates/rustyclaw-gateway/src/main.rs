@@ -9,6 +9,7 @@ mod canvas_handler;
 mod cli;
 mod command_wrapper;
 mod concurrent;
+mod dispatch;
 mod errors;
 mod helpers;
 mod mcp_handler;
@@ -21,6 +22,7 @@ mod skills_handler;
 mod ssh;
 mod system_prompt;
 mod task_handler;
+mod thread_updates;
 mod tool_executor;
 
 use std::io::IsTerminal;
