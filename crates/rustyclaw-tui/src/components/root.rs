@@ -68,7 +68,7 @@ pub struct RootProps {
 
     // sidebar (two-level: projects → threads)
     pub surface: rustyclaw_view::ChatSurfaceData,
-    pub threads: Vec<crate::action::ThreadInfo>,
+    pub threads: Vec<rustyclaw_view::SidebarItemData>,
     pub projects: Vec<rustyclaw_core::ui::ProjectInfo>,
     pub active_project_id: u64,
     pub tab_focused: bool,

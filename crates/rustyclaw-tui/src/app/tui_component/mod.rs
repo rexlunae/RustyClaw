@@ -153,7 +153,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let model_selector_loading = hooks.use_state(|| false);
 
     // ── Thread state (unified tasks + threads) ───────────────────────
-    let threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
+    let threads: State<Vec<rustyclaw_view::SidebarItemData>> = hooks.use_state(Vec::new);
     let projects: State<Vec<rustyclaw_core::ui::ProjectInfo>> = hooks.use_state(Vec::new);
     let active_project_id = hooks.use_state(|| 0u64);
     let tab_focused = hooks.use_state(|| false);

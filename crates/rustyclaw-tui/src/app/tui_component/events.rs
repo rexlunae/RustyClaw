@@ -551,12 +551,20 @@ pub(super) fn apply_gw_event(
                     thread.is_foreground = thread.id == active_id;
                 }
             }
-            // Group threads by project for the two-level sidebar: normalize
-            // orphan/ephemeral project_id (0 or unknown) to the active project,
-            // then stable-sort so each project's threads are contiguous. Keeps
-            // the rendered order aligned with the selection index.
-            group_threads_by_project(&mut thread_list, &projects.read(), active_project_id.get());
-            threads.set(thread_list);
+            // Adapt transport threads to view items, group them through the
+            // shared SidebarTree, then flatten back to a project-ordered list.
+            // The flat order matches the rendered tree, so the keyboard's flat
+            // selection index lines up with what the user sees. Grouping +
+            // orphan placement live entirely in rustyclaw-view (one definition
+            // shared with the desktop).
+            let items: Vec<rustyclaw_view::SidebarItemData> =
+                thread_list.iter().map(item_from_thread).collect();
+            let tree = rustyclaw_view::SidebarTree::from_items(
+                &projects.read(),
+                items,
+                active_project_id.get(),
+            );
+            threads.set(tree.into_flat_items());
             // Keep local foreground in sync and request
             // authoritative history when gateway picks
             // a new foreground (including initial load).
@@ -595,10 +603,10 @@ pub(super) fn apply_gw_event(
         } => {
             projects.set(project_list);
             active_project_id.set(active_id);
-            // Re-group existing threads now that the project set/active changed.
-            let mut thread_list = threads.read().clone();
-            group_threads_by_project(&mut thread_list, &projects.read(), active_id);
-            threads.set(thread_list);
+            // Re-group existing items now that the project set/active changed.
+            let items = threads.read().clone();
+            let tree = rustyclaw_view::SidebarTree::from_items(&projects.read(), items, active_id);
+            threads.set(tree.into_flat_items());
         }
         GwEvent::ThreadMessages {
             thread_id: _,
@@ -851,22 +859,23 @@ pub(super) fn apply_gw_event(
     }
 }
 
-/// Group threads by project for the two-level sidebar.
+/// Adapt a transport `ThreadInfoDto` into the shared view-layer
+/// [`SidebarItemData`](rustyclaw_view::SidebarItemData).
 ///
-/// Normalizes orphan/ephemeral `project_id` (0 or not in `projects`) to the
-/// active project, then stable-sorts by `project_id` so each project's threads
-/// are contiguous and the rendered order matches the selection index.
-pub(super) fn group_threads_by_project(
-    threads: &mut [crate::action::ThreadInfo],
-    projects: &[rustyclaw_core::ui::ProjectInfo],
-    active_project_id: u64,
-) {
-    use std::collections::HashSet;
-    let known: HashSet<u64> = projects.iter().map(|p| p.id).collect();
-    for t in threads.iter_mut() {
-        if t.project_id == 0 || !known.contains(&t.project_id) {
-            t.project_id = active_project_id;
-        }
+/// This is the client's transport→view boundary; grouping and display logic
+/// then live entirely in rustyclaw-view.
+fn item_from_thread(t: &crate::action::ThreadInfo) -> rustyclaw_view::SidebarItemData {
+    rustyclaw_view::SidebarItemData {
+        id: t.id,
+        project_id: t.project_id,
+        label: if t.label.is_empty() {
+            None
+        } else {
+            Some(t.label.clone())
+        },
+        description: t.description.clone(),
+        status: t.status.clone().unwrap_or_default(),
+        is_foreground: t.is_foreground,
+        message_count: t.message_count,
     }
-    threads.sort_by_key(|t| t.project_id);
 }

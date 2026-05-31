@@ -8,15 +8,8 @@ pub struct ToolCallPanelProps {
 
 #[component]
 pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static>> {
-    let status = if props.data.result.is_some() {
-        if props.data.is_error {
-            "✕ Error"
-        } else {
-            "✓ Done"
-        }
-    } else {
-        "⏳ Running"
-    };
+    let (_, status_label, status_icon) = props.data.status_label();
+    let status = format!("{status_icon} {status_label}");
 
     let args = props.data.arguments_preview(600, 12);
     let result = props.data.result_preview(2000, 40);

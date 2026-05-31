@@ -36,6 +36,13 @@
 //! change to how the bubble looks (`MessageBubbleData`) doesn't
 //! require touching event-processing code.
 
+/// Canonical braille spinner frames for "busy" animations.
+///
+/// Single source of truth so every client (and every component within a
+/// client) animates identically instead of each defining its own array.
+/// Index with `tick % SPINNER_FRAMES.len()`.
+pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+
 pub mod app_menu;
 pub mod client;
 pub mod command_menu;
