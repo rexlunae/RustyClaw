@@ -47,7 +47,6 @@ pub mod message;
 pub mod sidebar;
 pub mod status;
 pub mod swarm;
-pub mod tabs;
 
 // Re-export at crate root for convenience.
 pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
@@ -70,7 +69,6 @@ pub use dialogs::{
 };
 pub use file_browser::{FileBrowserData, FileBrowserEntry};
 pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData};
-pub use sidebar::SidebarItemData;
+pub use sidebar::{ProjectGroupData, SidebarItemData, SidebarTree};
 pub use status::StatusBarData;
 pub use swarm::{SwarmAgentData, SwarmData};
-pub use tabs::{TabBarData, TabItemData};

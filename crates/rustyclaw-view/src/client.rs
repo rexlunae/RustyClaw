@@ -25,7 +25,7 @@ use std::collections::{HashMap, VecDeque};
 
 use rustyclaw_core::gateway::protocol;
 use rustyclaw_core::types::MessageRole;
-use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo, ToolCallInfo};
+use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ProjectInfo, ThreadInfo, ToolCallInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
 
 use crate::PromptAttachment;
@@ -55,6 +55,10 @@ pub struct ClientState {
     pub is_thinking: bool,
     /// Active threads/sessions.
     pub threads: Vec<ThreadInfo>,
+    /// Known projects (the sidebar's top level).
+    pub projects: Vec<ProjectInfo>,
+    /// The active project's ID (its threads run in its directory).
+    pub active_project_id: u64,
     /// Current foreground thread ID.
     pub foreground_thread_id: Option<u64>,
     /// Agent name from hatching.
@@ -101,6 +105,8 @@ impl Default for ClientState {
             is_streaming: false,
             is_thinking: false,
             threads: Vec::new(),
+            projects: Vec::new(),
+            active_project_id: 0,
             foreground_thread_id: None,
             agent_name: None,
             vault_locked: false,
