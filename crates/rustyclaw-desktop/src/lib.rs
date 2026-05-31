@@ -7,6 +7,7 @@ use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitEx
 use url::Url;
 
 pub mod app;
+mod app_support;
 mod components;
 mod markdown;
 pub(crate) mod menu;
