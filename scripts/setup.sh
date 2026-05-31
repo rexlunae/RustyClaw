@@ -483,7 +483,10 @@ if should_install rustyclaw; then
             git clone https://github.com/rexlunae/RustyClaw.git /tmp/rustyclaw-build
             INSTALL_PATH="/tmp/rustyclaw-build/crates/rustyclaw-cli"
         fi
-        GATEWAY_PATH="${INSTALL_PATH%/rustyclaw-cli}/rustyclaw-gateway"
+        CRATES_DIR="${INSTALL_PATH%/rustyclaw-cli}"
+        GATEWAY_PATH="$CRATES_DIR/rustyclaw-gateway"
+        TUI_PATH="$CRATES_DIR/rustyclaw-tui"
+        DESKTOP_PATH="$CRATES_DIR/rustyclaw-desktop"
 
         if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
             cargo install --path "$INSTALL_PATH" --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
@@ -496,6 +499,12 @@ if should_install rustyclaw; then
         else
             cargo install --path "$GATEWAY_PATH" $FORCE_FLAG
         fi
+        # The TUI and desktop clients are standalone binaries (no extra
+        # features); the `rustyclaw tui`/`desktop` subcommands spawn them.
+        info "Installing terminal UI client (rustyclaw-tui)..."
+        cargo install --path "$TUI_PATH" $FORCE_FLAG
+        info "Installing desktop GUI client (rustyclaw-desktop)..."
+        cargo install --path "$DESKTOP_PATH" $FORCE_FLAG
     else
         info "Installing from crates.io..."
         if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
@@ -509,6 +518,10 @@ if should_install rustyclaw; then
         else
             cargo install rustyclaw-gateway $FORCE_FLAG
         fi
+        info "Installing terminal UI client (rustyclaw-tui)..."
+        cargo install rustyclaw-tui $FORCE_FLAG
+        info "Installing desktop GUI client (rustyclaw-desktop)..."
+        cargo install rustyclaw-desktop $FORCE_FLAG
     fi
 
     if has rustyclaw; then
@@ -522,6 +535,16 @@ if should_install rustyclaw; then
         success "RustyClaw gateway daemon installed"
     else
         warn "rustyclaw-gateway not found in PATH after install — 'gateway start/restart' will fail until it is installed"
+    fi
+    if has rustyclaw-tui; then
+        success "RustyClaw terminal UI client installed"
+    else
+        warn "rustyclaw-tui not found in PATH after install — 'rustyclaw tui' will fail until it is installed"
+    fi
+    if has rustyclaw-desktop; then
+        success "RustyClaw desktop client installed"
+    else
+        warn "rustyclaw-desktop not found in PATH after install — 'rustyclaw desktop' will fail (desktop also needs GTK/WebKit dev libs on Linux)"
     fi
 else
     SKIPPED="$SKIPPED rustyclaw"

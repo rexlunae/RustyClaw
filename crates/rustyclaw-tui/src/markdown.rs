@@ -7,4 +7,4 @@
 use iocraft::prelude::*;
 
 // Re-export the core markdown types and functions
-pub use rustyclaw_core::markdown::{StyledSegment, parse_markdown, render_ansi};
+pub use rustyclaw_core::markdown::render_ansi;

@@ -281,20 +281,23 @@ fn detach_child(_cmd: &mut Command) {
     // No detach on unknown platforms — the child may be tied to our terminal.
 }
 
-/// Find the gateway binary.  Checks:
+/// Find a sibling RustyClaw binary by name.  Checks:
 /// 1. Next to the current executable (same directory).
 /// 2. On `$PATH` via the `which` crate (cross-platform).
-fn resolve_gateway_binary() -> Result<PathBuf> {
-    let name = if cfg!(windows) {
-        "rustyclaw-gateway.exe"
+///
+/// `name` is the base name without an extension (e.g. `"rustyclaw-gateway"`,
+/// `"rustyclaw-tui"`); `.exe` is appended automatically on Windows.
+pub fn resolve_binary(name: &str) -> Result<PathBuf> {
+    let file_name = if cfg!(windows) {
+        format!("{name}.exe")
     } else {
-        "rustyclaw-gateway"
+        name.to_string()
     };
 
     // 1. Same directory as the running binary.
     if let Ok(current_exe) = std::env::current_exe() {
         if let Some(dir) = current_exe.parent() {
-            let candidate = dir.join(name);
+            let candidate = dir.join(&file_name);
             if candidate.is_file() {
                 return Ok(candidate);
             }
@@ -302,12 +305,28 @@ fn resolve_gateway_binary() -> Result<PathBuf> {
     }
 
     // 2. On $PATH.
-    if let Ok(path) = which::which(name) {
+    if let Ok(path) = which::which(&file_name) {
         return Ok(path);
     }
 
     anyhow::bail!(
-        "Could not find the `rustyclaw-gateway` binary.\n\
+        "Could not find the `{name}` binary.\n\
          Make sure it is installed or built (`cargo build`) and on your PATH."
     )
+}
+
+/// Find the gateway binary (see [`resolve_binary`]).
+fn resolve_gateway_binary() -> Result<PathBuf> {
+    resolve_binary("rustyclaw-gateway")
+}
+
+/// Resolve a sibling binary by `name` and run it in the foreground, passing
+/// `args` verbatim. Inherits stdio (so terminal/GUI clients work) and blocks
+/// until the process exits.
+pub fn run_foreground_named(name: &str, args: &[String]) -> Result<std::process::ExitStatus> {
+    let bin = resolve_binary(name)?;
+    Command::new(&bin)
+        .args(args)
+        .status()
+        .with_context(|| format!("Failed to run {}", bin.display()))
 }

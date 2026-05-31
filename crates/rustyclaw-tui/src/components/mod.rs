@@ -4,7 +4,6 @@ pub mod command_menu;
 pub mod credential_request_dialog;
 pub mod details_dialog;
 pub mod device_flow_dialog;
-pub mod dialogs;
 pub mod hatching_dialog;
 pub mod input_bar;
 pub mod message;
