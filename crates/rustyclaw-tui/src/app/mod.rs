@@ -1,3 +1,4 @@
+mod command_action;
 mod events;
 mod tui_component;
 // ── App module ──────────────────────────────────────────────────────────────
