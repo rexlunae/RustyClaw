@@ -70,6 +70,16 @@ pub enum ClientFrameType {
     SetWorkingDirectory = 29,
     /// Request the persisted conversation history for a thread.
     ThreadHistoryRequest = 30,
+    /// Request the current project list.
+    ProjectList = 31,
+    /// Create a new project (a named working directory).
+    ProjectCreate = 32,
+    /// Rename a project.
+    ProjectRename = 33,
+    /// Delete a project.
+    ProjectDelete = 34,
+    /// Switch the active project.
+    ProjectSwitch = 35,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -160,6 +170,8 @@ pub enum ServerFrameType {
 
     /// Thread messages/history update.
     ThreadMessages = 40,
+    /// Project list update.
+    ProjectsUpdate = 41,
 }
 
 /// Status frame sub-types.
@@ -293,9 +305,10 @@ pub enum ClientPayload {
     TasksRequest {
         session: Option<String>,
     },
-    /// Create a new thread.
+    /// Create a new thread. `project_id` of 0 means "the active project".
     ThreadCreate {
         label: String,
+        project_id: u64,
     },
     /// Switch to a different thread.
     ThreadSwitch {
@@ -346,6 +359,29 @@ pub enum ClientPayload {
     /// Request the gateway-persisted conversation history for a thread.
     ThreadHistoryRequest {
         thread_id: u64,
+    },
+    // ── Projects ──────────────────────────────────────────────────────────
+    // Appended at the end: `ClientPayload` is encoded positionally (bincode),
+    // so new variants must not shift existing discriminants.
+    /// Request the current project list.
+    ProjectList,
+    /// Create a new project (a named working directory).
+    ProjectCreate {
+        name: String,
+        path: String,
+    },
+    /// Rename a project.
+    ProjectRename {
+        project_id: u64,
+        new_name: String,
+    },
+    /// Delete a project.
+    ProjectDelete {
+        project_id: u64,
+    },
+    /// Switch the active project.
+    ProjectSwitch {
+        project_id: u64,
     },
 }
 
@@ -548,6 +584,11 @@ pub enum ServerPayload {
         thread_id: u64,
         messages: Vec<super::types::ChatMessage>,
     },
+    /// Project list update (appended — positional encoding, see `ClientPayload`).
+    ProjectsUpdate {
+        projects: Vec<ProjectInfoDto>,
+        active_id: u64,
+    },
 }
 
 /// DTO for task info in updates.
@@ -578,6 +619,18 @@ pub struct ThreadInfoDto {
     pub is_foreground: bool,
     pub message_count: usize,
     pub has_summary: bool,
+    /// Project this thread belongs to. Appended last (positional bincode
+    /// encoding); 0 / absent maps to the Default project.
+    #[serde(default)]
+    pub project_id: u64,
+}
+
+/// DTO for project info in `ProjectsUpdate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectInfoDto {
+    pub id: u64,
+    pub name: String,
+    pub path: String,
 }
 
 /// DTO for secret entries in list results.

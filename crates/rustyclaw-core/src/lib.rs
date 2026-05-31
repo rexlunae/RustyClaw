@@ -36,6 +36,7 @@ pub mod models;
 pub mod observability;
 pub mod pairing;
 pub mod process_manager;
+pub mod projects;
 pub mod protocols;
 pub mod providers;
 pub mod retry;
