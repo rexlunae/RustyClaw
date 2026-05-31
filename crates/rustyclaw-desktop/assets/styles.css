@@ -1,6 +1,10 @@
 /* ============================================================
    RustyClaw Desktop — Design System
-   ============================================================ */
+   ============================================================
+   Layered on top of vendored Bulma (bulma.min.css, injected first).
+   The `--bulma-*` bridge below themes Bulma's components from our
+   `--rc-*` tokens; the app-specific rules further down own the chat,
+   sidebar and composer layout that Bulma doesn't provide. */
 
 :root {
     /* Brand */
@@ -73,6 +77,51 @@
     --rc-code-bg: #f3f4f6;
     --rc-shadow: 0 6px 18px rgba(15, 17, 21, 0.10);
     --rc-overlay: rgba(15, 17, 21, 0.35);
+}
+
+/* ============================================================
+   Bulma theme bridge — drive Bulma's components from our tokens
+   ============================================================ */
+:root {
+    /* Brand: rusty orange #f06f3a ≈ hsl(18, 86%, 58%) */
+    --bulma-primary-h: 18deg;
+    --bulma-primary-s: 86%;
+    --bulma-primary-l: 58%;
+    --bulma-link-h: 18deg;
+    --bulma-link-s: 86%;
+    --bulma-link-l: 58%;
+
+    /* Status hues mapped to our palette */
+    --bulma-success: var(--rc-success);
+    --bulma-warning: var(--rc-warn);
+    --bulma-danger: var(--rc-danger);
+    --bulma-info: var(--rc-info);
+
+    /* Typography + radii */
+    --bulma-family-primary: var(--rc-font-sans);
+    --bulma-family-secondary: var(--rc-font-sans);
+    --bulma-family-code: var(--rc-font-mono);
+    --bulma-radius-small: var(--rc-radius-sm);
+    --bulma-radius: var(--rc-radius-md);
+    --bulma-radius-large: var(--rc-radius-lg);
+
+    /* Scheme: follow our dark/light tokens (late-bound, so per-data-theme) */
+    --bulma-scheme-main: var(--rc-bg);
+    --bulma-scheme-main-bis: var(--rc-bg-elev);
+    --bulma-scheme-main-ter: var(--rc-bg-raised);
+    --bulma-background: var(--rc-bg-elev);
+    --bulma-body-background-color: var(--rc-bg);
+    --bulma-body-color: var(--rc-text);
+    --bulma-text: var(--rc-text);
+    --bulma-text-strong: var(--rc-text);
+    --bulma-text-weak: var(--rc-text-muted);
+    --bulma-text-light: var(--rc-text-faint);
+    --bulma-border: var(--rc-border);
+    --bulma-border-weak: var(--rc-border);
+    --bulma-input-background-color: var(--rc-input-bg);
+    --bulma-input-border-color: var(--rc-input-border);
+    --bulma-input-color: var(--rc-text);
+    --bulma-shadow: var(--rc-shadow);
 }
 
 /* ============================================================

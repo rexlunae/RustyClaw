@@ -23,9 +23,15 @@ use signals::do_reconnect;
 
 const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 
-/// Bundled stylesheet — embedded directly in the binary so the desktop crate
-/// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
-const STYLES: &str = include_str!("../../assets/styles.css");
+/// Vendored Bulma stylesheet, embedded so the desktop runs offline (no CDN).
+/// Injected before [`THEME`] so our overrides win the cascade.
+const BULMA: &str = include_str!("../../assets/bulma.min.css");
+
+/// RustyClaw theme: Bulma variable overrides (rusty-orange / dark) plus the
+/// app-specific layout Bulma can't express (chat, sidebar, composer).
+/// Embedded directly in the binary so the desktop crate can be run with plain
+/// `cargo run`/`cargo build` without the `dx` CLI.
+const THEME: &str = include_str!("../../assets/styles.css");
 
 #[component]
 pub fn App() -> Element {
@@ -620,7 +626,8 @@ pub fn App() -> Element {
     };
 
     rsx! {
-        style { dangerous_inner_html: STYLES }
+        style { dangerous_inner_html: BULMA }
+        style { dangerous_inner_html: THEME }
 
         div {
             id: "rc-root",
