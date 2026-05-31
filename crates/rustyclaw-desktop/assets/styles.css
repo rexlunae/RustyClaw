@@ -198,6 +198,19 @@ p { margin: 0; }
 }
 .rc-tab-row > * { -webkit-app-region: no-drag; }
 
+/* Active project/thread title in the top bar (replaces the old tab strip). */
+.rc-topbar-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding: 0 10px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--rc-text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
 .rc-tab-actions {
     margin-left: auto;
     display: inline-flex;
@@ -410,6 +423,77 @@ p { margin: 0; }
     overflow-y: auto;
     padding: 0 6px 6px;
     min-height: 0;
+}
+
+/* ── Two-level sidebar: project groups → threads ───────────────────────── */
+.projects-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 0 6px 6px;
+    min-height: 0;
+}
+.project-group { margin-bottom: 4px; }
+.project-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 8px;
+    border-radius: var(--rc-radius-sm);
+    color: var(--rc-text-muted);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.12s ease;
+}
+.project-header:hover { background: var(--rc-bg-hover); }
+.project-header.is-active { color: var(--rc-text); }
+.project-header.is-active .project-name { color: var(--rc-primary); }
+.project-chevron {
+    border: none;
+    background: transparent;
+    color: var(--rc-text-muted);
+    cursor: pointer;
+    font-size: 11px;
+    width: 16px;
+    padding: 0;
+    line-height: 1;
+}
+.project-name {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.project-count {
+    font-size: 11px;
+    color: var(--rc-text-muted);
+    background: var(--rc-bg-elev);
+    border: 1px solid var(--rc-border);
+    border-radius: 9px;
+    padding: 0 6px;
+}
+.project-add-btn,
+.project-delete-btn {
+    border: none;
+    background: transparent;
+    color: var(--rc-text-muted);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 0 2px;
+    opacity: 0;
+    transition: opacity 0.12s ease, color 0.12s ease;
+}
+.project-header:hover .project-add-btn,
+.project-header:hover .project-delete-btn { opacity: 1; }
+.project-add-btn:hover { color: var(--rc-primary); }
+.project-delete-btn:hover { color: var(--rc-danger, #ff6b6b); }
+/* Threads nested under a project header. */
+.sessions-list.is-nested {
+    flex: 0 0 auto;
+    overflow: visible;
+    padding: 0 0 2px 14px;
 }
 
 .session-row {
@@ -1930,140 +2014,6 @@ p { margin: 0; }
     gap: 0.5rem;
 }
 
-/* ═══ Tab Bar ═══════════════════════════════════════════════════ */
-
-/* ---- Tab bar ---- */
-
-.tab-bar {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    padding: 0 0.5rem 0 0.75rem;
-    background: var(--rc-surface, #1a1a2e);
-    border-bottom: 1px solid var(--rc-border);
-    min-height: 34px;
-    flex: 1;
-    min-width: 0;
-    flex-shrink: 0;
-}
-
-.tab-bar-tabs {
-    display: flex;
-    align-items: stretch;
-    gap: 0;
-    flex: 1;
-    overflow-x: auto;
-    scrollbar-width: thin;
-}
-
-.tab-bar-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.35rem;
-    padding: 0.35rem 0.7rem;
-    font-size: 0.8rem;
-    color: var(--rc-text-muted, #888);
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    margin-right: 1px;
-    white-space: nowrap;
-    transition: background 0.1s, color 0.1s, border-color 0.1s;
-    user-select: none;
-}
-
-.tab-bar-tab:hover {
-    background: var(--rc-hover-bg, rgba(255,255,255,0.05));
-    color: var(--rc-text, #eee);
-}
-
-.tab-bar-tab.is-active {
-    color: var(--rc-text, #eee);
-    border-bottom-color: var(--rc-accent, #4f8cff);
-    font-weight: 600;
-    background: var(--rc-active-bg, rgba(79, 140, 255, 0.08));
-}
-
-.tab-bar-label {
-    max-width: 130px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.tab-bar-count {
-    font-size: 0.72rem;
-    color: var(--rc-text-faint, #666);
-    min-width: 1.2em;
-    text-align: center;
-}
-
-.tab-bar-close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 18px;
-    height: 18px;
-    padding: 0;
-    border: none;
-    background: transparent;
-    color: var(--rc-text-faint, #666);
-    font-size: 0.72rem;
-    border-radius: 3px;
-    cursor: pointer;
-    line-height: 1;
-    transition: background 0.1s, color 0.1s;
-    opacity: 0.5;
-}
-
-.tab-bar-tab:hover .tab-bar-close,
-.tab-bar-tab.is-active .tab-bar-close {
-    opacity: 1;
-}
-
-.tab-bar-close:hover {
-    background: rgba(255, 70, 70, 0.15);
-    color: #ff4646;
-    opacity: 1;
-}
-
-.tab-bar-empty {
-    display: flex;
-    align-items: center;
-    padding: 0.35rem 0.7rem;
-    font-size: 0.8rem;
-    color: var(--rc-text-faint, #555);
-    font-style: italic;
-}
-
-.tab-bar-new {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    padding: 0;
-    border: 1px dashed var(--rc-border, #333);
-    background: transparent;
-    color: var(--rc-text-faint, #666);
-    font-size: 1rem;
-    font-weight: 700;
-    border-radius: 4px;
-    cursor: pointer;
-    flex-shrink: 0;
-    align-self: center;
-    margin-left: auto;
-    transition: background 0.1s, border-color 0.1s, color 0.1s;
-}
-
-.tab-bar-new:hover {
-    border-color: var(--rc-accent, #4f8cff);
-    color: var(--rc-accent, #4f8cff);
-    background: rgba(79, 140, 255, 0.08);
-}
-
-    border-color: var(--rc-accent, #4f8cff);
-    color: var(--rc-accent, #4f8cff);
-    background: var(--rc-accent-bg, rgba(79, 140, 255, 0.08));
-}
 
 /* ── Message action bar ─────────────────────────────────────────────────── */
 .msg-actions {

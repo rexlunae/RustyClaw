@@ -4,7 +4,7 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::components::{Chat, Sidebar, TabBar};
+use crate::components::{Chat, NewProjectDialog, Sidebar};
 
 use crate::app_support::*;
 use crate::state::AppState;
@@ -79,8 +79,11 @@ pub fn App() -> Element {
     // Secrets management state
     let mut show_secrets = use_signal(|| false);
 
+    // New-project dialog state
+    let mut show_new_project = use_signal(|| false);
+
     // Thread deletion confirmation state
-    let mut pending_thread_delete = use_signal(|| None::<(u64, String)>);
+    let pending_thread_delete = use_signal(|| None::<(u64, String)>);
 
     // Initialize directory chooser state once.
     let mut did_init_directories = use_signal(|| false);
@@ -479,12 +482,16 @@ pub fn App() -> Element {
         }
     };
 
-    let on_new_thread = move |_| {
+    // Create a new thread in a specific project (the sidebar's per-project +).
+    let on_new_thread_in = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
                 let _ = client
-                    .send(GatewayCommand::ThreadCreate { label: None })
+                    .send(GatewayCommand::ThreadCreate {
+                        label: None,
+                        project_id: Some(project_id),
+                    })
                     .await;
             });
         }
@@ -498,6 +505,44 @@ pub fn App() -> Element {
             s.save_thread_messages(current_id, msgs);
         }
         s.messages.clear();
+    };
+
+    let on_new_project = move |_| show_new_project.set(true);
+
+    let on_switch_project = move |project_id: u64| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::ProjectSwitch { project_id })
+                    .await;
+            });
+        }
+    };
+
+    let on_rename_project = move |(project_id, new_name): (u64, String)| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::ProjectRename {
+                        project_id,
+                        new_name,
+                    })
+                    .await;
+            });
+        }
+    };
+
+    let on_delete_project = move |project_id: u64| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::ProjectDelete { project_id })
+                    .await;
+            });
+        }
     };
 
     let on_switch_thread = move |thread_id: u64| {
@@ -566,7 +611,10 @@ pub fn App() -> Element {
                 if let Some(client) = gw {
                     spawn(async move {
                         let _ = client
-                            .send(GatewayCommand::ThreadCreate { label: None })
+                            .send(GatewayCommand::ThreadCreate {
+                                label: None,
+                                project_id: None,
+                            })
                             .await;
                     });
                 }
@@ -625,6 +673,26 @@ pub fn App() -> Element {
         s.status_message = Some(format!("Attached {}", path.display()));
     };
 
+    // Top-bar title: "Project — Thread" for the active project / foreground thread.
+    let topbar_title = {
+        let s = state.read();
+        let proj = s
+            .projects
+            .iter()
+            .find(|p| p.id == s.active_project_id)
+            .map(|p| p.name.clone());
+        let thread = s
+            .foreground_thread_id
+            .and_then(|id| s.threads.iter().find(|t| t.id == id))
+            .and_then(|t| t.label.clone());
+        match (proj, thread) {
+            (Some(p), Some(t)) => format!("{p} — {t}"),
+            (Some(p), None) => p,
+            (None, Some(t)) => t,
+            (None, None) => "RustyClaw".to_string(),
+        }
+    };
+
     rsx! {
         style { dangerous_inner_html: BULMA }
         style { dangerous_inner_html: THEME }
@@ -634,7 +702,7 @@ pub fn App() -> Element {
             class: "app",
             "data-theme": "{theme_attr}",
 
-            // ── Tab row: sidebar toggles + thread tabs ─────────────────────
+            // ── Top bar: sidebar toggles + global actions ──────────────────
             div { class: "rc-tab-row",
                 Button {
                     color: BulmaColor::Ghost,
@@ -646,23 +714,9 @@ pub fn App() -> Element {
                     },
                     "☰"
                 }
-                TabBar {
-                    data: rustyclaw_view::TabBarData::from_threads(
-                        &state.read().threads,
-                    ),
-                    on_switch: on_switch_thread,
-                    on_new: on_new_thread,
-                    on_close: move |id| {
-                        let label = state
-                            .read()
-                            .threads
-                            .iter()
-                            .find(|thread| thread.id == id)
-                            .and_then(|thread| thread.label.clone())
-                            .unwrap_or_else(|| format!("Session #{}", id));
-                        pending_thread_delete.set(Some((id, label)));
-                    },
-                }
+                // The sidebar is now the sole thread/project navigation; the
+                // active thread/project title fills the top bar.
+                div { class: "rc-topbar-title", "{topbar_title}" }
                 Buttons { class: "rc-tab-actions", addons: true,
                     Button {
                         color: BulmaColor::Ghost,
@@ -719,16 +773,19 @@ pub fn App() -> Element {
                             let v = state.read().sidebar_collapsed;
                             state.write().sidebar_collapsed = !v;
                         },
-                        on_new_thread: on_new_thread,
                         on_switch_thread: on_switch_thread,
                         on_rename_thread: on_rename_thread,
                         on_delete_thread: on_delete_thread,
-                        threads: state
-                            .read()
-                            .threads
-                            .iter()
-                            .map(rustyclaw_view::SidebarItemData::from)
-                            .collect(),
+                        on_new_thread_in: on_new_thread_in,
+                        on_new_project: on_new_project,
+                        on_switch_project: on_switch_project,
+                        on_rename_project: on_rename_project,
+                        on_delete_project: on_delete_project,
+                        tree: rustyclaw_view::SidebarTree::build(
+                            &state.read().projects,
+                            &state.read().threads,
+                            state.read().active_project_id,
+                        ),
                         foreground_id: state.read().foreground_thread_id,
                         on_pair: move |_| show_pairing.set(true),
                         on_secrets: move |_| {
@@ -972,6 +1029,23 @@ pub fn App() -> Element {
                         }
                     }
                 }
+            }
+
+            // New-project dialog
+            NewProjectDialog {
+                visible: show_new_project(),
+                on_cancel: move |_| show_new_project.set(false),
+                on_create: move |(name, path): (String, String)| {
+                    show_new_project.set(false);
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::ProjectCreate { name, path })
+                                .await;
+                        });
+                    }
+                },
             }
 
             // Modals

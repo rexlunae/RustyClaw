@@ -178,6 +178,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 .into_iter()
                 .map(|t| ThreadInfo {
                     id: t.id,
+                    project_id: t.project_id,
                     label: t.label,
                     description: t.description,
                     status: t.status,
@@ -186,6 +187,20 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 })
                 .collect();
             state.write().foreground_thread_id = foreground_id;
+        }
+        GatewayEvent::ProjectsUpdate {
+            projects,
+            active_id,
+        } => {
+            state.write().projects = projects
+                .into_iter()
+                .map(|p| rustyclaw_core::ui::ProjectInfo {
+                    id: p.id,
+                    name: p.name,
+                    path: p.path,
+                })
+                .collect();
+            state.write().active_project_id = active_id;
         }
         GatewayEvent::ThreadHistory {
             thread_id,
