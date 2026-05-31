@@ -124,6 +124,11 @@
     --bulma-shadow: var(--rc-shadow);
 }
 
+/* Narrower modal-card for simple prompt dialogs. */
+.modal-card.rc-modal-narrow {
+    max-width: 460px;
+}
+
 /* ============================================================
    Reset & base
    ============================================================ */
