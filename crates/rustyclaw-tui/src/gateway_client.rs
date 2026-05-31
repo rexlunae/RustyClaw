@@ -132,9 +132,24 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                     is_foreground: t.is_foreground,
                     message_count: t.message_count,
                     has_summary: false,
+                    project_id: t.project_id,
                 })
                 .collect(),
             foreground_id,
+        },
+        E::ProjectsUpdate {
+            projects,
+            active_id,
+        } => GwEvent::ProjectsUpdate {
+            projects: projects
+                .into_iter()
+                .map(|p| rustyclaw_core::ui::ProjectInfo {
+                    id: p.id,
+                    name: p.name,
+                    path: p.path,
+                })
+                .collect(),
+            active_id,
         },
         E::ThreadMessages {
             thread_id,

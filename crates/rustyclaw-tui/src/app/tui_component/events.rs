@@ -93,6 +93,8 @@ pub(super) fn apply_gw_event(
         mut model_selector_cursor,
         mut model_selector_loading,
         mut threads,
+        mut projects,
+        mut active_project_id,
         mut tab_focused,
         mut tab_selected,
         mut thread_messages_cache,
@@ -549,6 +551,11 @@ pub(super) fn apply_gw_event(
                     thread.is_foreground = thread.id == active_id;
                 }
             }
+            // Group threads by project for the two-level sidebar: normalize
+            // orphan/ephemeral project_id (0 or unknown) to the active project,
+            // then stable-sort so each project's threads are contiguous. Keeps
+            // the rendered order aligned with the selection index.
+            group_threads_by_project(&mut thread_list, &projects.read(), active_project_id.get());
             threads.set(thread_list);
             // Keep local foreground in sync and request
             // authoritative history when gateway picks
@@ -581,6 +588,17 @@ pub(super) fn apply_gw_event(
                 hatching.show_if_needed(needs_hatching);
                 hatching_dialog.set(hatching);
             }
+        }
+        GwEvent::ProjectsUpdate {
+            projects: project_list,
+            active_id,
+        } => {
+            projects.set(project_list);
+            active_project_id.set(active_id);
+            // Re-group existing threads now that the project set/active changed.
+            let mut thread_list = threads.read().clone();
+            group_threads_by_project(&mut thread_list, &projects.read(), active_id);
+            threads.set(thread_list);
         }
         GwEvent::ThreadMessages {
             thread_id: _,
@@ -831,4 +849,24 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
     }
+}
+
+/// Group threads by project for the two-level sidebar.
+///
+/// Normalizes orphan/ephemeral `project_id` (0 or not in `projects`) to the
+/// active project, then stable-sorts by `project_id` so each project's threads
+/// are contiguous and the rendered order matches the selection index.
+pub(super) fn group_threads_by_project(
+    threads: &mut [crate::action::ThreadInfo],
+    projects: &[rustyclaw_core::ui::ProjectInfo],
+    active_project_id: u64,
+) {
+    use std::collections::HashSet;
+    let known: HashSet<u64> = projects.iter().map(|p| p.id).collect();
+    for t in threads.iter_mut() {
+        if t.project_id == 0 || !known.contains(&t.project_id) {
+            t.project_id = active_project_id;
+        }
+    }
+    threads.sort_by_key(|t| t.project_id);
 }

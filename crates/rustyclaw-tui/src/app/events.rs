@@ -89,6 +89,12 @@ pub(crate) enum GwEvent {
         foreground_id: Option<u64>,
     },
 
+    /// Project list update (the sidebar's top level).
+    ProjectsUpdate {
+        projects: Vec<rustyclaw_core::ui::ProjectInfo>,
+        active_id: u64,
+    },
+
     /// Live message/history update for a thread.
     ThreadMessages {
         #[allow(dead_code)]
