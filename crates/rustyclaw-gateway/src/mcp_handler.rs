@@ -1,4 +1,10 @@
 //! MCP tool execution handler for the gateway.
+//!
+//! Partially wired: tool *detection* ([`is_mcp_tool`]) is used by the messenger
+//! tool-dispatch loop, but execution still needs the `McpManager` threaded
+//! through. See the `TODO: Pass mcp_mgr` marker in `messenger_handler`. Tracked
+//! for completion; `dead_code` is allowed here until the manager is wired in.
+#![allow(dead_code)]
 
 #[cfg(feature = "mcp")]
 use tracing::{debug, instrument, warn};

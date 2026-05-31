@@ -9,6 +9,12 @@
 //! - Tasks send frames back via an mpsc channel
 //! - The main loop selects between client messages and model responses
 //! - Thread switching is allowed while models are running
+//!
+//! Partially wired: the consumer side (the `ModelTaskMessage` select loop in the
+//! connection handler) is in place, but the producer side — spawning model tasks
+//! with a [`ChannelSink`] and tracking them via [`ActiveTasks`] — is not yet
+//! hooked up. Tracked for completion; `dead_code` is allowed until then.
+#![allow(dead_code)]
 
 use anyhow::Result;
 use async_trait::async_trait;
