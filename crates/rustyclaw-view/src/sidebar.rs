@@ -254,7 +254,11 @@ mod tests {
         let p2 = tree.groups.iter().find(|g| g.id == 2).unwrap();
         assert!(p2.is_active);
         assert_eq!(p1.threads.len(), 1);
-        assert_eq!(p2.threads.len(), 2, "orphan thread lands under active project");
+        assert_eq!(
+            p2.threads.len(),
+            2,
+            "orphan thread lands under active project"
+        );
         assert_eq!(tree.thread_count(), 3);
     }
 }
