@@ -202,8 +202,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
+      # Clippy lints the whole workspace, including the Dioxus desktop crate,
+      # which links GTK/WebKit via glib-sys. Without these the clippy step fails
+      # at dependency build time (every other job installs them too).
+      - name: Install Linux system dependencies for desktop GUI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libxdo-dev
       - uses: Swatinem/rust-cache@v2
-      
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
