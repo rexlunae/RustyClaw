@@ -17,22 +17,15 @@ use tracing::{debug, error, info, trace, warn};
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
     ChatMessage, ChatRequest, ClientFrame, ClientFrameType, ClientPayload, CopilotSession,
-    GatewayOptions, ModelContext, ProbeResult, ProviderRequest, ScopedTransportWriter,
-    SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload, StatusType, Transport,
-    TransportAcceptor, WireFrame, deserialize_frame, protocol, transport,
+    GatewayOptions, ModelContext, ProbeResult, ProviderRequest, ScopedTransportWriter, ServerFrame,
+    ServerFrameType, ServerPayload, StatusType, Transport, TransportAcceptor, WireFrame,
+    deserialize_frame, protocol, transport,
 };
 use rustyclaw_core::providers as crate_providers;
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::tools;
 
-use protocol::server::{
-    send_frame, send_reload_result, send_secrets_delete_credential_result,
-    send_secrets_delete_result, send_secrets_get_result, send_secrets_has_totp_result,
-    send_secrets_list_result, send_secrets_peek_result, send_secrets_remove_totp_result,
-    send_secrets_set_disabled_result, send_secrets_set_policy_result,
-    send_secrets_setup_totp_result, send_secrets_store_result, send_secrets_verify_totp_result,
-    send_vault_unlocked,
-};
+use protocol::server::{send_frame, send_reload_result};
 
 use crate::dispatch::dispatch_text_message;
 use crate::messenger_handler::SharedMessengerManager;
@@ -942,178 +935,25 @@ async fn handle_connection(
 
                         // Handle the frame based on type
                         match frame.payload {
-                            ClientPayload::UnlockVault { password } => {
-                                let mut v = vault.lock().await;
-                                v.set_password(password);
-                                match v.get_secret("__vault_check__", true) {
-                                    Ok(_) => {
-                                        send_vault_unlocked(&mut *writer, true, None).await?;
-                                    }
-                                    Err(e) => {
-                                        v.clear_password();
-                                        send_vault_unlocked(
-                                            &mut *writer,
-                                            false,
-                                            Some(&format!("Failed to unlock vault: {}", e)),
-                                        ).await?;
-                                    }
-                                }
-                            }
-                            ClientPayload::SecretsList => {
-                                let mut v = vault.lock().await;
-                                let entries = v.list_all_entries();
-                                let dto_entries: Vec<SecretEntryDto> = entries
-                                    .iter()
-                                    .map(|(name, entry)| SecretEntryDto {
-                                        name: name.clone(),
-                                        label: entry.label.clone(),
-                                        kind: entry.kind.to_string(),
-                                        policy: entry.policy.badge().to_string(),
-                                        disabled: entry.disabled,
-                                    })
-                                    .collect();
-                                send_secrets_list_result(&mut *writer, true, dto_entries).await?;
-                            }
-                            ClientPayload::SecretsStore { key, value } => {
-                                let mut v = vault.lock().await;
-                                let result = v.store_secret(&key, &value);
-                                match result {
-                                    Ok(()) => send_secrets_store_result(
-                                        &mut *writer,
-                                        true,
-                                        &format!("Secret '{}' stored.", key),
-                                    ).await?,
-                                    Err(e) => send_secrets_store_result(
-                                        &mut *writer,
-                                        false,
-                                        &format!("Failed to store secret: {}", e),
-                                    ).await?,
-                                };
-                            }
-                            ClientPayload::SecretsGet { key } => {
-                                let mut v = vault.lock().await;
-                                let result = v.get_secret(&key, true);
-                                match result {
-                                    Ok(Some(value)) => {
-                                        send_secrets_get_result(&mut *writer, true, &key, Some(&value), None).await?
-                                    }
-                                    Ok(None) => {
-                                        send_secrets_get_result(&mut *writer, false, &key, None, Some(&format!("Secret '{}' not found.", key))).await?
-                                    }
-                                    Err(e) => {
-                                        send_secrets_get_result(&mut *writer, false, &key, None, Some(&format!("Failed to get secret: {}", e))).await?
-                                    }
-                                };
-                            }
-                            ClientPayload::SecretsDelete { key } => {
-                                let mut v = vault.lock().await;
-                                let result = v.delete_secret(&key);
-                                match result {
-                                    Ok(()) => send_secrets_delete_result(&mut *writer, true, None).await?,
-                                    Err(e) => send_secrets_delete_result(
-                                        &mut *writer,
-                                        false,
-                                        Some(&format!("Failed to delete: {}", e)),
-                                    ).await?,
-                                };
-                            }
-                            ClientPayload::SecretsPeek { name } => {
-                                let mut v = vault.lock().await;
-                                let result = v.peek_credential_display(&name);
-                                match result {
-                                    Ok(fields) => {
-                                        let field_tuples: Vec<(String, String)> = fields
-                                            .iter()
-                                            .map(|(label, value)| (label.clone(), value.clone()))
-                                            .collect();
-                                        send_secrets_peek_result(&mut *writer, true, field_tuples, None)
-                                            .await?
-                                    }
-                                    Err(e) => send_secrets_peek_result(
-                                        &mut *writer,
-                                        false,
-                                        vec![],
-                                        Some(&format!("Failed to peek: {}", e)),
-                                    ).await?,
-                                };
-                            }
-                            ClientPayload::SecretsSetPolicy { name, policy, skills } => {
-                                let mut v = vault.lock().await;
-                                let policy_str = policy.clone();
-                                let policy = match policy.as_str() {
-                                    "always" => Some(rustyclaw_core::secrets::AccessPolicy::Always),
-                                    "ask" => Some(rustyclaw_core::secrets::AccessPolicy::WithApproval),
-                                    "auth" => Some(rustyclaw_core::secrets::AccessPolicy::WithAuth),
-                                    "skill_only" => Some(rustyclaw_core::secrets::AccessPolicy::SkillOnly(skills)),
-                                    _ => None,
-                                };
-                                if let Some(policy) = policy {
-                                    let result = v.set_credential_policy(&name, policy);
-                                    match result {
-                                        Ok(()) => send_secrets_set_policy_result(&mut *writer, true, None).await?,
-                                        Err(e) => send_secrets_set_policy_result(
-                                            &mut *writer,
-                                            false,
-                                            Some(&format!("Failed to set policy: {}", e)),
-                                        ).await?,
-                                    }
-                                } else {
-                                    send_secrets_set_policy_result(
-                                        &mut *writer,
-                                        false,
-                                        Some(&format!("Unknown policy: {}", policy_str)),
-                                    ).await?;
-                                }
-                            }
-                            ClientPayload::SecretsSetDisabled { name, disabled } => {
-                                let mut v = vault.lock().await;
-                                let result = v.set_credential_disabled(&name, disabled);
-                                match result {
-                                    Ok(()) => send_secrets_set_disabled_result(&mut *writer, true, None).await?,
-                                    Err(e) => send_secrets_set_disabled_result(&mut *writer, false, Some(&format!("Failed: {}", e))).await?,
-                                };
-                            }
-                            ClientPayload::SecretsDeleteCredential { name } => {
-                                let mut v = vault.lock().await;
-                                let meta_key = format!("cred:{}", name);
-                                let is_legacy = v.get_secret(&meta_key, true).ok().flatten().is_none();
-                                if is_legacy {
-                                    let _ = v.delete_secret(&name);
-                                }
-                                let result = v.delete_credential(&name);
-                                match result {
-                                    Ok(()) => send_secrets_delete_credential_result(&mut *writer, true, None).await?,
-                                    Err(e) => send_secrets_delete_credential_result(&mut *writer, false, Some(&format!("Failed: {}", e))).await?,
-                                };
-                            }
-                            ClientPayload::SecretsHasTotp => {
-                                let mut v = vault.lock().await;
-                                let has_totp = v.has_totp();
-                                send_secrets_has_totp_result(&mut *writer, has_totp).await?;
-                            }
-                            ClientPayload::SecretsSetupTotp => {
-                                let mut v = vault.lock().await;
-                                let result = v.setup_totp("rustyclaw");
-                                match result {
-                                    Ok(uri) => send_secrets_setup_totp_result(&mut *writer, true, Some(&uri), None).await?,
-                                    Err(e) => send_secrets_setup_totp_result(&mut *writer, false, None, Some(&format!("Failed: {}", e))).await?,
-                                };
-                            }
-                            ClientPayload::SecretsVerifyTotp { code } => {
-                                let mut v = vault.lock().await;
-                                let result = v.verify_totp(&code);
-                                match result {
-                                    Ok(valid) => send_secrets_verify_totp_result(&mut *writer, valid, None).await?,
-                                    Err(e) => send_secrets_verify_totp_result(&mut *writer, false, Some(&format!("Error: {}", e))).await?,
-                                };
-                            }
-                            ClientPayload::SecretsRemoveTotp => {
-                                let mut v = vault.lock().await;
-                                let result = v.remove_totp();
-                                match result {
-                                    Ok(()) => send_secrets_remove_totp_result(&mut *writer, true, None).await?,
-                                    Err(e) => send_secrets_remove_totp_result(&mut *writer, false, Some(&format!("Failed: {}", e))).await?,
-                                };
+                            payload @ (ClientPayload::UnlockVault { .. }
+                            | ClientPayload::SecretsList
+                            | ClientPayload::SecretsStore { .. }
+                            | ClientPayload::SecretsGet { .. }
+                            | ClientPayload::SecretsDelete { .. }
+                            | ClientPayload::SecretsPeek { .. }
+                            | ClientPayload::SecretsSetPolicy { .. }
+                            | ClientPayload::SecretsSetDisabled { .. }
+                            | ClientPayload::SecretsDeleteCredential { .. }
+                            | ClientPayload::SecretsHasTotp
+                            | ClientPayload::SecretsSetupTotp
+                            | ClientPayload::SecretsVerifyTotp { .. }
+                            | ClientPayload::SecretsRemoveTotp) => {
+                                crate::secrets_handler::handle_secrets_frame(
+                                    &mut *writer,
+                                    &vault,
+                                    payload,
+                                )
+                                .await?;
                             }
                             ClientPayload::Reload => {
                                 let settings_dir = config.settings_dir.clone();
