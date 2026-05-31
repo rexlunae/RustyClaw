@@ -1,5 +1,6 @@
 //! Thread model — core types for the unified thread system.
 
+use crate::projects::ProjectId;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::time::SystemTime;
@@ -201,6 +202,12 @@ pub struct AgentThread {
     /// Unique identifier
     pub id: ThreadId,
 
+    /// Project (working directory) this thread belongs to. Defaults to the
+    /// implicit Default project so threads from a pre-projects `threads.json`
+    /// deserialize cleanly and migrate into it.
+    #[serde(default)]
+    pub project_id: ProjectId,
+
     /// What kind of thread this is
     pub kind: ThreadKind,
 
@@ -249,6 +256,7 @@ impl AgentThread {
         let now = SystemTime::now();
         Self {
             id: ThreadId::new(),
+            project_id: ProjectId::default(),
             kind: ThreadKind::Chat,
             label: label.into(),
             description: None,
@@ -274,6 +282,7 @@ impl AgentThread {
         let now = SystemTime::now();
         Self {
             id: ThreadId::new(),
+            project_id: ProjectId::default(),
             kind: ThreadKind::SubAgent {
                 agent_id: agent_id.into(),
                 task: task.into(),
@@ -304,6 +313,7 @@ impl AgentThread {
         let now = SystemTime::now();
         Self {
             id: ThreadId::new(),
+            project_id: ProjectId::default(),
             kind: ThreadKind::Background {
                 purpose: purpose.into(),
             },
@@ -333,6 +343,7 @@ impl AgentThread {
         let now = SystemTime::now();
         Self {
             id: ThreadId::new(),
+            project_id: ProjectId::default(),
             kind: ThreadKind::Task {
                 action: action.into(),
             },
@@ -492,6 +503,7 @@ impl AgentThread {
     pub fn to_info(&self) -> ThreadInfo {
         ThreadInfo {
             id: self.id,
+            project_id: self.project_id,
             kind: self.kind.display_name().to_string(),
             icon: self.kind.icon().to_string(),
             label: self.label.clone(),
@@ -511,6 +523,8 @@ impl AgentThread {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThreadInfo {
     pub id: ThreadId,
+    #[serde(default)]
+    pub project_id: ProjectId,
     pub kind: String,
     pub icon: String,
     pub label: String,

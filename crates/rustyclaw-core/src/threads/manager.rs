@@ -96,6 +96,40 @@ impl ThreadManager {
         id
     }
 
+    /// Create a foreground chat thread belonging to a specific project.
+    pub fn create_chat_in(
+        &mut self,
+        project_id: crate::projects::ProjectId,
+        label: impl Into<String>,
+    ) -> ThreadId {
+        let id = self.create_chat(label);
+        if let Some(t) = self.threads.get_mut(&id) {
+            t.project_id = project_id;
+        }
+        id
+    }
+
+    /// All threads belonging to a project.
+    pub fn threads_for(&self, project_id: crate::projects::ProjectId) -> Vec<&AgentThread> {
+        let mut v: Vec<&AgentThread> = self
+            .threads
+            .values()
+            .filter(|t| t.project_id == project_id)
+            .collect();
+        v.sort_by_key(|t| t.created_at);
+        v
+    }
+
+    /// Reassign a thread to a different project. Returns false if unknown.
+    pub fn set_project(&mut self, id: ThreadId, project_id: crate::projects::ProjectId) -> bool {
+        if let Some(t) = self.threads.get_mut(&id) {
+            t.project_id = project_id;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Create a sub-agent thread.
     pub fn create_subagent(
         &mut self,

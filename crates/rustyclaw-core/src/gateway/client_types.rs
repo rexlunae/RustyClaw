@@ -124,6 +124,12 @@ pub enum GatewayEvent {
         foreground_id: Option<u64>,
     },
 
+    /// Projects updated
+    ProjectsUpdate {
+        projects: Vec<ProjectInfoDto>,
+        active_id: u64,
+    },
+
     /// Authoritative, cross-session conversation history for a thread.
     ThreadHistory {
         thread_id: u64,
@@ -248,9 +254,12 @@ pub enum GatewayCommand {
     #[serde(rename = "thread_switch")]
     ThreadSwitch { thread_id: u64 },
 
-    /// Create a new thread
+    /// Create a new thread. `project_id` of `None` means the active project.
     #[serde(rename = "thread_create")]
-    ThreadCreate { label: Option<String> },
+    ThreadCreate {
+        label: Option<String>,
+        project_id: Option<u64>,
+    },
 
     /// Request the current thread list
     #[serde(rename = "thread_list")]
@@ -267,6 +276,26 @@ pub enum GatewayCommand {
     /// Rename a thread
     #[serde(rename = "thread_rename")]
     ThreadRename { thread_id: u64, new_label: String },
+
+    /// Request the current project list
+    #[serde(rename = "project_list")]
+    ProjectList,
+
+    /// Create a new project (a named working directory)
+    #[serde(rename = "project_create")]
+    ProjectCreate { name: String, path: String },
+
+    /// Rename a project
+    #[serde(rename = "project_rename")]
+    ProjectRename { project_id: u64, new_name: String },
+
+    /// Delete a project
+    #[serde(rename = "project_delete")]
+    ProjectDelete { project_id: u64 },
+
+    /// Switch the active project
+    #[serde(rename = "project_switch")]
+    ProjectSwitch { project_id: u64 },
 
     /// List secrets
     #[serde(rename = "secrets_list")]
@@ -363,11 +392,38 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::ThreadSwitch,
                 payload: ClientPayload::ThreadSwitch { thread_id },
             },
-            GatewayCommand::ThreadCreate { label } => ClientFrame {
+            GatewayCommand::ThreadCreate { label, project_id } => ClientFrame {
                 frame_type: ClientFrameType::ThreadCreate,
                 payload: ClientPayload::ThreadCreate {
                     label: label.unwrap_or_default(),
+                    project_id: project_id.unwrap_or(0),
                 },
+            },
+            GatewayCommand::ProjectList => ClientFrame {
+                frame_type: ClientFrameType::ProjectList,
+                payload: ClientPayload::ProjectList,
+            },
+            GatewayCommand::ProjectCreate { name, path } => ClientFrame {
+                frame_type: ClientFrameType::ProjectCreate,
+                payload: ClientPayload::ProjectCreate { name, path },
+            },
+            GatewayCommand::ProjectRename {
+                project_id,
+                new_name,
+            } => ClientFrame {
+                frame_type: ClientFrameType::ProjectRename,
+                payload: ClientPayload::ProjectRename {
+                    project_id,
+                    new_name,
+                },
+            },
+            GatewayCommand::ProjectDelete { project_id } => ClientFrame {
+                frame_type: ClientFrameType::ProjectDelete,
+                payload: ClientPayload::ProjectDelete { project_id },
+            },
+            GatewayCommand::ProjectSwitch { project_id } => ClientFrame {
+                frame_type: ClientFrameType::ProjectSwitch,
+                payload: ClientPayload::ProjectSwitch { project_id },
             },
             GatewayCommand::ThreadList => ClientFrame {
                 frame_type: ClientFrameType::ThreadList,
@@ -609,6 +665,7 @@ impl GatewayEvent {
                     .into_iter()
                     .map(|t| ThreadInfoDto {
                         id: t.id,
+                        project_id: t.project_id,
                         label: Some(t.label),
                         description: t.description,
                         status: t.status.unwrap_or_default(),
@@ -617,6 +674,20 @@ impl GatewayEvent {
                     })
                     .collect(),
                 foreground_id,
+            }),
+            ServerPayload::ProjectsUpdate {
+                projects,
+                active_id,
+            } => Some(GatewayEvent::ProjectsUpdate {
+                projects: projects
+                    .into_iter()
+                    .map(|p| ProjectInfoDto {
+                        id: p.id,
+                        name: p.name,
+                        path: p.path,
+                    })
+                    .collect(),
+                active_id,
             }),
             ServerPayload::ThreadSwitched {
                 thread_id,
@@ -732,9 +803,19 @@ impl From<SecretEntryDto> for SecretEntryInfo {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ThreadInfoDto {
     pub id: u64,
+    #[serde(default)]
+    pub project_id: u64,
     pub label: Option<String>,
     pub description: Option<String>,
     pub status: String,
     pub is_foreground: bool,
     pub message_count: usize,
+}
+
+/// Project info from gateway (client-facing).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProjectInfoDto {
+    pub id: u64,
+    pub name: String,
+    pub path: String,
 }

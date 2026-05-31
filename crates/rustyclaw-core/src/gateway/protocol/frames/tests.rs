@@ -48,6 +48,7 @@ mod serialization {
         assert_eq!(ServerFrameType::DomQuery as u8, 38);
         assert_eq!(ServerFrameType::ThreadHistoryReply as u8, 39);
         assert_eq!(ServerFrameType::ThreadMessages as u8, 40);
+        assert_eq!(ServerFrameType::ProjectsUpdate as u8, 41);
     }
 
     #[test]
@@ -83,6 +84,69 @@ mod serialization {
         assert_eq!(ClientFrameType::SetAgentName as u8, 28);
         assert_eq!(ClientFrameType::SetWorkingDirectory as u8, 29);
         assert_eq!(ClientFrameType::ThreadHistoryRequest as u8, 30);
+        assert_eq!(ClientFrameType::ProjectList as u8, 31);
+        assert_eq!(ClientFrameType::ProjectCreate as u8, 32);
+        assert_eq!(ClientFrameType::ProjectRename as u8, 33);
+        assert_eq!(ClientFrameType::ProjectDelete as u8, 34);
+        assert_eq!(ClientFrameType::ProjectSwitch as u8, 35);
+    }
+
+    #[test]
+    fn test_projects_update_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ProjectsUpdate,
+            payload: ServerPayload::ProjectsUpdate {
+                projects: vec![
+                    ProjectInfoDto {
+                        id: 1,
+                        name: "Default".into(),
+                        path: "/home/me/ws".into(),
+                    },
+                    ProjectInfoDto {
+                        id: 2,
+                        name: "Side".into(),
+                        path: "/home/me/side".into(),
+                    },
+                ],
+                active_id: 2,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        match decoded.payload {
+            ServerPayload::ProjectsUpdate {
+                projects,
+                active_id,
+            } => {
+                assert_eq!(projects.len(), 2);
+                assert_eq!(projects[1].name, "Side");
+                assert_eq!(projects[1].path, "/home/me/side");
+                assert_eq!(active_id, 2);
+            }
+            _ => panic!("Expected ProjectsUpdate payload"),
+        }
+    }
+
+    #[test]
+    fn test_project_create_client_roundtrip() {
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::ProjectCreate,
+            payload: ClientPayload::ProjectCreate {
+                name: "Side".into(),
+                path: "/home/me/side".into(),
+            },
+        };
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ClientPayload::ProjectCreate { name, path } => {
+                assert_eq!(name, "Side");
+                assert_eq!(path, "/home/me/side");
+            }
+            _ => panic!("Expected ProjectCreate payload"),
+        }
     }
 
     #[test]

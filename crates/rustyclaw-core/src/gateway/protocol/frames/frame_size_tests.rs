@@ -14,6 +14,7 @@ fn test_threads_update_size() {
         is_foreground: true,
         message_count: 0,
         has_summary: false,
+        project_id: 1,
     };
 
     let frame = ServerFrame {
