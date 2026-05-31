@@ -1408,7 +1408,14 @@ p { margin: 0; }
     to   { opacity: 1; }
 }
 
-.modal {
+/* Scoped to the custom backdrop so it does NOT collide with Bulma's `.modal`
+   (which is the full-screen `position: fixed` overlay container). `position`
+   is reset to relative so Bulma's leaked `fixed; inset:0` can't pin this box
+   to the left edge. Converted dialogs use Bulma's Modal/ModalCard instead. */
+.modal-backdrop .modal {
+    position: relative;
+    inset: auto;
+    z-index: auto;
     background: var(--rc-bg-elev);
     border: 1px solid var(--rc-border);
     border-radius: var(--rc-radius-lg);
@@ -1439,7 +1446,13 @@ p { margin: 0; }
     color: var(--rc-text);
     font-size: 15px;
 }
-.modal-close {
+/* Scoped + reset so Bulma's `.modal-close` (an absolutely-positioned round
+   button with ::before/::after forming an X) doesn't hijack the custom
+   header close button. */
+.modal-backdrop .modal-close {
+    position: static;
+    inset: auto;
+    background: transparent;
     color: var(--rc-text-muted);
     font-size: 14px;
     width: 28px;
@@ -1449,7 +1462,9 @@ p { margin: 0; }
     align-items: center;
     justify-content: center;
 }
-.modal-close:hover { background: var(--rc-bg-hover); color: var(--rc-text); }
+.modal-backdrop .modal-close::before,
+.modal-backdrop .modal-close::after { display: none; }
+.modal-backdrop .modal-close:hover { background: var(--rc-bg-hover); color: var(--rc-text); }
 
 .modal-body {
     padding: 18px;
