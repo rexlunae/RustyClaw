@@ -54,6 +54,19 @@ pub(crate) fn run(config: &Config, args: &StatusArgs) {
                 &config.workspace_dir().display().to_string()
             )
         );
+        // Active project, if the gateway has created a project registry.
+        let projects_path = config.sessions_dir().join("projects.json");
+        if let Ok(pm) = rustyclaw_core::projects::ProjectManager::load_from_file(&projects_path) {
+            if let Some(p) = pm.active() {
+                println!(
+                    "{}",
+                    t::label_value(
+                        "Project     ",
+                        &format!("{} ({})", p.name, p.path.display())
+                    )
+                );
+            }
+        }
         if let Some(m) = &config.model {
             println!("{}", t::label_value("Provider    ", &m.provider));
             if let Some(model) = &m.model {

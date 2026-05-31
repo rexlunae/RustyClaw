@@ -221,7 +221,11 @@ mod tests {
         // Default and last-project are protected.
         assert!(mgr.remove(DEFAULT_PROJECT_ID).is_none());
         assert!(mgr.remove(p2).is_some());
-        assert_eq!(mgr.active_id(), DEFAULT_PROJECT_ID, "active falls back to default");
+        assert_eq!(
+            mgr.active_id(),
+            DEFAULT_PROJECT_ID,
+            "active falls back to default"
+        );
     }
 
     #[test]
