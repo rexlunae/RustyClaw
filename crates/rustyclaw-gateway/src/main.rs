@@ -4,24 +4,29 @@
 //! SSH server. The client-facing wire protocol and transport interface live in
 //! [`rustyclaw_core::gateway`], which this crate builds upon.
 
+mod admin;
 mod auth;
 mod canvas_handler;
+mod chat;
 mod cli;
 mod command_wrapper;
 mod concurrent;
 mod dispatch;
 mod errors;
 mod helpers;
+mod listen;
 mod mcp_handler;
 mod messenger_handler;
 mod model_handler;
 mod providers;
 mod secrets_handler;
 mod server;
+mod session;
 mod skills_handler;
 mod ssh;
 mod system_prompt;
 mod task_handler;
+mod thread_handler;
 mod thread_updates;
 mod tool_executor;
 
@@ -41,7 +46,7 @@ use rustyclaw_core::skills::SkillManager;
 use rustyclaw_core::theme as t;
 
 use cli::{GatewayBind, GatewayCli, GatewayCommands, RunArgs, handle_pair_command};
-use server::run_gateway;
+use listen::run_gateway;
 
 // ── Shared state aliases (referenced by the server engine and submodules) ────
 

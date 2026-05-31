@@ -7,498 +7,28 @@
 //! `main.rs`.
 
 use anyhow::{Context, Result};
-use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{trace, warn};
 
-use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{
-    ChatMessage, ChatRequest, ClientFrame, ClientFrameType, ClientPayload, CopilotSession,
-    GatewayOptions, ModelContext, ProbeResult, ProviderRequest, ScopedTransportWriter, ServerFrame,
-    ServerFrameType, ServerPayload, StatusType, Transport, TransportAcceptor, WireFrame,
-    deserialize_frame, protocol, transport,
+    ClientFrame, ClientFrameType, ClientPayload, ProbeResult, ServerFrame, ServerFrameType,
+    ServerPayload, StatusType, WireFrame, deserialize_frame, protocol, transport,
 };
 use rustyclaw_core::providers as crate_providers;
-use rustyclaw_core::secrets::SecretsManager;
-use rustyclaw_core::tools;
 
-use protocol::server::{send_frame, send_reload_result};
+use protocol::server::send_frame;
 
-use crate::dispatch::dispatch_text_message;
-use crate::messenger_handler::SharedMessengerManager;
-use crate::ssh::{SshConfig, SshServer, StdioTransport};
 use crate::thread_updates::{send_thread_messages_update, send_threads_update};
 use crate::{
     SharedConfig, SharedCopilotSession, SharedModelCtx, SharedModelRegistry, SharedObserver,
-    SharedSkillManager, SharedTaskManager, SharedVault, TOTP_LOCKOUT_SECS, ToolCancelFlag, auth,
-    concurrent, messenger_handler, providers, system_prompt,
+    SharedSkillManager, SharedTaskManager, SharedVault, TOTP_LOCKOUT_SECS, ToolCancelFlag, admin,
+    auth, concurrent, providers, thread_handler,
 };
 
-/// Try to import a fresh GitHub Copilot token from OpenClaw's credential store.
-///
-/// This allows RustyClaw to automatically refresh its session token when the
-/// vault copy expires, as long as OpenClaw is running and has a valid token.
-fn try_import_openclaw_token(vault: &mut SecretsManager) -> Option<CopilotSession> {
-    let openclaw_dir = dirs::home_dir()?.join(".openclaw");
-    let token_file = openclaw_dir.join("credentials/github-copilot.token.json");
-
-    if !token_file.exists() {
-        return None;
-    }
-
-    let content = std::fs::read_to_string(&token_file).ok()?;
-    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
-
-    let token = json.get("token")?.as_str()?;
-    let expires_at_ms = json.get("expiresAt")?.as_i64()?;
-    let expires_at = expires_at_ms / 1000; // Convert ms to seconds
-
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs() as i64;
-
-    let remaining = expires_at - now;
-    if remaining <= 60 {
-        debug!("OpenClaw token also expired");
-        return None;
-    }
-
-    info!(
-        remaining_hours = remaining / 3600,
-        "Auto-imported fresh token from OpenClaw"
-    );
-
-    // Store in our vault for next time
-    let session_data = serde_json::json!({
-        "session_token": token,
-        "expires_at": expires_at,
-    });
-    if let Err(e) = vault.store_secret("GITHUB_COPILOT_SESSION", &session_data.to_string()) {
-        warn!(error = %e, "Failed to cache imported token in vault");
-    }
-
-    Some(CopilotSession::from_session_token(
-        token.to_string(),
-        expires_at,
-    ))
-}
-
-/// Initialize a CopilotSession if the provider requires one.
-///
-/// Checks multiple sources in order:
-/// 1. Imported session token from vault (GITHUB_COPILOT_SESSION)
-/// 2. Fresh token from OpenClaw (~/.openclaw/credentials/github-copilot.token.json)
-/// 3. OAuth token from model context
-async fn init_copilot_session(
-    provider: &str,
-    api_key: Option<&str>,
-    vault: &SharedVault,
-) -> Option<Arc<CopilotSession>> {
-    if !crate_providers::needs_copilot_session(provider) {
-        return None;
-    }
-
-    let mut vault_guard = vault.lock().await;
-    let session_result = vault_guard.get_secret("GITHUB_COPILOT_SESSION", true);
-
-    let mut session_from_import = match &session_result {
-        Ok(Some(json_str)) => {
-            debug!("Found GITHUB_COPILOT_SESSION in vault");
-            serde_json::from_str::<serde_json::Value>(json_str)
-                .ok()
-                .and_then(|json| {
-                    let token = json.get("session_token")?.as_str()?.to_string();
-                    let expires_at = json.get("expires_at")?.as_i64()?;
-
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs() as i64;
-
-                    let remaining = expires_at - now;
-                    debug!(remaining_seconds = remaining, "Session expiry check");
-
-                    if remaining > 60 {
-                        Some(CopilotSession::from_session_token(token, expires_at))
-                    } else {
-                        debug!("Session expired or expiring soon");
-                        None
-                    }
-                })
-        }
-        Ok(None) => {
-            debug!("GITHUB_COPILOT_SESSION not found in vault");
-            None
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to read GITHUB_COPILOT_SESSION");
-            None
-        }
-    };
-
-    // If vault session is expired/missing, try to auto-import from OpenClaw
-    if session_from_import.is_none() {
-        if let Some(session) = try_import_openclaw_token(&mut vault_guard) {
-            session_from_import = Some(session);
-        }
-    }
-    drop(vault_guard);
-
-    if let Some(session) = session_from_import {
-        debug!("Using imported session token");
-        Some(Arc::new(session))
-    } else if let Some(oauth) = api_key {
-        debug!("Falling back to OAuth token");
-        Some(Arc::new(CopilotSession::new(oauth.to_string())))
-    } else {
-        warn!("No OAuth token available for Copilot provider");
-        None
-    }
-}
-
-/// Run the gateway WebSocket server.
-///
-/// Accepts connections in a loop until the `cancel` token is triggered,
-/// at which point the server shuts down gracefully.
-///
-/// The gateway owns the secrets vault (`vault`) — it uses the vault to
-/// verify TOTP codes during the WebSocket authentication handshake and
-/// to resolve model credentials.  The vault may be in a locked state
-/// (password not yet provided); authenticated clients can unlock it via
-/// a control message.
-///
-/// When `model_ctx` is provided the gateway owns the provider credentials
-/// and every chat request is resolved against that context.  If `None`,
-/// clients must send full `ChatRequest` payloads including provider info.
-pub async fn run_gateway(
-    config: Config,
-    options: GatewayOptions,
-    model_ctx: Option<ModelContext>,
-    vault: SharedVault,
-    skill_mgr: SharedSkillManager,
-    task_mgr: Option<SharedTaskManager>,
-    model_registry: Option<SharedModelRegistry>,
-    observer: Option<SharedObserver>,
-    cancel: CancellationToken,
-) -> Result<()> {
-    // Create task manager if not provided
-    let task_mgr = task_mgr.unwrap_or_else(|| Arc::new(rustyclaw_core::tasks::TaskManager::new()));
-
-    // Create model registry if not provided
-    let model_registry =
-        model_registry.unwrap_or_else(rustyclaw_core::models::create_model_registry);
-
-    // Populate the registry from the configured provider's live model
-    // list so the catalog is a single source of truth (same data the
-    // `/model` slash command and onboarding see).
-    if let Some(ref ctx) = model_ctx {
-        let base = if ctx.base_url.is_empty() {
-            None
-        } else {
-            Some(ctx.base_url.as_str())
-        };
-        let mut reg = model_registry.write().await;
-        match reg
-            .populate_from_provider(&ctx.provider, ctx.api_key.as_deref(), base)
-            .await
-        {
-            Ok(n) => {
-                tracing::info!(
-                    target: "rustyclaw::models",
-                    provider = %ctx.provider,
-                    count = n,
-                    "Populated model registry from provider"
-                );
-                // Mark the configured model as active (if present).
-                if !ctx.model.is_empty() {
-                    let qualified = if ctx.model.starts_with(&format!("{}/", ctx.provider)) {
-                        ctx.model.clone()
-                    } else {
-                        format!("{}/{}", ctx.provider, ctx.model)
-                    };
-                    let _ = reg.set_active(&qualified);
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    target: "rustyclaw::models",
-                    provider = %ctx.provider,
-                    error = %format!("{:#}", e),
-                    "Failed to populate model registry from provider; registry will be empty until a successful fetch"
-                );
-            }
-        }
-    }
-
-    // Register the credentials directory so file-access tools can enforce
-    // the vault boundary (blocks read_file, execute_command, etc.).
-    tools::set_credentials_dir(config.credentials_dir());
-
-    // Register the vault so web_fetch can access the cookie jar.
-    tools::set_vault(vault.clone());
-
-    // Initialize sandbox for command execution
-    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
-    tools::init_sandbox(
-        sandbox_mode,
-        config.workspace_dir(),
-        config.credentials_dir(),
-        config.sandbox.deny_paths.clone(),
-    );
-
-    // SSH-only transport: websocket listen/TLS options are ignored.
-
-    // Initialize Copilot session if needed (uses the new helper function)
-    let copilot_session: Option<Arc<CopilotSession>> = if let Some(ref ctx) = model_ctx {
-        init_copilot_session(&ctx.provider, ctx.api_key.as_deref(), &vault).await
-    } else {
-        None
-    };
-    // Wrap in shared type so it can be updated when models change
-    let shared_copilot_session: SharedCopilotSession =
-        Arc::new(RwLock::new(copilot_session.clone()));
-
-    let model_ctx = model_ctx.map(Arc::new);
-
-    // Store model info in global runtime context for tool access
-    if let Some(ref ctx) = model_ctx {
-        rustyclaw_core::runtime_ctx::set_model_info(&ctx.provider, &ctx.model, &ctx.base_url);
-    }
-
-    let shared_config: SharedConfig = Arc::new(RwLock::new(config.clone()));
-    let shared_model_ctx: SharedModelCtx = Arc::new(RwLock::new(model_ctx.clone()));
-    let rate_limiter = auth::new_rate_limiter();
-
-    if options.ssh_stdio {
-        let username = std::env::var("USER")
-            .or_else(|_| std::env::var("SSH_USER"))
-            .ok();
-        let transport = Box::new(StdioTransport::new(username));
-
-        info!("Gateway running in SSH stdio mode");
-        return handle_transport_connection(
-            transport,
-            shared_config,
-            shared_model_ctx,
-            shared_copilot_session,
-            vault,
-            skill_mgr,
-            task_mgr,
-            model_registry,
-            observer,
-            rate_limiter,
-            cancel,
-        )
-        .await;
-    }
-
-    // ── Initialize and start messenger loop ─────────────────────────
-    //
-    // If messengers are configured, we poll them for incoming messages
-    // and route them through the model.
-    eprintln!("DEBUG: messengers configured: {}", config.messengers.len());
-    let messenger_mgr = if !config.messengers.is_empty() {
-        eprintln!("DEBUG: Creating messenger manager...");
-        match messenger_handler::create_messenger_manager(&config).await {
-            Ok(mgr) => {
-                eprintln!("DEBUG: Messenger manager created successfully");
-                let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));
-
-                // Spawn messenger loop
-                let messenger_config = config.clone();
-                let messenger_ctx = model_ctx.clone();
-                let messenger_vault = vault.clone();
-                let messenger_skills = skill_mgr.clone();
-                let messenger_tasks = task_mgr.clone();
-                let messenger_models = model_registry.clone();
-                let messenger_cancel = cancel.child_token();
-                let mgr_clone = shared_mgr.clone();
-                // Read current copilot session from shared state
-                let messenger_copilot = shared_copilot_session.read().await.clone();
-
-                eprintln!("DEBUG: Spawning messenger loop task...");
-                tokio::spawn(async move {
-                    eprintln!("DEBUG: Messenger loop task started");
-                    eprintln!(
-                        "DEBUG: messenger_ctx.is_some() = {}",
-                        messenger_ctx.is_some()
-                    );
-                    if let Err(e) = messenger_handler::run_messenger_loop(
-                        messenger_config,
-                        mgr_clone,
-                        messenger_ctx,
-                        messenger_vault,
-                        messenger_skills,
-                        messenger_tasks,
-                        messenger_models,
-                        messenger_copilot,
-                        messenger_cancel,
-                    )
-                    .await
-                    {
-                        eprintln!("DEBUG: Messenger loop error: {}", e);
-                        error!(error = %e, "Messenger loop error");
-                    }
-                    eprintln!("DEBUG: Messenger loop exited");
-                });
-
-                Some(shared_mgr)
-            }
-            Err(e) => {
-                error!(error = %e, "Failed to initialize messengers");
-                None
-            }
-        }
-    } else {
-        None
-    };
-
-    // Determine SSH listen address from CLI option or config.
-    let ssh_listen = options
-        .ssh_listen
-        .clone()
-        .or_else(|| {
-            config.ssh.as_ref().and_then(|ssh_cfg| {
-                if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
-                    Some(ssh_cfg.bind.clone())
-                } else {
-                    None
-                }
-            })
-        })
-        .unwrap_or_else(|| "0.0.0.0:2222".to_string());
-
-    let bind_addr: SocketAddr = ssh_listen
-        .parse()
-        .with_context(|| format!("Invalid SSH listen address: {}", ssh_listen))?;
-
-    let ssh_cfg = SshConfig {
-        listen_addr: bind_addr,
-        host_key_path: options
-            .ssh_host_key
-            .clone()
-            .or_else(|| {
-                config
-                    .ssh
-                    .as_ref()
-                    .map(|s| s.host_key_path(&config.settings_dir))
-            })
-            .unwrap_or_else(|| config.settings_dir.join("ssh_host_key")),
-        authorized_clients_path: options
-            .ssh_authorized_clients
-            .clone()
-            .or_else(|| {
-                config
-                    .ssh
-                    .as_ref()
-                    .map(|s| s.authorized_keys_path(&config.settings_dir))
-            })
-            .unwrap_or_else(|| config.settings_dir.join("authorized_clients")),
-        allow_password: false,
-        require_pubkey: true,
-        allow_unknown_keys_with_totp: config.totp_enabled,
-    };
-
-    let mut ssh_server = SshServer::new(ssh_cfg).await?;
-    ssh_server.listen(bind_addr).await?;
-
-    info!(address = %bind_addr, "Gateway listening (SSH-only)");
-    if messenger_mgr.is_some() {
-        info!("Messenger polling enabled");
-    }
-
-    loop {
-        tokio::select! {
-            _ = cancel.cancelled() => break,
-            accepted = ssh_server.accept() => {
-                match accepted {
-                    Ok(transport) => {
-                        let peer_info = transport.peer_info().clone();
-                        info!(
-                            transport = %peer_info.transport_type,
-                            user = ?peer_info.username,
-                            fingerprint = ?peer_info.key_fingerprint,
-                            "SSH connection accepted"
-                        );
-
-                        let shared_cfg = shared_config.clone();
-                        let shared_ctx = shared_model_ctx.clone();
-                        let shared_session = shared_copilot_session.clone();
-                        let vault_clone = vault.clone();
-                        let skill_clone = skill_mgr.clone();
-                        let task_mgr_clone = task_mgr.clone();
-                        let model_reg_clone = model_registry.clone();
-                        let observer_clone = observer.clone();
-                        let rate_limiter_clone = rate_limiter.clone();
-                        let child_cancel = cancel.child_token();
-
-                        tokio::spawn(async move {
-                            if let Err(err) = handle_transport_connection(
-                                transport,
-                                shared_cfg,
-                                shared_ctx,
-                                shared_session,
-                                vault_clone,
-                                skill_clone,
-                                task_mgr_clone,
-                                model_reg_clone,
-                                observer_clone,
-                                rate_limiter_clone,
-                                child_cancel,
-                            ).await {
-                                debug!(error = %err, "SSH connection error");
-                            }
-                        });
-                    }
-                    Err(e) => warn!(error = %e, "SSH accept error"),
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Handle a connection using the Transport trait.
-///
-/// This is the transport-agnostic connection handler that works with any
-/// transport implementation (SSH, stdio, future transports). For SSH
-/// connections, authentication is already completed at the transport layer
-/// via public key, so we skip TOTP.
-async fn handle_transport_connection(
-    transport: Box<dyn Transport>,
-    shared_config: SharedConfig,
-    shared_model_ctx: SharedModelCtx,
-    shared_copilot_session: SharedCopilotSession,
-    vault: SharedVault,
-    skill_mgr: SharedSkillManager,
-    task_mgr: SharedTaskManager,
-    model_registry: SharedModelRegistry,
-    observer: Option<SharedObserver>,
-    rate_limiter: auth::RateLimiter,
-    cancel: CancellationToken,
-) -> Result<()> {
-    handle_connection(
-        transport,
-        shared_config,
-        shared_model_ctx,
-        shared_copilot_session,
-        vault,
-        skill_mgr,
-        task_mgr,
-        model_registry,
-        observer,
-        rate_limiter,
-        cancel,
-    )
-    .await
-}
-
-async fn handle_connection(
+pub(crate) async fn handle_connection(
     conn: Box<dyn transport::Transport>,
     shared_config: SharedConfig,
     shared_model_ctx: SharedModelCtx,
@@ -956,346 +486,31 @@ async fn handle_connection(
                                 .await?;
                             }
                             ClientPayload::Reload => {
-                                let settings_dir = config.settings_dir.clone();
-                                let config_path = settings_dir.join("config.toml");
-                                match Config::load(Some(config_path)) {
-                                    Ok(new_config) => {
-                                        let new_model_ctx = {
-                                            let mut v = vault.lock().await;
-                                            ModelContext::resolve(&new_config, &mut v).ok().map(Arc::new)
-                                        };
-
-                                        let (provider, model) = if let Some(ref ctx) = new_model_ctx {
-                                            (ctx.provider.clone(), ctx.model.clone())
-                                        } else {
-                                            ("(none)".to_string(), "(none)".to_string())
-                                        };
-
-                                        // Reinitialize Copilot session if the new model needs it
-                                        if let Some(ref ctx) = new_model_ctx {
-                                            let new_session = init_copilot_session(
-                                                &ctx.provider,
-                                                ctx.api_key.as_deref(),
-                                                &vault,
-                                            ).await;
-                                            let mut session = shared_copilot_session.write().await;
-                                            *session = new_session;
-                                        }
-
-                                        // Refresh the model registry from the new provider so
-                                        // the catalog matches the active connection.
-                                        if let Some(ref ctx) = new_model_ctx {
-                                            let base = if ctx.base_url.is_empty() {
-                                                None
-                                            } else {
-                                                Some(ctx.base_url.as_str())
-                                            };
-                                            let mut reg = model_registry.write().await;
-                                            if let Err(e) = reg
-                                                .populate_from_provider(
-                                                    &ctx.provider,
-                                                    ctx.api_key.as_deref(),
-                                                    base,
-                                                )
-                                                .await
-                                            {
-                                                tracing::warn!(
-                                                    target: "rustyclaw::models",
-                                                    provider = %ctx.provider,
-                                                    error = %format!("{:#}", e),
-                                                    "Failed to refresh model registry after Reload"
-                                                );
-                                            } else if !ctx.model.is_empty() {
-                                                let qualified = if ctx
-                                                    .model
-                                                    .starts_with(&format!("{}/", ctx.provider))
-                                                {
-                                                    ctx.model.clone()
-                                                } else {
-                                                    format!("{}/{}", ctx.provider, ctx.model)
-                                                };
-                                                let _ = reg.set_active(&qualified);
-                                            }
-                                        }
-
-                                        {
-                                            let mut cfg = shared_config.write().await;
-                                            *cfg = new_config;
-                                        }
-                                        {
-                                            let mut ctx = shared_model_ctx.write().await;
-                                            *ctx = new_model_ctx.clone();
-                                        }
-
-                                        send_reload_result(&mut *writer, true, &provider, &model, None).await?;
-
-                                        if let Some(ref ctx) = new_model_ctx {
-                                            let display = crate_providers::display_name_for_provider(&ctx.provider);
-                                            let detail = format!("{} / {} (reloaded)", display, ctx.model);
-                                            protocol::server::send_status(
-                                                &mut *writer,
-                                                StatusType::ModelConfigured,
-                                                &detail,
-                                            ).await?;
-                                        }
-                                    }
-                                    Err(e) => {
-                                        protocol::server::send_error(
-                                            &mut *writer,
-                                            &format!("Failed to reload config: {}", e),
-                                        ).await?;
-                                    }
-                                }
+                                admin::handle_reload(
+                                    &mut *writer,
+                                    &config,
+                                    &vault,
+                                    &shared_config,
+                                    &shared_model_ctx,
+                                    &shared_copilot_session,
+                                    &model_registry,
+                                )
+                                .await?;
                             }
                             ClientPayload::Chat { messages } => {
-                                // Check for auto-switch: find better matching thread
-                                if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-                                    if let Some(better_thread_id) = thread_mgr.find_best_match(&last_user.content) {
-                                        // Found a better match — switch threads
-                                        if thread_mgr.switch_foreground(better_thread_id) {
-                                            // Get the context summary from the new foreground thread
-                                            let context_summary = thread_mgr
-                                                .foreground()
-                                                .and_then(|t| t.compact_summary.clone());
-                                            // Send ThreadSwitched notification
-                                            let frame = ServerFrame {
-                                                frame_type: ServerFrameType::ThreadSwitched,
-                                                payload: ServerPayload::ThreadSwitched {
-                                                    thread_id: better_thread_id.0,
-                                                    context_summary,
-                                                },
-                                            };
-                                            send_frame(&mut *writer, &frame).await?;
-                                            // Update thread list
-                                            send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                            send_thread_messages_update(&mut *writer, better_thread_id, &thread_mgr).await?;
-                                        }
-                                    }
-                                }
-
-                                // Add user message to current thread's history
-                                let mut did_auto_label = false;
-                                let mut needs_caption = false;
-                                let mut did_append_user_message = false;
-                                let mut active_thread_id = None;
-                                if let Some(thread) = thread_mgr.foreground_mut() {
-                                    active_thread_id = Some(thread.id);
-                                    // Find the last user message (typically the new one)
-                                    if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-                                        // Check if this is the first message in a new thread
-                                        let is_first_message = thread.message_count() == 0
-                                            && (thread.label.is_empty()
-                                                || thread.label.starts_with("Session #")
-                                                || thread.label == "Main");
-                                        thread.add_message(
-                                            rustyclaw_core::threads::MessageRole::User,
-                                            &last_user.content,
-                                        );
-                                        did_append_user_message = true;
-                                        if is_first_message {
-                                            // Set a temporary auto-label as fallback
-                                            let label = auto_thread_label(&last_user.content);
-                                            thread.label = label;
-                                            did_auto_label = true;
-                                            // Flag for agent captioning
-                                            needs_caption = true;
-                                        }
-                                    }
-                                }
-                                if did_append_user_message
-                                    && let Err(e) = thread_mgr.save_to_file(&threads_path)
-                                {
-                                    warn!(error = %e, path = ?threads_path, "Failed to persist user message to thread history");
-                                }
-                                if did_auto_label {
-                                    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                }
-
-                                // Auto-ingest user message into Steel Memory
-                                if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-                                    let ws = config.workspace_dir().to_path_buf();
-                                    let text = last_user.content.clone();
-                                    tokio::spawn(async move {
-                                        if let Ok(mem) = rustyclaw_core::steel_memory::SteelMemory::new(&ws) {
-                                            let _ = mem.add_memory(&text, "conversations", "user", None).await;
-                                        }
-                                    });
-                                }
-                                if let Some(thread_id) = active_thread_id {
-                                    send_thread_messages_update(&mut *writer, thread_id, &thread_mgr).await?;
-                                }
-
-                                // Re-read model_ctx from shared state for each dispatch
-                                let current_model_ctx = shared_model_ctx.read().await.clone();
-                                // Re-read copilot session from shared state
-                                let copilot_session = shared_copilot_session.read().await.clone();
-                                let workspace_dir = config.workspace_dir();
-
-                                // Ensure a system prompt is present. The TUI
-                                // sends the full conversation (including a
-                                // system message), but the desktop client
-                                // only sends the user message. When missing,
-                                // build one from the workspace context so
-                                // that SOUL.md, IDENTITY.md, etc. are
-                                // included.
-                                let mut messages = messages;
-                                let client_sent_history = !messages.is_empty() && messages[0].role == "system";
-                                if !client_sent_history {
-                                    let sys = system_prompt::build_system_prompt(
-                                        &config,
-                                        &task_mgr,
-                                        &skill_mgr,
-                                    ).await;
-                                    messages.insert(0, ChatMessage::text("system", &sys));
-
-                                    // Inject conversation history from the
-                                    // thread. The desktop client only sends
-                                    // the current user message; we need to
-                                    // include prior turns so the model has
-                                    // context of the conversation.
-                                    if let Some(thread) = thread_mgr.foreground() {
-                                        let history = &thread.messages;
-                                        // history includes the message we just
-                                        // added — skip it (last element) to
-                                        // avoid duplication with the client's
-                                        // user message already in `messages`.
-                                        let prior_count = history.len().saturating_sub(1);
-                                        if prior_count > 0 {
-                                            // Optionally include compact summary as context
-                                            if let Some(summary) = &thread.compact_summary {
-                                                messages.insert(1, ChatMessage::text(
-                                                    "system",
-                                                    &format!("# Previous conversation summary\n\n{}", summary),
-                                                ));
-                                            }
-                                            let insert_pos = if thread.compact_summary.is_some() { 2 } else { 1 };
-                                            // Reconstruct the history with structured
-                                            // tool_call / tool_result payloads so that
-                                            // assistant messages keep their `tool_calls`
-                                            // and following tool results stay anchored
-                                            // to them. Flattening to plain text would
-                                            // produce orphan `tool` messages that the
-                                            // provider rejects.
-                                            let provider_name = current_model_ctx
-                                                .as_deref()
-                                                .map(|c| c.provider.as_str())
-                                                .unwrap_or("openai");
-                                            let history_slice: Vec<rustyclaw_core::threads::ThreadMessage> = history
-                                                .iter()
-                                                .take(prior_count)
-                                                .cloned()
-                                                .collect();
-                                            let history_msgs: Vec<ChatMessage> =
-                                                providers::thread_history_to_chat_messages(
-                                                    provider_name,
-                                                    &history_slice,
-                                                );
-                                            // Insert history between system prompt and current user message
-                                            let tail = messages.split_off(insert_pos);
-                                            messages.extend(history_msgs);
-                                            messages.extend(tail);
-                                        }
-                                    }
-                                }
-
-                                // Inject thread context into system prompt if available
-                                let mut messages_with_context = {
-                                    let global_ctx = thread_mgr.build_global_context();
-                                    let provider_name = current_model_ctx
-                                        .as_deref()
-                                        .map(|c| c.provider.as_str())
-                                        .unwrap_or("openai");
-                                    let mut msgs = active_thread_id
-                                        .and_then(|thread_id| {
-                                            thread_mgr.get(thread_id).map(|thread| {
-                                                let history: Vec<rustyclaw_core::threads::ThreadMessage> =
-                                                    thread.messages.iter().cloned().collect();
-                                                providers::thread_history_to_chat_messages(
-                                                    provider_name,
-                                                    &history,
-                                                )
-                                            })
-                                        })
-                                        .unwrap_or_else(|| messages.clone());
-                                    if let Some(system_message) = messages.first().filter(|m| m.role == "system") {
-                                        if msgs.first().map(|m| m.role.as_str()) != Some("system") {
-                                            msgs.insert(0, system_message.clone());
-                                        }
-                                    }
-                                    if !global_ctx.is_empty() && !msgs.is_empty() && msgs[0].role == "system" {
-                                        msgs[0].content = format!(
-                                            "{}\n\n# Background Tasks\n\n{}",
-                                            msgs[0].content,
-                                            global_ctx
-                                        );
-                                        msgs
-                                    } else {
-                                        msgs
-                                    }
-                                };
-
-                                // Inject captioning instruction for new threads
-                                if needs_caption && !messages_with_context.is_empty() && messages_with_context[0].role == "system" {
-                                    messages_with_context[0].content = format!(
-                                        "{}\n\n## Thread Captioning\n\
-                                        This is the first message in a new conversation thread. \
-                                        After responding, call `set_thread_caption` with a short \
-                                        2-6 word caption that summarises the topic of this conversation.",
-                                        messages_with_context[0].content
-                                    );
-                                }
-
-                                // Inject relevant memory context from Steel Memory
-                                if !messages_with_context.is_empty() && messages_with_context[0].role == "system" {
-                                    if let Some(last_user) = messages_with_context.iter().rev().find(|m| m.role == "user") {
-                                        let query = last_user.content.clone();
-                                        let ws = config.workspace_dir().to_path_buf();
-                                        if let Ok(mem) = rustyclaw_core::steel_memory::SteelMemory::new(&ws) {
-                                            if let Ok(results) = mem.search(&query, 3, Some(0.4)).await {
-                                                if !results.is_empty() {
-                                                    let mut ctx = String::from("\n\n## Relevant Memories\n");
-                                                    for r in &results {
-                                                        let snippet = if r.content.len() > 300 {
-                                                            format!("{}…", &r.content[..300])
-                                                        } else {
-                                                            r.content.clone()
-                                                        };
-                                                        ctx.push_str(&format!(
-                                                            "- (similarity {:.2}) {}\n",
-                                                            r.similarity, snippet
-                                                        ));
-                                                    }
-                                                    messages_with_context[0].content.push_str(&ctx);
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Build a ChatRequest from the messages
-                                let chat_request = ChatRequest {
-                                    msg_type: "chat".to_string(),
-                                    messages: messages_with_context,
-                                    model: None,
-                                    provider: None,
-                                    base_url: None,
-                                    api_key: None,
-                                };
-
-                                let mut stream_writer = ScopedTransportWriter::new(&mut *writer, stream_id);
-                                if let Err(err) = dispatch_text_message(
+                                crate::chat::handle_chat_frame(
                                     &http,
-                                    &chat_request,
-                                    current_model_ctx.as_deref(),
-                                    copilot_session.as_deref(),
-                                    &mut stream_writer,
-                                    &workspace_dir,
+                                    messages,
+                                    stream_id,
+                                    &mut *writer,
+                                    &config,
                                     &vault,
                                     &skill_mgr,
                                     &task_mgr,
                                     observer.as_ref(),
                                     &tool_cancel,
                                     &shared_config,
+                                    &shared_model_ctx,
                                     &shared_copilot_session,
                                     &approval_rx,
                                     &user_prompt_rx,
@@ -1304,354 +519,77 @@ async fn handle_connection(
                                     &mut thread_mgr,
                                     &threads_path,
                                 )
-                                .await
-                                {
-                                    let error_frame = ServerFrame {
-                                        frame_type: ServerFrameType::Error,
-                                        payload: ServerPayload::Error {
-                                            ok: false,
-                                            message: err.to_string(),
-                                        },
-                                    };
-                                    send_frame(&mut stream_writer, &error_frame).await?;
-                                }
+                                .await?;
                             }
                             ClientPayload::TasksRequest { session } => {
-                                // Build task list and send back
-                                let tasks = if let Some(ref sess) = session {
-                                    task_mgr.for_session(sess).await
-                                } else {
-                                    task_mgr.active().await
-                                };
-                                let dto_tasks: Vec<protocol::TaskInfoDto> = tasks
-                                    .iter()
-                                    .map(|t| protocol::TaskInfoDto {
-                                        id: t.id.0,
-                                        label: t.display_label(),
-                                        description: t.description.clone(),
-                                        status: format!("{:?}", t.status)
-                                            .split('{')
-                                            .next()
-                                            .unwrap_or("Unknown")
-                                            .trim()
-                                            .to_string(),
-                                        is_foreground: t.status.is_foreground(),
-                                    })
-                                    .collect();
-                                let frame = ServerFrame {
-                                    frame_type: ServerFrameType::TasksUpdate,
-                                    payload: ServerPayload::TasksUpdate { tasks: dto_tasks },
-                                };
-                                send_frame(&mut *writer, &frame).await?;
+                                thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
                             }
                             ClientPayload::ThreadCreate { label } => {
-                                let label = if label.is_empty() {
-                                    format!("Session #{}", thread_mgr.list().len() + 1)
-                                } else {
-                                    label
-                                };
-                                debug!("Thread create request: {}", label);
-                                let thread_id = thread_mgr.create_thread(&label);
-                                let frame = ServerFrame {
-                                    frame_type: ServerFrameType::ThreadCreated,
-                                    payload: ServerPayload::ThreadCreated {
-                                        thread_id: thread_id.0,
-                                        label,
-                                    },
-                                };
-                                send_frame(&mut *writer, &frame).await?;
-                                // Send updated thread list
-                                send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                // Persist thread state
-                                let _ = thread_mgr.save_to_file(&threads_path);
+                                thread_handler::handle_thread_create(
+                                    &mut *writer,
+                                    &mut thread_mgr,
+                                    &task_mgr,
+                                    &threads_path,
+                                    label,
+                                )
+                                .await?;
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
-                                debug!("Thread switch request: {}", thread_id);
-
-                                // thread_id == 0 is a sentinel meaning "background current thread"
-                                if thread_id == 0 {
-                                    // Clear foreground — no thread is active
-                                    thread_mgr.clear_foreground();
-                                    let frame = ServerFrame {
-                                        frame_type: ServerFrameType::ThreadSwitched,
-                                        payload: ServerPayload::ThreadSwitched {
-                                            thread_id: 0,
-                                            context_summary: None,
-                                        },
-                                    };
-                                    send_frame(&mut *writer, &frame).await?;
-                                    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                    let frame = ServerFrame {
-                                        frame_type: ServerFrameType::ThreadMessages,
-                                        payload: ServerPayload::ThreadMessages {
-                                            thread_id: 0,
-                                            messages: Vec::new(),
-                                        },
-                                    };
-                                    send_frame(&mut *writer, &frame).await?;
-                                    let _ = thread_mgr.save_to_file(&threads_path);
-                                    continue;
-                                }
-
-                                let target_id = rustyclaw_core::threads::ThreadId(thread_id);
-
-                                // Get current foreground thread for compaction
-                                let current_fg_id = thread_mgr.foreground().map(|t| t.task_id());
-
-                                // Compact the current thread if it has messages
-                                if let Some(fg_id) = current_fg_id {
-                                    if fg_id != target_id {
-                                        if let Some(thread) = thread_mgr.get_mut(fg_id) {
-                                            if thread.messages.len() > 3 && thread.compact_summary.is_none() {
-                                                // Generate compaction prompt
-                                                let prompt = thread.compaction_prompt();
-
-                                                // Notify client about compaction
-                                                protocol::server::send_info(
-                                                    &mut *writer,
-                                                    &format!("Compacting thread '{}'...", thread.label),
-                                                )
-                                                .await?;
-
-                                                // Call LLM to summarize
-                                                let current_model_ctx = shared_model_ctx.read().await.clone();
-                                                if let Some(ref ctx) = current_model_ctx {
-                                                    let summary_req = ProviderRequest {
-                                                        messages: vec![ChatMessage::text("user", &prompt)],
-                                                        model: ctx.model.clone(),
-                                                        provider: ctx.provider.clone(),
-                                                        base_url: ctx.base_url.clone(),
-                                                        api_key: ctx.api_key.clone(),
-                                                    };
-
-                                                    let summary_result = if ctx.provider == "anthropic" {
-                                                        providers::call_anthropic_with_tools(&http, &summary_req, None).await
-                                                    } else if ctx.provider == "google" {
-                                                        providers::call_google_with_tools(&http, &summary_req).await
-                                                    } else {
-                                                        providers::call_openai_with_tools(&http, &summary_req, None).await
-                                                    };
-
-                                                    match summary_result {
-                                                        Ok(resp) if !resp.text.is_empty() => {
-                                                            thread.apply_compaction(resp.text);
-                                                            debug!(thread = %thread.label, "Thread compacted");
-                                                        }
-                                                        Ok(_) => {
-                                                            debug!(thread = %thread.label, "Empty summary from LLM");
-                                                        }
-                                                        Err(e) => {
-                                                            debug!(thread = %thread.label, error = %e, "Compaction failed");
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // Get summary of thread being switched to
-                                let context_summary = thread_mgr
-                                    .get(target_id)
-                                    .and_then(|t| t.compact_summary.clone());
-
-                                // Perform the switch (use switch_foreground which returns bool,
-                                // not switch_to which returns old foreground ID — the latter
-                                // returns None when there is no previous foreground, e.g. after /thread bg)
-                                if thread_mgr.switch_foreground(target_id) {
-                                    let frame = ServerFrame {
-                                        frame_type: ServerFrameType::ThreadSwitched,
-                                        payload: ServerPayload::ThreadSwitched {
-                                            thread_id,
-                                            context_summary,
-                                        },
-                                    };
-                                    send_frame(&mut *writer, &frame).await?;
-                                    // Send updated thread list
-                                    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                    send_thread_messages_update(&mut *writer, target_id, &thread_mgr).await?;
-                                    // Persist thread state (includes compaction summary)
-                                    let _ = thread_mgr.save_to_file(&threads_path);
-                                } else {
-                                    let frame = ServerFrame {
-                                        frame_type: ServerFrameType::Error,
-                                        payload: ServerPayload::Error {
-                                            ok: false,
-                                            message: format!("Thread {} not found", thread_id),
-                                        },
-                                    };
-                                    send_frame(&mut *writer, &frame).await?;
-                                }
+                                thread_handler::handle_thread_switch(
+                                    &mut *writer,
+                                    &mut thread_mgr,
+                                    &task_mgr,
+                                    &threads_path,
+                                    &shared_model_ctx,
+                                    &http,
+                                    thread_id,
+                                )
+                                .await?;
                             }
                             ClientPayload::ThreadList => {
-                                debug!("Thread list request");
-                                send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                if let Some(thread) = thread_mgr.foreground() {
-                                    send_thread_messages_update(&mut *writer, thread.id, &thread_mgr).await?;
-                                }
+                                thread_handler::handle_thread_list(&mut *writer, &mut thread_mgr, &task_mgr).await?;
                             }
                             ClientPayload::ThreadHistoryRequest { thread_id } => {
-                                debug!("Thread history request: {}", thread_id);
-                                let target_id = rustyclaw_core::threads::ThreadId(thread_id);
-                                let (ok, messages, error) = match thread_mgr.get(target_id) {
-                                    Some(thread) => {
-                                        let wire: Vec<ChatMessage> = thread
-                                            .messages
-                                            .iter()
-                                            .map(|m| {
-                                                let role = match m.role {
-                                                    rustyclaw_core::threads::MessageRole::User => "user",
-                                                    rustyclaw_core::threads::MessageRole::Assistant => "assistant",
-                                                    rustyclaw_core::threads::MessageRole::System => "system",
-                                                    rustyclaw_core::threads::MessageRole::Tool => "tool",
-                                                };
-                                                ChatMessage {
-                                                    role: role.to_string(),
-                                                    content: m.content.clone(),
-                                                    tool_calls: m.tool_calls.clone(),
-                                                    tool_call_id: m.tool_call_id.clone(),
-                                                    media: None,
-                                                }
-                                            })
-                                            .collect();
-                                        info!(
-                                            thread_id,
-                                            caption = %thread.label,
-                                            message_count = wire.len(),
-                                            "Gateway loaded thread history"
-                                        );
-                                        (true, wire, None)
-                                    }
-                                    None => (
-                                        false,
-                                        Vec::new(),
-                                        Some(format!("Thread {} not found", thread_id)),
-                                    ),
-                                };
-                                let frame = ServerFrame {
-                                    frame_type: ServerFrameType::ThreadHistoryReply,
-                                    payload: ServerPayload::ThreadHistoryReply {
-                                        thread_id,
-                                        ok,
-                                        messages,
-                                        error,
-                                    },
-                                };
-                                debug!(thread_id, ok, "Sending ThreadHistoryReply");
-                                send_frame(&mut *writer, &frame).await?;
+                                thread_handler::handle_thread_history(&mut *writer, &thread_mgr, thread_id).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
-                                debug!("Thread close request: {}", thread_id);
-                                let task_id = rustyclaw_core::threads::ThreadId(thread_id);
-                                thread_mgr.remove(task_id);
-                                // Send updated thread list
-                                send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                // Persist thread state
-                                let _ = thread_mgr.save_to_file(&threads_path);
+                                thread_handler::handle_thread_close(
+                                    &mut *writer,
+                                    &mut thread_mgr,
+                                    &task_mgr,
+                                    &threads_path,
+                                    thread_id,
+                                )
+                                .await?;
                             }
                             ClientPayload::ThreadRename { thread_id, new_label } => {
-                                debug!("Thread rename request: {} -> {}", thread_id, new_label);
-                                let task_id = rustyclaw_core::threads::ThreadId(thread_id);
-                                if thread_mgr.rename(task_id, &new_label) {
-                                    // Send updated thread list
-                                    send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
-                                    // Persist thread state
-                                    let _ = thread_mgr.save_to_file(&threads_path);
-                                } else {
-                                    let frame = ServerFrame {
-                                        frame_type: ServerFrameType::Error,
-                                        payload: ServerPayload::Error {
-                                            ok: false,
-                                            message: format!("Thread {} not found", thread_id),
-                                        },
-                                    };
-                                    send_frame(&mut *writer, &frame).await?;
-                                }
+                                thread_handler::handle_thread_rename(
+                                    &mut *writer,
+                                    &mut thread_mgr,
+                                    &task_mgr,
+                                    &threads_path,
+                                    thread_id,
+                                    new_label,
+                                )
+                                .await?;
                             }
                             ClientPayload::ModelSwitch { provider, model } => {
-                                debug!("Model switch request: {} / {}", provider, model);
-                                let base_url = crate_providers::base_url_for_provider(&provider)
-                                    .unwrap_or("")
-                                    .to_string();
-                                let api_key = {
-                                    let key_name = crate_providers::secret_key_for_provider(&provider);
-                                    if let Some(name) = key_name {
-                                        let mut v = vault.lock().await;
-                                        v.get_secret(name, true)
-                                            .ok()
-                                            .flatten()
-                                            .or_else(|| std::env::var(name).ok())
-                                    } else {
-                                        None
-                                    }
-                                };
-
-                                let new_ctx = Arc::new(ModelContext {
-                                    provider: provider.clone(),
-                                    model: model.clone(),
-                                    base_url,
-                                    api_key: api_key.clone(),
-                                });
-
-                                // Reinitialize Copilot session if needed
-                                let new_session = init_copilot_session(
-                                    &provider,
-                                    api_key.as_deref(),
-                                    &vault,
-                                ).await;
-                                {
-                                    let mut session = shared_copilot_session.write().await;
-                                    *session = new_session;
-                                }
-                                {
-                                    let mut ctx = shared_model_ctx.write().await;
-                                    *ctx = Some(new_ctx);
-                                }
-
-                                // Also update the config so it persists across restarts
-                                {
-                                    let mut cfg = shared_config.write().await;
-                                    let base = crate_providers::base_url_for_provider(&provider)
-                                        .map(String::from);
-                                    cfg.model = Some(rustyclaw_core::config::ModelProvider {
-                                        provider: provider.clone(),
-                                        model: Some(model.clone()),
-                                        base_url: base,
-                                    });
-                                    let _ = cfg.save(None);
-                                }
-
-                                let display = crate_providers::display_name_for_provider(&provider);
-                                send_reload_result(&mut *writer, true, &provider, &model, None).await?;
-                                let detail = format!("{} / {}", display, model);
-                                protocol::server::send_status(
+                                admin::handle_model_switch(
                                     &mut *writer,
-                                    StatusType::ModelConfigured,
-                                    &detail,
-                                ).await?;
+                                    &vault,
+                                    &shared_config,
+                                    &shared_model_ctx,
+                                    &shared_copilot_session,
+                                    provider,
+                                    model,
+                                )
+                                .await?;
                             }
                             ClientPayload::SetAgentName { name } => {
-                                debug!("Agent name change: {}", name);
-                                {
-                                    let mut cfg = shared_config.write().await;
-                                    cfg.agent_name = name.clone();
-                                    let _ = cfg.save(None);
-                                }
-                                config.agent_name = name;
+                                admin::handle_set_agent_name(&mut config, &shared_config, name).await;
                             }
                             ClientPayload::SetWorkingDirectory { path } => {
-                                debug!("Working directory change: {}", path);
-                                let new_dir = std::path::PathBuf::from(&path);
-                                config.workspace_dir = Some(new_dir.clone());
-                                // Re-register sandbox with the new workspace dir so tool
-                                // access controls apply to the new location.
-                                let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
-                                tools::init_sandbox(
-                                    sandbox_mode,
-                                    new_dir,
-                                    config.credentials_dir(),
-                                    config.sandbox.deny_paths.clone(),
-                                );
+                                admin::handle_set_working_directory(&mut config, path);
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
@@ -1731,29 +669,20 @@ async fn handle_connection(
     Ok(())
 }
 
-/// Derive a short thread label from the first user message.
-fn auto_thread_label(content: &str) -> String {
-    let trimmed = content.trim();
-    // Use the first line, capped at 50 chars on a word boundary.
-    let first_line = trimmed.lines().next().unwrap_or(trimmed);
-    if first_line.len() <= 50 {
-        first_line.to_string()
-    } else {
-        match first_line[..50].rfind(' ') {
-            Some(pos) if pos > 20 => format!("{}…", &first_line[..pos]),
-            _ => format!("{}…", &first_line[..50]),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::listen::handle_transport_connection;
     use async_trait::async_trait;
-    use rustyclaw_core::gateway::{PeerInfo, TransportReader, TransportType, TransportWriter};
+    use rustyclaw_core::config::Config;
+    use rustyclaw_core::gateway::{
+        ChatMessage, PeerInfo, Transport, TransportReader, TransportType, TransportWriter,
+    };
+    use rustyclaw_core::secrets::SecretsManager;
     use rustyclaw_core::skills::SkillManager;
     use std::collections::VecDeque;
     use tempfile::tempdir;
+    use tokio::sync::RwLock;
 
     struct MockTransport {
         peer: PeerInfo,

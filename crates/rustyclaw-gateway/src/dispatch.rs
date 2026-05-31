@@ -1,7 +1,7 @@
 //! Text-message dispatch: turning a client chat request into model calls,
 //! running the tool loop, handling user-prompt / DOM-query tool round-trips,
-//! and streaming results back. The connection handler delegates each chat
-//! turn to [`dispatch_text_message`].
+//! and streaming results back. [`crate::chat`] assembles the per-frame context
+//! and delegates the model/tool loop to [`dispatch_text_message`].
 
 use anyhow::{Context, Result};
 use std::future::Future;
