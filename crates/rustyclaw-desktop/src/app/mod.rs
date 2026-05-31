@@ -4,29 +4,28 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::components::{
-    Chat, ConnectionDialog, CredentialRequestDialog, DeviceFlowDialog, HatchingDialog,
-    PairingDialog, SecretsCommand, SecretsDialog, SettingsDialog, Sidebar, SwarmPanel, TabBar,
-    ToolApprovalDialog, UserPromptDialog, VaultUnlockDialog, generate_qr_code,
-};
+use crate::components::{Chat, Sidebar, TabBar};
 
 use crate::app_support::*;
-use crate::state::{AppState, Theme};
+use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::ui::ConnectionStatus;
-use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
+use rustyclaw_core::user_prompt_types::UserPrompt;
 
-use rustyclaw_view::{
-    CredentialRequestData, DeviceFlowData, HatchingDialogData, PairingDialogData, PromptAttachment,
-    ToolApprovalData, UserPromptData, VaultUnlockData, build_prompt_with_attachments,
-};
+use rustyclaw_view::{HatchingDialogData, PromptAttachment, build_prompt_with_attachments};
+
+mod dialogs;
+mod signals;
+
+use dialogs::render_dialogs;
+use signals::do_reconnect;
 
 const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 
 /// Bundled stylesheet — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
-const STYLES: &str = include_str!("../assets/styles.css");
+const STYLES: &str = include_str!("../../assets/styles.css");
 
 #[component]
 pub fn App() -> Element {
@@ -37,14 +36,14 @@ pub fn App() -> Element {
     let gateway: Signal<Option<Arc<GatewayClient>>> = use_signal(|| None);
     let mut did_auto_connect = use_signal(|| false);
     let mut active_event_client: Signal<Option<Arc<GatewayClient>>> = use_signal(|| None);
-    let mut auth_code = use_signal(String::new);
+    let auth_code = use_signal(String::new);
 
     // Dialog visibility
     let mut show_pairing = use_signal(|| false);
-    let mut hatching_dialog = use_signal(|| HatchingDialogData::new(state.read().needs_hatching));
+    let hatching_dialog = use_signal(|| HatchingDialogData::new(state.read().needs_hatching));
     let mut show_settings = use_signal(|| false);
     let mut show_swarm = use_signal(|| false);
-    let mut swarm_creating = use_signal(|| false);
+    let swarm_creating = use_signal(|| false);
 
     // Tool approval state
     let mut tool_approval_id = use_signal(String::new);
@@ -54,7 +53,7 @@ pub fn App() -> Element {
 
     // Vault unlock state
     let mut show_vault_unlock = use_signal(|| false);
-    let mut vault_unlock_error = use_signal(|| None::<String>);
+    let vault_unlock_error = use_signal(|| None::<String>);
 
     // User prompt state
     let mut show_user_prompt = use_signal(|| false);
@@ -68,8 +67,8 @@ pub fn App() -> Element {
     let mut cred_request_message = use_signal(String::new);
 
     // QR code for pairing
-    let mut qr_code_url = use_signal(|| None::<String>);
-    let mut public_key = use_signal(|| None::<String>);
+    let qr_code_url = use_signal(|| None::<String>);
+    let public_key = use_signal(|| None::<String>);
 
     // Secrets management state
     let mut show_secrets = use_signal(|| false);
@@ -101,6 +100,38 @@ pub fn App() -> Element {
     // request bypass and no explicit CLI override is provided.
     let mut show_connection =
         use_signal(move || configured_gateway_url.is_none() && !skip_dialog && !bypass_dialog);
+
+    let sig = signals::AppSignals {
+        state,
+        gateway,
+        did_auto_connect,
+        active_event_client,
+        auth_code,
+        show_pairing,
+        hatching_dialog,
+        show_settings,
+        show_swarm,
+        swarm_creating,
+        tool_approval_id,
+        tool_approval_name,
+        tool_approval_args,
+        show_tool_approval,
+        show_vault_unlock,
+        vault_unlock_error,
+        show_user_prompt,
+        user_prompt_data,
+        show_cred_request,
+        cred_request_id,
+        cred_request_provider,
+        cred_request_secret,
+        cred_request_message,
+        qr_code_url,
+        public_key,
+        show_secrets,
+        pending_thread_delete,
+        did_init_directories,
+        show_connection,
+    };
 
     // Auto-connect on mount
     use_effect(move || {
@@ -519,44 +550,6 @@ pub fn App() -> Element {
     };
 
     // Secrets dialog event handler
-    let on_secrets_command = move |cmd: SecretsCommand| {
-        let gw = gateway.read().clone();
-        if let Some(client) = gw {
-            spawn(async move {
-                match cmd {
-                    SecretsCommand::Refresh => {
-                        let _ = client.send(GatewayCommand::SecretsList).await;
-                    }
-                    SecretsCommand::Store { key, value } => {
-                        let _ = client
-                            .send(GatewayCommand::SecretsStore { key, value })
-                            .await;
-                    }
-                    SecretsCommand::Delete { key } => {
-                        let _ = client.send(GatewayCommand::SecretsDelete { key }).await;
-                    }
-                    SecretsCommand::SetPolicy { name, policy } => {
-                        let _ = client
-                            .send(GatewayCommand::SecretsSetPolicy {
-                                name,
-                                policy,
-                                skills: Vec::new(),
-                            })
-                            .await;
-                    }
-                }
-            });
-        }
-    };
-
-    // Closure used by every "reconnect" entry-point. It only captures `Copy`
-    // signals, so it is itself `Copy`; rebinding is therefore cheap.
-    let do_reconnect = move || {
-        let url = state.read().gateway_url.clone();
-        spawn(async move {
-            connect_to_gateway(&url, state, gateway).await;
-        });
-    };
 
     // ── Native OS menu event handler ──────────────────────────────────────
     use dioxus::desktop::use_muda_event_handler;
@@ -758,7 +751,7 @@ pub fn App() -> Element {
                                 color: BulmaColor::Ghost,
                                 size: BulmaSize::Small,
                                 class: "btn btn-ghost btn-sm",
-                                onclick: move |_| do_reconnect(),
+                                onclick: move |_| do_reconnect(sig),
                                 "↻ Retry"
                             }
                             Button {
@@ -975,444 +968,7 @@ pub fn App() -> Element {
             }
 
             // Modals
-            ConnectionDialog {
-                visible: *show_connection.read(),
-                gateway_url: state.read().gateway_url.clone(),
-                status: state.read().connection.clone(),
-                on_connect: move |url: String| {
-                    crate::save_gateway_url(&url);
-                    state.write().gateway_url = url.clone();
-                    // Mark auto-connect as done so it does not also fire when
-                    // the dialog auto-closes after the connection succeeds.
-                    did_auto_connect.set(true);
-                    spawn(async move {
-                        connect_to_gateway(&url, state, gateway).await;
-                    });
-                },
-                on_cancel: move |_| show_connection.set(false),
-            }
-
-            HatchingDialog {
-                data: {
-                    let mut data = hatching_dialog.read().clone();
-                    if !data.should_render(matches!(
-                        state.read().connection,
-                        ConnectionStatus::Authenticating
-                    )) {
-                        data.hide_temporarily();
-                    }
-                    data
-                },
-                on_update: move |data| hatching_dialog.set(data),
-                on_complete: move |result: rustyclaw_view::HatchingResult| {
-                    if let Some(personality) = result.personality.clone() {
-                        state.write().status_message = Some(format!("Personality set: {}", personality));
-                    }
-                    let name = result.name.clone();
-                    state.write().agent_name = Some(result.name);
-                    // Persist the name to the gateway config.
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::SetAgentName { name }).await;
-                        });
-                    }
-                },
-                on_cancel: move |_| {},
-            }
-
-            PairingDialog {
-                visible: *show_pairing.read(),
-                data: PairingDialogData {
-                    step: rustyclaw_view::PairingStep::EnterGateway,
-                    field: rustyclaw_view::PairingField::Host,
-                    public_key: public_key.read().clone().unwrap_or_default(),
-                    fingerprint: String::new(),
-                    fingerprint_art: String::new(),
-                    qr_ascii: String::new(),
-                    host: "127.0.0.1".to_string(),
-                    port: "2222".to_string(),
-                    error: String::new(),
-                },
-                qr_code_data_url: qr_code_url.read().clone(),
-                on_host_change: move |_| {},
-                on_port_change: move |_| {},
-                on_connect: move |_| {
-                    show_pairing.set(false);
-                    do_reconnect();
-                },
-                on_generate_key: move |_| {
-                    public_key.set(Some(
-                        "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA... desktop-client".to_string(),
-                    ));
-                    if let Some(key) = &*public_key.read() {
-                        qr_code_url.set(generate_qr_code(key));
-                    }
-                },
-                on_cancel: move |_| show_pairing.set(false),
-            }
-
-            SettingsDialog {
-                visible: *show_settings.read(),
-                theme: state.read().theme,
-                gateway_url: state.read().gateway_url.clone(),
-                on_theme_change: move |t: Theme| state.write().theme = t,
-                on_gateway_url_change: move |v: String| state.write().gateway_url = v,
-                on_reconnect: move |_| {
-                    let url = state.read().gateway_url.clone();
-                    crate::save_gateway_url(&url);
-                    do_reconnect();
-                },
-                on_credential_save: move |(provider_id, api_key): (String, String)| {
-                    let secret_key = rustyclaw_core::providers::secret_key_for_provider(&provider_id)
-                        .unwrap_or(&provider_id)
-                        .to_string();
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            if let Err(e) = client.send(GatewayCommand::SecretsStore {
-                                key: secret_key,
-                                value: api_key,
-                            }).await {
-                                tracing::error!("Failed to store credential: {}", e);
-                            }
-                        });
-                    }
-                    state.write().status_message = Some(format!(
-                        "API key saved for {}",
-                        rustyclaw_core::providers::display_name_for_provider(&provider_id)
-                    ));
-                },
-                on_close: move |_| show_settings.set(false),
-            }
-
-            SwarmPanel {
-                swarms: get_swarm_infos(),
-                creating: *swarm_creating.read(),
-                visible: *show_swarm.read(),
-                on_create: move |template: String| {
-                    swarm_creating.set(true);
-                    spawn(async move {
-                        let result = create_swarm_from_template(&template);
-                        swarm_creating.set(false);
-                        if let Err(e) = result {
-                            state.write().status_message =
-                                Some(format!("Failed to create swarm: {}", e));
-                        }
-                    });
-                },
-                on_stop: move |name: String| {
-                    if let Err(e) = stop_swarm(&name) {
-                        state.write().status_message =
-                            Some(format!("Failed to stop swarm: {}", e));
-                    }
-                },
-                on_close: move |_| show_swarm.set(false),
-            }
-
-            ToolApprovalDialog {
-                visible: *show_tool_approval.read(),
-                data: ToolApprovalData {
-                    id: tool_approval_id.read().clone(),
-                    name: tool_approval_name.read().clone(),
-                    arguments: tool_approval_args.read().clone(),
-                    selected_allow: true,
-                },
-                on_approve: move |id: String| {
-                    state.write().pending_tool_approval = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::ToolApprove { id, approved: true }).await;
-                        });
-                    }
-                },
-                on_deny: move |id: String| {
-                    state.write().pending_tool_approval = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::ToolApprove { id, approved: false }).await;
-                        });
-                    }
-                },
-            }
-
-            VaultUnlockDialog {
-                visible: *show_vault_unlock.read(),
-                data: VaultUnlockData {
-                    password_len: 0,
-                    error: vault_unlock_error.read().clone().unwrap_or_default(),
-                },
-                on_submit: move |password: String| {
-                    vault_unlock_error.set(None);
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::VaultUnlock { password }).await;
-                        });
-                    }
-                },
-                on_cancel: move |_| show_vault_unlock.set(false),
-            }
-
-            UserPromptDialog {
-                visible: *show_user_prompt.read(),
-                prompt_id: user_prompt_data
-                    .read()
-                    .as_ref()
-                    .map(|p| p.id.clone())
-                    .unwrap_or_default(),
-                data: user_prompt_data.read().clone().map(UserPromptData::from),
-                on_respond: move |(id, value): (String, PromptResponseValue)| {
-                    state.write().pending_user_prompt = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::UserPromptResponse {
-                                id,
-                                dismissed: false,
-                                value,
-                            }).await;
-                        });
-                    }
-                },
-                on_dismiss: move |id: String| {
-                    state.write().pending_user_prompt = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::UserPromptResponse {
-                                id,
-                                dismissed: true,
-                                value: PromptResponseValue::Text(String::new()),
-                            }).await;
-                        });
-                    }
-                },
-            }
-
-            CredentialRequestDialog {
-                visible: *show_cred_request.read(),
-                id: cred_request_id.read().clone(),
-                data: CredentialRequestData {
-                    provider: cred_request_provider.read().clone(),
-                    secret_name: cred_request_secret.read().clone(),
-                    message: cred_request_message.read().clone(),
-                    input_len: 0,
-                },
-                on_submit: move |(id, value): (String, String)| {
-                    state.write().pending_credential_request = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::CredentialResponse {
-                                id,
-                                dismissed: false,
-                                value: Some(value),
-                            }).await;
-                        });
-                    }
-                },
-                on_dismiss: move |id: String| {
-                    state.write().pending_credential_request = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::CredentialResponse {
-                                id,
-                                dismissed: true,
-                                value: None,
-                            }).await;
-                        });
-                    }
-                },
-            }
-
-            SecretsDialog {
-                visible: *show_secrets.read(),
-                data: state.read().secrets_data.clone(),
-                on_command: on_secrets_command,
-                on_close: move |_| show_secrets.set(false),
-            }
-
-            DeviceFlowDialog {
-                visible: state.read().pending_device_flow.is_some(),
-                data: DeviceFlowData {
-                    url: state
-                        .read()
-                        .pending_device_flow
-                        .as_ref()
-                        .map(|(u, _, _)| u.clone())
-                        .unwrap_or_default(),
-                    code: state
-                        .read()
-                        .pending_device_flow
-                        .as_ref()
-                        .map(|(_, c, _)| c.clone())
-                        .unwrap_or_default(),
-                    message: state
-                        .read()
-                        .pending_device_flow
-                        .as_ref()
-                        .and_then(|(_, _, m)| m.clone()),
-                    browser_opened: false,
-                    tick: 0,
-                },
-                on_close: move |_| {
-                    state.write().pending_device_flow = None;
-                    state.write().status_message = Some("Device flow cancelled.".to_string());
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::Cancel).await;
-                        });
-                    }
-                },
-            }
-
-            if let Some((thread_id, thread_label)) = pending_thread_delete.read().clone() {
-                div { class: "modal-backdrop",
-                    div { class: "modal modal-confirm",
-                        div { class: "modal-head",
-                            div { class: "modal-title", "Delete thread?" }
-                            button {
-                                class: "modal-close",
-                                onclick: move |_| pending_thread_delete.set(None),
-                                "✕"
-                            }
-                        }
-                        div { class: "modal-body",
-                            p { "This will permanently delete \"{thread_label}\" and its messages." }
-                            p { class: "modal-muted", "This action cannot be undone." }
-                        }
-                        div { class: "modal-foot",
-                            Buttons {
-                                Button {
-                                    color: BulmaColor::Ghost,
-                                    size: BulmaSize::Small,
-                                class: "btn btn-ghost",
-                                onclick: move |_| pending_thread_delete.set(None),
-                                "Cancel"
-                                }
-                                Button {
-                                    color: BulmaColor::Danger,
-                                    size: BulmaSize::Small,
-                                class: "btn btn-danger",
-                                onclick: move |_| {
-                                    pending_thread_delete.set(None);
-                                    let fallback_id = {
-                                        let s = state.read();
-                                        if s.foreground_thread_id == Some(thread_id) {
-                                            s.threads
-                                                .iter()
-                                                .filter(|thread| thread.id != thread_id)
-                                                .map(|thread| thread.id)
-                                                .next_back()
-                                        } else {
-                                            None
-                                        }
-                                    };
-                                    if let Some(fallback_id) = fallback_id {
-                                        state.write().switch_thread(fallback_id);
-                                    }
-                                    let gw = gateway.read().clone();
-                                    if let Some(client) = gw {
-                                        spawn(async move {
-                                            if let Some(fallback_id) = fallback_id {
-                                                let _ = client
-                                                    .send(GatewayCommand::ThreadSwitch { thread_id: fallback_id })
-                                                    .await;
-                                            }
-                                            let _ = client
-                                                .send(GatewayCommand::ThreadClose { thread_id })
-                                                .await;
-                                        });
-                                    }
-                                },
-                                "Delete Thread"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // TOTP authentication modal
-            if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
-                div { class: "modal-backdrop",
-                    onclick: |_| {},
-                    div {
-                        class: "modal",
-                        onclick: move |evt| evt.stop_propagation(),
-                        div { class: "modal-head",
-                            span { class: "modal-title", "Gateway Authentication" }
-                        }
-                        div { class: "modal-body",
-                            p {
-                                style: "margin-bottom: 16px; color: var(--rc-text-muted); font-size: 13px;",
-                                "Enter the TOTP code from your authenticator app to connect to the gateway."
-                            }
-                            div { class: "field",
-                                label { class: "field-label", "TOTP Code" }
-                                input {
-                                    class: "input totp-input",
-                                    r#type: "text",
-                                    placeholder: "000000",
-                                    value: "{auth_code}",
-                                    autofocus: true,
-                                    maxlength: "8",
-                                    oninput: move |evt| auth_code.set(evt.value()),
-                                    onkeydown: move |evt: KeyboardEvent| {
-                                        if evt.key() == Key::Enter {
-                                            evt.prevent_default();
-                                            let code = auth_code.read().trim().to_string();
-                                            if code.is_empty() {
-                                                return;
-                                            }
-                                            let gw = gateway.read().clone();
-                                            if let Some(client) = gw {
-                                                auth_code.set(String::new());
-                                                spawn(async move {
-                                                    if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
-                                                        tracing::error!("Failed to send auth code: {}", e);
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                        div { class: "modal-foot",
-                            Buttons {
-                                Button {
-                                    color: BulmaColor::Primary,
-                                    size: BulmaSize::Small,
-                                class: "btn btn-primary",
-                                disabled: auth_code.read().trim().is_empty(),
-                                onclick: move |_| {
-                                    let code = auth_code.read().trim().to_string();
-                                    if code.is_empty() {
-                                        return;
-                                    }
-                                    let gw = gateway.read().clone();
-                                    if let Some(client) = gw {
-                                        auth_code.set(String::new());
-                                        spawn(async move {
-                                            if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
-                                                tracing::error!("Failed to send auth code: {}", e);
-                                            }
-                                        });
-                                    }
-                                },
-                                "Verify"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            {render_dialogs(sig)}
         }
     }
 }
