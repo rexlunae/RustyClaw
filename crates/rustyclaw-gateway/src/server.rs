@@ -21,11 +21,13 @@ use rustyclaw_core::providers as crate_providers;
 
 use protocol::server::send_frame;
 
-use crate::thread_updates::{send_thread_messages_update, send_threads_update};
+use crate::thread_updates::{
+    send_projects_update, send_thread_messages_update, send_threads_update,
+};
 use crate::{
     SharedConfig, SharedCopilotSession, SharedModelCtx, SharedModelRegistry, SharedObserver,
     SharedSkillManager, SharedTaskManager, SharedVault, TOTP_LOCKOUT_SECS, ToolCancelFlag, admin,
-    auth, concurrent, providers, thread_handler,
+    auth, concurrent, project_handler, providers, thread_handler,
 };
 
 pub(crate) async fn handle_connection(
@@ -54,6 +56,19 @@ pub(crate) async fn handle_connection(
     // Load from persistent storage or create new with default "Main" thread.
     let threads_path = config.sessions_dir().join("threads.json");
     let mut thread_mgr = rustyclaw_core::threads::ThreadManager::load_or_default(&threads_path);
+
+    // Project registry (each project is a working directory grouping threads).
+    // Migration: ensure a "Default" project exists pointing at the current
+    // workspace dir; pre-projects threads deserialize with project_id =
+    // DEFAULT_PROJECT_ID and thus land in it. Then point the workspace at the
+    // active project so tools run in the right directory from the first turn.
+    let projects_path = config.sessions_dir().join("projects.json");
+    let mut project_mgr = rustyclaw_core::projects::ProjectManager::load_or_new(&projects_path);
+    project_mgr.ensure_default(config.workspace_dir());
+    if let Some(active_path) = project_mgr.path_of(project_mgr.active_id()) {
+        admin::handle_set_working_directory(&mut config, active_path.display().to_string());
+    }
+    let _ = project_mgr.save_to_file(&projects_path);
 
     // Subscribe to thread events for push-based sidebar updates
     let mut thread_events_rx = thread_mgr.subscribe();
@@ -386,6 +401,9 @@ pub(crate) async fn handle_connection(
     if let Err(e) = send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await {
         warn!(error = %e, "Failed to send initial thread list");
     }
+    if let Err(e) = send_projects_update(&mut *writer, &project_mgr).await {
+        warn!(error = %e, "Failed to send initial project list");
+    }
 
     let reader_cancel = cancel.clone();
     let reader_tool_cancel = tool_cancel.clone();
@@ -524,12 +542,31 @@ pub(crate) async fn handle_connection(
                             ClientPayload::TasksRequest { session } => {
                                 thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
                             }
-                            ClientPayload::ThreadCreate { label } => {
+                            ClientPayload::ThreadCreate { label, project_id } => {
+                                // 0 means "the active project".
+                                let pid = if project_id == 0 {
+                                    project_mgr.active_id()
+                                } else {
+                                    rustyclaw_core::projects::ProjectId(project_id)
+                                };
+                                // Creating into a different project also makes it
+                                // active and repoints the workspace dir.
+                                if pid != project_mgr.active_id() {
+                                    project_handler::activate_project(
+                                        &mut *writer,
+                                        &mut config,
+                                        &mut project_mgr,
+                                        &projects_path,
+                                        pid,
+                                    )
+                                    .await?;
+                                }
                                 thread_handler::handle_thread_create(
                                     &mut *writer,
                                     &mut thread_mgr,
                                     &task_mgr,
                                     &threads_path,
+                                    pid,
                                     label,
                                 )
                                 .await?;
@@ -545,6 +582,22 @@ pub(crate) async fn handle_connection(
                                     thread_id,
                                 )
                                 .await?;
+                                // Repoint the workspace at the new foreground
+                                // thread's project so tools run in its directory.
+                                if let Some(pid) =
+                                    thread_mgr.foreground().map(|t| t.project_id)
+                                {
+                                    if pid != project_mgr.active_id() {
+                                        project_handler::activate_project(
+                                            &mut *writer,
+                                            &mut config,
+                                            &mut project_mgr,
+                                            &projects_path,
+                                            pid,
+                                        )
+                                        .await?;
+                                    }
+                                }
                             }
                             ClientPayload::ThreadList => {
                                 thread_handler::handle_thread_list(&mut *writer, &mut thread_mgr, &task_mgr).await?;
@@ -590,6 +643,63 @@ pub(crate) async fn handle_connection(
                             }
                             ClientPayload::SetWorkingDirectory { path } => {
                                 admin::handle_set_working_directory(&mut config, path);
+                            }
+                            ClientPayload::ProjectList => {
+                                project_handler::handle_project_list(&mut *writer, &project_mgr).await?;
+                            }
+                            ClientPayload::ProjectCreate { name, path } => {
+                                project_handler::handle_project_create(
+                                    &mut *writer,
+                                    &mut config,
+                                    &mut project_mgr,
+                                    &projects_path,
+                                    name,
+                                    path,
+                                )
+                                .await?;
+                            }
+                            ClientPayload::ProjectRename { project_id, new_name } => {
+                                project_handler::handle_project_rename(
+                                    &mut *writer,
+                                    &mut project_mgr,
+                                    &projects_path,
+                                    project_id,
+                                    new_name,
+                                )
+                                .await?;
+                            }
+                            ClientPayload::ProjectDelete { project_id } => {
+                                // Reassign the doomed project's threads to Default
+                                // so they aren't orphaned, then delete + repoint.
+                                let pid = rustyclaw_core::projects::ProjectId(project_id);
+                                let orphans: Vec<_> =
+                                    thread_mgr.threads_for(pid).iter().map(|t| t.id).collect();
+                                for tid in orphans {
+                                    thread_mgr.set_project(
+                                        tid,
+                                        rustyclaw_core::projects::DEFAULT_PROJECT_ID,
+                                    );
+                                }
+                                project_handler::handle_project_delete(
+                                    &mut *writer,
+                                    &mut config,
+                                    &mut project_mgr,
+                                    &projects_path,
+                                    project_id,
+                                )
+                                .await?;
+                                let _ = thread_mgr.save_to_file(&threads_path);
+                                send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                            }
+                            ClientPayload::ProjectSwitch { project_id } => {
+                                project_handler::handle_project_switch(
+                                    &mut *writer,
+                                    &mut config,
+                                    &mut project_mgr,
+                                    &projects_path,
+                                    project_id,
+                                )
+                                .await?;
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.

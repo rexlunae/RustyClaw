@@ -57,6 +57,7 @@ pub(crate) async fn handle_thread_create(
     thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
+    project_id: rustyclaw_core::projects::ProjectId,
     label: String,
 ) -> Result<()> {
     let label = if label.is_empty() {
@@ -64,8 +65,8 @@ pub(crate) async fn handle_thread_create(
     } else {
         label
     };
-    debug!("Thread create request: {}", label);
-    let thread_id = thread_mgr.create_thread(&label);
+    debug!("Thread create request: {} (project {})", label, project_id);
+    let thread_id = thread_mgr.create_chat_in(project_id, &label);
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThreadCreated,
         payload: ServerPayload::ThreadCreated {
