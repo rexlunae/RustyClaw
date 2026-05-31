@@ -133,6 +133,7 @@ fn from_tool_call_info_preserves_error_flag() {
 fn from_thread_info_preserves_fields() {
     let ti = ThreadInfo {
         id: 42,
+        project_id: 1,
         label: Some("Research".into()),
         description: Some("Epstein files".into()),
         status: "active".into(),
@@ -143,6 +144,7 @@ fn from_thread_info_preserves_fields() {
     let data = SidebarItemData::from(&ti);
 
     assert_eq!(data.id, 42);
+    assert_eq!(data.project_id, 1);
     assert_eq!(data.label, Some("Research".into()));
     assert_eq!(data.description, Some("Epstein files".into()));
     assert_eq!(data.status, "active");
@@ -154,6 +156,7 @@ fn from_thread_info_preserves_fields() {
 fn from_thread_info_no_label() {
     let ti = ThreadInfo {
         id: 7,
+        project_id: 0,
         label: None,
         description: None,
         status: "idle".into(),

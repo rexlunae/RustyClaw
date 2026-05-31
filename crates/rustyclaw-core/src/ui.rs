@@ -51,11 +51,21 @@ pub struct ToolCallInfo {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ThreadInfo {
     pub id: u64,
+    /// Project this thread belongs to (0 = the active project).
+    pub project_id: u64,
     pub label: Option<String>,
     pub description: Option<String>,
     pub status: String,
     pub is_foreground: bool,
     pub message_count: usize,
+}
+
+/// Project info for the sidebar's top level.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct ProjectInfo {
+    pub id: u64,
+    pub name: String,
+    pub path: String,
 }
 
 // ── Dialog state helpers ────────────────────────────────────────────────────
