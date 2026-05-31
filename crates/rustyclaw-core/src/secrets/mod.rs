@@ -19,6 +19,7 @@
 
 mod types;
 mod vault;
+mod vault_ext;
 
 use std::path::PathBuf;
 
