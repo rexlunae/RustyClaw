@@ -41,6 +41,7 @@ pub(crate) async fn send_threads_update(
             is_foreground: t.is_foreground,
             message_count: t.message_count,
             has_summary: t.has_summary,
+            project_id: t.project_id.0,
         })
         .collect();
 
@@ -80,6 +81,9 @@ pub(crate) async fn send_threads_update(
             is_foreground: false,
             message_count: 0,
             has_summary: task.status.is_terminal(),
+            // Ephemeral tasks aren't bound to a project; the client buckets
+            // project_id == 0 under the active project.
+            project_id: 0,
         });
     }
 
@@ -125,6 +129,7 @@ pub(crate) async fn send_threads_update(
                 is_foreground: false,
                 message_count: session.messages.len(),
                 has_summary: session.status != SessionStatus::Active,
+                project_id: 0,
             });
         }
     }
@@ -147,6 +152,30 @@ pub(crate) async fn send_threads_update(
         },
     };
 
+    send_frame(writer, &frame).await
+}
+
+/// Send a projects update frame (the full project list + active project).
+pub(crate) async fn send_projects_update(
+    writer: &mut dyn transport::TransportWriter,
+    project_mgr: &rustyclaw_core::projects::ProjectManager,
+) -> Result<()> {
+    let projects = project_mgr
+        .list_info()
+        .into_iter()
+        .map(|p| protocol::ProjectInfoDto {
+            id: p.id.0,
+            name: p.name,
+            path: p.path,
+        })
+        .collect();
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ProjectsUpdate,
+        payload: ServerPayload::ProjectsUpdate {
+            projects,
+            active_id: project_mgr.active_id().0,
+        },
+    };
     send_frame(writer, &frame).await
 }
 
