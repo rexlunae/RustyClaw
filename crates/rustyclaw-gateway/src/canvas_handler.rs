@@ -1,4 +1,11 @@
 //! Canvas tool execution handler for the gateway.
+//!
+//! Partially wired: tool *detection* ([`is_canvas_tool`]) is used by the
+//! messenger tool-dispatch loop, but execution still needs the `CanvasHost`
+//! threaded through. See the `TODO: Pass canvas_host` marker in
+//! `messenger_handler`. Tracked for completion; `dead_code` is allowed here
+//! until the host is wired in.
+#![allow(dead_code)]
 
 use std::sync::Arc;
 use tokio::sync::Mutex;

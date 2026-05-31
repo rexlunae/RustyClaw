@@ -113,15 +113,22 @@ fn encode_server_wire_frame(stream_id: u64, frame: &ServerFrame) -> Result<Vec<u
 /// Configuration for the SSH transport.
 #[derive(Debug, Clone)]
 pub struct SshConfig {
+    // listen_addr / allow_password / require_pubkey are set by callers for
+    // completeness but not yet read back: the bind address comes from the
+    // SshServer constructor argument, and auth policy is currently enforced
+    // at the russh handler level. Kept for a future config-driven path.
     /// Address to listen on (e.g., "0.0.0.0:2222").
+    #[allow(dead_code)]
     pub listen_addr: std::net::SocketAddr,
     /// Path to the server's host key.
     pub host_key_path: PathBuf,
     /// Path to the authorized_clients file.
     pub authorized_clients_path: PathBuf,
     /// Whether to allow password authentication (disabled by default).
+    #[allow(dead_code)]
     pub allow_password: bool,
     /// Whether to require public key authentication.
+    #[allow(dead_code)]
     pub require_pubkey: bool,
     /// Whether unknown client keys may authenticate at SSH layer when
     /// application-layer TOTP is enabled.

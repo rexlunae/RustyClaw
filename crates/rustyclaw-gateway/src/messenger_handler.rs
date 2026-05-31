@@ -19,13 +19,13 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, trace, warn};
 
-use super::providers;
-use super::{
-    ChatMessage, MediaRef, ModelContext, ProviderRequest, SharedSkillManager, SharedVault,
-    ToolCallResult,
-};
+use crate::providers;
 use crate::secrets_handler;
 use crate::skills_handler;
+use crate::{SharedSkillManager, SharedVault};
+use rustyclaw_core::gateway::{
+    ChatMessage, MediaRef, ModelContext, ProviderRequest, ToolCallResult,
+};
 
 #[cfg(feature = "matrix")]
 use rustyclaw_core::messengers::MatrixMessenger;

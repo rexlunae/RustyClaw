@@ -2,13 +2,12 @@ use anyhow::{Context, Result};
 use serde_json::json;
 use tracing::debug;
 
-use super::{ServerFrame, ServerFrameType, ServerPayload};
 use rustyclaw_core::error_details::{ErrorLike, RequestDetails};
 use rustyclaw_core::gateway::protocol::server;
 use rustyclaw_core::gateway::transport::TransportWriter;
 use rustyclaw_core::gateway::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProbeResult,
-    ProviderRequest, ToolCallResult,
+    ProviderRequest, ServerFrame, ServerFrameType, ServerPayload, ToolCallResult,
 };
 use rustyclaw_core::providers;
 

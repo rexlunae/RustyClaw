@@ -105,13 +105,20 @@ pub enum GatewayError {
     /// The user cancelled the current run.
     Cancelled,
 
+    // The Vault/DeviceFlow/Config variants round out the gateway error
+    // taxonomy but are not yet produced by the dispatch paths (vault ops and
+    // device flow currently surface errors through other channels). Kept for
+    // completeness and pending wiring; allowed dead until then.
     /// Vault operation failed (unlock, store, get, delete, etc.).
+    #[allow(dead_code)]
     Vault { message: String },
 
     /// Device flow initiation or polling failed.
+    #[allow(dead_code)]
     DeviceFlow { provider: String, message: String },
 
     /// Provider/model not found or misconfigured.
+    #[allow(dead_code)]
     Config { message: String },
 
     /// Token refresh (bearer / Copilot session) failed.
@@ -179,6 +186,7 @@ impl GatewayError {
     }
 
     /// Whether this error is non-fatal (the dispatch loop should continue).
+    #[allow(dead_code)] // used once the producing paths above are wired in
     pub fn is_non_fatal(&self) -> bool {
         matches!(self, Self::ContextCompaction { .. })
     }
