@@ -5,28 +5,20 @@
 // grouped by project (contiguous, project order) and `selected` indexes into
 // it directly, so keyboard navigation stays a simple flat index.
 
-use crate::action::ThreadInfo;
 use crate::theme;
 use iocraft::prelude::*;
 use rustyclaw_core::ui::ProjectInfo;
+use rustyclaw_view::SidebarItemData;
 
 #[derive(Default, Props)]
 pub struct ThreadTabsProps {
-    pub threads: Vec<ThreadInfo>,
+    /// Threads in project-grouped order (each `project_id` is its effective
+    /// group), so a header can be emitted whenever it changes.
+    pub threads: Vec<SidebarItemData>,
     pub projects: Vec<ProjectInfo>,
     pub active_project_id: u64,
     pub focused: bool,
     pub selected: usize,
-}
-
-/// Truncate to at most `max` chars, appending `…` when cut.
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() > max {
-        let head: String = s.chars().take(max.saturating_sub(1)).collect();
-        format!("{head}…")
-    } else {
-        s.to_string()
-    }
 }
 
 #[component]
@@ -67,7 +59,7 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
             last_project = Some(t.project_id);
         }
         rows.push(Row::Thread {
-            label: truncate(t.label.as_str(), 20),
+            label: t.truncated_label(20).into_owned(),
             active: t.is_foreground,
             selected: props.focused && idx == props.selected,
         });

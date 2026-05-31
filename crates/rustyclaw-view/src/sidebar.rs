@@ -173,6 +173,38 @@ impl SidebarTree {
         threads: &[rustyclaw_core::ui::ThreadInfo],
         active_project_id: u64,
     ) -> Self {
+        let items = threads.iter().map(SidebarItemData::from).collect();
+        Self::from_items(projects, items, active_project_id)
+    }
+
+    /// The project a thread displays under: its own `project_id` when that is
+    /// non-zero and known, otherwise the active project. Single source of truth
+    /// for orphan/ephemeral-thread placement, shared by the tree builder and
+    /// flat (TUI) clients so every renderer groups threads identically.
+    pub fn effective_project_id(
+        project_id: u64,
+        known: &std::collections::HashSet<u64>,
+        active_project_id: u64,
+    ) -> u64 {
+        if project_id != 0 && known.contains(&project_id) {
+            project_id
+        } else {
+            active_project_id
+        }
+    }
+
+    /// Bucket already-converted [`SidebarItemData`] into project groups.
+    ///
+    /// Project order follows `projects`; threads keep their incoming order
+    /// within a group. Orphan/ephemeral threads (see [`effective_project_id`])
+    /// land under the active project so they're never dropped.
+    ///
+    /// [`effective_project_id`]: SidebarTree::effective_project_id
+    pub fn from_items(
+        projects: &[rustyclaw_core::ui::ProjectInfo],
+        items: Vec<SidebarItemData>,
+        active_project_id: u64,
+    ) -> Self {
         use std::collections::HashSet;
         let known: HashSet<u64> = projects.iter().map(|p| p.id).collect();
 
@@ -187,14 +219,10 @@ impl SidebarTree {
             })
             .collect();
 
-        for t in threads {
-            let target = if t.project_id != 0 && known.contains(&t.project_id) {
-                t.project_id
-            } else {
-                active_project_id
-            };
+        for item in items {
+            let target = Self::effective_project_id(item.project_id, &known, active_project_id);
             if let Some(g) = groups.iter_mut().find(|g| g.id == target) {
-                g.threads.push(SidebarItemData::from(t));
+                g.threads.push(item);
             }
         }
 
@@ -202,6 +230,23 @@ impl SidebarTree {
             groups,
             active_project_id,
         }
+    }
+
+    /// Flatten the tree into a single project-grouped list, rewriting each
+    /// item's `project_id` to its effective group so flat renderers can insert
+    /// a header whenever it changes. Order matches the rendered tree, so a flat
+    /// selection index lines up with what the user sees.
+    pub fn into_flat_items(self) -> Vec<SidebarItemData> {
+        self.groups
+            .into_iter()
+            .flat_map(|g| {
+                let gid = g.id;
+                g.threads.into_iter().map(move |mut t| {
+                    t.project_id = gid;
+                    t
+                })
+            })
+            .collect()
     }
 
     /// Total thread count across all groups.

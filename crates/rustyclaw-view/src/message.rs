@@ -245,6 +245,22 @@ impl ToolCallData {
         }
     }
 
+    /// Execution status as `(css_class, label, icon)`, shared by every client so
+    /// the wording/icons stay consistent: running → `("is-running", "Running…",
+    /// "⏳")`, completed → `("is-done", "Done", "✓")`, failed → `("is-error",
+    /// "Failed", "✕")`.
+    pub fn status_label(&self) -> (&'static str, &'static str, &'static str) {
+        if self.result.is_some() {
+            if self.is_error {
+                ("is-error", "Failed", "✕")
+            } else {
+                ("is-done", "Done", "✓")
+            }
+        } else {
+            ("is-running", "Running…", "⏳")
+        }
+    }
+
     /// The arguments string, truncated for display.
     ///
     /// Uses `rustyclaw_core::ui::truncate_content` to limit both

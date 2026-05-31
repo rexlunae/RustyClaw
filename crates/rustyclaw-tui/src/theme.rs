@@ -106,7 +106,7 @@ pub const BG_CODE: Color = Color::Rgb {
 
 // ── Spinner frames ──────────────────────────────────────────────────────────
 
-pub const SPINNER: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+pub const SPINNER: &[char] = rustyclaw_view::SPINNER_FRAMES;
 
 // ── Role helpers ────────────────────────────────────────────────────────────
 
