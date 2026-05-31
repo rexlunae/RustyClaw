@@ -31,7 +31,7 @@ use crate::types::DisplayMessage;
 use rustyclaw_view::{
     ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchingDialogData,
     ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
-    SkillInfoData, TabBarData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
+    SkillInfoData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
 };
 
 #[derive(Default, Props)]
@@ -66,9 +66,11 @@ pub struct RootProps {
     pub on_submit: HandlerMut<'static, String>,
     pub input_has_focus: bool,
 
-    // sidebar
+    // sidebar (two-level: projects → threads)
     pub surface: rustyclaw_view::ChatSurfaceData,
-    pub tab_data: TabBarData,
+    pub threads: Vec<crate::action::ThreadInfo>,
+    pub projects: Vec<rustyclaw_core::ui::ProjectInfo>,
+    pub active_project_id: u64,
     pub tab_focused: bool,
     pub tab_selected: usize,
 
@@ -223,17 +225,19 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 flex_direction: FlexDirection::Row,
                 width: 100pct,
             ) {
-                // Chat area: tabs + messages + input
+                // Left sidebar: two-level project → thread navigation.
+                ThreadTabs(
+                    threads: props.threads.clone(),
+                    projects: props.projects.clone(),
+                    active_project_id: props.active_project_id,
+                    focused: props.tab_focused,
+                    selected: props.tab_selected,
+                )
+                // Chat area: messages + input
                 View(
                     flex_grow: 1.0,
                     flex_direction: FlexDirection::Column,
                 ) {
-                    // Thread tabs (horizontal bar at top of chat area)
-                    ThreadTabs(
-                        data: props.tab_data.clone(),
-                        focused: props.tab_focused,
-                        selected: props.tab_selected,
-                    )
                     Messages(
                         messages: props.messages.clone(),
                         scroll_offset: props.scroll_offset,

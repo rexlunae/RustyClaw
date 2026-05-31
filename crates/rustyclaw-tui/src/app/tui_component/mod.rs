@@ -154,6 +154,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
 
     // ── Thread state (unified tasks + threads) ───────────────────────
     let threads: State<Vec<crate::action::ThreadInfo>> = hooks.use_state(Vec::new);
+    let projects: State<Vec<rustyclaw_core::ui::ProjectInfo>> = hooks.use_state(Vec::new);
+    let active_project_id = hooks.use_state(|| 0u64);
     let tab_focused = hooks.use_state(|| false);
     let tab_selected = hooks.use_state(|| 0usize);
     // Per-thread message cache so switching tabs restores prior
@@ -287,6 +289,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         model_selector_cursor,
         model_selector_loading,
         threads,
+        projects,
+        active_project_id,
         tab_focused,
         tab_selected,
         thread_messages_cache,
@@ -455,10 +459,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 elapsed: Some(elapsed.to_string()),
                 spinner_tick: spinner_tick.get(),
             },
-            tab_data: {
-                            let thread_refs = threads.read();
-                            rustyclaw_view::TabBarData::from_gateway_threads(&thread_refs)
-                        },
+            threads: threads.read().clone(),
+            projects: projects.read().clone(),
+            active_project_id: active_project_id.get(),
             tab_focused: tab_focused.get(),
             tab_selected: tab_selected.get(),
             hint: prop_hint.clone(),

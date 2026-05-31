@@ -97,6 +97,8 @@ pub(super) fn apply_key_event(
         mut model_selector_cursor,
         mut model_selector_loading,
         mut threads,
+        mut projects,
+        mut active_project_id,
         mut tab_focused,
         mut tab_selected,
         mut thread_messages_cache,

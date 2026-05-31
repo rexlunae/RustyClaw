@@ -88,7 +88,10 @@ pub(super) async fn handle_command_action(
         CommandAction::ThreadNew(label) => {
             // Send thread create to gateway
             let _ = client
-                .send(GatewayCommand::ThreadCreate { label: Some(label) })
+                .send(GatewayCommand::ThreadCreate {
+                    label: Some(label),
+                    project_id: None,
+                })
                 .await;
         }
         CommandAction::ThreadList => {

@@ -87,6 +87,8 @@ pub(super) struct Ui {
     pub model_selector_cursor: State<usize>,
     pub model_selector_loading: State<bool>,
     pub threads: State<Vec<crate::action::ThreadInfo>>,
+    pub projects: State<Vec<rustyclaw_core::ui::ProjectInfo>>,
+    pub active_project_id: State<u64>,
     pub tab_focused: State<bool>,
     pub tab_selected: State<usize>,
     pub thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>>,
