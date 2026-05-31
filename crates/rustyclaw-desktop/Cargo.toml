@@ -14,10 +14,6 @@ repository.workspace = true
 [lints]
 workspace = true
 
-[lib]
-name = "rustyclaw_desktop"
-path = "src/lib.rs"
-
 [[bin]]
 name = "rustyclaw-desktop"
 path = "src/main.rs"
@@ -26,6 +22,9 @@ path = "src/main.rs"
 # Core library
 rustyclaw-core = { path = "../rustyclaw-core", default-features = false }
 rustyclaw-view.workspace = true
+
+# CLI argument parsing for the standalone binary
+clap = { workspace = true }
 
 # Dioxus framework
 # Note: "desktop" feature requires GTK dev libraries (libgtk-3-dev on Debian/Ubuntu)

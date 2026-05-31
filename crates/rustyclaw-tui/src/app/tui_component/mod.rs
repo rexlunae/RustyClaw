@@ -7,7 +7,6 @@ use std::time::{Duration, Instant};
 use crate::components::root::Root;
 use crate::theme;
 use crate::types::DisplayMessage;
-use rustyclaw_view;
 
 use crate::app::{GwEvent, UserInput};
 

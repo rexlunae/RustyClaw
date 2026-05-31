@@ -7,12 +7,9 @@ use anyhow::Result;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use rustyclaw_core::args::CommonArgs;
 use rustyclaw_core::config::Config;
+use rustyclaw_core::daemon;
 use rustyclaw_core::skills::SkillManager;
-#[cfg(feature = "desktop")]
-use rustyclaw_desktop as desktop_app;
 use rustyclaw_onboard::{OnboardArgs as WizardArgs, run_onboard_wizard};
-#[cfg(feature = "tui")]
-use rustyclaw_tui::app::App;
 
 mod commands;
 
@@ -387,39 +384,63 @@ enum SkillsCommands {
 //  Entrypoint
 // ═══════════════════════════════════════════════════════════════════════════
 
+/// Reconstruct the global `CommonArgs` flags so they can be forwarded to a
+/// spawned client binary (`rustyclaw-tui` / `rustyclaw-desktop`), which parse
+/// the same flags via their own flattened `CommonArgs`.
+fn common_flags(c: &CommonArgs) -> Vec<String> {
+    let mut v = Vec::new();
+    if let Some(p) = &c.config {
+        v.push("--config".to_string());
+        v.push(p.display().to_string());
+    }
+    if let Some(p) = &c.settings_dir {
+        v.push("--settings-dir".to_string());
+        v.push(p.display().to_string());
+    }
+    if let Some(p) = &c.profile {
+        v.push("--profile".to_string());
+        v.push(p.clone());
+    }
+    if c.no_color {
+        v.push("--no-color".to_string());
+    }
+    if let Some(p) = &c.soul {
+        v.push("--soul".to_string());
+        v.push(p.display().to_string());
+    }
+    if let Some(p) = &c.skills_dir {
+        v.push("--skills-dir".to_string());
+        v.push(p.display().to_string());
+    }
+    if c.no_secrets {
+        v.push("--no-secrets".to_string());
+    }
+    if let Some(g) = &c.gateway {
+        v.push("--gateway".to_string());
+        v.push(g.clone());
+    }
+    v
+}
+
+/// Spawn a sibling client binary in the foreground, forwarding `args`, and
+/// propagate its exit code on failure.
+fn launch_client(name: &str, args: &[String]) -> Result<()> {
+    let status = daemon::run_foreground_named(name, args)?;
+    if !status.success() {
+        std::process::exit(status.code().unwrap_or(1));
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
 
-    // For TUI mode, redirect logs to a file so they don't corrupt the terminal.
-    // For all other commands, log to stderr as usual.
-    #[cfg(feature = "tui")]
-    let _is_tui = matches!(
-        cli.command
-            .as_ref()
-            .unwrap_or(&Commands::Tui(TuiArgs::default())),
-        Commands::Tui(_)
-    );
-    #[cfg(not(feature = "tui"))]
-    let _is_tui = false;
-
-    if _is_tui {
-        #[cfg(feature = "tui")]
-        {
-            let log_path = dirs::home_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("."))
-                .join(".rustyclaw")
-                .join("tui.log");
-            if let Some(parent) = log_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            rustyclaw_core::logging::init_for_tui(&log_path);
-        }
-    } else {
-        // Initialize structured logging from environment variables.
-        // Set RUSTYCLAW_LOG=debug or RUST_LOG=debug for verbose output.
-        rustyclaw_core::logging::init_from_env();
-    }
+    // Initialize structured logging from environment variables.
+    // Set RUSTYCLAW_LOG=debug or RUST_LOG=debug for verbose output.
+    // (The `tui`/`desktop` subcommands spawn separate binaries that configure
+    // their own logging.)
+    rustyclaw_core::logging::init_from_env();
 
     // Initialise colour output (respects --no-color / NO_COLOR).
     rustyclaw_core::theme::init_color(cli.common.no_color);
@@ -597,51 +618,38 @@ async fn main() -> Result<()> {
         }
 
         // ── TUI ─────────────────────────────────────────────────
-        Commands::Tui(_args) => {
-            #[cfg(feature = "tui")]
-            {
-                // Apply TUI-specific overrides.
-                if let Some(url) = &_args.url {
-                    config.gateway_url = Some(url.clone());
-                }
-                // The gateway owns the secrets vault.  The TUI no longer needs
-                // a local vault password — it fetches secrets via gateway messages.
-                // A --password flag is forwarded to the gateway after connect if
-                // the vault is locked.
-                let mut app = App::new(config)?;
-                if let Some(pw) = _args.password {
-                    app.set_deferred_vault_password(pw);
-                }
-                app.set_skip_connection_dialog(_args.no_dialog);
-                app.run().await?;
+        // The TUI is a standalone binary (`rustyclaw-tui`); locate and run it
+        // in the foreground so it owns the terminal. It loads its own config and
+        // talks to the gateway over WebSocket.
+        Commands::Tui(args) => {
+            let mut fwd = common_flags(&cli.common);
+            if let Some(url) = args.url {
+                fwd.push("--url".to_string());
+                fwd.push(url);
             }
-            #[cfg(not(feature = "tui"))]
-            {
-                eprintln!(
-                    "TUI is not available in this build. Build with --features tui to enable."
-                );
-                std::process::exit(1);
+            if let Some(pw) = args.password {
+                fwd.push("--password".to_string());
+                fwd.push(pw);
             }
+            if args.no_dialog {
+                fwd.push("--no-dialog".to_string());
+            }
+            launch_client("rustyclaw-tui", &fwd)?;
         }
 
         // ── Desktop ─────────────────────────────────────────────
+        // The desktop client is a standalone binary (`rustyclaw-desktop`); run
+        // it in the foreground and block until the window closes.
         Commands::Desktop(args) => {
-            #[cfg(feature = "desktop")]
-            {
-                // Only forward an explicit URL (from --url or config). When
-                // neither is set, leave it as None so the desktop client can
-                // show its connection dialog with the default pre-filled.
-                let gateway_url = args.url.or_else(|| config.gateway_url.clone());
-                desktop_app::run(gateway_url, args.no_dialog);
+            let mut fwd = common_flags(&cli.common);
+            if let Some(url) = args.url {
+                fwd.push("--url".to_string());
+                fwd.push(url);
             }
-            #[cfg(not(feature = "desktop"))]
-            {
-                let _ = args;
-                eprintln!(
-                    "Desktop UI is not available in this build. Build with --features desktop to enable."
-                );
-                std::process::exit(1);
+            if args.no_dialog {
+                fwd.push("--no-dialog".to_string());
             }
+            launch_client("rustyclaw-desktop", &fwd)?;
         }
 
         // ── Command / Message ───────────────────────────────────

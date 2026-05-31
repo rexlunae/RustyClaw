@@ -136,16 +136,6 @@ impl App {
         Self::build(config, secrets_manager)
     }
 
-    pub fn with_password(config: Config, password: String) -> Result<Self> {
-        let mut app = Self::new(config)?;
-        app.deferred_vault_password = Some(password);
-        Ok(app)
-    }
-
-    pub fn new_locked(config: Config) -> Result<Self> {
-        Self::new(config)
-    }
-
     pub fn set_deferred_vault_password(&mut self, password: String) {
         self.deferred_vault_password = Some(password);
     }
