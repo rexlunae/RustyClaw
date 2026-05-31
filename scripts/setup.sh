@@ -457,6 +457,23 @@ if should_install rustyclaw; then
         IN_REPO=true
     fi
 
+    FORCE_FLAG=""
+    [[ "$FORCE" == true ]] && FORCE_FLAG="--force"
+
+    # The gateway daemon (`rustyclaw-gateway`) is a separate binary crate that
+    # the `rustyclaw` CLI spawns. It must be installed alongside the CLI or
+    # `gateway start/restart` fails with "Could not find the rustyclaw-gateway
+    # binary". It shares the messenger features but NOT the CLI-only tui/desktop
+    # features, so filter those out before installing it.
+    GATEWAY_FEATURES=""
+    for f in $(echo "$RUSTYCLAW_FEATURES" | tr ',' ' '); do
+        case "$f" in
+            tui|desktop) ;;  # CLI-only features; the gateway has no such features
+            *) GATEWAY_FEATURES="$GATEWAY_FEATURES $f" ;;
+        esac
+    done
+    GATEWAY_FEATURES="$(echo "$GATEWAY_FEATURES" | sed 's/^ *//;s/ *$//')"
+
     if [[ "$FROM_SOURCE" == true || "$IN_REPO" == true ]]; then
         if [[ "$IN_REPO" == true ]]; then
             info "Building from local workspace: $REPO_ROOT"
@@ -466,24 +483,31 @@ if should_install rustyclaw; then
             git clone https://github.com/rexlunae/RustyClaw.git /tmp/rustyclaw-build
             INSTALL_PATH="/tmp/rustyclaw-build/crates/rustyclaw-cli"
         fi
-
-        FORCE_FLAG=""
-        [[ "$FORCE" == true ]] && FORCE_FLAG="--force"
+        GATEWAY_PATH="${INSTALL_PATH%/rustyclaw-cli}/rustyclaw-gateway"
 
         if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
             cargo install --path "$INSTALL_PATH" --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
         else
             cargo install --path "$INSTALL_PATH" $FORCE_FLAG
         fi
+        info "Installing gateway daemon (rustyclaw-gateway)..."
+        if [[ -n "$GATEWAY_FEATURES" ]]; then
+            cargo install --path "$GATEWAY_PATH" --features "$GATEWAY_FEATURES" $FORCE_FLAG
+        else
+            cargo install --path "$GATEWAY_PATH" $FORCE_FLAG
+        fi
     else
         info "Installing from crates.io..."
-        FORCE_FLAG=""
-        [[ "$FORCE" == true ]] && FORCE_FLAG="--force"
-
         if [[ -n "$RUSTYCLAW_FEATURES" ]]; then
             cargo install rustyclaw --features "$RUSTYCLAW_FEATURES" $FORCE_FLAG
         else
             cargo install rustyclaw $FORCE_FLAG
+        fi
+        info "Installing gateway daemon (rustyclaw-gateway)..."
+        if [[ -n "$GATEWAY_FEATURES" ]]; then
+            cargo install rustyclaw-gateway --features "$GATEWAY_FEATURES" $FORCE_FLAG
+        else
+            cargo install rustyclaw-gateway $FORCE_FLAG
         fi
     fi
 
@@ -493,6 +517,11 @@ if should_install rustyclaw; then
     else
         err "RustyClaw binary not found in PATH after install"
         FAILED="$FAILED rustyclaw"
+    fi
+    if has rustyclaw-gateway; then
+        success "RustyClaw gateway daemon installed"
+    else
+        warn "rustyclaw-gateway not found in PATH after install — 'gateway start/restart' will fail until it is installed"
     fi
 else
     SKIPPED="$SKIPPED rustyclaw"
