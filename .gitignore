@@ -25,3 +25,6 @@ target
 
 /target
 Cargo.lock
+
+# Claude Code local state (worktrees, scheduled-task locks, etc.)
+.claude/
