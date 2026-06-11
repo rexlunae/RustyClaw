@@ -339,8 +339,9 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 
     let Some(api_key) = api_key else {
         return Ok(format!(
-            "TTS conversion requested (mock mode):\n- Text: {} chars\n- Output would be: {}\n\nNote: Set OPENAI_API_KEY or TTS_API_KEY environment variable to enable actual TTS generation.",
+            "TTS conversion requested (mock mode):\n- Text: {} chars\n- Output would be: {}\n\nNote: Set OPENAI_API_KEY or TTS_API_KEY environment variable to enable actual TTS generation.\n\nMEDIA: {}",
             text.len(),
+            output_path.display(),
             output_path.display()
         ));
     };

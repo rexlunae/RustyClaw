@@ -24,7 +24,7 @@ fn test_read_file_this_file() {
     let result = exec_read_file(&args, ws());
     assert!(result.is_ok());
     let text = result.unwrap();
-    assert!(text.contains("Agent tool system"));
+    assert!(text.contains("Tests for the tools module"));
 }
 
 #[test]
