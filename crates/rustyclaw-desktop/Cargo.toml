@@ -20,7 +20,7 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library
-rustyclaw-core = { path = "../rustyclaw-core", default-features = false }
+rustyclaw-core = { path = "../rustyclaw-core", version = "0.3.0", default-features = false }
 rustyclaw-view.workspace = true
 
 # CLI argument parsing for the standalone binary
