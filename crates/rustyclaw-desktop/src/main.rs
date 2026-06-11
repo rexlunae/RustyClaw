@@ -8,6 +8,7 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use clap::Parser;
+use dioxus::desktop::tao::window::Icon;
 use dioxus::desktop::{Config as DesktopConfig, LogicalSize, WindowBuilder};
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 use url::Url;
@@ -81,7 +82,8 @@ fn run(gateway_url: Option<String>, no_dialog: bool) {
     let window = WindowBuilder::new()
         .with_title("RustyClaw")
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
-        .with_min_inner_size(LogicalSize::new(720.0, 480.0));
+        .with_min_inner_size(LogicalSize::new(720.0, 480.0))
+        .with_window_icon(app_icon());
 
     // Match the dark-theme background so there's no white flash on startup.
     let cfg = DesktopConfig::new()
@@ -92,6 +94,18 @@ fn run(gateway_url: Option<String>, no_dialog: bool) {
     dioxus::LaunchBuilder::desktop()
         .with_cfg(cfg)
         .launch(app::App);
+}
+
+/// 256×256 application icon, rendered from the project logo
+/// (`logo.svg` → `icons/icon-256.png`; see `icons/` for the full set).
+const ICON_PNG: &[u8] = include_bytes!("../icons/icon-256.png");
+
+/// Decode the embedded icon for the window/taskbar. Used on Windows and
+/// Linux; macOS takes the Dock icon from the app bundle's `icon.icns`.
+fn app_icon() -> Option<Icon> {
+    let img = image::load_from_memory(ICON_PNG).ok()?.into_rgba8();
+    let (width, height) = img.dimensions();
+    Icon::from_rgba(img.into_raw(), width, height).ok()
 }
 
 pub(crate) fn configured_gateway_url() -> Option<String> {

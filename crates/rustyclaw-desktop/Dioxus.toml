@@ -1,0 +1,14 @@
+[application]
+name = "RustyClaw"
+
+# App icons rendered from the project logo (../../logo.svg). Regenerate with
+# rsvg-convert + iconutil if the logo changes; see icons/.
+[bundle]
+identifier = "io.rustyclaw.desktop"
+icon = [
+    "icons/32x32.png",
+    "icons/128x128.png",
+    "icons/128x128@2x.png",
+    "icons/icon.icns",
+    "icons/icon.ico",
+]
