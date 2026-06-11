@@ -95,11 +95,7 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                             size: BulmaSize::Small,
                             class: "msg-action-btn",
                             onclick: move |_| {
-                                let text = content_to_copy.clone();
-                                spawn(async move {
-                                    let js = format!("navigator.clipboard.writeText({:?})", text);
-                                    let _ = document::eval(&js).await;
-                                });
+                                super::copy_to_clipboard(content_to_copy.clone());
                             },
                             "⎘ Copy"
                         }

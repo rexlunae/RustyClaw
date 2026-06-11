@@ -171,3 +171,13 @@ curve25519-dalek = { git = "https://github.com/signalapp/curve25519-dalek", tag 
 lto = true
 codegen-units = 1
 strip = true
+
+[profile.wasm-dev]
+inherits = "dev"
+opt-level = 1
+
+[profile.server-dev]
+inherits = "dev"
+
+[profile.android-dev]
+inherits = "dev"

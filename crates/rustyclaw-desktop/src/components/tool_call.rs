@@ -5,10 +5,12 @@
 //! and tone both come from the shared view layer.
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::{BulmaSize, Message, MessageBody, MessageHeader, Tag};
+use dioxus_bulma::prelude::{
+    BulmaColor, BulmaSize, Button, Message, MessageBody, MessageHeader, Tag,
+};
 use rustyclaw_view::ToolCallData;
 
-use super::tone_color;
+use super::{copy_to_clipboard, tone_color};
 
 /// Props for [`ToolCallPanel`].
 #[derive(Props, Clone, PartialEq)]
@@ -72,8 +74,20 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
                     }
                     if let Some(result) = props.data.result.as_ref() {
                         div { class: "tool-section",
-                            div { class: "tool-section-label",
-                                if props.data.is_error { "Error" } else { "Result" }
+                            div { class: "tool-section-head",
+                                div { class: "tool-section-label",
+                                    if props.data.is_error { "Error" } else { "Result" }
+                                }
+                                Button {
+                                    color: BulmaColor::Ghost,
+                                    size: BulmaSize::Small,
+                                    class: "tool-copy-btn",
+                                    onclick: {
+                                        let text = result.clone();
+                                        move |_| copy_to_clipboard(text.clone())
+                                    },
+                                    "⎘ Copy"
+                                }
                             }
                             pre {
                                 class: if props.data.is_error { "tool-pre is-error" } else { "tool-pre" },

@@ -819,7 +819,12 @@ pub fn App() -> Element {
                         }
                         if !banner.actions.is_empty() {
                             Buttons { class: "banner-actions",
-                                for action in banner.actions.iter().cloned() {
+                                for (action, banner_text) in banner
+                                    .actions
+                                    .iter()
+                                    .cloned()
+                                    .map(|a| (a, banner.text.clone()))
+                                {
                                     Button {
                                         color: BulmaColor::Ghost,
                                         size: BulmaSize::Small,
@@ -828,6 +833,11 @@ pub fn App() -> Element {
                                             BannerActionKind::PairGateway => show_pairing.set(true),
                                             BannerActionKind::DismissStatus => {
                                                 state.write().status_message = None;
+                                            }
+                                            BannerActionKind::CopyText => {
+                                                crate::components::copy_to_clipboard(
+                                                    banner_text.clone(),
+                                                );
                                             }
                                         },
                                         "{action.label}"

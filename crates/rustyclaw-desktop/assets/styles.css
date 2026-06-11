@@ -683,6 +683,12 @@ body,
     opacity: 1;
 }
 
+/* Error/system rows keep their actions visible — copying an error
+   message shouldn't require discovering a hover affordance. */
+.msg-row.is-system .buttons.msg-actions {
+    opacity: 1;
+}
+
 .msg-action-btn.button {
     font-size: 11px;
     color: var(--rc-text-muted);
@@ -875,6 +881,27 @@ body,
 
 .tool-section + .tool-section {
     margin-top: 10px;
+}
+
+.tool-section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.tool-copy-btn.button {
+    font-size: 11px;
+    height: 1.8em;
+    color: var(--rc-text-muted);
+    text-decoration: none;
+    margin-bottom: 0 !important;
+}
+
+.tool-copy-btn.button:hover {
+    color: var(--rc-text-strong);
+    text-decoration: none;
+    background: var(--rc-bg-raised);
 }
 
 .tool-section-label {
@@ -1148,9 +1175,22 @@ body,
 }
 
 .notification.connection-status-error {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     margin-top: 12px;
     padding: 0.6rem 1rem;
     font-size: 13px;
+}
+
+.connection-error-text {
+    flex: 1;
+    word-break: break-word;
+}
+
+.connection-error-copy.button {
+    flex-shrink: 0;
+    text-decoration: none;
 }
 
 .icon.spin {

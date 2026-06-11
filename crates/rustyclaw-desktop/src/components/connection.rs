@@ -5,11 +5,11 @@
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{
-    BulmaColor, Button, Buttons, Control, Field, FieldLabel, Help, Notification,
+    BulmaColor, BulmaSize, Button, Buttons, Control, Field, FieldLabel, Help, Notification,
 };
 use rustyclaw_core::ui::ConnectionStatus;
 
-use super::RcModal;
+use super::{RcModal, copy_to_clipboard};
 
 #[derive(Props, Clone, PartialEq)]
 pub struct ConnectionDialogProps {
@@ -115,7 +115,17 @@ pub fn ConnectionDialog(props: ConnectionDialogProps) -> Element {
                     color: BulmaColor::Danger,
                     light: true,
                     class: "connection-status-error",
-                    "🚫 {err}"
+                    span { class: "connection-error-text", "🚫 {err}" }
+                    Button {
+                        color: BulmaColor::Ghost,
+                        size: BulmaSize::Small,
+                        class: "connection-error-copy",
+                        onclick: {
+                            let text = err.clone();
+                            move |_| copy_to_clipboard(text.clone())
+                        },
+                        "⎘ Copy"
+                    }
                 }
             }
         }

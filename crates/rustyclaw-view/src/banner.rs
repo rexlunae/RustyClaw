@@ -19,6 +19,8 @@ pub enum BannerActionKind {
     PairGateway,
     /// Clear the transient status message.
     DismissStatus,
+    /// Copy the banner text to the clipboard.
+    CopyText,
 }
 
 /// A single action button on a banner.
@@ -59,6 +61,10 @@ pub fn build_banners(
                     label: "Pair gateway",
                     kind: BannerActionKind::PairGateway,
                 },
+                BannerAction {
+                    label: "⎘ Copy",
+                    kind: BannerActionKind::CopyText,
+                },
             ],
         }),
         ConnectionStatus::Connecting => banners.push(BannerData {
@@ -75,10 +81,16 @@ pub fn build_banners(
             tone: Tone::Warning,
             icon: "",
             text: msg.to_string(),
-            actions: vec![BannerAction {
-                label: "Dismiss",
-                kind: BannerActionKind::DismissStatus,
-            }],
+            actions: vec![
+                BannerAction {
+                    label: "⎘ Copy",
+                    kind: BannerActionKind::CopyText,
+                },
+                BannerAction {
+                    label: "Dismiss",
+                    kind: BannerActionKind::DismissStatus,
+                },
+            ],
         });
     }
 

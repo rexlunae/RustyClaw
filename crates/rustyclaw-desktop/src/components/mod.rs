@@ -59,6 +59,14 @@ pub use tool_approval::ToolApprovalDialog;
 pub use user_prompt::UserPromptDialog;
 pub use vault_unlock::VaultUnlockDialog;
 
+/// Copy text to the system clipboard via the webview's Clipboard API.
+pub(crate) fn copy_to_clipboard(text: String) {
+    spawn(async move {
+        let js = format!("navigator.clipboard.writeText({:?})", text);
+        let _ = document::eval(&js).await;
+    });
+}
+
 /// Map a view-layer semantic [`Tone`] to a Bulma colour.
 ///
 /// `Tone::Neutral` maps to `None` so the widget keeps its scheme colour.
