@@ -113,6 +113,13 @@ jobs:
           if [ "${{ matrix.use_cross }}" = "true" ]; then
             # Cross-compilation: build only core packages (exclude desktop client)
             cross check --target ${{ matrix.target }} ${{ matrix.features }} --package rustyclaw-core --package rustyclaw --package rustyclaw-tui
+          elif [ "${{ matrix.target }}" = "x86_64-apple-darwin" ]; then
+            # ort ships no prebuilt ONNX Runtime binaries for x86_64 macOS,
+            # so the gateway's default `semantic-memory` feature cannot build
+            # on this target. Check the gateway without it; everything else
+            # gets a normal default-features check.
+            cargo check --target ${{ matrix.target }} ${{ matrix.features }} --workspace --exclude rustyclaw-gateway
+            cargo check --target ${{ matrix.target }} -p rustyclaw-gateway --no-default-features
           else
             cargo check --target ${{ matrix.target }} ${{ matrix.features }}
           fi
