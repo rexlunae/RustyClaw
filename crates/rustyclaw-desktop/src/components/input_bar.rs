@@ -1,18 +1,23 @@
 //! Input bar: the model selector + text area + send/cancel button + directory selector.
 //!
-//! Analogue of the TUI's `components/input_bar.rs`, extracted from
-//! `chat.rs` during the Phase D structural alignment.  Sub-components:
-//!   - [`InputBar`] — public composite (DirectoryBar + ModelBar + textarea + button)
-//!   - [`DirectorySelectorBar`] — working directory selector
-//!   - [`ModelBar`] — provider/model dropdowns
+//! Analogue of the TUI's `components/input_bar.rs`.  Sub-components:
+//!   - [`InputBar`] — public composite (attachments + ModelBar + textarea + button)
+//!   - [`DirectorySelectorBar`] — working directory selector (Bulma dropdown)
+//!   - [`ModelBar`] — provider/model selects
 //!
 //! The local text value is kept in a `Signal<String>` so that typing
 //! updates are snappy and only the submit/cancel actions cross the
-//! component boundary.
+//! component boundary.  The composer textarea stays a native element
+//! (Bulma's `Textarea` component has no `onkeydown`, which we need for
+//! Enter-to-send).
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{
+    BulmaColor, BulmaSize, Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Help,
+    Select, Tag, Tags,
+};
 use rustyclaw_core::providers;
-use rustyclaw_view::BottomBarData;
+use rustyclaw_view::{BottomBarData, ComposerData};
 
 use super::messages::ModelSelection;
 
@@ -42,12 +47,14 @@ pub fn InputBar(props: InputBarProps) -> Element {
     let is_processing = bottom_bar.composer.is_processing;
     let on_send = props.on_send;
     let attachments = bottom_bar.composer.attachments.clone();
+    let send_title = bottom_bar.composer.send_button_title();
 
     rsx! {
         div { class: "composer-wrap",
             div { class: "composer",
                 textarea {
-                    placeholder: "Message RustyClaw…",
+                    class: "textarea composer-input",
+                    placeholder: ComposerData::PLACEHOLDER,
                     rows: "1",
                     value: "{input_ref}",
                     disabled: is_processing,
@@ -63,42 +70,48 @@ pub fn InputBar(props: InputBarProps) -> Element {
                         props.on_input_change.call(value);
                     }
                 }
-                button {
-                    class: "composer-send",
-                    title: if is_processing { "Cancel request" } else { "Send (Enter)" },
-                    disabled: !is_processing && input_ref.read().trim().is_empty(),
-                    onclick: move |_| {
-                        if is_processing {
-                            props.on_cancel.call(());
-                        } else {
-                            on_send.call(());
-                        }
-                    },
-                    if is_processing { "×" } else { "↑" }
+                span { title: "{send_title}",
+                    Button {
+                        color: if is_processing { BulmaColor::Danger } else { BulmaColor::Primary },
+                        rounded: true,
+                        class: "composer-send",
+                        disabled: !is_processing && input_ref.read().trim().is_empty(),
+                        onclick: move |_| {
+                            if is_processing {
+                                props.on_cancel.call(());
+                            } else {
+                                on_send.call(());
+                            }
+                        },
+                        if is_processing { "×" } else { "↑" }
+                    }
                 }
             }
 
             div { class: "composer-bottom-row",
                 if !attachments.is_empty() {
-                    div { class: "composer-attachments",
+                    Tags { class: "composer-attachments",
                         for attachment in attachments.clone() {
-                            div {
+                            span {
                                 key: "{attachment.path}",
-                                class: "composer-attachment-chip",
                                 title: "{attachment.path}",
-                                span { class: "composer-attachment-icon", "{attachment.kind.icon()}" }
-                                span { class: "composer-attachment-name", "{attachment.display_name}" }
-                                button {
-                                    class: "composer-attachment-remove",
-                                    title: "Remove attachment",
-                                    onclick: move |_| props.on_remove_attachment.call(attachment.path.clone()),
-                                    "⊗"
+                                Tag {
+                                    rounded: true,
+                                    delete: true,
+                                    class: "composer-attachment-chip",
+                                    ondelete: {
+                                        let path = attachment.path.clone();
+                                        let on_remove = props.on_remove_attachment;
+                                        move |_| on_remove.call(path.clone())
+                                    },
+                                    span { class: "composer-attachment-icon", "{attachment.kind.icon()}" }
+                                    span { class: "composer-attachment-name", "{attachment.display_name}" }
                                 }
                             }
                         }
-                        button {
-                            class: "btn btn-subtle btn-sm",
-                            title: "Clear attached files and directories",
+                        Button {
+                            color: BulmaColor::Ghost,
+                            size: BulmaSize::Small,
                             onclick: move |_| props.on_clear_attachments.call(()),
                             "Clear"
                         }
@@ -110,15 +123,15 @@ pub fn InputBar(props: InputBarProps) -> Element {
                     on_model_change: props.on_model_change,
                     on_add_provider: props.on_add_provider,
                 }
-                button {
-                    class: "btn btn-subtle btn-sm",
-                    title: "Attach a file to the next prompt",
+                Button {
+                    color: BulmaColor::Ghost,
+                    size: BulmaSize::Small,
                     onclick: move |_| props.on_add_file_attachment.call(()),
                     "Add file"
                 }
-                button {
-                    class: "btn btn-subtle btn-sm",
-                    title: "Attach a directory to the next prompt",
+                Button {
+                    color: BulmaColor::Ghost,
+                    size: BulmaSize::Small,
                     onclick: move |_| props.on_add_directory_attachment.call(()),
                     "Add dir"
                 }
@@ -129,9 +142,7 @@ pub fn InputBar(props: InputBarProps) -> Element {
                 }
             }
 
-            div { class: "composer-hint",
-                "Press Enter to send · Shift + Enter for newline · Attachments are included in the next prompt"
-            }
+            div { class: "composer-hint", {ComposerData::HINT} }
         }
     }
 }
@@ -157,32 +168,40 @@ fn DirectorySelectorBar(props: DirectorySelectorBarProps) -> Element {
             .unwrap_or_else(|| "No directory".to_string())
     });
 
-    let arrow = if state.is_expanded { "v" } else { ">" };
+    let arrow = if state.is_expanded { "▾" } else { "▸" };
+    let directories = state.available_directories.clone();
 
     rsx! {
         div { class: "directory-selector-bar",
-            button {
-                class: "directory-selector-toggle",
-                title: "Change working directory",
-                onclick: move |_| props.on_toggle.call(()),
-                span { class: "directory-selector-label", "Dir" }
-                span { class: "directory-path", "{display}" }
-                span { class: "directory-arrow", "{arrow}" }
-            }
-
-            if state.is_expanded && !state.available_directories.is_empty() {
-                div { class: "directory-selector-menu",
-                    for dir in state.available_directories.clone().into_iter() {
-                        button {
-                            class: if dir.is_selected { "directory-item is-selected" } else { "directory-item" },
-                            onclick: move |_| {
-                                props.on_select.call(dir.path.clone())
+            Dropdown {
+                active: state.is_expanded,
+                up: true,
+                class: "directory-selector",
+                DropdownTrigger {
+                    onclick: move |_| props.on_toggle.call(()),
+                    Button {
+                        size: BulmaSize::Small,
+                        class: "directory-selector-toggle",
+                        span { class: "directory-selector-label", "Dir" }
+                        span { class: "directory-path", "{display}" }
+                        span { class: "directory-arrow", "{arrow}" }
+                    }
+                }
+                DropdownMenu { class: "directory-selector-menu",
+                    for dir in directories.into_iter() {
+                        DropdownItem {
+                            key: "{dir.path}",
+                            active: dir.is_selected,
+                            onclick: {
+                                let path = dir.path.clone();
+                                let on_select = props.on_select;
+                                move |_| on_select.call(path.clone())
                             },
                             "{dir.display_name}"
                         }
                     }
-                    button {
-                        class: "directory-item directory-item-other",
+                    DropdownItem {
+                        class: "directory-item-other",
                         onclick: move |_| {
                             props.on_select.call(DIRECTORY_OTHER_SENTINEL.to_string())
                         },
@@ -192,7 +211,9 @@ fn DirectorySelectorBar(props: DirectorySelectorBarProps) -> Element {
             }
 
             if let Some(err) = &state.error {
-                div { class: "directory-selector-error",
+                Help {
+                    color: BulmaColor::Danger,
+                    class: "directory-selector-error",
                     "⚠ {err}"
                 }
             }
@@ -257,14 +278,15 @@ fn ModelBar(props: ModelBarProps) -> Element {
 
     rsx! {
         div { class: "model-bar",
-            select {
+            Select {
+                size: BulmaSize::Small,
+                value: current_provider.clone(),
                 class: "model-bar-select",
-                value: "{current_provider}",
                 onchange: {
                     let on_model_change = props.on_model_change;
                     let on_add_provider = props.on_add_provider;
                     let selected_model = current_model.clone();
-                    move |evt: Event<FormData>| {
+                    move |evt: FormEvent| {
                         let prov = evt.value();
                         if prov == ADD_PROVIDER_SENTINEL {
                             on_add_provider.call(());
@@ -303,14 +325,15 @@ fn ModelBar(props: ModelBarProps) -> Element {
                 }
             }
 
-            select {
-                class: "model-bar-select",
-                value: "{current_model}",
+            Select {
+                size: BulmaSize::Small,
+                value: current_model.clone(),
                 disabled: current_provider.is_empty(),
+                class: "model-bar-select",
                 onchange: {
                     let on_model_change = props.on_model_change;
                     let selected_provider = current_provider.clone();
-                    move |evt: Event<FormData>| {
+                    move |evt: FormEvent| {
                         let mdl = evt.value();
                         let prov = selected_provider.clone();
                         if !prov.is_empty() {

@@ -119,27 +119,25 @@ pub(crate) const GITHUB_USER_AGENT: &str = "RustyClaw";
 /// omitted because Copilot access is subscription-based — showing
 /// "$0/$0 per 1M tok" would be misleading.
 const COPILOT_STATIC_CATALOG: &[(&str, &str, u64)] = &[
+    ("claude-fable-5", "Claude Fable 5", 128_000),
     ("claude-haiku-4.5", "Claude Haiku 4.5", 128_000),
     ("claude-opus-4.5", "Claude Opus 4.5", 128_000),
-    ("claude-opus-4.6", "Claude Opus 4.6", 128_000),
-    ("claude-sonnet-4", "Claude Sonnet 4", 128_000),
+    ("claude-opus-4.7", "Claude Opus 4.7", 128_000),
+    ("claude-opus-4.8", "Claude Opus 4.8", 128_000),
     ("claude-sonnet-4.5", "Claude Sonnet 4.5", 128_000),
     ("claude-sonnet-4.6", "Claude Sonnet 4.6", 128_000),
     ("gemini-2.5-pro", "Gemini 2.5 Pro", 128_000),
     ("gemini-3-flash-preview", "Gemini 3 Flash", 128_000),
-    ("gemini-3-pro-preview", "Gemini 3 Pro Preview", 128_000),
     ("gemini-3.1-pro-preview", "Gemini 3.1 Pro Preview", 128_000),
+    ("gemini-3.5-flash", "Gemini 3.5 Flash", 128_000),
     ("gpt-4.1", "GPT-4.1", 64_000),
     ("gpt-4o", "GPT-4o", 64_000),
-    ("gpt-5", "GPT-5", 128_000),
     ("gpt-5-mini", "GPT-5-mini", 128_000),
-    ("gpt-5.1", "GPT-5.1", 128_000),
-    ("gpt-5.1-codex", "GPT-5.1-Codex", 128_000),
-    ("gpt-5.1-codex-max", "GPT-5.1-Codex-max", 128_000),
-    ("gpt-5.1-codex-mini", "GPT-5.1-Codex-mini", 128_000),
     ("gpt-5.2", "GPT-5.2", 128_000),
-    ("gpt-5.2-codex", "GPT-5.2-Codex", 272_000),
-    ("grok-code-fast-1", "Grok Code Fast 1", 128_000),
+    ("gpt-5.3-codex", "GPT-5.3-Codex", 272_000),
+    ("gpt-5.4", "GPT-5.4", 128_000),
+    ("gpt-5.4-mini", "GPT-5.4-mini", 128_000),
+    ("gpt-5.5", "GPT-5.5", 128_000),
 ];
 
 /// Build [`ModelInfo`] entries for the static Copilot catalog.

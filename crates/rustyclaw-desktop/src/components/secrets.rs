@@ -2,10 +2,18 @@
 //!
 //! Displays all secrets stored in the gateway vault and emits commands
 //! for refresh, store, delete, and set-policy operations.  The parent
-//! component manages all mutable state.
+//! component manages all mutable state.  The credential list renders
+//! as a Bulma `Table`; policy badges and the legend use the shared
+//! policy tones from `rustyclaw-view`.
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{
+    BulmaColor, BulmaSize, Button, Buttons, Delete, Level, LevelItem, LevelLeft, Table, Tag,
+};
 use rustyclaw_view::SecretsDialogData;
+use rustyclaw_view::dialogs::{POLICY_LEGEND, next_policy};
+
+use super::{RcModal, tone_color};
 
 /// Commands emitted by the secrets dialog back to the parent.
 #[derive(Clone, Debug)]
@@ -33,39 +41,13 @@ pub struct SecretsDialogProps {
     pub on_close: EventHandler<()>,
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-fn policy_class(policy: &str, disabled: bool) -> &'static str {
-    if disabled {
-        "badge-muted"
-    } else {
-        match policy {
-            "OPEN" => "badge-open",
-            "ASK" => "badge-ask",
-            "AUTH" => "badge-auth",
-            "SKILL" => "badge-skill",
-            _ => "badge-muted",
-        }
-    }
-}
-
-fn next_policy(current: &str) -> &'static str {
-    match current {
-        "OPEN" => "ASK",
-        "ASK" => "AUTH",
-        "AUTH" => "SKILL",
-        "SKILL" => "OPEN",
-        _ => "OPEN",
-    }
-}
-
 /// Pre-computed fields for a single visible secret row, owned so the RSX
 /// `for` loop can clone from them without `let` expressions.
 #[derive(Clone)]
 struct SecretRow {
     is_selected: bool,
     icon: &'static str,
-    pclass: &'static str,
+    tone: rustyclaw_view::Tone,
     plabel: String,
     name: String,
     label: String,
@@ -117,12 +99,8 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                 SecretRow {
                     is_selected: idx == sel_idx,
                     icon: s.type_icon(),
-                    pclass: policy_class(&s.policy, s.disabled),
-                    plabel: if s.disabled {
-                        "OFF".into()
-                    } else {
-                        s.policy.clone()
-                    },
+                    tone: s.policy_tone(),
+                    plabel: s.policy_label().to_string(),
                     name: s.key.clone(),
                     label: s.label.clone(),
                     kind: s.kind.clone(),
@@ -133,10 +111,7 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
     };
 
     // Build row VNodes outside the main RSX so closures can own their data.
-    // Each closure clones what it needs (name, policy) and does not borrow
-    // the local `rows` vector, satisfying the 'static requirement.
     let is_empty = rows.is_empty();
-    let has_any = !d.secrets.is_empty();
     let row_elements: Vec<_> = rows
         .into_iter()
         .map(|row| {
@@ -144,25 +119,32 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
             let policy = row.policy.clone();
             let icon = row.icon;
             let kind = row.kind.clone();
-            let pclass = row.pclass;
+            let tone = row.tone;
             let plabel = row.plabel.clone();
             let label = row.label.clone();
             let is_selected = row.is_selected;
 
             rsx! {
-                div {
-                    class: if is_selected { "secrets-row selected" } else { "secrets-row" },
+                tr {
+                    class: if is_selected { "secrets-row is-selected" } else { "secrets-row" },
                     key: "{name}",
-                    span { class: "secrets-col-kind", "{icon} {kind}" }
-                    span { class: "secrets-col-policy",
-                        span { class: "badge {pclass}", "{plabel}" }
+                    td { class: "secrets-col-kind", "{icon} {kind}" }
+                    td { class: "secrets-col-policy",
+                        Tag {
+                            color: tone_color(tone),
+                            light: true,
+                            rounded: true,
+                            size: BulmaSize::Small,
+                            "{plabel}"
+                        }
                     }
-                    span { class: "secrets-col-label", "{label}" }
-                    span { class: "secrets-col-name", "{name}" }
-                    span { class: "secrets-col-actions",
-                        button {
-                            class: "btn btn-ghost btn-xs",
-                            title: "Cycle policy (OPEN ↔ ASK ↔ AUTH ↔ SKILL)",
+                    td { class: "secrets-col-label", "{label}" }
+                    td { class: "secrets-col-name", "{name}" }
+                    td { class: "secrets-col-actions",
+                        Button {
+                            color: BulmaColor::Ghost,
+                            size: BulmaSize::Small,
+                            class: "secrets-policy-cycle",
                             onclick: {
                                 let n = name.clone();
                                 let p = policy.clone();
@@ -177,9 +159,8 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                             },
                             "↻"
                         }
-                        button {
-                            class: "btn btn-ghost btn-xs btn-danger-hover",
-                            title: "Delete secret",
+                        Delete {
+                            size: BulmaSize::Small,
                             onclick: {
                                 let n = name.clone();
                                 move |_| {
@@ -188,7 +169,6 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                                     );
                                 }
                             },
-                            "\u{2715}"
                         }
                     }
                 }
@@ -202,146 +182,136 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
         "Disabled"
     };
     let totp_label = if d.has_totp { "On" } else { "Off" };
+    let is_adding = add_step_data.is_some();
 
     rsx! {
-        div {
-            class: "modal-backdrop",
-            onclick: move |_| props.on_close.call(()),
-
-            div {
-                class: "modal secrets-dialog",
-                onclick: move |evt| evt.stop_propagation(),
-
-                // ── Header ──────────────────────────────────────────
-                div { class: "modal-head",
-                    span { class: "modal-title", "🔐 Secrets Vault" }
-                    button {
-                        class: "modal-close",
-                        title: "Close",
-                        onclick: move |_| props.on_close.call(()),
-                        "\u{2715}"
-                    }
-                }
-
-                div { class: "modal-body",
-                    // ── Status bar ──────────────────────────────────
-                    div { class: "secrets-status",
-                        span { class: "secrets-status-item",
-                            span { class: "secrets-status-label", "Agent Access:" }
-                            span {
-                                class: if d.agent_access { "badge-open" } else { "badge-muted" },
-                                "{access_label}"
-                            }
-                        }
-                        span { class: "secrets-status-item",
-                            span { class: "secrets-status-label", "Credentials:" }
-                            span { "{d.secrets.len()}" }
-                        }
-                        span { class: "secrets-status-item",
-                            span { class: "secrets-status-label", "2FA:" }
-                            span {
-                                class: if d.has_totp { "badge-open" } else { "badge-muted" },
-                                "{totp_label}"
-                            }
-                        }
-                    }
-
-                    // ── Status message ──────────────────────────────
-                    if let Some(msg) = &d.status {
-                        div { class: "secrets-status-msg", "{msg}" }
-                    }
-
-                    // ── Credential list ─────────────────────────────
-                    div { class: "secrets-list",
-                        if has_any && !is_empty {
-                            div { class: "secrets-list-header",
-                                span { class: "secrets-col-kind", "Type" }
-                                span { class: "secrets-col-policy", "Policy" }
-                                span { class: "secrets-col-label", "Label" }
-                                span { class: "secrets-col-name", "Name" }
-                                span { class: "secrets-col-actions", "" }
-                            }
-                        }
-
-                        if is_empty {
-                            div { class: "secrets-empty",
-                                "No credentials stored in the vault."
-                            }
-                        } else {
-                            {row_elements.into_iter()}
-                        }
-                    }
-
-                    // ── Add-secret section ──────────────────────────
-                    if let Some((ref step_label, ref input_val, ref hint, input_type)) = add_step_data {
-                        div { class: "secrets-add-section",
-                            div { class: "secrets-add-title", "Add Secret — {step_label}" }
-                            input {
-                                class: "input",
-                                r#type: "{input_type}",
-                                placeholder: if d.add_step == 1 { "e.g. openai_api_key" } else { "Paste secret value…" },
-                                value: "{input_val}",
-                                autofocus: true,
-                            }
-                            span { class: "field-help", "{hint}" }
-                        }
-                    }
-
-                    // ── Legend ──────────────────────────────────────
-                    if add_step_data.is_none() {
-                        div { class: "secrets-legend",
-                            span { class: "secrets-legend-item",
-                                span { class: "badge badge-open", "OPEN" }
-                            }
-                            span { class: "secrets-legend-label", "anytime" }
-                            span { class: "secrets-legend-item",
-                                span { class: "badge badge-ask", "ASK" }
-                            }
-                            span { class: "secrets-legend-label", "per-use" }
-                            span { class: "secrets-legend-item",
-                                span { class: "badge badge-auth", "AUTH" }
-                            }
-                            span { class: "secrets-legend-label", "re-auth" }
-                            span { class: "secrets-legend-item",
-                                span { class: "badge badge-skill", "SKILL" }
-                            }
-                            span { class: "secrets-legend-label", "gated" }
-                            span { class: "secrets-legend-item",
-                                span { class: "badge badge-muted", "OFF" }
-                            }
-                            span { class: "secrets-legend-label", "disabled" }
-                        }
-                    }
-                }
-
-                // ── Footer ──────────────────────────────────────────
-                div { class: "modal-foot secrets-foot",
-                    button {
-                        class: "btn btn-subtle",
+        RcModal {
+            active: true,
+            title: "🔐 Secrets Vault",
+            width: 720,
+            class: "secrets-dialog",
+            onclose: move |_| props.on_close.call(()),
+            footer: rsx! {
+                Buttons { class: "secrets-foot",
+                    Button {
+                        color: BulmaColor::Light,
                         onclick: move |_| props.on_command.call(SecretsCommand::Refresh),
                         "↻ Refresh"
                     }
-                    if add_step_data.is_some() {
-                        button {
-                            class: "btn btn-ghost",
+                    if is_adding {
+                        Button {
+                            color: BulmaColor::Ghost,
                             onclick: move |_| {
                                 // Cancel add — parent resets add state
                             },
                             "Cancel"
                         }
                     } else {
-                        button {
-                            class: "btn btn-primary",
+                        Button {
+                            color: BulmaColor::Primary,
+                            outlined: true,
                             onclick: move |_| {
                                 // Start add — parent sets add step
                             },
                             "+ Add Secret"
                         }
                     }
-                    button {
-                        class: "btn btn-primary",
+                    Button {
+                        color: BulmaColor::Primary,
                         onclick: move |_| props.on_close.call(()),
                         "Done"
+                    }
+                }
+            },
+
+            // ── Status bar ──────────────────────────────────
+            Level { class: "secrets-status",
+                LevelLeft {
+                    LevelItem { class: "secrets-status-item",
+                        span { class: "secrets-status-label", "Agent Access:" }
+                        Tag {
+                            color: if d.agent_access { Some(BulmaColor::Success) } else { None },
+                            light: true,
+                            rounded: true,
+                            "{access_label}"
+                        }
+                    }
+                    LevelItem { class: "secrets-status-item",
+                        span { class: "secrets-status-label", "Credentials:" }
+                        span { "{d.secrets.len()}" }
+                    }
+                    LevelItem { class: "secrets-status-item",
+                        span { class: "secrets-status-label", "2FA:" }
+                        Tag {
+                            color: if d.has_totp { Some(BulmaColor::Success) } else { None },
+                            light: true,
+                            rounded: true,
+                            "{totp_label}"
+                        }
+                    }
+                }
+            }
+
+            // ── Status message ──────────────────────────────
+            if let Some(msg) = &d.status {
+                div { class: "secrets-status-msg", "{msg}" }
+            }
+
+            // ── Credential list ─────────────────────────────
+            if is_empty {
+                div { class: "secrets-empty",
+                    "No credentials stored in the vault."
+                }
+            } else {
+                Table {
+                    fullwidth: true,
+                    hoverable: true,
+                    narrow: true,
+                    class: "secrets-table",
+                    thead {
+                        tr {
+                            th { "Type" }
+                            th { "Policy" }
+                            th { "Label" }
+                            th { "Name" }
+                            th { "" }
+                        }
+                    }
+                    tbody {
+                        {row_elements.into_iter()}
+                    }
+                }
+            }
+
+            // ── Add-secret section ──────────────────────────
+            if let Some((ref step_label, ref input_val, ref hint, input_type)) = add_step_data {
+                div { class: "secrets-add-section",
+                    div { class: "secrets-add-title", "Add Secret — {step_label}" }
+                    input {
+                        class: "input",
+                        r#type: "{input_type}",
+                        placeholder: if d.add_step == 1 { "e.g. openai_api_key" } else { "Paste secret value…" },
+                        value: "{input_val}",
+                        autofocus: true,
+                    }
+                    p { class: "help", "{hint}" }
+                }
+            }
+
+            // ── Legend ──────────────────────────────────────
+            if !is_adding {
+                div { class: "secrets-legend",
+                    for (policy, tone, meaning) in POLICY_LEGEND.iter() {
+                        span { class: "secrets-legend-item",
+                            Tag {
+                                color: tone_color(*tone),
+                                light: true,
+                                rounded: true,
+                                size: BulmaSize::Small,
+                                "{policy}"
+                            }
+                            span { class: "secrets-legend-label", "{meaning}" }
+                        }
                     }
                 }
             }

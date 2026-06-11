@@ -1,5 +1,28 @@
 //! Secrets-management dialog data.
 
+use crate::tone::Tone;
+
+/// The policy cycle order used by the "cycle policy" action:
+/// OPEN → ASK → AUTH → SKILL → OPEN.
+pub fn next_policy(current: &str) -> &'static str {
+    match current {
+        "OPEN" => "ASK",
+        "ASK" => "AUTH",
+        "AUTH" => "SKILL",
+        "SKILL" => "OPEN",
+        _ => "OPEN",
+    }
+}
+
+/// Legend entries for the policy badges: `(policy, tone, meaning)`.
+pub const POLICY_LEGEND: [(&str, Tone, &str); 5] = [
+    ("OPEN", Tone::Success, "anytime"),
+    ("ASK", Tone::Warning, "per-use"),
+    ("AUTH", Tone::Danger, "re-auth"),
+    ("SKILL", Tone::Info, "gated"),
+    ("OFF", Tone::Neutral, "disabled"),
+];
+
 // ── Secrets dialog ──────────────────────────────────────────────────────────
 
 /// A single secret entry shown in the secrets management dialog.
@@ -58,6 +81,20 @@ impl SecretInfoData {
     /// Policy display label with color hint.
     pub fn policy_label(&self) -> &str {
         if self.disabled { "OFF" } else { &self.policy }
+    }
+
+    /// Semantic tone for the policy badge.
+    pub fn policy_tone(&self) -> Tone {
+        if self.disabled {
+            return Tone::Neutral;
+        }
+        match self.policy.as_str() {
+            "OPEN" => Tone::Success,
+            "ASK" => Tone::Warning,
+            "AUTH" => Tone::Danger,
+            "SKILL" => Tone::Info,
+            _ => Tone::Neutral,
+        }
     }
 }
 

@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification};
+use dioxus_bulma::prelude::{
+    BulmaColor, BulmaSize, Button, Buttons, Control, Field, FieldLabel, Notification,
+};
 
 use crate::app_support::{
     connect_to_gateway, create_swarm_from_template, get_swarm_infos, stop_swarm,
@@ -381,33 +383,21 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
             }
 
             if let Some((thread_id, thread_label)) = pending_thread_delete.read().clone() {
-                div { class: "modal-backdrop",
-                    div { class: "modal modal-confirm",
-                        div { class: "modal-head",
-                            div { class: "modal-title", "Delete thread?" }
-                            button {
-                                class: "modal-close",
-                                onclick: move |_| pending_thread_delete.set(None),
-                                "✕"
-                            }
-                        }
-                        div { class: "modal-body",
-                            p { "This will permanently delete \"{thread_label}\" and its messages." }
-                            p { class: "modal-muted", "This action cannot be undone." }
-                        }
-                        div { class: "modal-foot",
-                            Buttons {
-                                Button {
-                                    color: BulmaColor::Ghost,
-                                    size: BulmaSize::Small,
-                                class: "btn btn-ghost",
+                RcModal {
+                    active: true,
+                    title: "Delete thread?",
+                    width: 420,
+                    class: "modal-confirm",
+                    onclose: move |_| pending_thread_delete.set(None),
+                    footer: rsx! {
+                        Buttons {
+                            Button {
+                                color: BulmaColor::Light,
                                 onclick: move |_| pending_thread_delete.set(None),
                                 "Cancel"
-                                }
-                                Button {
-                                    color: BulmaColor::Danger,
-                                    size: BulmaSize::Small,
-                                class: "btn btn-danger",
+                            }
+                            Button {
+                                color: BulmaColor::Danger,
                                 onclick: move |_| {
                                     pending_thread_delete.set(None);
                                     let fallback_id = {
@@ -440,65 +430,26 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     }
                                 },
                                 "Delete Thread"
-                                }
                             }
                         }
-                    }
+                    },
+                    p { "This will permanently delete \"{thread_label}\" and its messages." }
+                    p { class: "modal-muted", "This action cannot be undone." }
                 }
             }
 
             // TOTP authentication modal
             if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
-                div { class: "modal-backdrop",
-                    onclick: |_| {},
-                    div {
-                        class: "modal",
-                        onclick: move |evt| evt.stop_propagation(),
-                        div { class: "modal-head",
-                            span { class: "modal-title", "Gateway Authentication" }
-                        }
-                        div { class: "modal-body",
-                            p {
-                                style: "margin-bottom: 16px; color: var(--rc-text-muted); font-size: 13px;",
-                                "Enter the TOTP code from your authenticator app to connect to the gateway."
-                            }
-                            div { class: "field",
-                                label { class: "field-label", "TOTP Code" }
-                                input {
-                                    class: "input totp-input",
-                                    r#type: "text",
-                                    placeholder: "000000",
-                                    value: "{auth_code}",
-                                    autofocus: true,
-                                    maxlength: "8",
-                                    oninput: move |evt| auth_code.set(evt.value()),
-                                    onkeydown: move |evt: KeyboardEvent| {
-                                        if evt.key() == Key::Enter {
-                                            evt.prevent_default();
-                                            let code = auth_code.read().trim().to_string();
-                                            if code.is_empty() {
-                                                return;
-                                            }
-                                            let gw = gateway.read().clone();
-                                            if let Some(client) = gw {
-                                                auth_code.set(String::new());
-                                                spawn(async move {
-                                                    if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
-                                                        tracing::error!("Failed to send auth code: {}", e);
-                                                    }
-                                                });
-                                            }
-                                        }
-                                    },
-                                }
-                            }
-                        }
-                        div { class: "modal-foot",
-                            Buttons {
-                                Button {
-                                    color: BulmaColor::Primary,
-                                    size: BulmaSize::Small,
-                                class: "btn btn-primary",
+                RcModal {
+                    active: true,
+                    title: "Gateway Authentication",
+                    width: 420,
+                    closable: false,
+                    onclose: move |_| {},
+                    footer: rsx! {
+                        Buttons {
+                            Button {
+                                color: BulmaColor::Primary,
                                 disabled: auth_code.read().trim().is_empty(),
                                 onclick: move |_| {
                                     let code = auth_code.read().trim().to_string();
@@ -516,7 +467,41 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     }
                                 },
                                 "Verify"
-                                }
+                            }
+                        }
+                    },
+                    p { class: "rc-dialog-lead",
+                        "Enter the TOTP code from your authenticator app to connect to the gateway."
+                    }
+                    Field {
+                        FieldLabel { "TOTP Code" }
+                        Control {
+                            input {
+                                class: "input totp-input",
+                                r#type: "text",
+                                placeholder: "000000",
+                                value: "{auth_code}",
+                                autofocus: true,
+                                maxlength: "8",
+                                oninput: move |evt| auth_code.set(evt.value()),
+                                onkeydown: move |evt: KeyboardEvent| {
+                                    if evt.key() == Key::Enter {
+                                        evt.prevent_default();
+                                        let code = auth_code.read().trim().to_string();
+                                        if code.is_empty() {
+                                            return;
+                                        }
+                                        let gw = gateway.read().clone();
+                                        if let Some(client) = gw {
+                                            auth_code.set(String::new());
+                                            spawn(async move {
+                                                if let Err(e) = client.send(GatewayCommand::Auth { code }).await {
+                                                    tracing::error!("Failed to send auth code: {}", e);
+                                                }
+                                            });
+                                        }
+                                    }
+                                },
                             }
                         }
                     }

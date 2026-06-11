@@ -13,7 +13,9 @@ use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::ui::ConnectionStatus;
 use rustyclaw_core::user_prompt_types::UserPrompt;
 
-use rustyclaw_view::{HatchingDialogData, PromptAttachment, build_prompt_with_attachments};
+use rustyclaw_view::{
+    BannerActionKind, HatchingDialogData, PromptAttachment, build_prompt_with_attachments,
+};
 
 mod dialogs;
 mod signals;
@@ -23,8 +25,11 @@ use signals::do_reconnect;
 
 const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 
-/// Bundled stylesheet — embedded directly in the binary so the desktop crate
+/// Bundled stylesheets — embedded directly in the binary so the desktop crate
 /// can be run with plain `cargo run`/`cargo build` without the `dx` CLI.
+/// Bulma provides the component framework; `styles.css` layers the RustyClaw
+/// brand theme and app-shell layout on top.
+const BULMA: &str = include_str!("../../assets/bulma.min.css");
 const STYLES: &str = include_str!("../../assets/styles.css");
 
 #[component]
@@ -688,6 +693,7 @@ pub fn App() -> Element {
     };
 
     rsx! {
+        style { dangerous_inner_html: BULMA }
         style { dangerous_inner_html: STYLES }
 
         div {
@@ -795,53 +801,38 @@ pub fn App() -> Element {
                 }
 
             div { class: "main",
-                // Connection / status banners
-                if let ConnectionStatus::Error(err) = state.read().connection.clone() {
+                // Connection / status banners — which banners appear, and
+                // which actions each offers, is decided by the view layer.
+                for banner in rustyclaw_view::build_banners(
+                    &state.read().connection,
+                    state.read().status_message.as_deref(),
+                ) {
                     Notification {
-                        color: BulmaColor::Danger,
-                        class: "banner is-danger",
+                        color: crate::components::tone_color(banner.tone),
+                        light: true,
+                        class: "banner",
                         span { class: "banner-text",
-                            "🚫 Connection error: {err}"
-                        }
-                        Buttons { class: "banner-actions", addons: true,
-                            Button {
-                                color: BulmaColor::Ghost,
-                                size: BulmaSize::Small,
-                                class: "btn btn-ghost btn-sm",
-                                onclick: move |_| do_reconnect(sig),
-                                "↻ Retry"
+                            if !banner.icon.is_empty() {
+                                "{banner.icon} "
                             }
-                            Button {
-                                color: BulmaColor::Light,
-                                size: BulmaSize::Small,
-                                class: "btn btn-subtle btn-sm",
-                                onclick: move |_| show_pairing.set(true),
-                                "Pair gateway"
-                            }
+                            "{banner.text}"
                         }
-                    }
-                } else if matches!(state.read().connection.clone(), ConnectionStatus::Connecting) {
-                    Notification {
-                        color: BulmaColor::Info,
-                        class: "banner is-info",
-                        span { class: "banner-text",
-                            "🔄 Connecting to gateway…"
-                        }
-                    }
-                }
-
-                if let Some(msg) = state.read().status_message.clone() {
-                    Notification {
-                        color: BulmaColor::Warning,
-                        class: "banner is-warn",
-                        span { class: "banner-text", "{msg}" }
-                        Buttons { class: "banner-actions", addons: true,
-                            Button {
-                                color: BulmaColor::Ghost,
-                                size: BulmaSize::Small,
-                                class: "btn btn-ghost btn-sm",
-                                onclick: move |_| state.write().status_message = None,
-                                "Dismiss"
+                        if !banner.actions.is_empty() {
+                            Buttons { class: "banner-actions",
+                                for action in banner.actions.iter().cloned() {
+                                    Button {
+                                        color: BulmaColor::Ghost,
+                                        size: BulmaSize::Small,
+                                        onclick: move |_| match action.kind {
+                                            BannerActionKind::Reconnect => do_reconnect(sig),
+                                            BannerActionKind::PairGateway => show_pairing.set(true),
+                                            BannerActionKind::DismissStatus => {
+                                                state.write().status_message = None;
+                                            }
+                                        },
+                                        "{action.label}"
+                                    }
+                                }
                             }
                         }
                     }

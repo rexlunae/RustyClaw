@@ -1,17 +1,27 @@
 //! UI components for the desktop client.
 //!
-//! Module structure aligned with the TUI client after Phase D
-//! structural refactoring:
+//! Components render shared view-models from `rustyclaw-view` with
+//! `dioxus-bulma` widgets.  Module structure aligned with the TUI client:
 //!
 //!   - `chat.rs`           — composite of Messages + InputBar
 //!   - `messages.rs`       — message list, empty state, indicators
 //!   - `message.rs`        — individual message bubble
 //!   - `input_bar.rs`      — text input + model bar
-//!   - `sidebar.rs`        — thread sidebar
+//!   - `sidebar.rs`        — project/thread sidebar
 //!   - `tool_call.rs`      — tool call panel
 //!   - dialog modules      — credential, device_flow, hatching,
 //!     pairing, settings, swarm, tool_approval,
 //!     user_prompt, vault_unlock
+//!
+//! This module also provides the shared Bulma plumbing: [`tone_color`]
+//! maps the view layer's semantic [`Tone`] to a Bulma colour, and
+//! [`RcModal`] is the one modal shell every dialog renders into.
+
+use dioxus::prelude::*;
+use dioxus_bulma::prelude::{
+    BulmaColor, Modal, ModalCard, ModalCardBody, ModalCardFoot, ModalCardHead,
+};
+use rustyclaw_view::Tone;
 
 mod chat;
 mod connection;
@@ -48,3 +58,90 @@ pub use swarm_panel::SwarmPanel;
 pub use tool_approval::ToolApprovalDialog;
 pub use user_prompt::UserPromptDialog;
 pub use vault_unlock::VaultUnlockDialog;
+
+/// Map a view-layer semantic [`Tone`] to a Bulma colour.
+///
+/// `Tone::Neutral` maps to `None` so the widget keeps its scheme colour.
+pub(crate) fn tone_color(tone: Tone) -> Option<BulmaColor> {
+    match tone {
+        Tone::Neutral => None,
+        Tone::Primary => Some(BulmaColor::Primary),
+        Tone::Info => Some(BulmaColor::Info),
+        Tone::Success => Some(BulmaColor::Success),
+        Tone::Warning => Some(BulmaColor::Warning),
+        Tone::Danger => Some(BulmaColor::Danger),
+    }
+}
+
+/// Props for [`RcModal`].
+#[derive(Props, Clone, PartialEq)]
+pub struct RcModalProps {
+    /// Whether the modal is shown. When `false` nothing renders.
+    pub active: bool,
+    /// Header title text.
+    pub title: String,
+    /// Preferred card width in pixels (clamped to the viewport).
+    #[props(default)]
+    pub width: Option<u32>,
+    /// Extra class for the modal card.
+    #[props(default)]
+    pub class: Option<String>,
+    /// Whether the backdrop click / header ✕ dismisses the dialog.
+    #[props(default = true)]
+    pub closable: bool,
+    /// Dismiss handler (backdrop click or header ✕).
+    pub onclose: EventHandler<()>,
+    /// Footer content, typically a `Buttons` row. Omitted → no footer.
+    #[props(default)]
+    pub footer: Option<Element>,
+    pub children: Element,
+}
+
+/// Shared modal shell: Bulma `Modal` + `ModalCard` with a title header,
+/// scrollable body, and optional footer.
+#[component]
+pub fn RcModal(props: RcModalProps) -> Element {
+    if !props.active {
+        return rsx! {};
+    }
+
+    let card_style = props
+        .width
+        .map(|w| format!("width: min({w}px, calc(100vw - 40px));"))
+        .unwrap_or_default();
+    let head_class = if props.closable {
+        None
+    } else {
+        Some("rc-no-close".to_string())
+    };
+    let closable = props.closable;
+    let onclose = props.onclose;
+
+    rsx! {
+        Modal {
+            active: true,
+            onclose: move |_| {
+                if closable {
+                    onclose.call(());
+                }
+            },
+            ModalCard {
+                class: props.class.clone(),
+                style: card_style,
+                ModalCardHead {
+                    class: head_class,
+                    onclose: move |_| {
+                        if closable {
+                            onclose.call(());
+                        }
+                    },
+                    p { class: "modal-card-title", "{props.title}" }
+                }
+                ModalCardBody { {props.children} }
+                if let Some(footer) = props.footer {
+                    ModalCardFoot { class: "rc-modal-foot", {footer} }
+                }
+            }
+        }
+    }
+}
