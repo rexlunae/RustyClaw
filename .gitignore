@@ -28,3 +28,6 @@ Cargo.lock
 
 # Claude Code local state (worktrees, scheduled-task locks, etc.)
 .claude/
+
+# Rasterized app icons — generated from logo.svg by rustyclaw-desktop/build.rs
+crates/rustyclaw-desktop/icons/

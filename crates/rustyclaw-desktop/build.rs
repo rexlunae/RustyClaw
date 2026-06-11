@@ -4,12 +4,12 @@
 //! iconutil, or ImageMagick needed) into:
 //!
 //!   - `$OUT_DIR/icon-256.png` — embedded into the binary as the window icon
-//!   - `icons/*.png`, `icons/icon.icns`, `icons/icon.ico` — the committed
-//!     icon set used by `dx bundle` (refreshed best-effort; failures to
-//!     write into the source tree are warnings, not build errors)
+//!   - `icons/*.png`, `icons/icon.icns`, `icons/icon.ico` — the icon set
+//!     used by `dx bundle` (gitignored: generated, never committed; written
+//!     best-effort so a read-only source tree warns instead of failing)
 //!
-//! Re-runs only when the logo (or this script) changes, so the committed
-//! set can never go stale relative to the logo.
+//! Re-runs only when the logo (or this script) changes, so the icon set
+//! can never go stale relative to the logo.
 
 use std::fs;
 use std::io;
@@ -32,13 +32,11 @@ fn main() {
     let out_dir = PathBuf::from(std::env::var("OUT_DIR").expect("OUT_DIR set by cargo"));
     let embedded = out_dir.join("icon-256.png");
 
+    // The icons are generated, not committed, so there is no fallback:
+    // a failure here must fail the build (the embedded window icon is
+    // include_bytes!'d from OUT_DIR).
     if let Err(e) = generate_icons(&embedded) {
-        println!("cargo:warning=icon generation from {LOGO} failed ({e}); using committed icons");
-        // The embedded window icon must exist; fall back to the committed copy.
-        if !embedded.exists() {
-            fs::copy("icons/icon-256.png", &embedded)
-                .expect("committed icons/icon-256.png present as fallback");
-        }
+        panic!("failed to generate app icons from {LOGO}: {e}");
     }
 }
 

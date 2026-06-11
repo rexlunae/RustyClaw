@@ -1,8 +1,8 @@
 [application]
 name = "RustyClaw"
 
-# App icons rendered from the project logo (../../logo.svg). Regenerate with
-# rsvg-convert + iconutil if the logo changes; see icons/.
+# App icons rendered from the project logo (../../logo.svg) by build.rs on
+# every build — the icons/ directory is generated, not committed.
 [bundle]
 identifier = "io.rustyclaw.desktop"
 icon = [
