@@ -96,9 +96,9 @@ fn run(gateway_url: Option<String>, no_dialog: bool) {
         .launch(app::App);
 }
 
-/// 256×256 application icon, rendered from the project logo
-/// (`logo.svg` → `icons/icon-256.png`; see `icons/` for the full set).
-const ICON_PNG: &[u8] = include_bytes!("../icons/icon-256.png");
+/// 256×256 application icon, rendered from the project logo at build time
+/// (`logo.svg` → `$OUT_DIR/icon-256.png`; see `build.rs` for the full set).
+const ICON_PNG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.png"));
 
 /// Decode the embedded icon for the window/taskbar. Used on Windows and
 /// Linux; macOS takes the Dock icon from the app bundle's `icon.icns`.

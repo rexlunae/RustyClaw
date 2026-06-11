@@ -73,5 +73,11 @@ dirs.workspace = true
 # Native file/folder picker dialogs
 rfd = "0.15"
 
+# Build-time icon generation: render logo.svg into the window icon and the
+# bundled icon set (see build.rs). Pure Rust so it works on every platform.
+[build-dependencies]
+resvg = { version = "0.47", default-features = false }
+icns = "0.4"
+
 [features]
 default = []
