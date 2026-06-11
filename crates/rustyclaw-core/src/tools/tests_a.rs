@@ -436,6 +436,7 @@ fn test_memory_search_params_defined() {
     );
 }
 
+#[cfg(feature = "semantic-memory")]
 #[test]
 fn test_memory_search_missing_query() {
     let args = json!({});

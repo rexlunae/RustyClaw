@@ -70,8 +70,9 @@ use runtime::{exec_execute_command, exec_process};
 use web::{exec_web_fetch, exec_web_search};
 
 // Memory operations
-use memory_tools::exec_add_memory;
-use memory_tools::{exec_memory_get, exec_memory_search, exec_save_memory, exec_search_history};
+#[cfg(feature = "semantic-memory")]
+use memory_tools::{exec_add_memory, exec_memory_search};
+use memory_tools::{exec_memory_get, exec_save_memory, exec_search_history};
 
 // Cron operations
 use cron_tool::exec_cron;
@@ -379,10 +380,12 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &WEB_FETCH,
         &WEB_SEARCH,
         &PROCESS,
+        #[cfg(feature = "semantic-memory")]
         &MEMORY_SEARCH,
         &MEMORY_GET,
         &SAVE_MEMORY,
         &SEARCH_HISTORY,
+        #[cfg(feature = "semantic-memory")]
         &ADD_MEMORY,
         &CRON,
         &SESSIONS_LIST,

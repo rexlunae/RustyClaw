@@ -116,6 +116,7 @@ pub static PROCESS: ToolDef = ToolDef {
     execute: exec_process,
 };
 
+#[cfg(feature = "semantic-memory")]
 pub static MEMORY_SEARCH: ToolDef = ToolDef {
     name: "memory_search",
     description: "Semantically search MEMORY.md and memory/*.md files for relevant information. \
@@ -151,6 +152,7 @@ pub static SEARCH_HISTORY: ToolDef = ToolDef {
     execute: exec_search_history,
 };
 
+#[cfg(feature = "semantic-memory")]
 pub static ADD_MEMORY: ToolDef = ToolDef {
     name: "add_memory",
     description: "Add a memory to the semantic vector index. Use to store important facts, decisions, \

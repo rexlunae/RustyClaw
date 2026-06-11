@@ -7,6 +7,7 @@ use std::path::Path;
 use tracing::{debug, instrument};
 
 /// Search memory using Steel Memory semantic vector search.
+#[cfg(feature = "semantic-memory")]
 #[instrument(skip(args, workspace_dir), fields(query))]
 pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let query = args
@@ -98,6 +99,7 @@ pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, Str
 }
 
 /// Add a memory to the semantic index.
+#[cfg(feature = "semantic-memory")]
 #[instrument(skip(args, workspace_dir))]
 pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let content = args
