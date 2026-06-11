@@ -44,6 +44,7 @@
 pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
 pub mod app_menu;
+pub mod banner;
 pub mod client;
 pub mod command_menu;
 pub mod composer;
@@ -54,9 +55,11 @@ pub mod message;
 pub mod sidebar;
 pub mod status;
 pub mod swarm;
+pub mod tone;
 
 // Re-export at crate root for convenience.
 pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
+pub use banner::{BannerAction, BannerActionKind, BannerData, build_banners};
 pub use client::ClientState;
 pub use command_menu::{CommandMenuData, build_slash_completions};
 pub use composer::{
@@ -79,3 +82,4 @@ pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData};
 pub use sidebar::{ProjectGroupData, SidebarItemData, SidebarTree};
 pub use status::StatusBarData;
 pub use swarm::{SwarmAgentData, SwarmData};
+pub use tone::Tone;

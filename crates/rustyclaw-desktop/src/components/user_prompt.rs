@@ -1,8 +1,11 @@
 //! User prompt dialog: structured input requested by the agent (ask_user tool).
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{BulmaColor, Button, Buttons, Control, Field, Radio};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, PromptType};
 use rustyclaw_view::UserPromptData;
+
+use super::RcModal;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct UserPromptDialogProps {
@@ -30,127 +33,26 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
 
     let prompt_id = props.prompt_id.clone();
     let prompt_id_dismiss = props.prompt_id.clone();
+    let prompt_id_footer = props.prompt_id.clone();
 
     rsx! {
-        div { class: "modal-backdrop",
-            onclick: move |_| props.on_dismiss.call(prompt_id_dismiss.clone()),
-
-            div {
-                class: "modal",
-                style: "max-width: 520px;",
-                onclick: move |evt| evt.stop_propagation(),
-
-                div { class: "modal-head",
-                    span { class: "modal-title", "💬 {prompt.title}" }
-                    button {
-                        class: "modal-close",
-                        title: "Dismiss",
+        RcModal {
+            active: true,
+            title: "💬 {prompt.title}",
+            width: 520,
+            onclose: move |_| props.on_dismiss.call(prompt_id_dismiss.clone()),
+            footer: rsx! {
+                Buttons {
+                    Button {
+                        color: BulmaColor::Light,
                         onclick: {
-                            let id = prompt_id.clone();
-                            move |_| props.on_dismiss.call(id.clone())
-                        },
-                        "✕"
-                    }
-                }
-
-                div { class: "modal-body",
-                    if !prompt.description.is_empty() {
-                        p {
-                            style: "color: var(--text-dim); margin-bottom: 12px;",
-                            "{prompt.description}"
-                        }
-                    }
-
-                    {match &prompt.prompt_type {
-                        Some(PromptType::TextInput { placeholder, .. }) => {
-                            let ph = placeholder.clone().unwrap_or_default();
-                            rsx! {
-                                div { class: "field",
-                                    input {
-                                        class: "input",
-                                        r#type: "text",
-                                        placeholder: "{ph}",
-                                        value: "{text_input}",
-                                        oninput: move |evt| text_input.set(evt.value()),
-                                    }
-                                }
-                            }
-                        }
-                        Some(PromptType::Confirm { default }) => {
-                            let _ = *default;
-                            rsx! {
-                                div {
-                                    style: "display: flex; gap: 12px;",
-                                    label {
-                                        style: "display: flex; align-items: center; gap: 6px; cursor: pointer;",
-                                        input {
-                                            r#type: "radio",
-                                            name: "confirm",
-                                            checked: *confirm_value.read(),
-                                            onchange: move |_| confirm_value.set(true),
-                                        }
-                                        "Yes"
-                                    }
-                                    label {
-                                        style: "display: flex; align-items: center; gap: 6px; cursor: pointer;",
-                                        input {
-                                            r#type: "radio",
-                                            name: "confirm",
-                                            checked: !*confirm_value.read(),
-                                            onchange: move |_| confirm_value.set(false),
-                                        }
-                                        "No"
-                                    }
-                                }
-                            }
-                        }
-                        Some(PromptType::Select { options, .. }) => {
-                            rsx! {
-                                div {
-                                    style: "display: flex; flex-direction: column; gap: 4px; max-height: 300px; overflow: auto;",
-                                    for (i, opt) in options.iter().enumerate() {
-                                        {
-                                            let bg = if *selected_index.read() == i { "var(--accent-dim)" } else { "transparent" };
-                                            let item_style = format!("padding: 8px 12px; border-radius: 6px; cursor: pointer; background: {};", bg);
-                                            rsx! {
-                                        div {
-                                            key: "{i}",
-                                            style: "{item_style}",
-                                            onclick: move |_| selected_index.set(i),
-                                            span {
-                                                style: "font-weight: 500;",
-                                                "{opt.label}"
-                                            }
-                                            if let Some(desc) = &opt.description {
-                                                span {
-                                                    style: "color: var(--text-dim); margin-left: 8px; font-size: 0.9em;",
-                                                    "{desc}"
-                                                }
-                                            }
-                                        }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        _ => rsx! {
-                            p { style: "color: var(--text-dim);", "Unsupported prompt type." }
-                        },
-                    }}
-                }
-
-                div { class: "modal-foot",
-                    button {
-                        class: "btn btn-subtle",
-                        onclick: {
-                            let id = prompt_id.clone();
+                            let id = prompt_id_footer.clone();
                             move |_| props.on_dismiss.call(id.clone())
                         },
                         "Dismiss"
                     }
-                    button {
-                        class: "btn btn-primary",
+                    Button {
+                        color: BulmaColor::Primary,
                         onclick: {
                             let id = prompt_id.clone();
                             let prompt_type = prompt.prompt_type.clone();
@@ -178,7 +80,72 @@ pub fn UserPromptDialog(props: UserPromptDialogProps) -> Element {
                         "Submit"
                     }
                 }
+            },
+
+            if !prompt.description.is_empty() {
+                p { class: "rc-dialog-lead", "{prompt.description}" }
             }
+
+            {match &prompt.prompt_type {
+                Some(PromptType::TextInput { placeholder, .. }) => {
+                    let ph = placeholder.clone().unwrap_or_default();
+                    rsx! {
+                        Field {
+                            Control {
+                                input {
+                                    class: "input",
+                                    r#type: "text",
+                                    placeholder: "{ph}",
+                                    value: "{text_input}",
+                                    autofocus: true,
+                                    oninput: move |evt| text_input.set(evt.value()),
+                                }
+                            }
+                        }
+                    }
+                }
+                Some(PromptType::Confirm { default }) => {
+                    let _ = *default;
+                    rsx! {
+                        Field { class: "rc-confirm-options",
+                            Radio {
+                                name: "confirm",
+                                value: "yes",
+                                checked: *confirm_value.read(),
+                                onchange: move |_| confirm_value.set(true),
+                                "Yes"
+                            }
+                            Radio {
+                                name: "confirm",
+                                value: "no",
+                                checked: !*confirm_value.read(),
+                                onchange: move |_| confirm_value.set(false),
+                                "No"
+                            }
+                        }
+                    }
+                }
+                Some(PromptType::Select { options, .. }) => {
+                    rsx! {
+                        div { class: "rc-select-options",
+                            for (i, opt) in options.iter().enumerate() {
+                                div {
+                                    key: "{i}",
+                                    class: if *selected_index.read() == i { "rc-select-option is-selected" } else { "rc-select-option" },
+                                    onclick: move |_| selected_index.set(i),
+                                    span { class: "rc-select-option-label", "{opt.label}" }
+                                    if let Some(desc) = &opt.description {
+                                        span { class: "rc-select-option-desc", "{desc}" }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => rsx! {
+                    p { class: "rc-dialog-lead", "Unsupported prompt type." }
+                },
+            }}
         }
     }
 }

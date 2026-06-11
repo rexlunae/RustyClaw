@@ -23,10 +23,15 @@ mcp = ["dep:rmcp", "dep:schemars"]
 matrix = ["chat-system/matrix"]
 whatsapp = ["chat-system/whatsapp"]
 qr = ["dep:image"]
+# Semantic vector memory (steel-memory → fastembed → ONNX Runtime).
+# Heavy native dep that does not cross-compile (no armv7 ONNX binaries and
+# the ort-sys build script breaks under cross); enabled by default in the
+# gateway, which is the only component that runs it.
+semantic-memory = ["dep:steel-memory"]
 # CLI-based messengers (tier 1) - no heavy deps, just HTTP
 signal-cli = ["chat-system/signal-cli"]
 all-messengers = ["whatsapp", "signal-cli", "matrix"]
-full = ["web-tools", "browser", "mcp", "all-messengers"]
+full = ["web-tools", "browser", "mcp", "all-messengers", "semantic-memory"]
 
 [dependencies]
 serde.workspace = true
@@ -89,7 +94,7 @@ schemars = { workspace = true, optional = true }
 
 # Steel Memory - semantic vector search memory palace
 # Keep git for local/dev; include version so publish can strip git and use crates.io.
-steel-memory = { version = "0.1.2" }
+steel-memory = { version = "0.1.2", optional = true }
 
 # OpenHuman-derived helpers
 # - tokenjuice: rule-driven compression of tool output before it hits the LLM

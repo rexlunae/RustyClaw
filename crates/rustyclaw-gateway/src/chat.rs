@@ -121,6 +121,7 @@ pub(crate) async fn handle_chat_frame(
     }
 
     // Auto-ingest user message into Steel Memory
+    #[cfg(feature = "semantic-memory")]
     if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
         let ws = config.workspace_dir().to_path_buf();
         let text = last_user.content.clone();
@@ -251,6 +252,7 @@ pub(crate) async fn handle_chat_frame(
     }
 
     // Inject relevant memory context from Steel Memory
+    #[cfg(feature = "semantic-memory")]
     if !messages_with_context.is_empty() && messages_with_context[0].role == "system" {
         if let Some(last_user) = messages_with_context
             .iter()

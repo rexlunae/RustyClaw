@@ -2,8 +2,7 @@
 //! and streaming/thinking/processing indicators.
 //!
 //! This component is the messages-area analogue of the TUI's
-//! `components/messages.rs`, refactored out of `chat.rs` during the
-//! Phase D structural alignment.  Sub-components:
+//! `components/messages.rs`.  Sub-components:
 //!   - [`Messages`] — the public composite
 //!   - [`EmptyState`] — starter prompts when no messages exist
 //!   - [`ThinkingIndicator`] — animated "Thinking…" row
@@ -11,6 +10,8 @@
 //!   - [`StreamingProgress`] — live chunk/byte counter during streaming
 
 use dioxus::prelude::*;
+use dioxus_bulma::components::{Subtitle, Title, TitleSize};
+use dioxus_bulma::prelude::{BulmaBox, BulmaColor, BulmaSize, Progress};
 use rustyclaw_core::ui::ChatMessage;
 
 use super::message::MessageBubble;
@@ -96,11 +97,11 @@ fn EmptyState(props: EmptyStateProps) -> Element {
         div { class: "empty-state",
             div { class: "empty-state-card",
                 div { class: "empty-state-mark", "🦞" }
-                h2 { "{data.greeting()}" }
-                p { "{data.subtitle()}" }
+                Title { size: TitleSize::Is3, "{data.greeting()}" }
+                Subtitle { size: TitleSize::Is6, "{data.subtitle()}" }
                 div { class: "starter-grid",
                     for starter in data.starters().iter() {
-                        button {
+                        BulmaBox {
                             key: "{starter.title}",
                             class: "starter-card",
                             onclick: {
@@ -156,7 +157,12 @@ fn ThinkingIndicator(props: ThinkingIndicatorProps) -> Element {
 fn ProcessingIndicator() -> Element {
     rsx! {
         div { class: "streaming-progress",
-            span { class: "streaming-progress-icon", "⏳" }
+            Progress {
+                color: BulmaColor::Primary,
+                size: BulmaSize::Small,
+                max: 100.0,
+                class: "streaming-progress-bar",
+            }
             span { class: "streaming-progress-text", "Processing…" }
         }
     }
@@ -178,7 +184,12 @@ fn StreamingProgress(props: StreamingProgressProps) -> Element {
 
     rsx! {
         div { class: "streaming-progress",
-            span { class: "streaming-progress-icon streaming-pulse" }
+            Progress {
+                color: BulmaColor::Primary,
+                size: BulmaSize::Small,
+                max: 100.0,
+                class: "streaming-progress-bar",
+            }
             span { class: "streaming-progress-text", "{label}" }
         }
     }

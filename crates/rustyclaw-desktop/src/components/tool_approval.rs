@@ -1,7 +1,10 @@
 //! Tool approval dialog: approve or deny tool execution in Ask mode.
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{BulmaColor, Button, Buttons, FieldLabel, Tag};
 use rustyclaw_view::ToolApprovalData;
+
+use super::RcModal;
 
 #[derive(Props, Clone, PartialEq)]
 pub struct ToolApprovalDialogProps {
@@ -21,52 +24,43 @@ pub fn ToolApprovalDialog(props: ToolApprovalDialogProps) -> Element {
 
     let id_approve = props.data.id.clone();
     let id_deny = props.data.id.clone();
+    let id_close = props.data.id.clone();
 
     rsx! {
-        div { class: "modal-backdrop",
-            div {
-                class: "modal",
-                style: "max-width: 560px;",
-                onclick: move |evt| evt.stop_propagation(),
-
-                div { class: "modal-head",
-                    span { class: "modal-title", "🔒 Tool Approval Required" }
-                }
-
-                div { class: "modal-body",
-                    div { class: "settings-section",
-                        div { class: "settings-section-title", "The agent wants to run:" }
-                        div {
-                            style: "margin-top: 8px; padding: 8px 12px; background: var(--bg-surface); border-radius: 6px; font-family: monospace;",
-                            span {
-                                style: "color: var(--accent-bright); font-weight: bold;",
-                                "{props.data.name}"
-                            }
-                        }
-                    }
-
-                    if !truncated_args.is_empty() {
-                        div { class: "settings-section",
-                            div { class: "settings-section-title", "Arguments:" }
-                            pre {
-                                style: "margin-top: 8px; padding: 8px 12px; background: var(--bg-surface); border-radius: 6px; font-size: 0.85em; max-height: 200px; overflow: auto; white-space: pre-wrap; word-break: break-all;",
-                                "{truncated_args}"
-                            }
-                        }
-                    }
-                }
-
-                div { class: "modal-foot",
-                    button {
-                        class: "btn btn-subtle",
+        RcModal {
+            active: true,
+            title: "🔒 Tool Approval Required",
+            width: 560,
+            onclose: move |_| props.on_deny.call(id_close.clone()),
+            footer: rsx! {
+                Buttons {
+                    Button {
+                        color: BulmaColor::Light,
                         onclick: move |_| props.on_deny.call(id_deny.clone()),
                         "✕ Deny"
                     }
-                    button {
-                        class: "btn btn-primary",
+                    Button {
+                        color: BulmaColor::Primary,
                         onclick: move |_| props.on_approve.call(id_approve.clone()),
                         "✓ Approve"
                     }
+                }
+            },
+
+            div { class: "settings-section",
+                FieldLabel { "The agent wants to run:" }
+                Tag {
+                    color: BulmaColor::Warning,
+                    light: true,
+                    class: "tool-approval-name",
+                    "{props.data.name}"
+                }
+            }
+
+            if !truncated_args.is_empty() {
+                div { class: "settings-section",
+                    FieldLabel { "Arguments:" }
+                    pre { class: "tool-pre tool-approval-args", "{truncated_args}" }
                 }
             }
         }

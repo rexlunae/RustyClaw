@@ -5,6 +5,8 @@
 
 use rustyclaw_core::ui::ConnectionStatus;
 
+use crate::tone::Tone;
+
 /// Everything the status bar needs to render.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct StatusBarData {
@@ -70,6 +72,29 @@ impl StatusBarData {
             ConnectionStatus::Authenticated => "is-success",
             ConnectionStatus::Error(_) => "is-danger",
         }
+    }
+
+    /// Semantic tone for the connection chip.
+    pub fn connection_tone(&self) -> Tone {
+        Self::connection_tone_static(&self.connection)
+    }
+
+    /// Static version of [`connection_tone`](Self::connection_tone).
+    pub fn connection_tone_static(status: &ConnectionStatus) -> Tone {
+        match status {
+            ConnectionStatus::Disconnected => Tone::Warning,
+            ConnectionStatus::Connecting | ConnectionStatus::Authenticating => Tone::Info,
+            ConnectionStatus::Connected | ConnectionStatus::Authenticated => Tone::Success,
+            ConnectionStatus::Error(_) => Tone::Danger,
+        }
+    }
+
+    /// Whether the connection chip should pulse (a transition is in flight).
+    pub fn connection_is_pending_static(status: &ConnectionStatus) -> bool {
+        matches!(
+            status,
+            ConnectionStatus::Connecting | ConnectionStatus::Authenticating
+        )
     }
 
     /// Static version of [`connection_error`] that takes a reference.

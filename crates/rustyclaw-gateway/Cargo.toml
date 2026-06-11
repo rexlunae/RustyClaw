@@ -13,7 +13,11 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-default = []
+default = ["semantic-memory"]
+# Semantic vector memory (auto-ingest + recall via steel-memory). On by
+# default for the gateway; disable for targets where ONNX Runtime is
+# unavailable (e.g. 32-bit ARM).
+semantic-memory = ["rustyclaw-core/semantic-memory"]
 mcp = ["rustyclaw-core/mcp"]
 matrix = ["rustyclaw-core/matrix", "chat-system/matrix"]
 whatsapp = ["rustyclaw-core/whatsapp", "chat-system/whatsapp"]

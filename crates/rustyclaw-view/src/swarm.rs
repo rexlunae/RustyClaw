@@ -53,6 +53,18 @@ impl SwarmData {
         }
     }
 
+    /// Semantic tone for the status badge.
+    pub fn status_tone(&self) -> crate::tone::Tone {
+        use crate::tone::Tone;
+        match self.status.as_str() {
+            "Running" => Tone::Success,
+            "Idle" => Tone::Info,
+            "Paused" => Tone::Warning,
+            "Stopped" => Tone::Neutral,
+            _ => Tone::Danger,
+        }
+    }
+
     /// Whether this swarm should show a stop action.
     pub fn is_stoppable(&self) -> bool {
         matches!(self.status.as_str(), "Running" | "Idle" | "Paused")

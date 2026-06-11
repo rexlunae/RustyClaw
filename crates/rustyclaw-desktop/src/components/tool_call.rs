@@ -1,7 +1,16 @@
 //! Collapsible panel showing tool-call arguments and result.
+//!
+//! Rendered as a Bulma `Message` whose colour follows the call status
+//! (running → info, done → success, failed → danger).  Status wording
+//! and tone both come from the shared view layer.
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{
+    BulmaColor, BulmaSize, Button, Message, MessageBody, MessageHeader, Tag,
+};
 use rustyclaw_view::ToolCallData;
+
+use super::{copy_to_clipboard, tone_color};
 
 /// Props for [`ToolCallPanel`].
 #[derive(Props, Clone, PartialEq)]
@@ -13,52 +22,50 @@ pub struct ToolCallPanelProps {
 pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
     let mut is_collapsed = use_signal(|| props.data.collapsed);
 
-    let (status_class, status_label, status_icon) = if props.data.result.is_some() {
-        if props.data.is_error {
-            ("is-error", "Failed", "✕")
-        } else {
-            ("is-done", "Done", "✓")
-        }
-    } else {
-        ("is-running", "Running…", "⏳")
-    };
+    let (_, status_label, status_icon) = props.data.status_label();
+    let status_tone = props.data.status_tone();
+    let is_running = props.data.result.is_none();
 
-    let panel_class = format!(
-        "tool-call {} {}",
-        status_class,
-        if *is_collapsed.read() { "" } else { "is-open" }
-    );
-    let panel_class = panel_class.trim().to_string();
+    let panel_class = if *is_collapsed.read() {
+        "tool-call"
+    } else {
+        "tool-call is-open"
+    };
+    let chip_class = if is_running {
+        "rc-chip is-pulse"
+    } else {
+        "rc-chip"
+    };
 
     let pretty_args = props.data.arguments_preview(100_000, 10_000);
 
-    let chip_class = format!(
-        "chip {}",
-        match status_class {
-            "is-error" => "is-danger",
-            "is-running" => "is-info is-pulse",
-            _ => "is-success",
-        }
-    );
-
     rsx! {
-        div { class: "{panel_class}",
-            div { class: "tool-head",
-                onclick: move |_| {
-                    let v = *is_collapsed.read();
-                    is_collapsed.set(!v);
-                },
-                span { class: "tool-name", "🔧 {props.data.name}" }
-                span { class: "tool-spacer" }
-                span { class: "{chip_class}",
-                    span { class: "dot" }
-                    span { "{status_icon} {status_label}" }
+        Message {
+            color: tone_color(status_tone),
+            size: BulmaSize::Small,
+            class: panel_class,
+            MessageHeader { class: "tool-head",
+                div {
+                    class: "tool-head-row",
+                    onclick: move |_| {
+                        let v = *is_collapsed.read();
+                        is_collapsed.set(!v);
+                    },
+                    span { class: "tool-name", "🔧 {props.data.name}" }
+                    span { class: "tool-spacer" }
+                    Tag {
+                        color: tone_color(status_tone),
+                        light: true,
+                        rounded: true,
+                        class: chip_class,
+                        "{status_icon} {status_label}"
+                    }
+                    span { class: "tool-chevron", "⌄" }
                 }
-                span { class: "tool-chevron", "⌄" }
             }
 
             if !*is_collapsed.read() {
-                div { class: "tool-body",
+                MessageBody { class: "tool-body",
                     div { class: "tool-section",
                         div { class: "tool-section-label", "Arguments" }
                         pre { class: "tool-pre",
@@ -67,8 +74,20 @@ pub fn ToolCallPanel(props: ToolCallPanelProps) -> Element {
                     }
                     if let Some(result) = props.data.result.as_ref() {
                         div { class: "tool-section",
-                            div { class: "tool-section-label",
-                                if props.data.is_error { "Error" } else { "Result" }
+                            div { class: "tool-section-head",
+                                div { class: "tool-section-label",
+                                    if props.data.is_error { "Error" } else { "Result" }
+                                }
+                                Button {
+                                    color: BulmaColor::Ghost,
+                                    size: BulmaSize::Small,
+                                    class: "tool-copy-btn",
+                                    onclick: {
+                                        let text = result.clone();
+                                        move |_| copy_to_clipboard(text.clone())
+                                    },
+                                    "⎘ Copy"
+                                }
                             }
                             pre {
                                 class: if props.data.is_error { "tool-pre is-error" } else { "tool-pre" },

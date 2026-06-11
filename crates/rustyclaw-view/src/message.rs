@@ -15,6 +15,8 @@ use std::borrow::Cow;
 use chrono::{DateTime, Utc};
 use rustyclaw_core::types::MessageRole;
 
+use crate::tone::Tone;
+
 // ── Message bubble ──────────────────────────────────────────────────────────
 
 /// Everything a message-bubble component needs to render.
@@ -122,6 +124,27 @@ impl MessageBubbleData {
     /// call replaces the manual match in each client.
     pub fn icon(&self) -> &'static str {
         self.role.icon()
+    }
+
+    /// The avatar glyph for this message's role, as shown next to the
+    /// bubble in graphical clients.
+    pub fn avatar(&self) -> &'static str {
+        match self.role {
+            MessageRole::User => "🧑",
+            MessageRole::Assistant | MessageRole::Thinking => "🦞",
+            MessageRole::System => "⚙",
+            _ => "ℹ️",
+        }
+    }
+
+    /// CSS modifier identifying the role family of this bubble:
+    /// `"is-user"`, `"is-assistant"`, or `"is-system"`.
+    pub fn role_class(&self) -> &'static str {
+        match self.role {
+            MessageRole::User => "is-user",
+            MessageRole::Assistant | MessageRole::Thinking => "is-assistant",
+            _ => "is-system",
+        }
     }
 
     /// Whether this message should be rendered as markdown.
@@ -258,6 +281,20 @@ impl ToolCallData {
             }
         } else {
             ("is-running", "Running…", "⏳")
+        }
+    }
+
+    /// Semantic tone for the status chip: running → Info, done → Success,
+    /// failed → Danger.
+    pub fn status_tone(&self) -> Tone {
+        if self.result.is_some() {
+            if self.is_error {
+                Tone::Danger
+            } else {
+                Tone::Success
+            }
+        } else {
+            Tone::Info
         }
     }
 

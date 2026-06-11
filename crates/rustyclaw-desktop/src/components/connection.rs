@@ -5,10 +5,11 @@
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{
-    BulmaColor, Button, Control, Field, FieldLabel, Help, Modal, ModalCard, ModalCardBody,
-    ModalCardFoot, ModalCardHead, Notification,
+    BulmaColor, BulmaSize, Button, Buttons, Control, Field, FieldLabel, Help, Notification,
 };
 use rustyclaw_core::ui::ConnectionStatus;
+
+use super::{RcModal, copy_to_clipboard};
 
 #[derive(Props, Clone, PartialEq)]
 pub struct ConnectionDialogProps {
@@ -45,69 +46,85 @@ pub fn ConnectionDialog(props: ConnectionDialogProps) -> Element {
     let trimmed_url = url.read().trim().to_string();
     let can_connect = !is_connecting && !trimmed_url.is_empty();
 
-    let on_connect = props.on_connect;
-    let on_cancel = props.on_cancel;
-    let cancel = move |_| {
-        if !is_connecting {
-            on_cancel.call(());
-        }
-    };
     let submit = move |_| {
         let v = url.read().trim().to_string();
         if !v.is_empty() {
-            on_connect.call(v);
+            props.on_connect.call(v);
         }
     };
 
     rsx! {
-        Modal { active: true, onclose: cancel,
-            ModalCard { class: "rc-modal-narrow",
-                ModalCardHead { onclose: cancel,
-                    p { class: "modal-card-title", "Connect to gateway" }
-                }
-                ModalCardBody {
-                    Field {
-                        FieldLabel { "Gateway URL" }
-                        Control {
-                            // Raw input: dioxus-bulma's `Input` has no onkeydown,
-                            // and we need Enter-to-connect. Bulma's `.input` class
-                            // (themed) still applies.
-                            input {
-                                class: "input",
-                                r#type: "text",
-                                value: "{url}",
-                                placeholder: "ssh://127.0.0.1:2222",
-                                disabled: is_connecting,
-                                oninput: move |evt| url.set(evt.value()),
-                                onkeydown: move |evt: KeyboardEvent| {
-                                    if evt.key() == Key::Enter && can_connect {
-                                        let v = url.read().trim().to_string();
-                                        if !v.is_empty() {
-                                            on_connect.call(v);
-                                        }
-                                    }
-                                },
-                            }
-                        }
-                        Help {
-                            "RustyClaw connects to your gateway over SSH (default port 2222)."
-                        }
+        RcModal {
+            active: true,
+            title: "Connect to gateway",
+            width: 460,
+            // Don't allow dismissal while a connect attempt is in flight —
+            // keeps the user from accidentally losing the spinner.
+            closable: !is_connecting,
+            onclose: move |_| props.on_cancel.call(()),
+            footer: rsx! {
+                Buttons {
+                    Button {
+                        color: BulmaColor::Light,
+                        disabled: is_connecting,
+                        onclick: move |_| props.on_cancel.call(()),
+                        "Cancel"
                     }
-
-                    if is_connecting {
-                        Notification { color: BulmaColor::Info, class: "is-light",
-                            "Connecting to {trimmed_url}…"
-                        }
-                    }
-
-                    if let Some(err) = error_text {
-                        Notification { color: BulmaColor::Danger, "🚫 {err}" }
-                    }
-                }
-                ModalCardFoot {
-                    Button { disabled: is_connecting, onclick: cancel, "Cancel" }
-                    Button { color: BulmaColor::Primary, disabled: !can_connect, onclick: submit,
+                    Button {
+                        color: BulmaColor::Primary,
+                        loading: is_connecting,
+                        disabled: !can_connect,
+                        onclick: submit,
                         if is_connecting { "Connecting…" } else { "Connect" }
+                    }
+                }
+            },
+
+            Field {
+                FieldLabel { "Gateway URL" }
+                Control {
+                    input {
+                        class: "input",
+                        r#type: "text",
+                        value: "{url}",
+                        placeholder: "ssh://127.0.0.1:2222",
+                        disabled: is_connecting,
+                        oninput: move |evt| url.set(evt.value()),
+                        onkeydown: move |evt: KeyboardEvent| {
+                            if evt.key() == Key::Enter && can_connect {
+                                let v = url.read().trim().to_string();
+                                if !v.is_empty() {
+                                    props.on_connect.call(v);
+                                }
+                            }
+                        },
+                    }
+                }
+                Help { "RustyClaw connects to your gateway over SSH (default port 2222)." }
+            }
+
+            if is_connecting {
+                div { class: "connection-status connection-status-connecting",
+                    span { class: "icon spin", "↻" }
+                    span { "Connecting to {trimmed_url}…" }
+                }
+            }
+
+            if let Some(err) = error_text {
+                Notification {
+                    color: BulmaColor::Danger,
+                    light: true,
+                    class: "connection-status-error",
+                    span { class: "connection-error-text", "🚫 {err}" }
+                    Button {
+                        color: BulmaColor::Ghost,
+                        size: BulmaSize::Small,
+                        class: "connection-error-copy",
+                        onclick: {
+                            let text = err.clone();
+                            move |_| copy_to_clipboard(text.clone())
+                        },
+                        "⎘ Copy"
                     }
                 }
             }

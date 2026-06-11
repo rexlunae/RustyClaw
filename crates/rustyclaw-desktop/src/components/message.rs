@@ -1,9 +1,9 @@
 //! Single chat message row (avatar + role header + content).
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons};
 
 use crate::markdown;
-use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::format_chat_timestamp;
 
 /// Props for [`MessageBubble`].
@@ -19,12 +19,8 @@ pub struct MessageBubbleProps {
 pub fn MessageBubble(props: MessageBubbleProps) -> Element {
     let mut collapsed = use_signal(|| props.data.collapsed);
 
-    let (row_class, avatar) = match props.data.role {
-        MessageRole::User => ("msg-row is-user", "🧑"),
-        MessageRole::Assistant => ("msg-row is-assistant", "🦞"),
-        MessageRole::System => ("msg-row is-system", "⚙"),
-        _ => ("msg-row is-system", "ℹ️"),
-    };
+    let row_class = format!("msg-row {}", props.data.role_class());
+    let avatar = props.data.avatar();
     let name = props.data.display_name().to_string();
 
     let time_str = props
@@ -68,7 +64,7 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
 
                 if let Some(html) = rendered {
                     div {
-                        class: "msg-content",
+                        class: "content msg-content",
                         dangerous_inner_html: "{html}",
                     }
                 } else {
@@ -81,9 +77,11 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                 }
 
                 if !is_streaming {
-                    div { class: "msg-actions",
+                    Buttons { class: "msg-actions", size: BulmaSize::Small,
                         if can_collapse {
-                            button {
+                            Button {
+                                color: BulmaColor::Ghost,
+                                size: BulmaSize::Small,
                                 class: "msg-action-btn",
                                 onclick: move |_| {
                                     let current = *collapsed.read();
@@ -92,18 +90,18 @@ pub fn MessageBubble(props: MessageBubbleProps) -> Element {
                                 if is_collapsed { "⊞ Expand" } else { "⊟ Collapse" }
                             }
                         }
-                        button {
+                        Button {
+                            color: BulmaColor::Ghost,
+                            size: BulmaSize::Small,
                             class: "msg-action-btn",
                             onclick: move |_| {
-                                let text = content_to_copy.clone();
-                                spawn(async move {
-                                    let js = format!("navigator.clipboard.writeText({:?})", text);
-                                    let _ = document::eval(&js).await;
-                                });
+                                super::copy_to_clipboard(content_to_copy.clone());
                             },
                             "⎘ Copy"
                         }
-                        button {
+                        Button {
+                            color: BulmaColor::Ghost,
+                            size: BulmaSize::Small,
                             class: "msg-action-btn",
                             onclick: move |_| {
                                 let text = content_to_save.clone();

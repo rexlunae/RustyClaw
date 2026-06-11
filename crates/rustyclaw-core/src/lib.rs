@@ -48,7 +48,9 @@ pub mod security;
 pub mod sessions;
 pub mod skills;
 pub mod soul;
+#[cfg(feature = "semantic-memory")]
 pub mod steel_memory;
+#[cfg(feature = "semantic-memory")]
 pub mod steel_memory_indexer;
 pub mod streaming;
 pub mod subconscious;

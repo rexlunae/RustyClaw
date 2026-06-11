@@ -690,15 +690,18 @@ pub(crate) async fn dispatch_text_message(
                     // clients see it via ThreadHistoryRequest.
                     let _ = thread_mgr.save_to_file(threads_path);
                     // Auto-ingest assistant response into Steel Memory
-                    let ws = workspace_dir.to_path_buf();
-                    let text = model_resp.text.clone();
-                    tokio::spawn(async move {
-                        if let Ok(mem) = rustyclaw_core::steel_memory::SteelMemory::new(&ws) {
-                            let _ = mem
-                                .add_memory(&text, "conversations", "assistant", None)
-                                .await;
-                        }
-                    });
+                    #[cfg(feature = "semantic-memory")]
+                    {
+                        let ws = workspace_dir.to_path_buf();
+                        let text = model_resp.text.clone();
+                        tokio::spawn(async move {
+                            if let Ok(mem) = rustyclaw_core::steel_memory::SteelMemory::new(&ws) {
+                                let _ = mem
+                                    .add_memory(&text, "conversations", "assistant", None)
+                                    .await;
+                            }
+                        });
+                    }
                 }
                 providers::send_response_done(writer).await?;
                 if let Some(thread_id) = updated_thread_id {

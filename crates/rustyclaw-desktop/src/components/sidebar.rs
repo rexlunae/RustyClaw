@@ -1,14 +1,20 @@
-//! Sidebar component: brand, connection chip, session list, footer actions.
+//! Sidebar component: brand, connection chip, project→thread tree, footer.
 //!
-//! The sidebar shows brand info, connection status, the list of chat sessions
-//! with rename/delete UI, and footer action buttons.
+//! Rendered with Bulma `Menu`/`Tag` components; the project/thread rows
+//! are custom rows inside the menu list because they carry inline rename
+//! inputs and per-row actions.
 
 use std::collections::HashSet;
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{
+    BulmaColor, BulmaSize, Button, Delete, Menu, MenuLabel, MenuList, Tag, Tags,
+};
 
 use rustyclaw_core::ui::ConnectionStatus;
-use rustyclaw_view::{ProjectGroupData, SidebarItemData, SidebarTree};
+use rustyclaw_view::{ProjectGroupData, SidebarItemData, SidebarTree, StatusBarData};
+
+use super::tone_color;
 
 // ── Public top-level component ──────────────────────────────────────────────
 
@@ -124,9 +130,10 @@ fn BrandHeader(props: BrandHeaderProps) -> Element {
                     }
                 }
             }
-            button {
+            Button {
+                color: BulmaColor::Ghost,
+                size: BulmaSize::Small,
                 class: "sidebar-collapse-btn",
-                title: if props.collapsed { "Expand sidebar" } else { "Collapse sidebar" },
                 onclick: move |_| props.on_toggle.call(()),
                 if props.collapsed { "›" } else { "‹" }
             }
@@ -146,37 +153,37 @@ struct StatusChipsProps {
 /// Connection state and active model indicators.
 #[component]
 fn StatusChips(props: StatusChipsProps) -> Element {
-    let label = rustyclaw_view::StatusBarData::connection_label_static(&props.connection);
-    let base_class = rustyclaw_view::StatusBarData::connection_class_static(&props.connection);
-    let pulse = matches!(
-        &props.connection,
-        ConnectionStatus::Connecting | ConnectionStatus::Authenticating
-    );
-    let cls = if pulse {
-        format!("chip {} is-pulse", base_class)
-    } else {
-        format!("chip {}", base_class)
-    };
-    let err = match &props.connection {
-        ConnectionStatus::Error(e) => Some(e.clone()),
-        _ => None,
-    };
+    let label = StatusBarData::connection_label_static(&props.connection);
+    let tone = StatusBarData::connection_tone_static(&props.connection);
+    let pulse = StatusBarData::connection_is_pending_static(&props.connection);
+    let chip_class = if pulse { "rc-chip is-pulse" } else { "rc-chip" };
+    let err = StatusBarData::connection_error_static(&props.connection).map(str::to_owned);
 
     rsx! {
-        div { class: "sidebar-status",
-            span { class: "{cls}",
+        Tags { class: "sidebar-status",
+            Tag {
+                color: tone_color(tone),
+                light: true,
+                rounded: true,
+                class: chip_class,
                 span { class: "dot" }
                 span { "{label}" }
             }
             if let Some(err) = err.as_ref() {
-                span {
-                    class: "chip is-danger",
-                    title: "{err}",
-                    "⚠ {err}"
+                span { title: "{err}",
+                    Tag {
+                        color: BulmaColor::Danger,
+                        light: true,
+                        rounded: true,
+                        class: "rc-chip rc-chip-error",
+                        "⚠ {err}"
+                    }
                 }
             }
             if let Some(model) = props.model.as_ref() {
-                span { class: "chip",
+                Tag {
+                    rounded: true,
+                    class: "rc-chip",
                     "🧠 ",
                     if let Some(provider) = props.provider.as_ref() {
                         "{provider} · {model}"
@@ -213,31 +220,36 @@ fn ProjectsList(props: ProjectsListProps) -> Element {
     let collapsed_projects = use_signal(HashSet::<u64>::new);
 
     rsx! {
-        div { class: "sidebar-section-label", "Projects" }
-        button {
-            class: "sidebar-action is-primary",
-            onclick: move |_| props.on_new_project.call(()),
-            title: "New project",
-            span { class: "icon-only", "＋" }
-            if !props.collapsed { span { "New project" } }
-        }
+        Menu { class: "projects-menu",
+            MenuLabel { class: "sidebar-section-label", "Projects" }
+            Button {
+                color: BulmaColor::Primary,
+                size: BulmaSize::Small,
+                outlined: true,
+                fullwidth: true,
+                class: "sidebar-new-project",
+                onclick: move |_| props.on_new_project.call(()),
+                span { class: "icon-only", "＋" }
+                if !props.collapsed { span { "New project" } }
+            }
 
-        div { class: "projects-list",
-            for group in props.tree.groups.iter() {
-                ProjectGroup {
-                    key: "{group.id}",
-                    group: group.clone(),
-                    foreground_id: props.foreground_id,
-                    sidebar_collapsed: props.collapsed,
-                    group_collapsed: collapsed_projects.read().contains(&group.id),
-                    collapsed_projects: collapsed_projects,
-                    on_new_thread_in: props.on_new_thread_in,
-                    on_switch_thread: props.on_switch_thread,
-                    on_rename_thread: props.on_rename_thread,
-                    on_delete_thread: props.on_delete_thread,
-                    on_switch_project: props.on_switch_project,
-                    on_rename_project: props.on_rename_project,
-                    on_delete_project: props.on_delete_project,
+            MenuList { class: "projects-list",
+                for group in props.tree.groups.iter() {
+                    ProjectGroup {
+                        key: "{group.id}",
+                        group: group.clone(),
+                        foreground_id: props.foreground_id,
+                        sidebar_collapsed: props.collapsed,
+                        group_collapsed: collapsed_projects.read().contains(&group.id),
+                        collapsed_projects: collapsed_projects,
+                        on_new_thread_in: props.on_new_thread_in,
+                        on_switch_thread: props.on_switch_thread,
+                        on_rename_thread: props.on_rename_thread,
+                        on_delete_thread: props.on_delete_thread,
+                        on_switch_project: props.on_switch_project,
+                        on_rename_project: props.on_rename_project,
+                        on_delete_project: props.on_delete_project,
+                    }
                 }
             }
         }
@@ -280,7 +292,7 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
     let mut collapsed_projects = props.collapsed_projects;
 
     rsx! {
-        div { class: "project-group",
+        li { class: "project-group",
             div {
                 class: "{header_class}",
                 title: "{path}",
@@ -314,7 +326,7 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                 if !props.sidebar_collapsed {
                     if *editing.read() {
                         input {
-                            class: "session-rename-input",
+                            class: "input is-small session-rename-input",
                             r#type: "text",
                             value: "{edit_value}",
                             autofocus: true,
@@ -337,7 +349,12 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                         }
                     } else {
                         span { class: "project-name", "{name}" }
-                        span { class: "project-count", "{count}" }
+                        Tag {
+                            size: BulmaSize::Small,
+                            rounded: true,
+                            class: "project-count",
+                            "{count}"
+                        }
                         button {
                             class: "project-add-btn",
                             title: "New thread in this project",
@@ -347,24 +364,23 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                             },
                             "＋"
                         }
-                        button {
+                        Delete {
+                            size: BulmaSize::Small,
                             class: "project-delete-btn",
-                            title: "Delete project",
-                            onclick: move |evt| {
+                            onclick: move |evt: MouseEvent| {
                                 evt.stop_propagation();
                                 props.on_delete_project.call(project_id);
                             },
-                            "✕"
                         }
                     }
                 }
             }
 
             if !props.group_collapsed {
-                div { class: "sessions-list is-nested",
+                ul { class: "sessions-list is-nested",
                     if props.group.threads.is_empty() {
                         if !props.sidebar_collapsed {
-                            div { class: "sidebar-empty-sessions",
+                            li { class: "sidebar-empty-sessions",
                                 "No threads yet."
                             }
                         }
@@ -426,75 +442,81 @@ fn SessionRow(props: SessionRowProps) -> Element {
     let thread_id = props.thread.id;
 
     rsx! {
-        div {
-            class: "{class}",
-            title: "{title_text}",
-            onclick: move |_| {
-                if !*editing.read() {
-                    props.on_click.call(());
-                }
-            },
-            ondoubleclick: move |evt| {
+        li {
+            div {
+                class: "{class}",
+                title: "{title_text}",
+                onclick: move |_| {
+                    if !*editing.read() {
+                        props.on_click.call(());
+                    }
+                },
+                ondoubleclick: move |evt| {
+                    if !props.collapsed {
+                        evt.stop_propagation();
+                        edit_value.set(label.clone());
+                        editing.set(true);
+                    }
+                },
+                span { class: "session-icon", "💬" }
                 if !props.collapsed {
-                    evt.stop_propagation();
-                    edit_value.set(label.clone());
-                    editing.set(true);
-                }
-            },
-            span { class: "session-icon", "💬" }
-            if !props.collapsed {
-                if *editing.read() {
-                    input {
-                        class: "session-rename-input",
-                        r#type: "text",
-                        value: "{edit_value}",
-                        autofocus: true,
-                        oninput: move |evt| {
-                            edit_value.set(evt.value());
-                        },
-                        onkeydown: {
-                            let on_rename = props.on_rename;
-                            move |evt: KeyboardEvent| {
-                                if evt.key() == Key::Enter {
+                    if *editing.read() {
+                        input {
+                            class: "input is-small session-rename-input",
+                            r#type: "text",
+                            value: "{edit_value}",
+                            autofocus: true,
+                            oninput: move |evt| {
+                                edit_value.set(evt.value());
+                            },
+                            onkeydown: {
+                                let on_rename = props.on_rename;
+                                move |evt: KeyboardEvent| {
+                                    if evt.key() == Key::Enter {
+                                        let val = edit_value.read().trim().to_string();
+                                        if !val.is_empty() {
+                                            on_rename.call((thread_id, val));
+                                        }
+                                        editing.set(false);
+                                    } else if evt.key() == Key::Escape {
+                                        editing.set(false);
+                                    }
+                                }
+                            },
+                            onfocusout: {
+                                let on_rename = props.on_rename;
+                                move |_| {
                                     let val = edit_value.read().trim().to_string();
                                     if !val.is_empty() {
                                         on_rename.call((thread_id, val));
                                     }
                                     editing.set(false);
-                                } else if evt.key() == Key::Escape {
-                                    editing.set(false);
                                 }
-                            }
-                        },
-                        onfocusout: {
-                            let on_rename = props.on_rename;
-                            move |_| {
-                                let val = edit_value.read().trim().to_string();
-                                if !val.is_empty() {
-                                    on_rename.call((thread_id, val));
-                                }
-                                editing.set(false);
-                            }
-                        },
-                    }
-                } else {
-                    div { class: "session-text",
-                        span { class: "session-label", "{label}" }
-                        if let Some(desc) = description.as_deref() {
-                            span { class: "session-description", "{desc}" }
+                            },
                         }
-                    }
-                    if count > 0 {
-                        span { class: "session-count", "{count}" }
-                    }
-                    button {
-                        class: "session-delete-btn",
-                        title: "Delete thread",
-                        onclick: move |evt| {
-                            evt.stop_propagation();
-                            props.on_delete.call(());
-                        },
-                        "✕"
+                    } else {
+                        div { class: "session-text",
+                            span { class: "session-label", "{label}" }
+                            if let Some(desc) = description.as_deref() {
+                                span { class: "session-description", "{desc}" }
+                            }
+                        }
+                        if count > 0 {
+                            Tag {
+                                size: BulmaSize::Small,
+                                rounded: true,
+                                class: "session-count",
+                                "{count}"
+                            }
+                        }
+                        Delete {
+                            size: BulmaSize::Small,
+                            class: "session-delete-btn",
+                            onclick: move |evt: MouseEvent| {
+                                evt.stop_propagation();
+                                props.on_delete.call(());
+                            },
+                        }
                     }
                 }
             }
@@ -517,24 +539,30 @@ struct FooterActionsProps {
 fn FooterActions(props: FooterActionsProps) -> Element {
     rsx! {
         div { class: "sidebar-footer",
-            button {
+            Button {
+                color: BulmaColor::Ghost,
+                size: BulmaSize::Small,
+                fullwidth: true,
                 class: "sidebar-action",
                 onclick: move |_| props.on_pair.call(()),
-                title: "Pair with gateway",
                 span { class: "icon-only", "🔗" }
                 if !props.collapsed { span { "Pair gateway" } }
             }
-            button {
+            Button {
+                color: BulmaColor::Ghost,
+                size: BulmaSize::Small,
+                fullwidth: true,
                 class: "sidebar-action",
                 onclick: move |_| props.on_secrets.call(()),
-                title: "Secrets Vault",
                 span { class: "icon-only", "🔑" }
                 if !props.collapsed { span { "Secrets" } }
             }
-            button {
+            Button {
+                color: BulmaColor::Ghost,
+                size: BulmaSize::Small,
+                fullwidth: true,
                 class: "sidebar-action",
                 onclick: move |_| props.on_settings.call(()),
-                title: "Settings",
                 span { class: "icon-only", "⚙" }
                 if !props.collapsed { span { "Settings" } }
             }

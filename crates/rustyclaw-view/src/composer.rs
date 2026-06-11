@@ -110,12 +110,27 @@ pub struct ComposerData {
 }
 
 impl ComposerData {
+    /// Placeholder shown in the empty message input.
+    pub const PLACEHOLDER: &'static str = "Message RustyClaw…";
+
+    /// Keyboard hint line shown under the composer.
+    pub const HINT: &'static str = "Press Enter to send · Shift + Enter for newline · Attachments are included in the next prompt";
+
     pub fn attachment_count(&self) -> usize {
         self.attachments.len()
     }
 
     pub fn has_attachments(&self) -> bool {
         !self.attachments.is_empty()
+    }
+
+    /// Tooltip for the send/cancel button given the processing state.
+    pub fn send_button_title(&self) -> &'static str {
+        if self.is_processing {
+            "Cancel request"
+        } else {
+            "Send (Enter)"
+        }
     }
 }
 

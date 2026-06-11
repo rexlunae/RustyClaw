@@ -194,14 +194,11 @@ pub fn open_file_read_safe(path: &Path) -> std::io::Result<(std::fs::File, PathB
         // Step 3: verify the opened fd still points where we expect.
         let fd_path = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
         if fd_path != canonical {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Symlink race detected: opened fd points to {}, expected {}",
-                    fd_path.display(),
-                    canonical.display()
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "Symlink race detected: opened fd points to {}, expected {}",
+                fd_path.display(),
+                canonical.display()
+            )));
         }
 
         Ok((file, canonical))
@@ -244,14 +241,11 @@ pub fn open_file_write_safe(path: &Path) -> std::io::Result<(std::fs::File, Path
 
         let fd_path = std::fs::read_link(format!("/proc/self/fd/{}", file.as_raw_fd()))?;
         if fd_path != canonical {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                format!(
-                    "Symlink race detected: opened fd points to {}, expected {}",
-                    fd_path.display(),
-                    canonical.display()
-                ),
-            ));
+            return Err(std::io::Error::other(format!(
+                "Symlink race detected: opened fd points to {}, expected {}",
+                fd_path.display(),
+                canonical.display()
+            )));
         }
 
         Ok((file, canonical))
