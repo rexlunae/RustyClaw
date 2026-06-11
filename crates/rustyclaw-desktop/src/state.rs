@@ -267,12 +267,22 @@ impl AppState {
         self.thread_messages.insert(thread_id, messages);
     }
 
+    /// Whether a request is currently in flight (waiting, thinking, or
+    /// streaming). While true, history snapshots from the gateway must not
+    /// replace the live view: doing so would drop the in-flight streaming
+    /// bubble and clear the busy indicators, making the agent look idle
+    /// while it is still working. The gateway sends another snapshot when
+    /// the response completes.
+    pub fn request_in_flight(&self) -> bool {
+        self.is_processing || self.is_streaming || self.is_thinking
+    }
+
     /// Replace the cached messages for a thread with an authoritative
     /// history from the gateway. If the thread is currently in the
     /// foreground, also refresh the live view.
     pub fn apply_thread_history(&mut self, thread_id: u64, messages: VecDeque<ChatMessage>) {
         self.thread_messages.insert(thread_id, messages.clone());
-        if self.foreground_thread_id == Some(thread_id) {
+        if self.foreground_thread_id == Some(thread_id) && !self.request_in_flight() {
             self.messages = messages;
             self.is_processing = false;
             self.is_streaming = false;
@@ -291,7 +301,9 @@ impl AppState {
         let hydrated: VecDeque<ChatMessage> =
             messages.into_iter().map(ui_message_from_gateway).collect();
         self.thread_messages.insert(thread_id, hydrated.clone());
-        if self.foreground_thread_id == Some(thread_id) || thread_id == 0 {
+        if (self.foreground_thread_id == Some(thread_id) || thread_id == 0)
+            && !self.request_in_flight()
+        {
             self.messages = hydrated;
             self.is_processing = false;
             self.is_streaming = false;

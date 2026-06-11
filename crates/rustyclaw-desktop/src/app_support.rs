@@ -82,17 +82,29 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             provider,
             model,
         } => {
-            state.write().connection = ConnectionStatus::Connected;
-            state.write().agent_name = agent;
-            state.write().vault_locked = vault_locked;
-            state.write().provider = provider.map(|p| normalize_provider_id(&p).to_string());
-            state.write().model = model;
+            let mut s = state.write();
+            s.connection = ConnectionStatus::Connected;
+            s.agent_name = agent;
+            s.vault_locked = vault_locked;
+            s.provider = provider.map(|p| normalize_provider_id(&p).to_string());
+            s.model = model;
+            // A fresh session has nothing in flight; clear any indicator
+            // state left over from a request the old connection dropped, so
+            // it can't block history hydration or show a phantom spinner.
+            s.is_processing = false;
+            s.is_streaming = false;
+            s.is_thinking = false;
         }
         GatewayEvent::Disconnected { reason } => {
-            state.write().connection = ConnectionStatus::Disconnected;
+            let mut s = state.write();
+            s.connection = ConnectionStatus::Disconnected;
             if let Some(r) = reason {
-                state.write().status_message = Some(format!("Disconnected: {}", r));
+                s.status_message = Some(format!("Disconnected: {}", r));
             }
+            // The in-flight request (if any) died with the connection.
+            s.is_processing = false;
+            s.is_streaming = false;
+            s.is_thinking = false;
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -139,7 +151,14 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             name,
             arguments,
         } => {
-            state.write().add_tool_call(id, name, arguments);
+            let mut s = state.write();
+            s.add_tool_call(id, name, arguments);
+            // A tool call marks the end of this round's text stream; the
+            // gateway is now executing the tool. Switch the indicator from
+            // "Streaming…" (which would sit frozen) to the processing bar
+            // while the tool panel shows the running call. `is_processing`
+            // stays set until ResponseDone.
+            s.is_streaming = false;
         }
         GatewayEvent::ToolResult {
             id,
