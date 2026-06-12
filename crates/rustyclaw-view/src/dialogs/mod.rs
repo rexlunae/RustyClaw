@@ -11,6 +11,8 @@
 
 use rustyclaw_core::user_prompt_types::{PromptType, UserPrompt};
 
+mod connection;
+pub use connection::*;
 mod secrets;
 pub use secrets::*;
 

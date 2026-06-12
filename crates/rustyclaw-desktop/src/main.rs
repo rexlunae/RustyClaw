@@ -33,6 +33,7 @@ use rustyclaw_core::client_prefs::{
 
 static GATEWAY_URL: OnceLock<Option<String>> = OnceLock::new();
 static SKIP_DIALOG: OnceLock<bool> = OnceLock::new();
+static FORCE_DIALOG: OnceLock<bool> = OnceLock::new();
 
 #[derive(Debug, Parser)]
 #[command(
@@ -50,6 +51,10 @@ struct Cli {
     /// default URL automatically.
     #[arg(long = "no-dialog", alias = "auto-connect")]
     no_dialog: bool,
+    /// Always show the connection dialog on startup, even when auto-connect
+    /// is configured. Used by the "New Connection Window" menu entry.
+    #[arg(long = "pick-connection", conflicts_with = "no_dialog")]
+    pick_connection: bool,
 }
 
 fn main() -> Result<()> {
@@ -60,17 +65,22 @@ fn main() -> Result<()> {
 
     // Only forward an explicit URL (from --url or config). When neither is set,
     // leave it None so the desktop client shows its connection dialog with the
-    // default pre-filled.
-    let gateway_url = cli.url.or_else(|| config.gateway_url.clone());
+    // default pre-filled. --pick-connection forces the dialog regardless.
+    let gateway_url = if cli.pick_connection {
+        None
+    } else {
+        cli.url.or_else(|| config.gateway_url.clone())
+    };
 
-    run(gateway_url, cli.no_dialog);
+    run(gateway_url, cli.no_dialog, cli.pick_connection);
     Ok(())
 }
 
-fn run(gateway_url: Option<String>, no_dialog: bool) {
+fn run(gateway_url: Option<String>, no_dialog: bool, pick_connection: bool) {
     let normalized_gateway_url = normalize_gateway_url(gateway_url);
     let _ = GATEWAY_URL.set(normalized_gateway_url);
     let _ = SKIP_DIALOG.set(no_dialog);
+    let _ = FORCE_DIALOG.set(pick_connection);
 
     let _ = tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
@@ -114,6 +124,27 @@ pub(crate) fn configured_gateway_url() -> Option<String> {
 
 pub(crate) fn skip_connection_dialog() -> bool {
     SKIP_DIALOG.get().copied().unwrap_or(false)
+}
+
+pub(crate) fn force_connection_dialog() -> bool {
+    FORCE_DIALOG.get().copied().unwrap_or(false)
+}
+
+/// Spawn a second desktop window as a separate process, opening on the
+/// connection dialog so a new gateway connection can be established
+/// without disturbing this one.
+pub(crate) fn spawn_connection_window() {
+    match std::env::current_exe() {
+        Ok(exe) => {
+            if let Err(e) = std::process::Command::new(exe)
+                .arg("--pick-connection")
+                .spawn()
+            {
+                tracing::error!("failed to spawn new connection window: {e}");
+            }
+        }
+        Err(e) => tracing::error!("failed to resolve current executable: {e}"),
+    }
 }
 
 fn normalize_gateway_url(gateway_url: Option<String>) -> Option<String> {

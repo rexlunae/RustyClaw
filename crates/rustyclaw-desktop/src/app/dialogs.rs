@@ -53,6 +53,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
         mut pending_thread_delete,
         mut did_init_directories,
         mut show_connection,
+        mut connection_prefs,
     } = sig;
 
     let on_secrets_command = move |cmd: SecretsCommand| {
@@ -90,8 +91,12 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 visible: *show_connection.read(),
                 gateway_url: state.read().gateway_url.clone(),
                 status: state.read().connection.clone(),
+                data: connection_prefs.read().clone(),
                 on_connect: move |url: String| {
-                    crate::save_gateway_url(&url);
+                    // Record in the history (most recent first); the default
+                    // marker is only changed explicitly via the star toggle.
+                    rustyclaw_core::client_prefs::record_recent_connection(&url);
+                    connection_prefs.set(ConnectionDialogData::load());
                     state.write().gateway_url = url.clone();
                     // Mark auto-connect as done so it does not also fire when
                     // the dialog auto-closes after the connection succeeds.
@@ -99,6 +104,18 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     spawn(async move {
                         connect_to_gateway(&url, state, gateway).await;
                     });
+                },
+                on_set_default: move |(url, is_default): (String, bool)| {
+                    rustyclaw_core::client_prefs::set_default_connection(&url, is_default);
+                    connection_prefs.set(ConnectionDialogData::load());
+                },
+                on_remove: move |url: String| {
+                    rustyclaw_core::client_prefs::remove_connection(&url);
+                    connection_prefs.set(ConnectionDialogData::load());
+                },
+                on_toggle_autoconnect: move |enabled: bool| {
+                    rustyclaw_core::client_prefs::set_autoconnect_on_startup(enabled);
+                    connection_prefs.set(ConnectionDialogData::load());
                 },
                 on_cancel: move |_| show_connection.set(false),
             }

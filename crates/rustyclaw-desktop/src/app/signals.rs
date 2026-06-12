@@ -9,7 +9,7 @@ use crate::app_support::connect_to_gateway;
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::user_prompt_types::UserPrompt;
-use rustyclaw_view::HatchingDialogData;
+use rustyclaw_view::{ConnectionDialogData, HatchingDialogData};
 
 #[derive(Clone, Copy)]
 pub(super) struct AppSignals {
@@ -42,6 +42,9 @@ pub(super) struct AppSignals {
     pub pending_thread_delete: Signal<Option<(u64, String)>>,
     pub did_init_directories: Signal<bool>,
     pub show_connection: Signal<bool>,
+    /// Connection history / default / autoconnect, mirrored from the
+    /// persisted client preferences.
+    pub connection_prefs: Signal<ConnectionDialogData>,
 }
 
 /// Reconnect to the gateway using the current `state.gateway_url`.

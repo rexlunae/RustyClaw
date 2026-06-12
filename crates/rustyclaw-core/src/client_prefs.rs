@@ -225,6 +225,121 @@ pub fn should_bypass_connection_dialog() -> bool {
     load_client_preferences().bypass_connection_dialog
 }
 
+/// Maximum number of connections kept in the history.
+pub const CONNECTION_HISTORY_LIMIT: usize = 10;
+
+/// Record a connection in the history: the URL moves to the front
+/// (most-recent-first) without touching its default/auto-connect flags.
+/// The history is capped at [`CONNECTION_HISTORY_LIMIT`] entries; the
+/// default connection is never evicted.
+pub fn record_recent_connection(url: &str) {
+    let mut prefs = load_client_preferences();
+    if record_recent_in(&mut prefs, url) {
+        save_client_preferences(&prefs);
+    }
+}
+
+/// Pure form of [`record_recent_connection`]; returns whether anything changed.
+pub fn record_recent_in(prefs: &mut ClientPreferences, url: &str) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let existing = prefs
+        .connections
+        .iter()
+        .position(|conn| conn.url == trimmed)
+        .map(|idx| prefs.connections.remove(idx));
+    let entry = existing.unwrap_or_else(|| ClientConnection {
+        name: None,
+        url: trimmed.to_string(),
+        auto_connect: false,
+        default_on_startup: false,
+    });
+    prefs.connections.insert(0, entry);
+
+    // Trim from the back, sparing the default connection.
+    while prefs.connections.len() > CONNECTION_HISTORY_LIMIT {
+        let victim = prefs
+            .connections
+            .iter()
+            .rposition(|conn| !conn.default_on_startup)
+            .unwrap_or(prefs.connections.len() - 1);
+        prefs.connections.remove(victim);
+    }
+    true
+}
+
+/// Mark one URL as the startup default (clearing any other default), or
+/// clear the default entirely when `is_default` is false. The default
+/// connection is also the auto-connect target, so its `auto_connect`
+/// flag follows the default marker.
+pub fn set_default_connection(url: &str, is_default: bool) {
+    let mut prefs = load_client_preferences();
+    if set_default_in(&mut prefs, url, is_default) {
+        save_client_preferences(&prefs);
+    }
+}
+
+/// Pure form of [`set_default_connection`]; returns whether anything changed.
+pub fn set_default_in(prefs: &mut ClientPreferences, url: &str, is_default: bool) -> bool {
+    let trimmed = url.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let mut found = false;
+    for conn in &mut prefs.connections {
+        let this_one = conn.url == trimmed;
+        conn.default_on_startup = this_one && is_default;
+        conn.auto_connect = this_one && is_default;
+        if this_one {
+            found = true;
+        }
+    }
+    if !found && is_default {
+        prefs.connections.insert(
+            0,
+            ClientConnection {
+                name: None,
+                url: trimmed.to_string(),
+                auto_connect: true,
+                default_on_startup: true,
+            },
+        );
+    }
+    // Auto-connect at startup is meaningless without a default.
+    if !prefs.connections.iter().any(|c| c.default_on_startup) {
+        prefs.bypass_connection_dialog = false;
+    }
+    true
+}
+
+/// Remove a connection from the history. Clears the startup auto-connect
+/// preference if the removed connection was the default.
+pub fn remove_connection(url: &str) {
+    let mut prefs = load_client_preferences();
+    let was_default = prefs
+        .connections
+        .iter()
+        .any(|conn| conn.url == url && conn.default_on_startup);
+    prefs.connections.retain(|conn| conn.url != url);
+    if was_default {
+        prefs.bypass_connection_dialog = false;
+    }
+    save_client_preferences(&prefs);
+}
+
+/// Enable or disable automatic connection to the default at startup
+/// (skipping the connection dialog).
+pub fn set_autoconnect_on_startup(enabled: bool) {
+    let mut prefs = load_client_preferences();
+    prefs.bypass_connection_dialog =
+        enabled && prefs.connections.iter().any(|c| c.default_on_startup);
+    save_client_preferences(&prefs);
+}
+
 /// Startup default connections, in order.
 pub fn load_default_startup_gateway_urls() -> Vec<String> {
     let prefs = load_client_preferences();
@@ -278,6 +393,63 @@ pub fn load_auto_connect_gateway_urls() -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn conn(url: &str, default: bool) -> ClientConnection {
+        ClientConnection {
+            name: None,
+            url: url.to_string(),
+            auto_connect: default,
+            default_on_startup: default,
+        }
+    }
+
+    #[test]
+    fn record_moves_url_to_front_without_changing_default() {
+        let mut prefs = ClientPreferences {
+            bypass_connection_dialog: true,
+            connections: vec![conn("ssh://a:2222", true), conn("ssh://b:2222", false)],
+        };
+        assert!(record_recent_in(&mut prefs, "ssh://b:2222"));
+        assert_eq!(prefs.connections[0].url, "ssh://b:2222");
+        assert!(!prefs.connections[0].default_on_startup);
+        assert!(prefs.connections[1].default_on_startup, "default untouched");
+    }
+
+    #[test]
+    fn record_caps_history_but_never_evicts_default() {
+        let mut prefs = ClientPreferences::default();
+        prefs.connections.push(conn("ssh://default:2222", true));
+        for i in 0..CONNECTION_HISTORY_LIMIT + 3 {
+            record_recent_in(&mut prefs, &format!("ssh://host{i}:2222"));
+        }
+        assert_eq!(prefs.connections.len(), CONNECTION_HISTORY_LIMIT);
+        assert!(
+            prefs
+                .connections
+                .iter()
+                .any(|c| c.url == "ssh://default:2222"),
+            "default survives eviction"
+        );
+    }
+
+    #[test]
+    fn set_default_is_exclusive_and_clearing_disables_autoconnect() {
+        let mut prefs = ClientPreferences {
+            bypass_connection_dialog: true,
+            connections: vec![conn("ssh://a:2222", true), conn("ssh://b:2222", false)],
+        };
+        set_default_in(&mut prefs, "ssh://b:2222", true);
+        assert!(!prefs.connections[0].default_on_startup);
+        assert!(prefs.connections[1].default_on_startup);
+        assert!(prefs.connections[1].auto_connect);
+
+        set_default_in(&mut prefs, "ssh://b:2222", false);
+        assert!(!prefs.connections.iter().any(|c| c.default_on_startup));
+        assert!(
+            !prefs.bypass_connection_dialog,
+            "autoconnect cleared with the default"
+        );
+    }
 
     #[test]
     fn parse_legacy_gateway_url_into_connection() {

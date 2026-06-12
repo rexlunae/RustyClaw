@@ -1164,6 +1164,77 @@ body,
     margin-bottom: 0 !important;
 }
 
+/* Connection dialog — recent connections */
+.recent-connections {
+    margin-top: 16px;
+}
+
+.recent-connection-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 1px solid var(--rc-border);
+    border-radius: var(--bulma-radius);
+    background: var(--rc-bg-elev);
+    cursor: pointer;
+    margin-bottom: 6px;
+    transition: border-color 0.12s, background 0.12s;
+}
+
+.recent-connection-row:hover {
+    border-color: var(--rc-primary);
+    background: var(--rc-bg-raised);
+}
+
+.recent-connection-row.is-default {
+    border-color: var(--rc-primary);
+}
+
+.recent-connection-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: var(--bulma-family-code);
+    font-size: 13px;
+}
+
+.recent-connection-default-tag {
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--rc-primary);
+    flex-shrink: 0;
+}
+
+.recent-connection-star.button {
+    text-decoration: none;
+    color: var(--rc-primary);
+    height: 1.8em;
+    margin-bottom: 0 !important;
+}
+
+.recent-connection-remove {
+    opacity: 0;
+    transition: opacity 0.12s;
+    flex-shrink: 0;
+}
+
+.recent-connection-row:hover .recent-connection-remove {
+    opacity: 1;
+}
+
+.autoconnect-field {
+    margin-top: 10px;
+}
+
+.autoconnect-field .checkbox {
+    font-size: 13px;
+}
+
 /* Connection dialog */
 .connection-status {
     display: flex;

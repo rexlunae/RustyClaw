@@ -105,9 +105,15 @@ pub fn App() -> Element {
     };
 
     // Connection dialog is shown only when startup configuration does not
-    // request bypass and no explicit CLI override is provided.
-    let mut show_connection =
-        use_signal(move || configured_gateway_url.is_none() && !skip_dialog && !bypass_dialog);
+    // request bypass and no explicit CLI override is provided. The
+    // --pick-connection flag (used by "New Connection Window") forces it.
+    let force_dialog = crate::force_connection_dialog();
+    let mut show_connection = use_signal(move || {
+        force_dialog || (configured_gateway_url.is_none() && !skip_dialog && !bypass_dialog)
+    });
+
+    // Connection history / default / autoconnect from the client prefs.
+    let connection_prefs = use_signal(rustyclaw_view::ConnectionDialogData::load);
 
     let sig = signals::AppSignals {
         state,
@@ -139,6 +145,7 @@ pub fn App() -> Element {
         pending_thread_delete,
         did_init_directories,
         show_connection,
+        connection_prefs,
     };
 
     // Auto-connect on mount
@@ -632,6 +639,8 @@ pub fn App() -> Element {
                     s.save_thread_messages(current_id, msgs);
                 }
                 s.messages.clear();
+            } else if event.id == ids.new_connection_window {
+                crate::spawn_connection_window();
             } else if event.id == ids.toggle_left_sidebar {
                 let v = state.read().left_sidebar_visible;
                 state.write().left_sidebar_visible = !v;

@@ -7,6 +7,7 @@ use dioxus::desktop::muda;
 /// Stable IDs for all menu items, stored after `build_app_menu()` runs.
 pub struct AppMenuIds {
     pub new_thread: muda::MenuId,
+    pub new_connection_window: muda::MenuId,
     pub quit: muda::MenuId,
     pub toggle_left_sidebar: muda::MenuId,
     pub toggle_right_sidebar: muda::MenuId,
@@ -29,6 +30,11 @@ pub fn app_menu_ids() -> Option<&'static AppMenuIds> {
 pub fn build_app_menu() -> muda::Menu {
     // ── File ──────────────────────────────────────────────────────────────
     let new_thread = muda::MenuItem::new("New Thread", true, "CmdOrCtrl+T".parse().ok());
+    let new_connection_window = muda::MenuItem::new(
+        "New Connection Window",
+        true,
+        "CmdOrCtrl+Shift+N".parse().ok(),
+    );
     let quit = muda::PredefinedMenuItem::quit(None);
 
     // ── View ──────────────────────────────────────────────────────────────
@@ -49,6 +55,7 @@ pub fn build_app_menu() -> muda::Menu {
     // Register all IDs before the items are moved into the menu.
     let ids = AppMenuIds {
         new_thread: new_thread.id().clone(),
+        new_connection_window: new_connection_window.id().clone(),
         quit: quit.id().clone(),
         toggle_left_sidebar: toggle_left.id().clone(),
         toggle_right_sidebar: toggle_right.id().clone(),
@@ -63,8 +70,12 @@ pub fn build_app_menu() -> muda::Menu {
     let file_sep = muda::PredefinedMenuItem::separator();
     let tools_sep = muda::PredefinedMenuItem::separator();
 
-    let file_menu = muda::Submenu::with_items("File", true, &[&new_thread, &file_sep, &quit])
-        .expect("failed to build File menu");
+    let file_menu = muda::Submenu::with_items(
+        "File",
+        true,
+        &[&new_thread, &new_connection_window, &file_sep, &quit],
+    )
+    .expect("failed to build File menu");
 
     let view_menu = muda::Submenu::with_items("View", true, &[&toggle_left, &toggle_right])
         .expect("failed to build View menu");
