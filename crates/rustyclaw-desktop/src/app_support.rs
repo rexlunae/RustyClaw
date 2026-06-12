@@ -94,6 +94,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.is_processing = false;
             s.is_streaming = false;
             s.is_thinking = false;
+            s.streaming_thread_id = None;
         }
         GatewayEvent::Disconnected { reason } => {
             let mut s = state.write();
@@ -105,6 +106,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.is_processing = false;
             s.is_streaming = false;
             s.is_thinking = false;
+            s.streaming_thread_id = None;
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -131,20 +133,37 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::ModelError { message } => {
             state.write().status_message = Some(format!("Model error: {}", message));
         }
+        // Live stream events carry no thread id; they belong to the thread
+        // that submitted the request (`streaming_thread_id`). When the user
+        // has switched away from it, they must not touch the on-screen view
+        // or its indicators — the backgrounded thread's transcript arrives
+        // via the gateway's history snapshot on completion.
         GatewayEvent::StreamStart => {
-            state.write().start_assistant_message();
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.start_assistant_message();
+            }
         }
         GatewayEvent::ThinkingStart => {
-            state.write().is_thinking = true;
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.is_thinking = true;
+            }
         }
         GatewayEvent::ThinkingEnd => {
-            state.write().is_thinking = false;
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.is_thinking = false;
+            }
         }
         GatewayEvent::Chunk { delta } => {
-            state.write().append_to_current_message(&delta);
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.append_to_current_message(&delta);
+            }
         }
         GatewayEvent::ResponseDone => {
-            state.write().finish_current_message();
+            state.write().response_done();
         }
         GatewayEvent::ToolCall {
             id,
@@ -152,13 +171,15 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             arguments,
         } => {
             let mut s = state.write();
-            s.add_tool_call(id, name, arguments);
-            // A tool call marks the end of this round's text stream; the
-            // gateway is now executing the tool. Switch the indicator from
-            // "Streaming…" (which would sit frozen) to the processing bar
-            // while the tool panel shows the running call. `is_processing`
-            // stays set until ResponseDone.
-            s.is_streaming = false;
+            if s.stream_targets_foreground() {
+                s.add_tool_call(id, name, arguments);
+                // A tool call marks the end of this round's text stream; the
+                // gateway is now executing the tool. Switch the indicator from
+                // "Streaming…" (which would sit frozen) to the processing bar
+                // while the tool panel shows the running call. `is_processing`
+                // stays set until ResponseDone.
+                s.is_streaming = false;
+            }
         }
         GatewayEvent::ToolResult {
             id,
@@ -166,10 +187,13 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             result,
             is_error,
         } => {
+            let mut s = state.write();
             if is_error {
-                state.write().status_message = Some(format!("Tool '{}' failed", name));
+                s.status_message = Some(format!("Tool '{}' failed", name));
             }
-            state.write().set_tool_result(&id, result, is_error);
+            if s.stream_targets_foreground() {
+                s.set_tool_result(&id, result, is_error);
+            }
         }
         GatewayEvent::ToolApprovalRequest {
             id,

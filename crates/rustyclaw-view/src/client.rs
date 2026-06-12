@@ -61,6 +61,11 @@ pub struct ClientState {
     pub active_project_id: u64,
     /// Current foreground thread ID.
     pub foreground_thread_id: Option<u64>,
+    /// The thread the in-flight response belongs to (set at submit time,
+    /// cleared on completion). Stream events carry no thread id on the wire,
+    /// so this is how the client knows whether live stream events target the
+    /// thread currently on screen or one the user has switched away from.
+    pub streaming_thread_id: Option<u64>,
     /// Agent name from hatching.
     pub agent_name: Option<String>,
     /// Whether the vault is locked.
@@ -108,6 +113,7 @@ impl Default for ClientState {
             projects: Vec::new(),
             active_project_id: 0,
             foreground_thread_id: None,
+            streaming_thread_id: None,
             agent_name: None,
             vault_locked: false,
             needs_hatching: false,
@@ -149,6 +155,22 @@ impl ClientState {
         self.messages.push_back(ChatMessage::user(content));
     }
 
+    /// Mark a request as submitted: the response that follows belongs to the
+    /// current foreground thread. Stream events are applied to the live view
+    /// only while that thread stays in the foreground.
+    pub fn mark_request_started(&mut self) {
+        self.is_processing = true;
+        self.streaming_thread_id = self.foreground_thread_id;
+    }
+
+    /// Whether live stream events (StreamStart/Chunk/Thinking/ToolCall…)
+    /// target the thread currently on screen. `None` means the response
+    /// thread is unknown (e.g. submitted before any thread existed) and
+    /// events apply to whatever is in the foreground.
+    pub fn stream_targets_foreground(&self) -> bool {
+        self.streaming_thread_id.is_none() || self.streaming_thread_id == self.foreground_thread_id
+    }
+
     /// Start a new assistant message (streaming) and return its id.
     pub fn start_assistant_message(&mut self) -> String {
         let id = uuid::Uuid::new_v4().to_string();
@@ -178,6 +200,19 @@ impl ClientState {
         self.is_processing = false;
         self.streaming_chunks = 0;
         self.streaming_bytes = 0;
+        self.streaming_thread_id = None;
+    }
+
+    /// Handle the end of a response. Finalizes the live view only when the
+    /// response targeted the foreground thread; a response that completed in
+    /// a backgrounded thread just releases the in-flight marker (its
+    /// transcript arrives via the gateway's history snapshot).
+    pub fn response_done(&mut self) {
+        if self.stream_targets_foreground() {
+            self.finish_current_message();
+        } else {
+            self.streaming_thread_id = None;
+        }
     }
 
     /// Add a tool call to the current message.
@@ -199,23 +234,25 @@ impl ClientState {
         self.thread_messages.insert(thread_id, messages);
     }
 
-    /// Whether a request is currently in flight (waiting, thinking, or
-    /// streaming). While true, history snapshots from the gateway must not
-    /// replace the live view: doing so would drop the in-flight streaming
-    /// bubble and clear the busy indicators, making the agent look idle
-    /// while it is still working. The gateway sends another snapshot when
-    /// the response completes.
-    pub fn request_in_flight(&self) -> bool {
-        self.is_processing || self.is_streaming || self.is_thinking
+    /// Whether a request is in flight *for the thread on screen* (waiting,
+    /// thinking, or streaming). While true, history snapshots from the
+    /// gateway must not replace the live view: doing so would drop the
+    /// in-flight streaming bubble and clear the busy indicators, making the
+    /// agent look idle while it is still working. The gateway sends another
+    /// snapshot when the response completes. A request running in a
+    /// *backgrounded* thread never blocks the foreground view.
+    pub fn foreground_request_in_flight(&self) -> bool {
+        (self.is_processing || self.is_streaming || self.is_thinking)
+            && self.stream_targets_foreground()
     }
 
     /// Replace the cached messages for a thread with an authoritative history.
     /// If the thread is in the foreground, also refresh the live view.
     pub fn apply_thread_history(&mut self, thread_id: u64, messages: VecDeque<ChatMessage>) {
         self.thread_messages.insert(thread_id, messages.clone());
-        if self.foreground_thread_id == Some(thread_id) && !self.request_in_flight() {
+        if self.foreground_thread_id == Some(thread_id) && !self.foreground_request_in_flight() {
             self.messages = messages;
-            self.reset_streaming_state();
+            self.reset_streaming_indicators();
         }
     }
 
@@ -229,10 +266,10 @@ impl ClientState {
             messages.into_iter().map(ui_message_from_gateway).collect();
         self.thread_messages.insert(thread_id, hydrated.clone());
         if (self.foreground_thread_id == Some(thread_id) || thread_id == 0)
-            && !self.request_in_flight()
+            && !self.foreground_request_in_flight()
         {
             self.messages = hydrated;
-            self.reset_streaming_state();
+            self.reset_streaming_indicators();
         }
     }
 
@@ -250,11 +287,18 @@ impl ClientState {
             .get(&target_id)
             .cloned()
             .unwrap_or_default();
-        self.reset_streaming_state();
+        self.foreground_thread_id = Some(target_id);
+        self.reset_streaming_indicators();
+        // Switching back to the thread whose response is still running:
+        // surface the busy indicator again (the streamed bubble was lost
+        // with the view; the full text arrives in the completion snapshot).
+        self.is_processing = self.streaming_thread_id == Some(target_id);
     }
 
-    /// Reset the processing/streaming bookkeeping to idle.
-    fn reset_streaming_state(&mut self) {
+    /// Reset the processing/streaming indicators to idle. Does not release
+    /// `streaming_thread_id` — an in-flight response keeps its owner until
+    /// [`response_done`](Self::response_done) or disconnect.
+    fn reset_streaming_indicators(&mut self) {
         self.is_processing = false;
         self.is_streaming = false;
         self.is_thinking = false;
@@ -280,5 +324,108 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
         timestamp: chrono::Utc::now(),
         tool_calls: Vec::<ToolCallInfo>::new(),
         is_streaming: false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn history(texts: &[&str]) -> VecDeque<ChatMessage> {
+        texts
+            .iter()
+            .map(|t| ChatMessage::user((*t).to_string()))
+            .collect()
+    }
+
+    /// A history snapshot for the on-screen thread applies when nothing is
+    /// in flight (the plain thread-switch case).
+    #[test]
+    fn snapshot_applies_when_idle() {
+        let mut s = ClientState::default();
+        s.foreground_thread_id = Some(2);
+        s.apply_thread_history(2, history(&["hello"]));
+        assert_eq!(s.messages.len(), 1);
+    }
+
+    /// While a response is in flight for the on-screen thread, snapshots
+    /// must not clear the busy indicators or replace the live view.
+    #[test]
+    fn snapshot_skipped_while_foreground_request_in_flight() {
+        let mut s = ClientState::default();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.add_user_message("question".into());
+
+        s.apply_thread_history(1, history(&[]));
+
+        assert!(s.is_processing, "indicator survives the echo snapshot");
+        assert_eq!(s.messages.len(), 1, "live view not replaced");
+    }
+
+    /// Switching threads while a response runs elsewhere: the new thread's
+    /// history must load — the backgrounded request can't block it.
+    #[test]
+    fn snapshot_applies_when_request_belongs_to_background_thread() {
+        let mut s = ClientState::default();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.is_streaming = true; // stream events were flowing
+
+        s.switch_thread(2);
+        s.apply_thread_history(2, history(&["old message", "old reply"]));
+
+        assert_eq!(s.foreground_thread_id, Some(2));
+        assert_eq!(s.messages.len(), 2, "thread 2's history loads");
+        assert!(!s.is_processing, "thread 2 is idle");
+    }
+
+    /// Stream events stop targeting the live view after switching away from
+    /// the thread that owns the response.
+    #[test]
+    fn stream_events_scoped_to_owning_thread() {
+        let mut s = ClientState::default();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        assert!(s.stream_targets_foreground());
+
+        s.switch_thread(2);
+        assert!(!s.stream_targets_foreground());
+
+        s.switch_thread(1);
+        assert!(s.stream_targets_foreground());
+    }
+
+    /// Switching back to the thread whose response is still running restores
+    /// the busy indicator.
+    #[test]
+    fn switch_back_to_running_thread_restores_indicator() {
+        let mut s = ClientState::default();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        s.switch_thread(2);
+        assert!(!s.is_processing);
+
+        s.switch_thread(1);
+        assert!(s.is_processing, "thread 1's response is still in flight");
+    }
+
+    /// A response completing in a backgrounded thread releases the in-flight
+    /// marker without finalizing the on-screen view.
+    #[test]
+    fn background_response_done_releases_marker() {
+        let mut s = ClientState::default();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.switch_thread(2);
+
+        s.response_done();
+
+        assert_eq!(s.streaming_thread_id, None);
+        // A later snapshot for thread 1 refreshes only its cache.
+        s.apply_thread_history(1, history(&["done"]));
+        assert!(s.messages.is_empty(), "thread 2 stays on screen");
+        assert_eq!(s.thread_messages[&1].len(), 1);
     }
 }

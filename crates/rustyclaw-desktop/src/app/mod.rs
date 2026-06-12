@@ -340,9 +340,14 @@ pub fn App() -> Element {
                             }
                             BufferEntry::Chunks { text, count, bytes } => {
                                 let mut s = state.write();
-                                s.append_to_current_message(&text);
-                                s.streaming_chunks += count;
-                                s.streaming_bytes += bytes;
+                                // Chunks belong to the thread that submitted
+                                // the request; don't stream into a thread the
+                                // user has switched to in the meantime.
+                                if s.stream_targets_foreground() {
+                                    s.append_to_current_message(&text);
+                                    s.streaming_chunks += count;
+                                    s.streaming_bytes += bytes;
+                                }
                             }
                         }
                     }
@@ -399,8 +404,10 @@ pub fn App() -> Element {
             let mut s = state.write();
             s.add_user_message(prompt.clone());
             s.prompt_attachments.clear();
+            // Records which thread owns the response, so its stream events
+            // don't follow the user if they switch threads mid-response.
+            s.mark_request_started();
         }
-        state.write().is_processing = true;
 
         let gw = gateway.read().clone();
         if let Some(client) = gw {
