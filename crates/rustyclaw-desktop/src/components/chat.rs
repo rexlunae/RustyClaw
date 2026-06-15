@@ -1,16 +1,17 @@
-//! Chat surface — composite of [`Messages`] and [`InputBar`].
+//! Chat surface — renders the conversation with the `dioxus-genai-chat`
+//! `ChatSurface` component (embedded mode), plus RustyClaw's empty state and the
+//! composer accessory (model + working-directory selectors).
 //!
-//! This component owns the message list and input bar, keeping the
-//! local text value in a `Signal<String>` and coordinating auto-scroll
-//! via a Dioxus document `eval`.  It delegates rendering to the
-//! extracted sub-components [`Messages`] and [`InputBar`], which mirror
-//! the TUI's `components/messages.rs` and `components/input_bar.rs`.
+//! This component owns the local input value (`Signal<String>`) for snappy
+//! typing and the auto-scroll behaviour; everything below the textarea — the
+//! transcript, attachment chips, send/stop buttons — is rendered by the crate.
 
 use dioxus::prelude::*;
+use dioxus_genai_chat::{ChatControls, ChatSurface, ContextEvent};
 use rustyclaw_core::ui::ChatMessage;
 
-use super::input_bar::InputBar;
-use super::messages::{Messages, ModelSelection};
+use super::composer_accessory::{ComposerAccessory, ModelSelection};
+use crate::chat_transcript::{to_context_items, to_transcript};
 
 /// Props for [`Chat`].
 #[derive(Props, Clone, PartialEq)]
@@ -27,22 +28,18 @@ pub struct ChatProps {
     pub on_add_provider: EventHandler<()>,
     pub on_add_file_attachment: EventHandler<()>,
     pub on_add_directory_attachment: EventHandler<()>,
-    pub on_clear_attachments: EventHandler<()>,
     pub on_remove_attachment: EventHandler<String>,
     pub on_toggle_directory_selector: EventHandler<()>,
     pub on_select_directory: EventHandler<String>,
 }
 
-/// Composite of the message list and the input bar.
-///
-/// Owns the local input signal and auto-scroll logic that the two
-/// sub-components share.
+/// The chat surface: empty-state when there are no messages, otherwise the
+/// `ChatSurface` transcript + composer.
 #[component]
 pub fn Chat(props: ChatProps) -> Element {
     let mut input_ref = use_signal(|| props.input.clone());
 
-    // Keep local input in sync if the parent's value resets (e.g. cleared
-    // after submit). Not blindly mirrored so the user's typing isn't clobbered.
+    // Keep the local input in sync when the parent clears it (e.g. after submit).
     {
         let parent = props.input.clone();
         use_effect(move || {
@@ -52,86 +49,149 @@ pub fn Chat(props: ChatProps) -> Element {
         });
     }
 
-    // Auto-scroll: MutationObserver-based sticky-scroll on `.messages`.
+    // Auto-scroll: keep the transcript pinned to the bottom as content streams
+    // in, unless the user has scrolled up. Observes the embedded surface.
     use_effect(move || {
         document::eval(
             r#"
             (function() {
                 if (window.__rcAutoScroll) return;
                 window.__rcStick = true;
-                var currentEl = null;
-
-                function attach(el) {
-                    if (el === currentEl) return;
-                    if (currentEl) currentEl.removeEventListener('scroll', onScroll);
-                    currentEl = el;
-                    if (!el) return;
-                    el.addEventListener('scroll', onScroll, { passive: true });
-                    el.scrollTop = el.scrollHeight;
-                }
-
-                function onScroll() {
-                    if (!currentEl) return;
-                    var gap = currentEl.scrollHeight - currentEl.scrollTop - currentEl.clientHeight;
+                var el = document.querySelector('.chat-scroll');
+                if (!el) return;
+                el.addEventListener('scroll', function() {
+                    var gap = el.scrollHeight - el.scrollTop - el.clientHeight;
                     window.__rcStick = gap < 80;
-                }
-
-                var chat = document.querySelector('.chat');
-                if (!chat) return;
+                }, { passive: true });
                 new MutationObserver(function() {
-                    var el = chat.querySelector('.messages');
-                    attach(el);
-                    if (el && window.__rcStick) {
-                        el.scrollTop = el.scrollHeight;
-                    }
-                }).observe(chat, { childList: true, subtree: true, characterData: true });
-
+                    if (window.__rcStick) { el.scrollTop = el.scrollHeight; }
+                }).observe(el, { childList: true, subtree: true, characterData: true });
+                el.scrollTop = el.scrollHeight;
                 window.__rcAutoScroll = true;
             })();
         "#,
         );
     });
 
-    let on_submit = props.on_submit;
     let is_processing = props.surface.is_processing;
+    let has_messages = !props.messages.is_empty();
 
-    let mut send_now = move || {
-        let text = input_ref.read().trim().to_string();
+    let controls = ChatControls {
+        show_input: true,
+        show_send_button: !is_processing,
+        show_stop_button: is_processing,
+        show_retry_button: false,
+        show_clear_button: false,
+        input_enabled: !is_processing,
+        placeholder: rustyclaw_view::ComposerData::PLACEHOLDER.to_string(),
+        allow_file_attachments: true,
+        allow_directory_context: true,
+        attach_files_label: "📎 Add file".to_string(),
+        add_directory_label: "📁 Add dir".to_string(),
+        allow_document_selection: false,
+    };
+
+    let on_submit = props.on_submit;
+    let on_input_change = props.on_input_change;
+    let send = move |text: String| {
+        let text = text.trim().to_string();
         if !text.is_empty() && !is_processing {
             on_submit.call(text);
             input_ref.set(String::new());
+            on_input_change.call(String::new());
+        }
+    };
+
+    let accessory = rsx! {
+        ComposerAccessory {
+            current_provider: props.bottom_bar.composer.current_provider.clone(),
+            current_model: props.bottom_bar.composer.current_model.clone(),
+            directory_selector: props.bottom_bar.directory_selector.clone(),
+            on_model_change: props.on_model_change,
+            on_add_provider: props.on_add_provider,
+            on_toggle_directory_selector: props.on_toggle_directory_selector,
+            on_select_directory: props.on_select_directory,
         }
     };
 
     rsx! {
         div { class: "chat",
-            Messages {
-                messages: props.messages.clone(),
-                surface: props.surface.clone(),
-                agent_name: props.agent_name.clone(),
-                on_starter_pick: {
-                    let on_input_change = props.on_input_change;
-                    move |prompt: String| {
-                        input_ref.set(prompt.clone());
-                        on_input_change.call(prompt);
+            div { class: "chat-scroll",
+                if !has_messages && !props.surface.is_thinking {
+                    EmptyState {
+                        agent_name: props.agent_name.clone(),
+                        on_pick: move |prompt: String| {
+                            input_ref.set(prompt.clone());
+                            on_input_change.call(prompt);
+                        },
                     }
-                },
+                } else {
+                    ChatSurface {
+                        embedded: true,
+                        transcript: to_transcript(&props.messages, &props.surface),
+                        controls,
+                        input: input_ref(),
+                        attachments: to_context_items(&props.bottom_bar.composer.attachments),
+                        input_accessory: accessory,
+                        on_input: move |value: String| {
+                            input_ref.set(value.clone());
+                            on_input_change.call(value);
+                        },
+                        on_send: send,
+                        on_stop: move |_| props.on_cancel.call(()),
+                        on_context: move |event: ContextEvent| match event {
+                            ContextEvent::AddFilesRequested => props.on_add_file_attachment.call(()),
+                            ContextEvent::AddDirectoryRequested => props.on_add_directory_attachment.call(()),
+                            ContextEvent::Remove(id) => props.on_remove_attachment.call(id),
+                        },
+                    }
+                }
             }
+        }
+    }
+}
 
-            InputBar {
-                input: input_ref,
-                bottom_bar: props.bottom_bar.clone(),
-                on_send: move |_| send_now(),
-                on_cancel: props.on_cancel,
-                on_input_change: props.on_input_change,
-                on_model_change: props.on_model_change,
-                on_add_provider: props.on_add_provider,
-                on_add_file_attachment: props.on_add_file_attachment,
-                on_add_directory_attachment: props.on_add_directory_attachment,
-                on_clear_attachments: props.on_clear_attachments,
-                on_remove_attachment: props.on_remove_attachment,
-                on_toggle_directory_selector: props.on_toggle_directory_selector,
-                on_select_directory: props.on_select_directory,
+// ── Empty state ─────────────────────────────────────────────────────────────
+
+#[derive(Props, Clone, PartialEq)]
+struct EmptyStateProps {
+    agent_name: Option<String>,
+    on_pick: EventHandler<String>,
+}
+
+#[component]
+fn EmptyState(props: EmptyStateProps) -> Element {
+    use dioxus_bulma::components::{Subtitle, Title, TitleSize};
+    use dioxus_bulma::prelude::BulmaBox;
+
+    let data = rustyclaw_view::EmptyStateData {
+        agent_name: props.agent_name,
+    };
+
+    rsx! {
+        div { class: "empty-state",
+            div { class: "empty-state-card",
+                div { class: "empty-state-mark", "🦞" }
+                Title { size: TitleSize::Is3, "{data.greeting()}" }
+                Subtitle { size: TitleSize::Is6, "{data.subtitle()}" }
+                div { class: "starter-grid",
+                    for starter in data.starters().iter() {
+                        BulmaBox {
+                            key: "{starter.title}",
+                            class: "starter-card",
+                            onclick: {
+                                let p = starter.prompt.to_string();
+                                let cb = props.on_pick;
+                                move |_| cb.call(p.clone())
+                            },
+                            div { class: "starter-title",
+                                span { "{starter.icon}" }
+                                span { "{starter.title}" }
+                            }
+                            div { class: "starter-sub", "{starter.prompt}" }
+                        }
+                    }
+                }
             }
         }
     }

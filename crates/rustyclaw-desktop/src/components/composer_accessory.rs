@@ -1,155 +1,52 @@
-//! Input bar: the model selector + text area + send/cancel button + directory selector.
-//!
-//! Analogue of the TUI's `components/input_bar.rs`.  Sub-components:
-//!   - [`InputBar`] — public composite (attachments + ModelBar + textarea + button)
-//!   - [`DirectorySelectorBar`] — working directory selector (Bulma dropdown)
-//!   - [`ModelBar`] — provider/model selects
-//!
-//! The local text value is kept in a `Signal<String>` so that typing
-//! updates are snappy and only the submit/cancel actions cross the
-//! component boundary.  The composer textarea stays a native element
-//! (Bulma's `Textarea` component has no `onkeydown`, which we need for
-//! Enter-to-send).
+//! Composer accessory controls injected into `ChatSurface`'s input area via its
+//! `input_accessory` slot: the provider/model selector and the working-directory
+//! selector. These are RustyClaw-specific affordances the generic chat crate
+//! intentionally doesn't know about.
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{
     BulmaColor, BulmaSize, Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Help,
-    Select, Tag, Tags,
+    Select,
 };
 use rustyclaw_core::providers;
-use rustyclaw_view::{BottomBarData, ComposerData};
 
-use super::messages::ModelSelection;
+/// (provider_id, model_id) pair emitted when the user changes model.
+pub type ModelSelection = (String, String);
 
-/// Props for [`InputBar`].
+/// Sentinel selected from the directory menu to open a native folder picker.
+pub const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
+
+/// Props for [`ComposerAccessory`].
 #[derive(Props, Clone, PartialEq)]
-pub struct InputBarProps {
-    pub input: Signal<String>,
-    pub bottom_bar: BottomBarData,
-    pub on_send: EventHandler<()>,
-    pub on_cancel: EventHandler<()>,
-    pub on_input_change: EventHandler<String>,
+pub struct ComposerAccessoryProps {
+    pub current_provider: Option<String>,
+    pub current_model: Option<String>,
+    pub directory_selector: rustyclaw_view::DirectorySelectorState,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
-    pub on_add_file_attachment: EventHandler<()>,
-    pub on_add_directory_attachment: EventHandler<()>,
-    pub on_clear_attachments: EventHandler<()>,
-    pub on_remove_attachment: EventHandler<String>,
     pub on_toggle_directory_selector: EventHandler<()>,
     pub on_select_directory: EventHandler<String>,
 }
 
-/// Model selector bar + message input area with send/cancel button + directory selector.
+/// The model bar + directory selector, rendered as one row inside the composer.
 #[component]
-pub fn InputBar(props: InputBarProps) -> Element {
-    let mut input_ref = props.input;
-    let bottom_bar = &props.bottom_bar;
-    let is_processing = bottom_bar.composer.is_processing;
-    let on_send = props.on_send;
-    let attachments = bottom_bar.composer.attachments.clone();
-    let send_title = bottom_bar.composer.send_button_title();
-
+pub fn ComposerAccessory(props: ComposerAccessoryProps) -> Element {
     rsx! {
-        div { class: "composer-wrap",
-            div { class: "composer",
-                textarea {
-                    class: "textarea composer-input",
-                    placeholder: ComposerData::PLACEHOLDER,
-                    rows: "1",
-                    value: "{input_ref}",
-                    disabled: is_processing,
-                    onkeydown: move |evt: KeyboardEvent| {
-                        if evt.key() == Key::Enter && !evt.modifiers().shift() {
-                            evt.prevent_default();
-                            on_send.call(());
-                        }
-                    },
-                    oninput: move |evt| {
-                        let value = evt.value();
-                        input_ref.set(value.clone());
-                        props.on_input_change.call(value);
-                    }
-                }
-                span { title: "{send_title}",
-                    Button {
-                        color: if is_processing { BulmaColor::Danger } else { BulmaColor::Primary },
-                        rounded: true,
-                        class: "composer-send",
-                        disabled: !is_processing && input_ref.read().trim().is_empty(),
-                        onclick: move |_| {
-                            if is_processing {
-                                props.on_cancel.call(());
-                            } else {
-                                on_send.call(());
-                            }
-                        },
-                        if is_processing { "×" } else { "↑" }
-                    }
-                }
-            }
-
-            div { class: "composer-bottom-row",
-                if !attachments.is_empty() {
-                    Tags { class: "composer-attachments",
-                        for attachment in attachments.clone() {
-                            span {
-                                key: "{attachment.path}",
-                                title: "{attachment.path}",
-                                Tag {
-                                    rounded: true,
-                                    delete: true,
-                                    class: "composer-attachment-chip",
-                                    ondelete: {
-                                        let path = attachment.path.clone();
-                                        let on_remove = props.on_remove_attachment;
-                                        move |_| on_remove.call(path.clone())
-                                    },
-                                    span { class: "composer-attachment-icon", "{attachment.kind.icon()}" }
-                                    span { class: "composer-attachment-name", "{attachment.display_name}" }
-                                }
-                            }
-                        }
-                        Button {
-                            color: BulmaColor::Ghost,
-                            size: BulmaSize::Small,
-                            onclick: move |_| props.on_clear_attachments.call(()),
-                            "Clear"
-                        }
-                    }
-                }
-                ModelBar {
-                    current_provider: bottom_bar.composer.current_provider.clone(),
-                    current_model: bottom_bar.composer.current_model.clone(),
-                    on_model_change: props.on_model_change,
-                    on_add_provider: props.on_add_provider,
-                }
-                Button {
-                    color: BulmaColor::Ghost,
-                    size: BulmaSize::Small,
-                    onclick: move |_| props.on_add_file_attachment.call(()),
-                    "Add file"
-                }
-                Button {
-                    color: BulmaColor::Ghost,
-                    size: BulmaSize::Small,
-                    onclick: move |_| props.on_add_directory_attachment.call(()),
-                    "Add dir"
-                }
-                DirectorySelectorBar {
-                    state: bottom_bar.directory_selector.clone(),
-                    on_toggle: props.on_toggle_directory_selector,
-                    on_select: props.on_select_directory,
-                }
-            }
-
-            div { class: "composer-hint", {ComposerData::HINT} }
+        ModelBar {
+            current_provider: props.current_provider.clone(),
+            current_model: props.current_model.clone(),
+            on_model_change: props.on_model_change,
+            on_add_provider: props.on_add_provider,
+        }
+        DirectorySelectorBar {
+            state: props.directory_selector.clone(),
+            on_toggle: props.on_toggle_directory_selector,
+            on_select: props.on_select_directory,
         }
     }
 }
 
 // ── Directory selector bar ──────────────────────────────────────────────────
-
-const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 
 #[derive(Props, Clone, PartialEq)]
 struct DirectorySelectorBarProps {
@@ -221,7 +118,7 @@ fn DirectorySelectorBar(props: DirectorySelectorBarProps) -> Element {
     }
 }
 
-// ── Model bar (provider / model selector above composer) ─────────────────────
+// ── Model bar (provider / model selector) ────────────────────────────────────
 
 /// Sentinel value used for the "Add provider…" menu entry.
 const ADD_PROVIDER_SENTINEL: &str = "__add_provider__";

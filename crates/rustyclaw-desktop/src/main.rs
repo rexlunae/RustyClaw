@@ -18,8 +18,8 @@ use rustyclaw_core::config::Config;
 
 mod app;
 mod app_support;
+mod chat_transcript;
 mod components;
-mod markdown;
 mod menu;
 mod state;
 

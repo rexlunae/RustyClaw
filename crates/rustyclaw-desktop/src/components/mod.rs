@@ -24,14 +24,12 @@ use dioxus_bulma::prelude::{
 use rustyclaw_view::Tone;
 
 mod chat;
+mod composer_accessory;
 mod connection;
 mod credential_request;
 mod device_flow;
 mod file_browser;
 mod hatching;
-mod input_bar;
-mod message;
-mod messages;
 mod new_project;
 mod pairing;
 mod secrets;
@@ -39,7 +37,6 @@ mod settings;
 mod sidebar;
 mod swarm_panel;
 mod tool_approval;
-mod tool_call;
 mod user_prompt;
 mod vault_unlock;
 

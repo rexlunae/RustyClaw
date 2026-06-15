@@ -31,9 +31,10 @@ clap = { workspace = true }
 # For webview-based desktop: libwebkit2gtk-4.1-dev plus libxdo-dev (-lxdo at link time)
 dioxus = { version = "0.7", features = ["desktop"] }
 dioxus-bulma = "0.7.3"
-
-# Markdown rendering for assistant message content
-pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+# Chat surface. `default-features = false` drops the `genai` feature (we drive
+# the gateway ourselves); `markdown` renders assistant Markdown payloads.
+# TODO: switch to `version = "0.2"` once published to crates.io.
+dioxus-genai-chat = { path = "../../../dioxus-genai-chat/dioxus-genai-chat", default-features = false, features = ["markdown"] }
 
 # UUID generation for message IDs
 uuid = { version = "1", features = ["v4"] }
