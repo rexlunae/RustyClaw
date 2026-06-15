@@ -119,27 +119,17 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
 // `dangerous_inner_html`.  pulldown-cmark passes raw HTML through verbatim,
 // so an adversarial or hallucinated LLM response could inject `<script>`,
 // `<iframe>`, event-handler attributes, or `javascript:` links into the
-// webview.  The old hand-rolled renderer had a multi-layer belt-and-suspenders
-// sanitiser; this lightweight pre-pass on the *source* markdown strips the
-// same high-risk vectors before the crate ever sees them.
-
-use regex::Regex;
-use std::sync::LazyLock;
-
-static RE_DANGEROUS_TAGS: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)<\s*/?\s*(script|iframe|object|embed|form|style)\b[^>]*>"#).unwrap()
-});
-static RE_EVENT_HANDLER: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#"(?i)\bon\w+\s*="#).unwrap());
-static RE_DANGEROUS_URL: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r#"(?i)(href|src|action)\s*=\s*["']?\s*(javascript|data)\s*:"#).unwrap()
-});
+// webview.
+//
+// We use `ammonia` (a DOM-aware allowlist HTML sanitiser) on the raw markdown
+// source.  This handles nested-tag bypasses, HTML-entity-encoding evasion,
+// and attribute-level attacks that regex-based approaches cannot cover.
+// Markdown syntax (headings, bold, code fences, etc.) passes through
+// unmodified because it is not HTML.  Raw HTML *outside* code fences is
+// cleaned to the ammonia default allowlist (safe inline elements only).
 
 fn sanitize_markdown(src: &str) -> String {
-    let out = RE_DANGEROUS_TAGS.replace_all(src, "");
-    let out = RE_EVENT_HANDLER.replace_all(&out, "");
-    let out = RE_DANGEROUS_URL.replace_all(&out, "");
-    out.into_owned()
+    ammonia::clean(src)
 }
 
 /// Map prompt attachments to the chat surface's context-item model. The

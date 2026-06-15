@@ -67,8 +67,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 thiserror = "2"
 
-# Markdown sanitisation (strip dangerous raw-HTML from LLM output)
-regex.workspace = true
+# Markdown sanitisation (strip dangerous raw-HTML from LLM output before the
+# crate renders it via pulldown-cmark → dangerous_inner_html)
+ammonia = "4"
 
 # Config directory lookup for SSH known_hosts handling
 dirs.workspace = true
