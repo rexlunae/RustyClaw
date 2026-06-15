@@ -125,28 +125,7 @@ pub fn Chat(props: ChatProps) -> Element {
                             on_input_change.call(prompt);
                         },
                     }
-<<<<<<< HEAD
-                } else {
-                    ChatSurface {
-                        embedded: true,
-                        transcript: to_transcript(&props.messages, &props.surface),
-                        controls,
-                        input: input_ref(),
-                        attachments: to_context_items(&props.bottom_bar.composer.attachments),
-                        input_accessory: accessory,
-                        on_input: move |value: String| {
-                            input_ref.set(value.clone());
-                            on_input_change.call(value);
-                        },
-                        on_send: send,
-                        on_stop: move |_| props.on_cancel.call(()),
-                        on_context: move |event: ContextEvent| match event {
-                            ContextEvent::AddFilesRequested => props.on_add_file_attachment.call(()),
-                            ContextEvent::AddDirectoryRequested => props.on_add_directory_attachment.call(()),
-                            ContextEvent::Remove(id) => props.on_remove_attachment.call(id),
-                        },
                     }
-=======
                 }
                 ChatSurface {
                     embedded: true,
@@ -166,7 +145,6 @@ pub fn Chat(props: ChatProps) -> Element {
                         ContextEvent::AddDirectoryRequested => props.on_add_directory_attachment.call(()),
                         ContextEvent::Remove(id) => props.on_remove_attachment.call(id),
                     },
->>>>>>> origin/main
                 }
             }
         }

@@ -51,18 +51,11 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             ChatMessagePayload::Text(msg.content.clone()),
         ),
         // Assistant turns are markdown; an empty in-flight bubble that only
-<<<<<<< HEAD
-        // carries tool calls contributes no text payload.
-        MessageRole::Assistant | MessageRole::Thinking => (
-            ChatRole::Assistant,
-            ChatMessagePayload::Markdown(msg.content.clone()),
-=======
         // carries tool calls contributes no text payload.  Pre-sanitise the
         // source so raw-HTML attack vectors don't survive pulldown-cmark → webview.
         MessageRole::Assistant | MessageRole::Thinking => (
             ChatRole::Assistant,
             ChatMessagePayload::Markdown(sanitize_markdown(&msg.content)),
->>>>>>> origin/main
         ),
         MessageRole::Error => (
             ChatRole::Assistant,
@@ -120,8 +113,6 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
     }
 }
 
-<<<<<<< HEAD
-=======
 // ── Markdown sanitisation ────────────────────────────────────────────────────
 //
 // `dioxus-genai-chat` renders Markdown via pulldown-cmark straight into
@@ -141,7 +132,6 @@ fn sanitize_markdown(src: &str) -> String {
     ammonia::clean(src)
 }
 
->>>>>>> origin/main
 /// Map prompt attachments to the chat surface's context-item model. The
 /// attachment path is the stable id used when the user removes a chip.
 pub fn to_context_items(attachments: &[PromptAttachment]) -> Vec<ContextItem> {
