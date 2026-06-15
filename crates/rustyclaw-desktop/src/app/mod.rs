@@ -480,12 +480,6 @@ pub fn App() -> Element {
         });
     };
 
-    let on_clear_attachments = move |_| {
-        let mut s = state.write();
-        s.prompt_attachments.clear();
-        s.status_message = Some("Cleared prompt attachments".to_string());
-    };
-
     let on_remove_attachment = move |path: String| {
         let mut s = state.write();
         let before = s.prompt_attachments.len();
@@ -920,7 +914,6 @@ pub fn App() -> Element {
                     on_add_provider: move |_| show_settings.set(true),
                     on_add_file_attachment: on_add_file_attachment,
                     on_add_directory_attachment: on_add_directory_attachment,
-                    on_clear_attachments: on_clear_attachments,
                     on_remove_attachment: on_remove_attachment,
                     on_toggle_directory_selector: move |_| {
                         let is_expanded = state.read().directory_selector_expanded;
