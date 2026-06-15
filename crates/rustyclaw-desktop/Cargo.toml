@@ -33,8 +33,7 @@ dioxus = { version = "0.7", features = ["desktop"] }
 dioxus-bulma = "0.7.3"
 # Chat surface. `default-features = false` drops the `genai` feature (we drive
 # the gateway ourselves); `markdown` renders assistant Markdown payloads.
-# TODO: switch to `version = "0.2"` once published to crates.io.
-dioxus-genai-chat = { path = "../../../dioxus-genai-chat/dioxus-genai-chat", default-features = false, features = ["markdown"] }
+dioxus-genai-chat = { version = "0.2", default-features = false, features = ["markdown"] }
 
 # UUID generation for message IDs
 uuid = { version = "1", features = ["v4"] }
