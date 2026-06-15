@@ -546,11 +546,21 @@ body,
 }
 
 /* Scroll container for the chat surface (the transcript is rendered by the
+<<<<<<< HEAD
    `dioxus-genai-chat` ChatSurface in embedded mode). */
+=======
+   `dioxus-genai-chat` ChatSurface in embedded mode).  Uses flex-column so the
+   EmptyState can fill space above the always-present ChatSurface input. */
+>>>>>>> origin/main
 .chat-scroll {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
+<<<<<<< HEAD
+=======
+    display: flex;
+    flex-direction: column;
+>>>>>>> origin/main
 }
 
 /* Centre + pad the embedded ChatSurface to a readable column. */
