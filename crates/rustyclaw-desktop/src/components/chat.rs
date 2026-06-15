@@ -125,7 +125,6 @@ pub fn Chat(props: ChatProps) -> Element {
                             on_input_change.call(prompt);
                         },
                     }
-                    }
                 }
                 ChatSurface {
                     embedded: true,
