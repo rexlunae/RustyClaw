@@ -51,10 +51,11 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             ChatMessagePayload::Text(msg.content.clone()),
         ),
         // Assistant turns are markdown; an empty in-flight bubble that only
-        // carries tool calls contributes no text payload.
+        // carries tool calls contributes no text payload.  Pre-sanitise the
+        // source so raw-HTML attack vectors don't survive pulldown-cmark → webview.
         MessageRole::Assistant | MessageRole::Thinking => (
             ChatRole::Assistant,
-            ChatMessagePayload::Markdown(msg.content.clone()),
+            ChatMessagePayload::Markdown(sanitize_markdown(&msg.content)),
         ),
         MessageRole::Error => (
             ChatRole::Assistant,
@@ -110,6 +111,35 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             );
         }
     }
+}
+
+// ── Markdown sanitisation ────────────────────────────────────────────────────
+//
+// `dioxus-genai-chat` renders Markdown via pulldown-cmark straight into
+// `dangerous_inner_html`.  pulldown-cmark passes raw HTML through verbatim,
+// so an adversarial or hallucinated LLM response could inject `<script>`,
+// `<iframe>`, event-handler attributes, or `javascript:` links into the
+// webview.  The old hand-rolled renderer had a multi-layer belt-and-suspenders
+// sanitiser; this lightweight pre-pass on the *source* markdown strips the
+// same high-risk vectors before the crate ever sees them.
+
+use regex::Regex;
+use std::sync::LazyLock;
+
+static RE_DANGEROUS_TAGS: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)<\s*/?\s*(script|iframe|object|embed|form|style)\b[^>]*>"#).unwrap()
+});
+static RE_EVENT_HANDLER: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r#"(?i)\bon\w+\s*="#).unwrap());
+static RE_DANGEROUS_URL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?i)(href|src|action)\s*=\s*["']?\s*(javascript|data)\s*:"#).unwrap()
+});
+
+fn sanitize_markdown(src: &str) -> String {
+    let out = RE_DANGEROUS_TAGS.replace_all(src, "");
+    let out = RE_EVENT_HANDLER.replace_all(&out, "");
+    let out = RE_DANGEROUS_URL.replace_all(&out, "");
+    out.into_owned()
 }
 
 /// Map prompt attachments to the chat surface's context-item model. The
