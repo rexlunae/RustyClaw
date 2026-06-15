@@ -342,8 +342,10 @@ mod tests {
     /// in flight (the plain thread-switch case).
     #[test]
     fn snapshot_applies_when_idle() {
-        let mut s = ClientState::default();
-        s.foreground_thread_id = Some(2);
+        let mut s = ClientState {
+            foreground_thread_id: Some(2),
+            ..Default::default()
+        };
         s.apply_thread_history(2, history(&["hello"]));
         assert_eq!(s.messages.len(), 1);
     }
@@ -352,8 +354,10 @@ mod tests {
     /// must not clear the busy indicators or replace the live view.
     #[test]
     fn snapshot_skipped_while_foreground_request_in_flight() {
-        let mut s = ClientState::default();
-        s.foreground_thread_id = Some(1);
+        let mut s = ClientState {
+            foreground_thread_id: Some(1),
+            ..Default::default()
+        };
         s.mark_request_started();
         s.add_user_message("question".into());
 
@@ -367,8 +371,10 @@ mod tests {
     /// history must load — the backgrounded request can't block it.
     #[test]
     fn snapshot_applies_when_request_belongs_to_background_thread() {
-        let mut s = ClientState::default();
-        s.foreground_thread_id = Some(1);
+        let mut s = ClientState {
+            foreground_thread_id: Some(1),
+            ..Default::default()
+        };
         s.mark_request_started();
         s.is_streaming = true; // stream events were flowing
 
@@ -384,8 +390,10 @@ mod tests {
     /// the thread that owns the response.
     #[test]
     fn stream_events_scoped_to_owning_thread() {
-        let mut s = ClientState::default();
-        s.foreground_thread_id = Some(1);
+        let mut s = ClientState {
+            foreground_thread_id: Some(1),
+            ..Default::default()
+        };
         s.mark_request_started();
         assert!(s.stream_targets_foreground());
 
@@ -400,8 +408,10 @@ mod tests {
     /// the busy indicator.
     #[test]
     fn switch_back_to_running_thread_restores_indicator() {
-        let mut s = ClientState::default();
-        s.foreground_thread_id = Some(1);
+        let mut s = ClientState {
+            foreground_thread_id: Some(1),
+            ..Default::default()
+        };
         s.mark_request_started();
 
         s.switch_thread(2);
@@ -415,8 +425,10 @@ mod tests {
     /// marker without finalizing the on-screen view.
     #[test]
     fn background_response_done_releases_marker() {
-        let mut s = ClientState::default();
-        s.foreground_thread_id = Some(1);
+        let mut s = ClientState {
+            foreground_thread_id: Some(1),
+            ..Default::default()
+        };
         s.mark_request_started();
         s.switch_thread(2);
 

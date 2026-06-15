@@ -51,10 +51,11 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             ChatMessagePayload::Text(msg.content.clone()),
         ),
         // Assistant turns are markdown; an empty in-flight bubble that only
-        // carries tool calls contributes no text payload.
+        // carries tool calls contributes no text payload.  Pre-sanitise the
+        // source so raw-HTML attack vectors don't survive pulldown-cmark → webview.
         MessageRole::Assistant | MessageRole::Thinking => (
             ChatRole::Assistant,
-            ChatMessagePayload::Markdown(msg.content.clone()),
+            ChatMessagePayload::Markdown(sanitize_markdown(&msg.content)),
         ),
         MessageRole::Error => (
             ChatRole::Assistant,
@@ -110,6 +111,25 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             );
         }
     }
+}
+
+// ── Markdown sanitisation ────────────────────────────────────────────────────
+//
+// `dioxus-genai-chat` renders Markdown via pulldown-cmark straight into
+// `dangerous_inner_html`.  pulldown-cmark passes raw HTML through verbatim,
+// so an adversarial or hallucinated LLM response could inject `<script>`,
+// `<iframe>`, event-handler attributes, or `javascript:` links into the
+// webview.
+//
+// We use `ammonia` (a DOM-aware allowlist HTML sanitiser) on the raw markdown
+// source.  This handles nested-tag bypasses, HTML-entity-encoding evasion,
+// and attribute-level attacks that regex-based approaches cannot cover.
+// Markdown syntax (headings, bold, code fences, etc.) passes through
+// unmodified because it is not HTML.  Raw HTML *outside* code fences is
+// cleaned to the ammonia default allowlist (safe inline elements only).
+
+fn sanitize_markdown(src: &str) -> String {
+    ammonia::clean(src)
 }
 
 /// Map prompt attachments to the chat surface's context-item model. The
