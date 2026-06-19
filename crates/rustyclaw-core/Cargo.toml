@@ -94,7 +94,7 @@ schemars = { workspace = true, optional = true }
 
 # Steel Memory - semantic vector search memory palace
 # Keep git for local/dev; include version so publish can strip git and use crates.io.
-steel-memory = { version = "0.1.2", optional = true }
+steel-memory = { version = "0.1.3", optional = true }
 
 # OpenHuman-derived helpers
 # - tokenjuice: rule-driven compression of tool output before it hits the LLM
