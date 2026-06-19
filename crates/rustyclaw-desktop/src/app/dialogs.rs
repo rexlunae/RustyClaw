@@ -467,10 +467,15 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         Buttons {
                             Button {
                                 color: BulmaColor::Primary,
-                                disabled: auth_code.read().trim().is_empty(),
+                                disabled: auth_code.read().len() != 6,
                                 onclick: move |_| {
-                                    let code = auth_code.read().trim().to_string();
-                                    if code.is_empty() {
+                                    let code: String = auth_code
+                                        .read()
+                                        .chars()
+                                        .filter(|c| c.is_ascii_digit())
+                                        .take(6)
+                                        .collect();
+                                    if code.len() != 6 {
                                         return;
                                     }
                                     let gw = gateway.read().clone();
@@ -499,13 +504,26 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                 placeholder: "000000",
                                 value: "{auth_code}",
                                 autofocus: true,
-                                maxlength: "8",
-                                oninput: move |evt| auth_code.set(evt.value()),
+                                maxlength: "6",
+                                oninput: move |evt| {
+                                    let sanitized: String = evt
+                                        .value()
+                                        .chars()
+                                        .filter(|c| c.is_ascii_digit())
+                                        .take(6)
+                                        .collect();
+                                    auth_code.set(sanitized);
+                                },
                                 onkeydown: move |evt: KeyboardEvent| {
                                     if evt.key() == Key::Enter {
                                         evt.prevent_default();
-                                        let code = auth_code.read().trim().to_string();
-                                        if code.is_empty() {
+                                        let code: String = auth_code
+                                            .read()
+                                            .chars()
+                                            .filter(|c| c.is_ascii_digit())
+                                            .take(6)
+                                            .collect();
+                                        if code.len() != 6 {
                                             return;
                                         }
                                         let gw = gateway.read().clone();

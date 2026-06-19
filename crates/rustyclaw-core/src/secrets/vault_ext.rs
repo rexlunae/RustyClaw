@@ -206,6 +206,19 @@ impl SecretsManager {
             .get_secret(Self::TOTP_SECRET_KEY, true)?
             .ok_or_else(|| anyhow::anyhow!("No TOTP secret configured"))?;
 
+        // Users often paste codes formatted like "123 456" or "123-456".
+        // Accept those by stripping non-digits, but still require a strict
+        // 6-digit final code (our configured TOTP digit width).
+        let digits_only: String = code.chars().filter(|c| c.is_ascii_digit()).collect();
+        let candidate = if digits_only.is_empty() {
+            code.trim().to_string()
+        } else {
+            digits_only
+        };
+        if candidate.len() != 6 || !candidate.chars().all(|c| c.is_ascii_digit()) {
+            return Ok(false);
+        }
+
         let secret = TotpSecret::Encoded(encoded);
         let secret_bytes = secret
             .to_bytes()
@@ -227,7 +240,7 @@ impl SecretsManager {
             .context("System time error")?
             .as_secs();
 
-        Ok(totp.check(code, now))
+        Ok(totp.check(&candidate, now))
     }
 
     /// Check whether a TOTP secret is stored in the vault.

@@ -265,6 +265,12 @@ fn test_totp_setup_and_verify() {
     let code = totp.generate(now);
 
     assert!(manager.verify_totp(&code).unwrap());
+    assert!(manager
+        .verify_totp(&format!("{} {}", &code[0..3], &code[3..6]))
+        .unwrap());
+    assert!(manager
+        .verify_totp(&format!("{}-{}", &code[0..3], &code[3..6]))
+        .unwrap());
 
     // Wrong code should fail.
     assert!(!manager.verify_totp("000000").unwrap());
