@@ -240,8 +240,26 @@ pub fn thread_history_to_chat_messages(
                                             Some(v.clone())
                                         } else if let Some(s) = v.as_str() {
                                             // If it's a string, try to parse it as JSON
-                                            serde_json::from_str(s).ok()
+                                            match serde_json::from_str(s) {
+                                                Ok(parsed) => Some(parsed),
+                                                Err(e) => {
+                                                    tracing::warn!(
+                                                        error = %e,
+                                                        tool_id = %id,
+                                                        tool_name = %name,
+                                                        arguments_str = %s.chars().take(100).collect::<String>(),
+                                                        "Failed to parse tool call arguments from string"
+                                                    );
+                                                    None
+                                                }
+                                            }
                                         } else {
+                                            tracing::debug!(
+                                                tool_id = %id,
+                                                tool_name = %name,
+                                                arguments_type = ?v,
+                                                "Tool call arguments in unexpected format"
+                                            );
                                             None
                                         }
                                     })

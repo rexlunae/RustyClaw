@@ -8,7 +8,7 @@ use rustyclaw_core::daemon;
 use rustyclaw_core::theme as t;
 
 /// Handle `gateway start` command.
-pub fn handle_start(config: &Config, vault_password: Option<&str>, ssh_listen: &str) -> Result<()> {
+pub fn handle_start(config: &Config, vault_password: Option<&str>, ssh_listen: &str, log_level: Option<&str>) -> Result<()> {
     let sp = t::spinner("Starting gateway…");
 
     match daemon::start(
@@ -19,6 +19,7 @@ pub fn handle_start(config: &Config, vault_password: Option<&str>, ssh_listen: &
         vault_password,
         config.tls_cert.as_deref(),
         config.tls_key.as_deref(),
+        log_level,
     ) {
         Ok(pid) => {
             t::spinner_ok(
@@ -66,6 +67,7 @@ pub fn handle_restart(
     config: &Config,
     vault_password: Option<&str>,
     ssh_listen: &str,
+    log_level: Option<&str>,
 ) -> Result<()> {
     let sp = t::spinner("Restarting gateway…");
 
@@ -95,6 +97,7 @@ pub fn handle_restart(
         vault_password,
         config.tls_cert.as_deref(),
         config.tls_key.as_deref(),
+        log_level,
     ) {
         Ok(pid) => {
             t::spinner_ok(
@@ -196,7 +199,7 @@ pub fn handle_reload_result(result: Result<(String, String), String>) {
 /// terminal so it can prompt for the vault password and stream logs). The
 /// gateway server itself lives entirely in the `rustyclaw-gateway` crate;
 /// the CLI only locates and launches its binary.
-pub fn handle_run(config: &Config, bind: &str, port: u16) -> Result<()> {
+pub fn handle_run(config: &Config, bind: &str, port: u16, log_level: Option<&str>) -> Result<()> {
     let args = vec![
         "--bind".to_string(),
         bind.to_string(),
@@ -209,6 +212,7 @@ pub fn handle_run(config: &Config, bind: &str, port: u16) -> Result<()> {
         &args,
         config.tls_cert.as_deref(),
         config.tls_key.as_deref(),
+        log_level,
     )?;
 
     if !status.success() {

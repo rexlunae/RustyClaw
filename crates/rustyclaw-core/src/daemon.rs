@@ -104,6 +104,7 @@ pub fn start(
     vault_password: Option<&str>,
     tls_cert: Option<&Path>,
     tls_key: Option<&Path>,
+    log_level: Option<&str>,
 ) -> Result<u32> {
     // If already running, bail.
     if let DaemonStatus::Running { pid } = status(settings_dir) {
@@ -148,6 +149,12 @@ pub fn start(
         cmd.env("RUSTYCLAW_VAULT_PASSWORD", pw);
     }
 
+    // Set the log level for the gateway process via RUST_LOG environment variable.
+    if let Some(level) = log_level {
+        cmd.env("RUST_LOG", level);
+        cmd.env("RUSTYCLAW_LOG", level);
+    }
+
     // Pass TLS certificate and key paths for WSS support.
     if let Some(cert) = tls_cert {
         cmd.arg("--tls-cert").arg(cert);
@@ -187,11 +194,18 @@ pub fn run_foreground(
     args: &[String],
     tls_cert: Option<&Path>,
     tls_key: Option<&Path>,
+    log_level: Option<&str>,
 ) -> Result<std::process::ExitStatus> {
     let gateway_bin = resolve_gateway_binary()?;
 
     let mut cmd = Command::new(&gateway_bin);
     cmd.arg("run").arg("--settings-dir").arg(settings_dir);
+
+    // Set the log level for the gateway process via RUST_LOG environment variable.
+    if let Some(level) = log_level {
+        cmd.env("RUST_LOG", level);
+        cmd.env("RUSTYCLAW_LOG", level);
+    }
 
     for a in args {
         cmd.arg(a);

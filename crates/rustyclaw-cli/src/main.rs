@@ -322,11 +322,19 @@ struct CommandArgs {
 #[derive(Debug, Subcommand)]
 enum GatewayCommands {
     /// Start the gateway (daemon/background)
-    Start,
+    Start {
+        /// Log level filter for the gateway (e.g., "debug", "rustyclaw=debug,info")
+        #[arg(long, value_name = "LEVEL")]
+        log_level: Option<String>,
+    },
     /// Stop a running gateway
     Stop,
     /// Restart the gateway
-    Restart,
+    Restart {
+        /// Log level filter for the gateway (e.g., "debug", "rustyclaw=debug,info")
+        #[arg(long, value_name = "LEVEL")]
+        log_level: Option<String>,
+    },
     /// Show gateway status
     Status {
         /// Output JSON
@@ -359,9 +367,12 @@ struct GatewayRunArgs {
     /// Overwrite existing configuration
     #[arg(long)]
     force: bool,
-    /// Verbose logging
+    /// Verbose logging (equivalent to --log-level=debug)
     #[arg(long, short)]
     verbose: bool,
+    /// Log level filter (e.g., "debug", "rustyclaw=debug,info", "rustyclaw_core::providers=debug")
+    #[arg(long, value_name = "LEVEL")]
+    log_level: Option<String>,
 }
 
 // ── Skills subcommands ──────────────────────────────────────────────────────
@@ -679,26 +690,26 @@ async fn main() -> Result<()> {
 
         // ── Gateway sub-commands ────────────────────────────────
         Commands::Gateway(sub) => match sub {
-            GatewayCommands::Start => {
+            GatewayCommands::Start { log_level } => {
                 let vault_password = extract_vault_password(&config);
                 let ssh_listen = config
                     .ssh
                     .as_ref()
                     .map(|s| s.bind.clone())
                     .unwrap_or_else(|| "0.0.0.0:2222".to_string());
-                commands::handle_start(&config, vault_password.as_deref(), &ssh_listen)?;
+                commands::handle_start(&config, vault_password.as_deref(), &ssh_listen, log_level.as_deref())?;
             }
             GatewayCommands::Stop => {
                 commands::handle_stop(&config)?;
             }
-            GatewayCommands::Restart => {
+            GatewayCommands::Restart { log_level } => {
                 let vault_password = extract_vault_password(&config);
                 let ssh_listen = config
                     .ssh
                     .as_ref()
                     .map(|s| s.bind.clone())
                     .unwrap_or_else(|| "0.0.0.0:2222".to_string());
-                commands::handle_restart(&config, vault_password.as_deref(), &ssh_listen)?;
+                commands::handle_restart(&config, vault_password.as_deref(), &ssh_listen, log_level.as_deref())?;
             }
             GatewayCommands::Status { json } => {
                 commands::handle_status(&config, json);
@@ -736,7 +747,13 @@ async fn main() -> Result<()> {
                     GatewayBind::Auto => "auto",
                     GatewayBind::Custom => "custom",
                 };
-                commands::handle_run(&config, bind, args.port)?;
+                // Verbose flag overrides log_level
+                let log_level = if args.verbose {
+                    Some("rustyclaw=debug,info")
+                } else {
+                    args.log_level.as_deref()
+                };
+                commands::handle_run(&config, bind, args.port, log_level)?;
             }
         },
 

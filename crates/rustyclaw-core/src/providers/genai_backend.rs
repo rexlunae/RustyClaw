@@ -26,6 +26,7 @@
 use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::json;
+use tracing::{debug, warn};
 
 use genai::Client;
 use genai::adapter::AdapterKind;
@@ -124,6 +125,15 @@ async fn genai_chat(
     req: &ProviderRequest,
     writer: Option<&mut dyn TransportWriter>,
 ) -> Result<ModelResponse> {
+    debug!(
+        provider = %req.provider,
+        model = %req.model,
+        base_url = %req.base_url,
+        messages = req.messages.len(),
+        streaming = writer.is_some(),
+        "Starting genai chat request"
+    );
+
     let client = build_client(http, req);
     let chat_req = to_genai_chat_request(req);
 
@@ -335,13 +345,26 @@ fn decode_assistant(content: &str) -> GenChatMessage {
             }
         }
         if let Some(calls) = env.get("tool_calls").and_then(|v| v.as_array()) {
-            for tc in calls {
+            debug!(
+                tool_calls_count = calls.len(),
+                "Decoding assistant message with tool calls"
+            );
+            for (idx, tc) in calls.iter().enumerate() {
                 let call_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let fn_name = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let fn_arguments = tc
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
+
+                debug!(
+                    tool_call_index = idx,
+                    call_id = %call_id,
+                    fn_name = %fn_name,
+                    arguments_type = %fn_arguments.to_string().chars().take(50).collect::<String>(),
+                    "Decoded tool call"
+                );
+
                 parts.push(ContentPart::ToolCall(ToolCall {
                     call_id: call_id.to_string(),
                     fn_name: fn_name.to_string(),
@@ -368,7 +391,20 @@ fn decode_tool_result(content: &str) -> GenChatMessage {
 
 /// Parse a canonical RustyClaw envelope, verifying the `__rustyclaw_kind` tag.
 fn parse_canonical(content: &str, kind: &str) -> Option<serde_json::Value> {
-    let value: serde_json::Value = serde_json::from_str(content).ok()?;
+    let value: serde_json::Value = match serde_json::from_str(content) {
+        Ok(v) => v,
+        Err(e) => {
+            // Only log at debug level since this is expected for non-JSON content
+            debug!(
+                error = %e,
+                content_preview = %content.chars().take(100).collect::<String>(),
+                expected_kind = kind,
+                "Failed to parse canonical envelope as JSON (this is normal for plain text messages)"
+            );
+            return None;
+        }
+    };
+
     if value.get("__rustyclaw_kind").and_then(|v| v.as_str()) == Some(kind) {
         Some(value)
     } else {
@@ -455,7 +491,23 @@ fn copilot_extra_headers(req: &ProviderRequest) -> Option<genai::Headers> {
 /// Wrap a genai error as an `anyhow::Error`, preserving the full message chain
 /// (status code + response body) so callers' auth-error detection still works.
 fn genai_err(err: genai::Error) -> anyhow::Error {
-    anyhow::anyhow!("{err}")
+    // Log the full error for debugging, including any nested causes
+    warn!(
+        error = %err,
+        error_debug = ?err,
+        "genai API call failed"
+    );
+
+    // Extract additional context from the error if available
+    let error_msg = format!("{err}");
+
+    // Check for common error patterns and add helpful context
+    if error_msg.to_lowercase().contains("invalid json")
+        || error_msg.to_lowercase().contains("json format") {
+        anyhow::anyhow!("Web stream error for model. Cause: HTTP error. Body: {}", error_msg)
+    } else {
+        anyhow::anyhow!("{err}")
+    }
 }
 
 #[cfg(test)]
