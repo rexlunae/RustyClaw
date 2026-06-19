@@ -231,8 +231,21 @@ pub fn thread_history_to_chat_messages(
                             .filter_map(|tc| {
                                 let id = tc.get("id")?.as_str()?.to_string();
                                 let name = tc.get("name")?.as_str()?.to_string();
-                                let arguments =
-                                    tc.get("arguments").cloned().unwrap_or_else(|| json!({}));
+                                // Arguments might be stored as a JSON string (from wire
+                                // protocol) or as a JSON object. Normalize to object.
+                                let arguments = tc.get("arguments")
+                                    .and_then(|v| {
+                                        // If it's already an object, use it
+                                        if v.is_object() || v.is_array() {
+                                            Some(v.clone())
+                                        } else if let Some(s) = v.as_str() {
+                                            // If it's a string, try to parse it as JSON
+                                            serde_json::from_str(s).ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or_else(|| json!({}));
                                 Some(ParsedToolCall {
                                     id,
                                     name,
