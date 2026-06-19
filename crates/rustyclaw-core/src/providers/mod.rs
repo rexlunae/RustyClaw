@@ -401,8 +401,13 @@ impl ModelInfo {
 /// Returns `Err` with a human-readable message on any failure — no silent
 /// fallbacks.  Callers should display the error to the user.
 mod device_flow;
+mod genai_backend;
 mod models;
 pub use device_flow::*;
+pub use genai_backend::{
+    call_anthropic_with_tools, call_google_with_tools, call_openai_with_tools,
+    encode_assistant_message, encode_tool_result,
+};
 pub use models::*;
 
 #[cfg(test)]

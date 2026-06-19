@@ -367,6 +367,35 @@ pub async fn send_stream_start(writer: &mut dyn TransportWriter) -> Result<()> {
     send_frame(writer, &frame).await
 }
 
+/// Build and send a thinking-start frame (extended-reasoning block begins).
+pub async fn send_thinking_start(writer: &mut dyn TransportWriter) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ThinkingStart,
+        payload: ServerPayload::ThinkingStart,
+    };
+    send_frame(writer, &frame).await
+}
+
+/// Build and send a thinking-delta frame (a chunk of reasoning content).
+pub async fn send_thinking_delta(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ThinkingDelta,
+        payload: ServerPayload::ThinkingDelta {
+            delta: delta.to_string(),
+        },
+    };
+    send_frame(writer, &frame).await
+}
+
+/// Build and send a thinking-end frame (the reasoning block is complete).
+pub async fn send_thinking_end(writer: &mut dyn TransportWriter) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ThinkingEnd,
+        payload: ServerPayload::ThinkingEnd,
+    };
+    send_frame(writer, &frame).await
+}
+
 /// Build and send a tool call frame.
 pub async fn send_tool_call(
     writer: &mut dyn TransportWriter,

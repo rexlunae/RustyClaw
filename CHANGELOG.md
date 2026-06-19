@@ -5,6 +5,35 @@ All notable changes to RustyClaw will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Provider backend migrated to the `genai` crate.** The gateway's hand-rolled
+  OpenAI / Anthropic / Google HTTP clients
+  (`rustyclaw-gateway/src/providers/{openai,anthropic,google}.rs`) are replaced
+  by a single [`genai`](https://crates.io/crates/genai)-backed dispatch in
+  **`rustyclaw-core`** (`providers/genai_backend.rs`). It lives in core so the
+  gateway and the client crates share one genai instance. Request building, tool
+  calling, and SSE streaming (including Anthropic extended-thinking deltas) are
+  now handled by genai; RustyClaw still owns provider selection, credentials /
+  Copilot session tokens, and the binary streaming frame protocol. Each provider
+  id maps onto a genai adapter; all OpenAI-compatible providers (OpenRouter,
+  Ollama, LM Studio, exo, OpenCode, GitHub Copilot, custom) use the OpenAI
+  adapter at their configured base URL. The gateway's
+  `providers::call_{openai,anthropic,google}_with_tools` re-export the core
+  implementation, so dispatch / messenger / thread / compaction call sites are
+  unchanged.
+
+### Notes
+
+- Tool-loop continuation messages now use a single provider-agnostic canonical
+  encoding (`providers::encode_assistant_message` / `encode_tool_result`)
+  instead of per-provider JSON shapes.
+- The previous automatic fallback to the OpenAI *Responses API* (for models that
+  reject `/chat/completions`) is not reproduced; genai selects the Responses API
+  adapter from the model name instead.
+
 ## [0.1.0] - 2026-02-12
 
 ### 🎉 Initial Release - Full OpenClaw Parity

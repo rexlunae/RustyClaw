@@ -7,43 +7,9 @@ use rustyclaw_core::gateway::protocol::server;
 use rustyclaw_core::gateway::transport::TransportWriter;
 use rustyclaw_core::gateway::{
     ChatMessage, CopilotSession, ModelContext, ModelResponse, ParsedToolCall, ProbeResult,
-    ProviderRequest, ServerFrame, ServerFrameType, ServerPayload, ToolCallResult,
+    ProviderRequest, ToolCallResult,
 };
 use rustyclaw_core::providers;
-
-// ── Error helpers ───────────────────────────────────────────────────────────
-
-/// Parse a provider HTTP error response body and return a user-friendly
-/// `anyhow::Error`.
-///
-/// Handles the OpenAI error envelope `{"error":{"message":"...","code":"..."}}`.
-/// For the `unsupported_api_for_model` code, the message is rewritten so users
-/// know to pick a different model rather than seeing a raw JSON dump.
-pub(crate) fn provider_error(
-    prefix: &str,
-    status: reqwest::StatusCode,
-    body: &str,
-) -> anyhow::Error {
-    if let Ok(json) = serde_json::from_str::<serde_json::Value>(body) {
-        if let Some(err_obj) = json.get("error") {
-            let code = err_obj.get("code").and_then(|v| v.as_str()).unwrap_or("");
-            let msg = err_obj
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or(body);
-            if code == "unsupported_api_for_model" {
-                return anyhow::anyhow!(
-                    "{}: model is not accessible via the chat/completions endpoint. \
-                     Choose a different model. ({})",
-                    prefix,
-                    msg
-                );
-            }
-            return anyhow::anyhow!("{} returned {} — {}", prefix, status, msg);
-        }
-    }
-    anyhow::anyhow!("{} returned {} — {}", prefix, status, body)
-}
 
 // ── Connection retry helper ─────────────────────────────────────────────────
 
@@ -94,74 +60,11 @@ pub async fn send_with_retry(builder: reqwest::RequestBuilder) -> Result<reqwest
 
 // ── Streaming helpers ───────────────────────────────────────────────────────
 
-/// Find the next SSE event boundary in the buffer.
-///
-/// Returns `(position, bytes_to_skip)` where `position` is the start of the
-/// blank-line separator and `bytes_to_skip` is how many bytes to consume
-/// (2 for `\n\n`, 4 for `\r\n\r\n`).
-pub(crate) fn find_event_boundary(buf: &str) -> Option<(usize, usize)> {
-    let bytes = buf.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'\n' && i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
-            return Some((i, 2));
-        }
-        if bytes[i] == b'\r'
-            && i + 3 < bytes.len()
-            && bytes[i + 1] == b'\n'
-            && bytes[i + 2] == b'\r'
-            && bytes[i + 3] == b'\n'
-        {
-            return Some((i, 4));
-        }
-        i += 1;
-    }
-    None
-}
-
 /// Send a single chunk frame as binary.
 pub async fn send_chunk(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
     server::send_chunk(writer, delta)
         .await
         .context("Failed to send chunk frame")
-}
-
-/// Send a thinking_start frame as binary.
-pub async fn send_thinking_start(writer: &mut dyn TransportWriter) -> Result<()> {
-    let frame = ServerFrame {
-        frame_type: ServerFrameType::ThinkingStart,
-        payload: ServerPayload::ThinkingStart,
-    };
-    server::send_frame(writer, &frame)
-        .await
-        .context("Failed to send thinking_start frame")
-}
-
-/// Send a thinking_delta frame as binary.
-pub async fn send_thinking_delta(writer: &mut dyn TransportWriter, delta: &str) -> Result<()> {
-    let frame = ServerFrame {
-        frame_type: ServerFrameType::ThinkingDelta,
-        payload: ServerPayload::ThinkingDelta {
-            delta: delta.to_string(),
-        },
-    };
-    server::send_frame(writer, &frame)
-        .await
-        .context("Failed to send thinking_delta frame")
-}
-
-/// Send a thinking_end frame as binary.
-pub async fn send_thinking_end(
-    writer: &mut dyn TransportWriter,
-    _summary: Option<&str>,
-) -> Result<()> {
-    let frame = ServerFrame {
-        frame_type: ServerFrameType::ThinkingEnd,
-        payload: ServerPayload::ThinkingEnd,
-    };
-    server::send_frame(writer, &frame)
-        .await
-        .context("Failed to send thinking_end frame")
 }
 
 /// Send the response_done sentinel frame as binary.
@@ -262,125 +165,24 @@ pub fn append_tool_round(
     }
 }
 
-/// Format the assistant message containing text and tool calls.
-fn format_assistant_message(provider: &str, model_resp: &ModelResponse) -> String {
-    match provider {
-        "anthropic" => {
-            // Anthropic: array of content blocks (text + tool_use)
-            let mut blocks = Vec::new();
-            if !model_resp.text.trim().is_empty() {
-                blocks.push(json!({ "type": "text", "text": model_resp.text }));
-            }
-            for tc in &model_resp.tool_calls {
-                blocks.push(json!({
-                    "type": "tool_use",
-                    "id": tc.id,
-                    "name": tc.name,
-                    "input": tc.arguments,
-                }));
-            }
-            serde_json::to_string(&blocks).unwrap_or_default()
-        }
-        "google" => {
-            // Google: array of parts (text + functionCall)
-            let mut parts = Vec::new();
-            if !model_resp.text.trim().is_empty() {
-                parts.push(json!({ "text": model_resp.text }));
-            }
-            for tc in &model_resp.tool_calls {
-                parts.push(json!({
-                    "functionCall": { "name": tc.name, "args": tc.arguments }
-                }));
-            }
-            serde_json::to_string(&parts).unwrap_or_default()
-        }
-        _ => {
-            // OpenAI-compatible: object with role, content, tool_calls
-            let tc_array: Vec<serde_json::Value> = model_resp
-                .tool_calls
-                .iter()
-                .map(|tc| {
-                    json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": serde_json::to_string(&tc.arguments).unwrap_or_default(),
-                        }
-                    })
-                })
-                .collect();
-
-            json!({
-                "role": "assistant",
-                "content": if model_resp.text.trim().is_empty() {
-                    serde_json::Value::Null
-                } else {
-                    json!(model_resp.text)
-                },
-                "tool_calls": tc_array,
-            })
-            .to_string()
-        }
-    }
+/// Encode the assistant turn (text + tool calls) into RustyClaw's canonical,
+/// provider-agnostic envelope.
+///
+/// The encoding now lives in `rustyclaw-core` alongside the genai decoder, so
+/// the on-wire contract has a single owner; this delegates to it. The
+/// `_provider` argument is retained for call-site compatibility but no longer
+/// affects the output.
+fn format_assistant_message(_provider: &str, model_resp: &ModelResponse) -> String {
+    providers::encode_assistant_message(model_resp)
 }
 
-/// Format tool results into message(s).
-/// Returns Vec of (role, content) pairs.
-fn format_tool_results(provider: &str, results: &[ToolCallResult]) -> Vec<(String, String)> {
-    match provider {
-        "anthropic" => {
-            // Anthropic: single "user" message with array of tool_result blocks
-            let blocks: Vec<serde_json::Value> = results
-                .iter()
-                .map(|r| {
-                    json!({
-                        "type": "tool_result",
-                        "tool_use_id": r.id,
-                        "content": r.output,
-                        "is_error": r.is_error,
-                    })
-                })
-                .collect();
-            vec![(
-                "user".to_string(),
-                serde_json::to_string(&blocks).unwrap_or_default(),
-            )]
-        }
-        "google" => {
-            // Google: single "user" message with array of functionResponse parts
-            let parts: Vec<serde_json::Value> = results
-                .iter()
-                .map(|r| {
-                    json!({
-                        "functionResponse": {
-                            "name": r.name,
-                            "response": { "content": r.output, "is_error": r.is_error }
-                        }
-                    })
-                })
-                .collect();
-            vec![(
-                "user".to_string(),
-                serde_json::to_string(&parts).unwrap_or_default(),
-            )]
-        }
-        _ => {
-            // OpenAI-compatible: one "tool" message per result
-            results
-                .iter()
-                .map(|r| {
-                    let content = json!({
-                        "role": "tool",
-                        "tool_call_id": r.id,
-                        "content": r.output,
-                    })
-                    .to_string();
-                    ("tool".to_string(), content)
-                })
-                .collect()
-        }
-    }
+/// Encode tool results into canonical `tool_result` messages — one `tool`
+/// message per result. Provider-agnostic (see [`format_assistant_message`]).
+fn format_tool_results(_provider: &str, results: &[ToolCallResult]) -> Vec<(String, String)> {
+    results
+        .iter()
+        .map(|r| ("tool".to_string(), providers::encode_tool_result(r)))
+        .collect()
 }
 
 /// Convert persisted [`ThreadMessage`]s into the [`ChatMessage`] wire form
@@ -859,9 +661,9 @@ fn format_probe_error(err: &anyhow_tracing::Error) -> String {
     }
 }
 
-mod anthropic;
-mod google;
-mod openai;
-pub use anthropic::call_anthropic_with_tools;
-pub use google::call_google_with_tools;
-pub use openai::call_openai_with_tools;
+// The genai-backed provider dispatch lives in `rustyclaw-core` so the gateway
+// and client crates share one genai instance. Re-export the call surface here
+// so existing `providers::call_*` call sites resolve unchanged.
+pub use rustyclaw_core::providers::{
+    call_anthropic_with_tools, call_google_with_tools, call_openai_with_tools,
+};

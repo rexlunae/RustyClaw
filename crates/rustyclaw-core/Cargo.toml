@@ -110,6 +110,11 @@ sha2 = { version = "0.11.0" }
 
 # QR code generation (optional)
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
+
+# Multi-provider LLM client. Backs the provider dispatch in
+# `providers::genai_backend` (request building, tool calling, SSE streaming).
+# Lives in core so every client crate that depends on rustyclaw-core shares
+# the same instance rather than pulling a separate copy.
 genai = "0.5.3"
 
 # AST-grep — structural code search and rewrite via tree-sitter
