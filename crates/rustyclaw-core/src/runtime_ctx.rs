@@ -1,16 +1,24 @@
 //! Global runtime context for tool access.
 //!
 //! This module provides a global store for runtime information that tools
-//! need to access, such as the current model context.
+//! need to access, such as the current model context, host capabilities,
+//! and real-time load data.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
+use crate::host::SharedHostCapabilities;
+use crate::load::SharedLoadTracker;
+
 /// Model information available to tools.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct RuntimeInfo {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+    /// Static host hardware profile.
+    pub host: Option<SharedHostCapabilities>,
+    /// Live load tracker (periodically sampled).
+    pub load_tracker: Option<SharedLoadTracker>,
 }
 
 /// Shared runtime context.
@@ -42,6 +50,30 @@ pub fn get_model_info() -> Option<(String, String, String)> {
             ctx.base_url.clone()?,
         ))
     })
+}
+
+/// Store the host capabilities snapshot in the runtime context.
+pub fn set_host(host: SharedHostCapabilities) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.host = Some(host);
+    }
+}
+
+/// Get the host capabilities snapshot.
+pub fn get_host() -> Option<SharedHostCapabilities> {
+    runtime_ctx().lock().ok().and_then(|ctx| ctx.host.clone())
+}
+
+/// Store the load tracker in the runtime context.
+pub fn set_load_tracker(tracker: SharedLoadTracker) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.load_tracker = Some(tracker);
+    }
+}
+
+/// Get the load tracker.
+pub fn get_load_tracker() -> Option<SharedLoadTracker> {
+    runtime_ctx().lock().ok().and_then(|ctx| ctx.load_tracker.clone())
 }
 
 #[cfg(test)]

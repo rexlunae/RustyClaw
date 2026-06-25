@@ -90,6 +90,75 @@ impl TaskComplexity {
     }
 }
 
+/// Whether a model provider runs locally or calls an external API.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default,
+)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderKind {
+    /// Locally executed and managed by the gateway (e.g. Ollama, llama.cpp).
+    Internal,
+    /// Remote API provider (e.g. Anthropic, OpenAI, Google).
+    #[default]
+    External,
+    /// Subscription / proxy provider where usage is covered by a flat fee
+    /// (e.g. GitHub Copilot).
+    Subscription,
+}
+
+impl ProviderKind {
+    pub fn display(&self) -> &'static str {
+        match self {
+            Self::Internal => "Internal",
+            Self::External => "External",
+            Self::Subscription => "Subscription",
+        }
+    }
+
+    /// Whether this provider kind executes on the local host.
+    pub fn is_local(&self) -> bool {
+        matches!(self, Self::Internal)
+    }
+}
+
+/// Resource requirements for running a model locally.
+///
+/// Only meaningful for [`ProviderKind::Internal`] models.  External
+/// models have `None` for all fields.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ResourceRequirements {
+    /// Minimum system RAM in bytes.
+    pub min_memory_bytes: Option<u64>,
+    /// Minimum GPU VRAM in bytes.
+    pub min_vram_bytes: Option<u64>,
+    /// Recommended number of CPU cores.
+    pub recommended_cpu_cores: Option<u32>,
+    /// Approximate model weight size on disk (bytes).
+    pub disk_size_bytes: Option<u64>,
+}
+
+impl ResourceRequirements {
+    /// Check whether the host has enough resources to run this model.
+    pub fn satisfies(&self, host: &crate::host::HostCapabilities) -> bool {
+        if let Some(min_mem) = self.min_memory_bytes {
+            if host.total_memory_bytes < min_mem {
+                return false;
+            }
+        }
+        if let Some(min_vram) = self.min_vram_bytes {
+            if host.total_vram_bytes() < min_vram {
+                return false;
+            }
+        }
+        if let Some(cores) = self.recommended_cpu_cores {
+            if (host.cpu_cores_logical as u32) < cores {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 /// A registered model with metadata.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModelEntry {
@@ -128,6 +197,14 @@ pub struct ModelEntry {
 
     /// Optional notes
     pub notes: Option<String>,
+
+    /// Whether this model runs locally or via an external API.
+    #[serde(default)]
+    pub provider_kind: ProviderKind,
+
+    /// Resource requirements for local execution.
+    #[serde(default)]
+    pub resource_requirements: ResourceRequirements,
 }
 
 impl ModelEntry {
@@ -151,6 +228,8 @@ impl ModelEntry {
             supports_tools: true,
             supports_thinking: false,
             notes: None,
+            provider_kind: ProviderKind::default(),
+            resource_requirements: ResourceRequirements::default(),
         }
     }
 
@@ -178,9 +257,34 @@ impl ModelEntry {
         self
     }
 
+    /// Builder: set provider kind.
+    pub fn with_provider_kind(mut self, kind: ProviderKind) -> Self {
+        self.provider_kind = kind;
+        self
+    }
+
+    /// Builder: set resource requirements.
+    pub fn with_resources(mut self, reqs: ResourceRequirements) -> Self {
+        self.resource_requirements = reqs;
+        self
+    }
+
     /// Check if model can be used (enabled + available).
     pub fn is_usable(&self) -> bool {
         self.enabled && self.available
+    }
+
+    /// Whether this model runs on the local host.
+    pub fn is_local(&self) -> bool {
+        self.provider_kind.is_local()
+    }
+
+    /// Check whether the host can run this model (always true for external).
+    pub fn can_run_on(&self, host: &crate::host::HostCapabilities) -> bool {
+        if !self.is_local() {
+            return true;
+        }
+        self.resource_requirements.satisfies(host)
     }
 
     /// Format for display with tier indicator.
@@ -192,12 +296,18 @@ impl ModelEntry {
         } else {
             "🟢"
         };
+        let kind_tag = match self.provider_kind {
+            ProviderKind::Internal => " [local]",
+            ProviderKind::Subscription => " [sub]",
+            ProviderKind::External => "",
+        };
         format!(
-            "{} {} {} ({})",
+            "{} {} {} ({}{})",
             status,
             self.tier.emoji(),
             self.display_name,
-            self.provider
+            self.provider,
+            kind_tag,
         )
     }
 }
@@ -300,7 +410,9 @@ impl ModelRegistry {
             };
 
             let tier = infer_cost_tier(provider_id, &info.id);
-            let mut entry = ModelEntry::new(qualified_id.clone(), provider_id, tier);
+            let kind = infer_provider_kind(provider_id);
+            let mut entry = ModelEntry::new(qualified_id.clone(), provider_id, tier)
+                .with_provider_kind(kind);
             if let Some(name) = info.name {
                 entry.display_name = name;
             }
@@ -366,6 +478,32 @@ impl ModelRegistry {
     /// List models by tier.
     pub fn by_tier(&self, tier: CostTier) -> Vec<&ModelEntry> {
         self.all().into_iter().filter(|m| m.tier == tier).collect()
+    }
+
+    /// List models by provider kind.
+    pub fn by_kind(&self, kind: ProviderKind) -> Vec<&ModelEntry> {
+        self.all()
+            .into_iter()
+            .filter(|m| m.provider_kind == kind)
+            .collect()
+    }
+
+    /// List internal (locally-managed) models.
+    pub fn internal_models(&self) -> Vec<&ModelEntry> {
+        self.by_kind(ProviderKind::Internal)
+    }
+
+    /// List external (API-based) models.
+    pub fn external_models(&self) -> Vec<&ModelEntry> {
+        self.by_kind(ProviderKind::External)
+    }
+
+    /// List models that can run on the given host.
+    pub fn runnable_on(&self, host: &crate::host::HostCapabilities) -> Vec<&ModelEntry> {
+        self.usable()
+            .into_iter()
+            .filter(|m| m.can_run_on(host))
+            .collect()
     }
 
     /// Enable a model.
@@ -459,6 +597,15 @@ pub fn create_model_registry() -> SharedModelRegistry {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+
+/// Infer the [`ProviderKind`] from a provider id.
+pub fn infer_provider_kind(provider_id: &str) -> ProviderKind {
+    match provider_id {
+        "ollama" | "lmstudio" | "exo" | "llamacpp" | "vllm" => ProviderKind::Internal,
+        "github-copilot" => ProviderKind::Subscription,
+        _ => ProviderKind::External,
+    }
+}
 
 /// Infer the [`CostTier`] for a model based on provider and id heuristics.
 ///

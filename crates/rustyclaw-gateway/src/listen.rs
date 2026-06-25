@@ -103,6 +103,29 @@ pub async fn run_gateway(
         }
     }
 
+    // ── Host introspection & load tracking ─────────────────────────
+    //
+    // Detect hardware capabilities once, then start a background sampler
+    // that periodically records CPU / memory load.  Both are stored in
+    // the global runtime context so tools and peer-status queries can
+    // access them without extra plumbing through every call site.
+    let host_caps = rustyclaw_core::host::detect_host();
+    info!(
+        hostname = %host_caps.hostname,
+        cpus = host_caps.cpu_cores_logical,
+        ram_gb = host_caps.total_memory_bytes / (1024 * 1024 * 1024),
+        gpus = host_caps.gpus.len(),
+        "Host capabilities detected"
+    );
+    rustyclaw_core::runtime_ctx::set_host(host_caps);
+
+    let load_tracker = rustyclaw_core::load::create_load_tracker();
+    let _load_sampler_handle = rustyclaw_core::load::spawn_load_sampler(
+        load_tracker.clone(),
+        None, // use default 5 s interval
+    );
+    rustyclaw_core::runtime_ctx::set_load_tracker(load_tracker);
+
     // Register the credentials directory so file-access tools can enforce
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());
