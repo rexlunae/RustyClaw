@@ -91,9 +91,7 @@ impl TaskComplexity {
 }
 
 /// Whether a model provider runs locally or calls an external API.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind {
     /// Locally executed and managed by the gateway (e.g. Ollama, llama.cpp).
@@ -411,8 +409,8 @@ impl ModelRegistry {
 
             let tier = infer_cost_tier(provider_id, &info.id);
             let kind = infer_provider_kind(provider_id);
-            let mut entry = ModelEntry::new(qualified_id.clone(), provider_id, tier)
-                .with_provider_kind(kind);
+            let mut entry =
+                ModelEntry::new(qualified_id.clone(), provider_id, tier).with_provider_kind(kind);
             if let Some(name) = info.name {
                 entry.display_name = name;
             }

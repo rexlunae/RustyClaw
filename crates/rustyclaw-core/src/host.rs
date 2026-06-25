@@ -79,14 +79,12 @@ impl HostCapabilities {
         // Disk — aggregate all mount points
         let disks = sysinfo::Disks::new_with_refreshed_list();
         let (disk_total_bytes, disk_available_bytes) =
-            disks
-                .iter()
-                .fold((0u64, 0u64), |(total, avail), d| {
-                    (
-                        total.saturating_add(d.total_space()),
-                        avail.saturating_add(d.available_space()),
-                    )
-                });
+            disks.iter().fold((0u64, 0u64), |(total, avail), d| {
+                (
+                    total.saturating_add(d.total_space()),
+                    avail.saturating_add(d.available_space()),
+                )
+            });
 
         // GPU — best-effort scan
         let gpus = detect_gpus();
@@ -120,10 +118,7 @@ impl HostCapabilities {
 
     /// Total GPU VRAM across all detected devices.
     pub fn total_vram_bytes(&self) -> u64 {
-        self.gpus
-            .iter()
-            .filter_map(|g| g.vram_bytes)
-            .sum()
+        self.gpus.iter().filter_map(|g| g.vram_bytes).sum()
     }
 
     /// Whether any GPU is available.
@@ -245,9 +240,8 @@ fn detect_gpus_linux_drm() -> Vec<GpuInfo> {
         };
 
         // Try to get a human-readable product name from uevent
-        let product_name = read_uevent_name(&device_dir).unwrap_or_else(|| {
-            format!("{} GPU {:04x}:{:04x}", vendor, vendor_id, device_id)
-        });
+        let product_name = read_uevent_name(&device_dir)
+            .unwrap_or_else(|| format!("{} GPU {:04x}:{:04x}", vendor, vendor_id, device_id));
 
         // VRAM: AMD exposes mem_info_vram_total, NVIDIA requires nvidia-smi
         let vram_bytes = read_sysfs_u64(&device_dir.join("mem_info_vram_total"));
@@ -265,7 +259,10 @@ fn detect_gpus_linux_drm() -> Vec<GpuInfo> {
 /// Try `nvidia-smi` to detect NVIDIA GPUs and VRAM.
 fn detect_gpus_nvidia_smi() -> Option<Vec<GpuInfo>> {
     let output = std::process::Command::new("nvidia-smi")
-        .args(["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"])
+        .args([
+            "--query-gpu=name,memory.total",
+            "--format=csv,noheader,nounits",
+        ])
         .output()
         .ok()?;
 
@@ -289,11 +286,7 @@ fn detect_gpus_nvidia_smi() -> Option<Vec<GpuInfo>> {
         })
         .collect();
 
-    if gpus.is_empty() {
-        None
-    } else {
-        Some(gpus)
-    }
+    if gpus.is_empty() { None } else { Some(gpus) }
 }
 
 /// Read a hex value from a sysfs file (e.g. "0x10de\n").

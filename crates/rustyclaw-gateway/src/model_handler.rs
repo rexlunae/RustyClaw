@@ -60,15 +60,15 @@ async fn exec_model_list(
 
     let registry = model_registry.read().await;
 
-    let kind_filter = args
-        .get("kind")
-        .and_then(|v| v.as_str())
-        .and_then(|s| match s.to_lowercase().as_str() {
-            "internal" | "local" => Some(ProviderKind::Internal),
-            "external" | "api" => Some(ProviderKind::External),
-            "subscription" | "sub" => Some(ProviderKind::Subscription),
-            _ => None,
-        });
+    let kind_filter =
+        args.get("kind")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "internal" | "local" => Some(ProviderKind::Internal),
+                "external" | "api" => Some(ProviderKind::External),
+                "subscription" | "sub" => Some(ProviderKind::Subscription),
+                _ => None,
+            });
 
     let models: Vec<_> = registry
         .all()

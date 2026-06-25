@@ -462,7 +462,11 @@ fn copilot_extra_headers(req: &ProviderRequest) -> Option<genai::Headers> {
         return None;
     }
     // Agent-initiated unless the last message is from the user.
-    let is_agent_call = req.messages.last().map(|m| m.role != "user").unwrap_or(false);
+    let is_agent_call = req
+        .messages
+        .last()
+        .map(|m| m.role != "user")
+        .unwrap_or(false);
     let x_initiator = if is_agent_call { "agent" } else { "user" };
 
     let headers: Vec<(String, String)> = vec![
@@ -482,7 +486,10 @@ fn copilot_extra_headers(req: &ProviderRequest) -> Option<genai::Headers> {
             "Copilot-Integration-Id".to_string(),
             providers::COPILOT_INTEGRATION_ID.to_string(),
         ),
-        ("Openai-Intent".to_string(), "conversation-edits".to_string()),
+        (
+            "Openai-Intent".to_string(),
+            "conversation-edits".to_string(),
+        ),
         ("X-Initiator".to_string(), x_initiator.to_string()),
     ];
     Some(genai::Headers::from(headers))
@@ -503,8 +510,12 @@ fn genai_err(err: genai::Error) -> anyhow::Error {
 
     // Check for common error patterns and add helpful context
     if error_msg.to_lowercase().contains("invalid json")
-        || error_msg.to_lowercase().contains("json format") {
-        anyhow::anyhow!("Web stream error for model. Cause: HTTP error. Body: {}", error_msg)
+        || error_msg.to_lowercase().contains("json format")
+    {
+        anyhow::anyhow!(
+            "Web stream error for model. Cause: HTTP error. Body: {}",
+            error_msg
+        )
     } else {
         anyhow::anyhow!("{err}")
     }

@@ -73,7 +73,10 @@ pub fn set_load_tracker(tracker: SharedLoadTracker) {
 
 /// Get the load tracker.
 pub fn get_load_tracker() -> Option<SharedLoadTracker> {
-    runtime_ctx().lock().ok().and_then(|ctx| ctx.load_tracker.clone())
+    runtime_ctx()
+        .lock()
+        .ok()
+        .and_then(|ctx| ctx.load_tracker.clone())
 }
 
 #[cfg(test)]
