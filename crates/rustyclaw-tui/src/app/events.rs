@@ -166,6 +166,10 @@ pub(crate) enum GwEvent {
     },
     /// SSH pairing connection failed.
     PairingError(String),
+    /// Host hardware capabilities received.
+    HostInfo(rustyclaw_view::HostInfoData),
+    /// Current system load status received.
+    LoadStatus(rustyclaw_view::LoadStatusData),
 }
 
 impl GwEvent {

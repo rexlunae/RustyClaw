@@ -126,6 +126,9 @@ pub(super) fn apply_gw_event(
         mut tool_perms_selected,
         mut skills_scroll_offset,
         mut tool_perms_scroll_offset,
+        mut host_info,
+        mut load_status,
+        mut show_system_info,
     } = ui;
     match ev {
         GwEvent::AuthChallenge => {
@@ -855,6 +858,12 @@ pub(super) fn apply_gw_event(
             let mut m = messages.read().clone();
             m.push(DisplayMessage::error(format!("Pairing failed: {}", err)));
             messages.set(m);
+        }
+        GwEvent::HostInfo(data) => {
+            host_info.set(Some(data));
+        }
+        GwEvent::LoadStatus(data) => {
+            load_status.set(Some(data));
         }
     }
 }

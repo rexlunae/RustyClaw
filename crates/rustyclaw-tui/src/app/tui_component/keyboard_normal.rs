@@ -132,8 +132,19 @@ pub(super) fn handle_normal_key(
         mut tool_perms_selected,
         mut skills_scroll_offset,
         mut tool_perms_scroll_offset,
+        mut host_info,
+        mut load_status,
+        mut show_system_info,
     } = ui;
     // ── Normal mode keyboard ────────────────────────
+    // System info dialog: Esc to close
+    if show_system_info.get() {
+        if code == KeyCode::Esc {
+            show_system_info.set(false);
+        }
+        return;
+    }
+
     // Details dialog: Esc to close, PgUp/PgDn to scroll
     if show_details_dialog.get() {
         match code {
@@ -909,6 +920,9 @@ pub(super) fn handle_normal_key(
                 }
                 messages.set(m2);
             }
+        }
+        KeyCode::Char('h') if modifiers.contains(KeyModifiers::CONTROL) => {
+            show_system_info.set(!show_system_info.get());
         }
         _ => {}
     }

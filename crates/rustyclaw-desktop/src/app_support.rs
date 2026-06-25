@@ -441,6 +441,60 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::DomQuery { .. } => {
             // Handled directly in the UI updater task via handle_dom_query.
         }
+        GatewayEvent::HostInfo {
+            hostname,
+            os,
+            arch,
+            cpu_brand,
+            cpu_cores_physical,
+            cpu_cores_logical,
+            cpu_frequency_mhz,
+            total_memory_bytes,
+            total_swap_bytes,
+            disk_total_bytes,
+            disk_available_bytes,
+            gpus,
+            summary,
+        } => {
+            let gib = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
+            state.write().host_info = Some(rustyclaw_view::HostInfoData {
+                hostname,
+                os,
+                arch,
+                cpu_brand,
+                cpu_cores_physical,
+                cpu_cores_logical,
+                cpu_frequency_mhz,
+                total_memory_gib: gib(total_memory_bytes),
+                total_swap_gib: gib(total_swap_bytes),
+                disk_total_gib: gib(disk_total_bytes),
+                disk_available_gib: gib(disk_available_bytes),
+                gpus: gpus
+                    .into_iter()
+                    .map(|g| rustyclaw_view::GpuDisplayInfo {
+                        name: g.name,
+                        vendor: g.vendor,
+                        vram_gib: gib(g.vram_bytes),
+                    })
+                    .collect(),
+                summary,
+            });
+        }
+        GatewayEvent::LoadStatus {
+            load_score,
+            avg_load_score,
+            cpu_percent,
+            memory_percent,
+            summary,
+        } => {
+            state.write().load_status = Some(rustyclaw_view::LoadStatusData {
+                load_score,
+                avg_load_score,
+                cpu_percent,
+                memory_percent,
+                summary,
+            });
+        }
     }
 }
 

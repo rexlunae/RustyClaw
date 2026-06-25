@@ -130,6 +130,9 @@ pub(super) fn apply_key_event(
         mut tool_perms_selected,
         mut skills_scroll_offset,
         mut tool_perms_scroll_offset,
+        mut host_info,
+        mut load_status,
+        mut show_system_info,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {

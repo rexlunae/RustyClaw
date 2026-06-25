@@ -658,6 +658,9 @@ pub fn App() -> Element {
             } else if event.id == ids.skills {
                 state.write().status_message =
                     Some("Skills manager coming soon on desktop".to_string());
+            } else if event.id == ids.system_info {
+                let v = state.read().show_system_info;
+                state.write().show_system_info = !v;
             } else if event.id == ids.quit {
                 dioxus::desktop::window().close();
             }

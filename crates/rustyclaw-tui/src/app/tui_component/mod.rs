@@ -207,6 +207,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let skills_scroll_offset = hooks.use_state(|| 0usize);
     let tool_perms_scroll_offset = hooks.use_state(|| 0usize);
 
+    // Host & load kernel awareness
+    let host_info: State<Option<rustyclaw_view::HostInfoData>> = hooks.use_state(|| None);
+    let load_status: State<Option<rustyclaw_view::LoadStatusData>> = hooks.use_state(|| None);
+    let show_system_info = hooks.use_state(|| false);
+
     // ── Channel access ──────────────────────────────────────────────
     let gw_rx: Arc<StdMutex<Option<sync_mpsc::Receiver<GwEvent>>>> =
         hooks.use_const(|| Arc::new(StdMutex::new(CHANNEL_RX.lock().unwrap().take())));
@@ -322,6 +327,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         tool_perms_selected,
         skills_scroll_offset,
         tool_perms_scroll_offset,
+        host_info,
+        load_status,
+        show_system_info,
     };
 
     // ── Poll gateway channel on a timer ─────────────────────────────
@@ -445,6 +453,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_device_flow.get()
                 && !show_model_selector.get()
                 && !show_pairing.get()
+                && !show_system_info.get()
                 && !tab_focused.get(),
             on_change: move |_new_val: String| {},
             on_submit: move |_val: String| {
@@ -560,6 +569,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 loading: model_selector_loading.get(),
                 spinner_tick: device_flow_tick.get(),
             },
+            show_system_info: show_system_info.get(),
+            host_info: host_info.read().clone(),
+            load_status: load_status.read().clone(),
             show_pairing: show_pairing.get(),
             pairing: rustyclaw_view::PairingDialogData {
                 step: *pairing_step.read(),

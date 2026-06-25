@@ -6,7 +6,7 @@
 use serde_json::{Value, json};
 
 use super::params::*;
-use super::{ToolDef, ToolParam, all_tools, mcp_tools, model_tools, task_tools};
+use super::{ToolDef, ToolParam, all_tools, kernel_tools, mcp_tools, model_tools, task_tools};
 
 // ── Provider-specific formatters ────────────────────────────────────────────
 
@@ -133,6 +133,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "swarm_send" => swarm_send_params(),
         "swarm_stop" => swarm_stop_params(),
         "swarm_templates" => swarm_templates_params(),
+        "host_info" => kernel_tools::host_info_params(),
+        "load_status" => kernel_tools::load_status_params(),
         _ => vec![],
     }
 }

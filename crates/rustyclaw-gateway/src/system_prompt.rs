@@ -230,6 +230,13 @@ patterns are more precise and don't break on formatting differences.
 - Rewrites preserve original formatting around the matched node
 - Use grep/search_files for PROSE/text files, use `ast_grep_manage` for CODE
 
+### Host & Load Awareness
+- `host_info` — query the gateway host's hardware: CPU, GPU, RAM, disk, OS.
+  Use this to understand what local models the system can run (VRAM, cores).
+- `load_status` — query current system load (0.0–1.0 composite score, CPU%,
+  memory%, active models). Use this before launching heavy local inference to
+  decide whether to use a local model or fall back to an external provider.
+
 ### Tool Call Style
 - Default: don't narrate routine tool calls (just call them)
 - Narrate only for: multi-step work, complex problems, sensitive actions
