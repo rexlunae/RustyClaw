@@ -22,8 +22,10 @@ struct RunningService {
     log_lines: VecDeque<String>,
     mcp_tool_count: u32,
     /// Partial line buffer for stdout (incomplete lines between reads).
+    #[cfg_attr(not(unix), allow(dead_code))]
     stdout_partial: String,
     /// Partial line buffer for stderr (incomplete lines between reads).
+    #[cfg_attr(not(unix), allow(dead_code))]
     stderr_partial: String,
 }
 
@@ -519,6 +521,7 @@ impl ServiceManager {
             .map_err(|e| format!("Failed to spawn service: {}", e))
     }
 
+    #[cfg(unix)]
     fn read_child_output(svc: &mut RunningService) {
         // Collect complete lines first, then append them to the log.
         // Partial lines (no trailing newline) are buffered in
@@ -562,6 +565,13 @@ impl ServiceManager {
         }
     }
 
+    #[cfg(not(unix))]
+    fn read_child_output(_svc: &mut RunningService) {
+        // Non-blocking fd reads require OS-specific APIs.
+        // On non-Unix platforms this is a no-op; output capture is not yet
+        // supported.
+    }
+
     async fn check_health(hc: &HealthCheck) -> bool {
         let timeout = std::time::Duration::from_secs(hc.timeout_secs as u64);
 
@@ -595,6 +605,7 @@ impl ServiceManager {
 /// Extract complete lines from `partial`, leaving an incomplete trailing
 /// fragment in `partial` for the next read cycle.  If `prefix` is `Some`,
 /// each line is prefixed (e.g. `"[stderr] "`).
+#[cfg(unix)]
 fn drain_lines(partial: &mut String, out: &mut Vec<String>, prefix: Option<&str>) {
     if partial.is_empty() {
         return;
@@ -613,12 +624,14 @@ fn drain_lines(partial: &mut String, out: &mut Vec<String>, prefix: Option<&str>
 
 /// Non-blocking read from a tokio ChildStdout/ChildStderr.
 ///
-/// Uses `libc::poll` + synchronous `std::io::Read` on Unix (the underlying
-/// fd). Falls back to returning 0 on other platforms.
+/// Uses `libc::poll` + synchronous `std::io::Read` on Unix (the underlying fd).
+#[cfg(unix)]
 fn try_read_async<T: tokio::io::AsyncRead + std::os::unix::io::AsRawFd>(
     reader: &mut T,
     buf: &mut [u8],
 ) -> std::io::Result<usize> {
+    use std::os::unix::io::FromRawFd;
+
     let fd = reader.as_raw_fd();
 
     let mut poll_fd = libc::pollfd {
@@ -647,6 +660,3 @@ fn try_read_async<T: tokio::io::AsyncRead + std::os::unix::io::AsRawFd>(
         Ok(0)
     }
 }
-
-// Bring trait into scope for from_raw_fd / as_raw_fd
-use std::os::unix::io::FromRawFd;

@@ -495,12 +495,43 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 summary,
             });
         }
-        GatewayEvent::ServiceList { .. }
-        | GatewayEvent::ServiceActionResult { .. }
-        | GatewayEvent::ServiceLogs { .. } => {
-            // TODO: populate services_data when service list UI is wired to
-            // gateway requests.
+        GatewayEvent::ServiceList { services } => {
+            state.write().services_data = Some(rustyclaw_view::ServiceListData {
+                services: services.into_iter().map(dto_to_service_info).collect(),
+            });
         }
+        GatewayEvent::ServiceActionResult { service, .. } => {
+            if let Some(svc) = service {
+                let info = dto_to_service_info(svc);
+                let mut st = state.write();
+                if let Some(ref mut data) = st.services_data {
+                    if let Some(existing) = data.services.iter_mut().find(|s| s.name == info.name) {
+                        *existing = info;
+                    } else {
+                        data.services.push(info);
+                    }
+                }
+            }
+        }
+        GatewayEvent::ServiceLogs { .. } => {
+            // Logs are displayed in a separate dialog; no state update needed.
+        }
+    }
+}
+
+fn dto_to_service_info(
+    dto: rustyclaw_core::gateway::protocol::frames::ServiceInfoDto,
+) -> rustyclaw_view::ServiceInfoData {
+    rustyclaw_view::ServiceInfoData {
+        name: dto.name,
+        service_type: dto.service_type,
+        status: dto.status,
+        pid: dto.pid,
+        uptime_secs: dto.uptime_secs,
+        restart_count: dto.restart_count,
+        exit_code: dto.exit_code,
+        health_ok: dto.health_ok,
+        mcp_tools: dto.mcp_tools,
     }
 }
 

@@ -170,6 +170,12 @@ pub(crate) enum GwEvent {
     HostInfo(rustyclaw_view::HostInfoData),
     /// Current system load status received.
     LoadStatus(rustyclaw_view::LoadStatusData),
+    /// Service list received from gateway.
+    ServiceList(rustyclaw_view::ServiceListData),
+    /// A single service was updated (start/stop/restart result).
+    ServiceActionResult {
+        service: Option<rustyclaw_view::ServiceInfoData>,
+    },
 }
 
 impl GwEvent {

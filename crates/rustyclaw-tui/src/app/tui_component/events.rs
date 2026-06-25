@@ -130,7 +130,7 @@ pub(super) fn apply_gw_event(
         mut load_status,
         mut show_system_info,
         show_services_dialog: _,
-        services_data: _,
+        mut services_data,
     } = ui;
     match ev {
         GwEvent::AuthChallenge => {
@@ -866,6 +866,20 @@ pub(super) fn apply_gw_event(
         }
         GwEvent::LoadStatus(data) => {
             load_status.set(Some(data));
+        }
+        GwEvent::ServiceList(data) => {
+            services_data.set(Some(data));
+        }
+        GwEvent::ServiceActionResult { service } => {
+            if let Some(info) = service {
+                let mut current = services_data.read().clone().unwrap_or_default();
+                if let Some(existing) = current.services.iter_mut().find(|s| s.name == info.name) {
+                    *existing = info;
+                } else {
+                    current.services.push(info);
+                }
+                services_data.set(Some(current));
+            }
         }
     }
 }
