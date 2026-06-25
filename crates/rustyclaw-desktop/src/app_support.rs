@@ -495,6 +495,12 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 summary,
             });
         }
+        GatewayEvent::ServiceList { .. }
+        | GatewayEvent::ServiceActionResult { .. }
+        | GatewayEvent::ServiceLogs { .. } => {
+            // TODO: populate services_data when service list UI is wired to
+            // gateway requests.
+        }
     }
 }
 

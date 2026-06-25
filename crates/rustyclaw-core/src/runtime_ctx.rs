@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::host::SharedHostCapabilities;
 use crate::load::SharedLoadTracker;
+use crate::services::SharedServiceManager;
 
 /// Model information available to tools.
 #[derive(Clone, Default)]
@@ -19,6 +20,8 @@ pub struct RuntimeInfo {
     pub host: Option<SharedHostCapabilities>,
     /// Live load tracker (periodically sampled).
     pub load_tracker: Option<SharedLoadTracker>,
+    /// Managed backend services.
+    pub service_manager: Option<SharedServiceManager>,
 }
 
 /// Shared runtime context.
@@ -77,6 +80,21 @@ pub fn get_load_tracker() -> Option<SharedLoadTracker> {
         .lock()
         .ok()
         .and_then(|ctx| ctx.load_tracker.clone())
+}
+
+/// Store the service manager in the runtime context.
+pub fn set_service_manager(mgr: SharedServiceManager) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.service_manager = Some(mgr);
+    }
+}
+
+/// Get the service manager.
+pub fn get_service_manager() -> Option<SharedServiceManager> {
+    runtime_ctx()
+        .lock()
+        .ok()
+        .and_then(|ctx| ctx.service_manager.clone())
 }
 
 #[cfg(test)]

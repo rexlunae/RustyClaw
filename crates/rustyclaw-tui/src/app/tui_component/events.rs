@@ -129,6 +129,8 @@ pub(super) fn apply_gw_event(
         mut host_info,
         mut load_status,
         mut show_system_info,
+        show_services_dialog: _,
+        services_data: _,
     } = ui;
     match ev {
         GwEvent::AuthChallenge => {

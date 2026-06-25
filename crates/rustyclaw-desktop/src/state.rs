@@ -154,6 +154,12 @@ pub struct AppState {
 
     /// Whether the system info panel is visible.
     pub show_system_info: bool,
+
+    /// Whether the services dialog is visible.
+    pub show_services_dialog: bool,
+
+    /// Service list data for the services dialog.
+    pub services_data: Option<rustyclaw_view::ServiceListData>,
 }
 
 impl Default for AppState {
@@ -223,6 +229,8 @@ impl Default for AppState {
             host_info: None,
             load_status: None,
             show_system_info: false,
+            show_services_dialog: false,
+            services_data: None,
         }
     }
 }

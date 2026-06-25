@@ -23,6 +23,7 @@ mod project_handler;
 mod providers;
 mod secrets_handler;
 mod server;
+mod service_handler;
 mod session;
 mod skills_handler;
 mod ssh;

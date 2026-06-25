@@ -12,6 +12,7 @@ use crate::user_prompt_types::UserPrompt;
 // ── Re-export ────────────────────────────────────────────────────────────────
 
 pub use crate::gateway::protocol::SecretEntryDto;
+pub use crate::gateway::protocol::ServiceInfoDto;
 
 // ── Events (server → client) ────────────────────────────────────────────────
 
@@ -235,6 +236,24 @@ pub enum GatewayEvent {
         memory_percent: f32,
         summary: String,
     },
+
+    /// Service list received from gateway
+    ServiceList { services: Vec<ServiceInfoDto> },
+
+    /// Service action result (start/stop/restart)
+    ServiceActionResult {
+        ok: bool,
+        service: Option<ServiceInfoDto>,
+        message: Option<String>,
+    },
+
+    /// Service logs received from gateway
+    ServiceLogs {
+        ok: bool,
+        name: String,
+        lines: Vec<String>,
+        message: Option<String>,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -386,6 +405,26 @@ pub enum GatewayCommand {
     /// Request current system load status
     #[serde(rename = "load_status_request")]
     LoadStatusRequest,
+
+    /// Request list of managed services
+    #[serde(rename = "service_list")]
+    ServiceList,
+
+    /// Start a managed service
+    #[serde(rename = "service_start")]
+    ServiceStart { name: String },
+
+    /// Stop a managed service
+    #[serde(rename = "service_stop")]
+    ServiceStop { name: String },
+
+    /// Restart a managed service
+    #[serde(rename = "service_restart")]
+    ServiceRestart { name: String },
+
+    /// Request logs for a managed service
+    #[serde(rename = "service_logs")]
+    ServiceLogs { name: String, tail: Option<usize> },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -576,6 +615,26 @@ impl GatewayCommand {
             GatewayCommand::LoadStatusRequest => ClientFrame {
                 frame_type: ClientFrameType::LoadStatusRequest,
                 payload: ClientPayload::LoadStatusRequest,
+            },
+            GatewayCommand::ServiceList => ClientFrame {
+                frame_type: ClientFrameType::ServiceListRequest,
+                payload: ClientPayload::ServiceListRequest,
+            },
+            GatewayCommand::ServiceStart { name } => ClientFrame {
+                frame_type: ClientFrameType::ServiceStartRequest,
+                payload: ClientPayload::ServiceStartRequest { name },
+            },
+            GatewayCommand::ServiceStop { name } => ClientFrame {
+                frame_type: ClientFrameType::ServiceStopRequest,
+                payload: ClientPayload::ServiceStopRequest { name },
+            },
+            GatewayCommand::ServiceRestart { name } => ClientFrame {
+                frame_type: ClientFrameType::ServiceRestartRequest,
+                payload: ClientPayload::ServiceRestartRequest { name },
+            },
+            GatewayCommand::ServiceLogs { name, tail } => ClientFrame {
+                frame_type: ClientFrameType::ServiceLogsRequest,
+                payload: ClientPayload::ServiceLogsRequest { name, tail },
             },
         }
     }
@@ -845,6 +904,29 @@ impl GatewayEvent {
                 cpu_percent,
                 memory_percent,
                 summary,
+            }),
+            ServerPayload::ServiceListResult { services } => {
+                Some(GatewayEvent::ServiceList { services })
+            }
+            ServerPayload::ServiceActionResult {
+                ok,
+                service,
+                message,
+            } => Some(GatewayEvent::ServiceActionResult {
+                ok,
+                service,
+                message,
+            }),
+            ServerPayload::ServiceLogsResult {
+                ok,
+                name,
+                lines,
+                message,
+            } => Some(GatewayEvent::ServiceLogs {
+                ok,
+                name,
+                lines,
+                message,
             }),
             // Frames with no client-visible state.
             ServerPayload::Empty

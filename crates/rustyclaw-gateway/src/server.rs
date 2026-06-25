@@ -707,6 +707,21 @@ pub(crate) async fn handle_connection(
                             ClientPayload::LoadStatusRequest => {
                                 crate::kernel_handler::handle_load_status_request(&mut *writer).await?;
                             }
+                            ClientPayload::ServiceListRequest => {
+                                crate::service_handler::handle_service_list(&mut *writer).await?;
+                            }
+                            ClientPayload::ServiceStartRequest { name } => {
+                                crate::service_handler::handle_service_start(&mut *writer, &name).await?;
+                            }
+                            ClientPayload::ServiceStopRequest { name } => {
+                                crate::service_handler::handle_service_stop(&mut *writer, &name).await?;
+                            }
+                            ClientPayload::ServiceRestartRequest { name } => {
+                                crate::service_handler::handle_service_restart(&mut *writer, &name).await?;
+                            }
+                            ClientPayload::ServiceLogsRequest { name, tail } => {
+                                crate::service_handler::handle_service_logs(&mut *writer, &name, tail).await?;
+                            }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.

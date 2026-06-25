@@ -17,6 +17,7 @@ pub struct AppMenuIds {
     pub swarm: muda::MenuId,
     pub skills: muda::MenuId,
     pub system_info: muda::MenuId,
+    pub services: muda::MenuId,
 }
 
 static APP_MENU_IDS: OnceLock<AppMenuIds> = OnceLock::new();
@@ -53,6 +54,7 @@ pub fn build_app_menu() -> muda::Menu {
     let pair = muda::MenuItem::new("Pair Gateway…", true, None);
     let swarm = muda::MenuItem::new("Swarm Manager…", true, None);
     let skills = muda::MenuItem::new("Skills…", true, None);
+    let services = muda::MenuItem::new("Services…", true, "CmdOrCtrl+J".parse().ok());
 
     // Register all IDs before the items are moved into the menu.
     let ids = AppMenuIds {
@@ -67,6 +69,7 @@ pub fn build_app_menu() -> muda::Menu {
         swarm: swarm.id().clone(),
         skills: skills.id().clone(),
         system_info: system_info.id().clone(),
+        services: services.id().clone(),
     };
     let _ = APP_MENU_IDS.set(ids);
 
@@ -80,9 +83,12 @@ pub fn build_app_menu() -> muda::Menu {
     )
     .expect("failed to build File menu");
 
-    let view_menu =
-        muda::Submenu::with_items("View", true, &[&toggle_left, &toggle_right, &system_info])
-            .expect("failed to build View menu");
+    let view_menu = muda::Submenu::with_items(
+        "View",
+        true,
+        &[&toggle_left, &toggle_right, &system_info, &services],
+    )
+    .expect("failed to build View menu");
 
     let tools_menu = muda::Submenu::with_items(
         "Tools",

@@ -26,8 +26,8 @@ pub use ssh_connection::{SshConnection, SshReader, SshWriter};
 // Re-export protocol types
 pub use protocol::{
     ClientFrame, ClientFrameType, ClientPayload, SecretEntryDto, ServerFrame, ServerFrameType,
-    ServerPayload, StatusType, WireFrame, deserialize_frame, deserialize_wire_frame,
-    serialize_frame, serialize_wire_frame,
+    ServerPayload, ServiceInfoDto, StatusType, WireFrame, deserialize_frame,
+    deserialize_wire_frame, serialize_frame, serialize_wire_frame,
 };
 
 // Re-export public types (includes protocol types via types module)

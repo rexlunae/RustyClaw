@@ -337,6 +337,9 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                 GwEvent::error("TOTP removal failed")
             }
         }
+        E::ServiceList { .. } | E::ServiceActionResult { .. } | E::ServiceLogs { .. } => {
+            return None;
+        }
     };
 
     Some(ev)

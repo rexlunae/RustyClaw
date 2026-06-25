@@ -615,6 +615,48 @@ pub static LOAD_STATUS: ToolDef = ToolDef {
     execute: exec_load_status_stub,
 };
 
+// ── Managed service tools ───────────────────────────────────────────────────
+
+pub static SERVICE_LIST: ToolDef = ToolDef {
+    name: "service_list",
+    description: "List all managed backend services and their current status: \
+                  name, type (MCP/HTTP/Process), status (Running/Stopped/Failed), \
+                  PID, uptime, restart count, health, and exposed MCP tool count.",
+    parameters: vec![],
+    execute: exec_service_list_stub,
+};
+
+pub static SERVICE_START: ToolDef = ToolDef {
+    name: "service_start",
+    description: "Start a managed backend service by name. Returns the updated \
+                  service info on success.",
+    parameters: vec![],
+    execute: exec_service_start_stub,
+};
+
+pub static SERVICE_STOP: ToolDef = ToolDef {
+    name: "service_stop",
+    description: "Stop a running managed backend service by name.",
+    parameters: vec![],
+    execute: exec_service_stop_stub,
+};
+
+pub static SERVICE_RESTART: ToolDef = ToolDef {
+    name: "service_restart",
+    description: "Restart a managed backend service by name. Stops the process \
+                  and starts it again.",
+    parameters: vec![],
+    execute: exec_service_restart_stub,
+};
+
+pub static SERVICE_LOGS: ToolDef = ToolDef {
+    name: "service_logs",
+    description: "Get recent log output from a managed backend service. \
+                  Use `tail` to control how many lines to return (default 50).",
+    parameters: vec![],
+    execute: exec_service_logs_stub,
+};
+
 // ── System tools ────────────────────────────────────────────────────────────
 
 pub static DISK_USAGE: ToolDef = ToolDef {

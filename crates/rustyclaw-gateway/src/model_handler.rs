@@ -18,6 +18,11 @@ pub fn is_model_tool(name: &str) -> bool {
             | "model_recommend"
             | "host_info"
             | "load_status"
+            | "service_list"
+            | "service_start"
+            | "service_stop"
+            | "service_restart"
+            | "service_logs"
     )
 }
 
@@ -36,6 +41,11 @@ pub async fn execute_model_tool(
         "model_recommend" => exec_model_recommend(args, model_registry).await,
         "host_info" => exec_host_info().await,
         "load_status" => exec_load_status().await,
+        "service_list" => exec_service_list().await,
+        "service_start" => exec_service_start(args).await,
+        "service_stop" => exec_service_stop(args).await,
+        "service_restart" => exec_service_restart(args).await,
+        "service_logs" => exec_service_logs(args).await,
         _ => Err(format!("Unknown model tool: {}", name)),
     }
 }
@@ -316,6 +326,105 @@ async fn exec_load_status() -> Result<String, String> {
         "summary": guard.summary(),
     })
     .to_string())
+}
+
+// ── Service tools ───────────────────────────────────────────────────────────
+
+async fn exec_service_list() -> Result<String, String> {
+    let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
+        .ok_or_else(|| "Service manager not initialised".to_string())?;
+    let mgr = mgr.read().await;
+    let services: Vec<Value> = mgr
+        .list()
+        .into_iter()
+        .map(|info| {
+            json!({
+                "name": info.name,
+                "type": info.service_type.display_name(),
+                "status": info.status.display_name(),
+                "pid": info.pid,
+                "uptimeSecs": info.uptime_secs,
+                "restartCount": info.restart_count,
+                "exitCode": info.exit_code,
+                "healthOk": info.health_ok,
+                "mcpTools": info.mcp_tools,
+            })
+        })
+        .collect();
+    Ok(json!({
+        "services": services,
+        "count": services.len(),
+    })
+    .to_string())
+}
+
+async fn exec_service_start(args: &Value) -> Result<String, String> {
+    let name = parse_service_name(args)?;
+    let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
+        .ok_or_else(|| "Service manager not initialised".to_string())?;
+    let mut mgr = mgr.write().await;
+    let info = mgr.start(&name).await.map_err(|e| e.to_string())?;
+    Ok(json!({
+        "ok": true,
+        "service": info.name,
+        "status": info.status.display_name(),
+        "pid": info.pid,
+    })
+    .to_string())
+}
+
+async fn exec_service_stop(args: &Value) -> Result<String, String> {
+    let name = parse_service_name(args)?;
+    let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
+        .ok_or_else(|| "Service manager not initialised".to_string())?;
+    let mut mgr = mgr.write().await;
+    let info = mgr.stop(&name).await.map_err(|e| e.to_string())?;
+    Ok(json!({
+        "ok": true,
+        "service": info.name,
+        "status": info.status.display_name(),
+    })
+    .to_string())
+}
+
+async fn exec_service_restart(args: &Value) -> Result<String, String> {
+    let name = parse_service_name(args)?;
+    let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
+        .ok_or_else(|| "Service manager not initialised".to_string())?;
+    let mut mgr = mgr.write().await;
+    let info = mgr.restart(&name).await.map_err(|e| e.to_string())?;
+    Ok(json!({
+        "ok": true,
+        "service": info.name,
+        "status": info.status.display_name(),
+        "pid": info.pid,
+    })
+    .to_string())
+}
+
+async fn exec_service_logs(args: &Value) -> Result<String, String> {
+    let name = parse_service_name(args)?;
+    let tail = args
+        .get("tail")
+        .and_then(|v| v.as_u64())
+        .map(|n| n as usize);
+    let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
+        .ok_or_else(|| "Service manager not initialised".to_string())?;
+    let mgr = mgr.read().await;
+    let lines = mgr.logs(&name, tail).map_err(|e| e.to_string())?;
+    Ok(json!({
+        "service": name,
+        "lines": lines,
+        "count": lines.len(),
+    })
+    .to_string())
+}
+
+fn parse_service_name(args: &Value) -> Result<String, String> {
+    args.get("name")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .ok_or_else(|| "Missing required parameter: name (service name)".to_string())
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
