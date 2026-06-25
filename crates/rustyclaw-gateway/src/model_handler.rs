@@ -5,13 +5,19 @@
 use serde_json::{Value, json};
 use tracing::instrument;
 
-use rustyclaw_core::models::{CostTier, SharedModelRegistry, TaskComplexity};
+use rustyclaw_core::models::{CostTier, ProviderKind, SharedModelRegistry, TaskComplexity};
 
 /// Check if a tool name is a model tool.
 pub fn is_model_tool(name: &str) -> bool {
     matches!(
         name,
-        "model_list" | "model_enable" | "model_disable" | "model_set" | "model_recommend"
+        "model_list"
+            | "model_enable"
+            | "model_disable"
+            | "model_set"
+            | "model_recommend"
+            | "host_info"
+            | "load_status"
     )
 }
 
@@ -28,6 +34,8 @@ pub async fn execute_model_tool(
         "model_disable" => exec_model_disable(args, model_registry).await,
         "model_set" => exec_model_set(args, model_registry).await,
         "model_recommend" => exec_model_recommend(args, model_registry).await,
+        "host_info" => exec_host_info().await,
+        "load_status" => exec_load_status().await,
         _ => Err(format!("Unknown model tool: {}", name)),
     }
 }
@@ -52,12 +60,27 @@ async fn exec_model_list(
 
     let registry = model_registry.read().await;
 
+    let kind_filter =
+        args.get("kind")
+            .and_then(|v| v.as_str())
+            .and_then(|s| match s.to_lowercase().as_str() {
+                "internal" | "local" => Some(ProviderKind::Internal),
+                "external" | "api" => Some(ProviderKind::External),
+                "subscription" | "sub" => Some(ProviderKind::Subscription),
+                _ => None,
+            });
+
     let models: Vec<_> = registry
         .all()
         .into_iter()
         .filter(|m| {
             if let Some(tier) = tier_filter {
                 if m.tier != tier {
+                    return false;
+                }
+            }
+            if let Some(kind) = kind_filter {
+                if m.provider_kind != kind {
                     return false;
                 }
             }
@@ -77,6 +100,7 @@ async fn exec_model_list(
                 "displayName": m.display_name,
                 "tier": format!("{} {}", m.tier.emoji(), m.tier.display()),
                 "tierCode": format!("{:?}", m.tier).to_lowercase(),
+                "providerKind": m.provider_kind.display(),
                 "enabled": m.enabled,
                 "available": m.available,
                 "usable": m.is_usable(),
@@ -216,6 +240,82 @@ async fn exec_model_recommend(
             "error": "No usable model found for this complexity level",
         }).to_string()),
     }
+}
+
+// ── Host & load tools ───────────────────────────────────────────────────────
+
+async fn exec_host_info() -> Result<String, String> {
+    let host = rustyclaw_core::runtime_ctx::get_host()
+        .ok_or_else(|| "Host capabilities not yet detected".to_string())?;
+
+    let gpus: Vec<Value> = host
+        .gpus
+        .iter()
+        .map(|g| {
+            json!({
+                "name": g.name,
+                "vendor": g.vendor,
+                "vramBytes": g.vram_bytes,
+            })
+        })
+        .collect();
+
+    Ok(json!({
+        "hostname": host.hostname,
+        "os": format!("{} {}", host.os_name, host.os_version),
+        "arch": host.arch,
+        "cpu": {
+            "brand": host.cpu_brand,
+            "coresPhysical": host.cpu_cores_physical,
+            "coresLogical": host.cpu_cores_logical,
+            "frequencyMhz": host.cpu_frequency_mhz,
+        },
+        "memory": {
+            "totalBytes": host.total_memory_bytes,
+            "totalGiB": host.total_memory_bytes as f64 / (1024.0 * 1024.0 * 1024.0),
+        },
+        "swap": {
+            "totalBytes": host.total_swap_bytes,
+        },
+        "disk": {
+            "totalBytes": host.disk_total_bytes,
+            "availableBytes": host.disk_available_bytes,
+        },
+        "gpus": gpus,
+        "hasGpu": host.has_gpu(),
+        "totalVramBytes": host.total_vram_bytes(),
+        "summary": host.summary(),
+    })
+    .to_string())
+}
+
+async fn exec_load_status() -> Result<String, String> {
+    let tracker = rustyclaw_core::runtime_ctx::get_load_tracker()
+        .ok_or_else(|| "Load tracker not yet initialised".to_string())?;
+
+    let guard = tracker.read().await;
+
+    let latest = guard.latest().map(|s| {
+        json!({
+            "uptimeSecs": s.uptime_secs,
+            "cpuUsagePercent": s.cpu_usage_percent,
+            "memoryUsedBytes": s.memory_used_bytes,
+            "memoryTotalBytes": s.memory_total_bytes,
+            "swapUsedBytes": s.swap_used_bytes,
+            "swapTotalBytes": s.swap_total_bytes,
+            "activeModels": s.active_model_count,
+            "activeInferences": s.active_inference_count,
+        })
+    });
+
+    Ok(json!({
+        "loadScore": guard.load_score(),
+        "avgLoadScore": guard.avg_load_score(),
+        "snapshotCount": guard.history().len(),
+        "latest": latest,
+        "summary": guard.summary(),
+    })
+    .to_string())
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────

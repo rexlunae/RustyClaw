@@ -697,7 +697,12 @@ async fn main() -> Result<()> {
                     .as_ref()
                     .map(|s| s.bind.clone())
                     .unwrap_or_else(|| "0.0.0.0:2222".to_string());
-                commands::handle_start(&config, vault_password.as_deref(), &ssh_listen, log_level.as_deref())?;
+                commands::handle_start(
+                    &config,
+                    vault_password.as_deref(),
+                    &ssh_listen,
+                    log_level.as_deref(),
+                )?;
             }
             GatewayCommands::Stop => {
                 commands::handle_stop(&config)?;
@@ -709,7 +714,12 @@ async fn main() -> Result<()> {
                     .as_ref()
                     .map(|s| s.bind.clone())
                     .unwrap_or_else(|| "0.0.0.0:2222".to_string());
-                commands::handle_restart(&config, vault_password.as_deref(), &ssh_listen, log_level.as_deref())?;
+                commands::handle_restart(
+                    &config,
+                    vault_password.as_deref(),
+                    &ssh_listen,
+                    log_level.as_deref(),
+                )?;
             }
             GatewayCommands::Status { json } => {
                 commands::handle_status(&config, json);

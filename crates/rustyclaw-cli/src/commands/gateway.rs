@@ -8,7 +8,12 @@ use rustyclaw_core::daemon;
 use rustyclaw_core::theme as t;
 
 /// Handle `gateway start` command.
-pub fn handle_start(config: &Config, vault_password: Option<&str>, ssh_listen: &str, log_level: Option<&str>) -> Result<()> {
+pub fn handle_start(
+    config: &Config,
+    vault_password: Option<&str>,
+    ssh_listen: &str,
+    log_level: Option<&str>,
+) -> Result<()> {
     let sp = t::spinner("Starting gateway…");
 
     match daemon::start(

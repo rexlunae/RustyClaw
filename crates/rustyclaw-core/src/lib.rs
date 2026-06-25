@@ -24,6 +24,8 @@ pub mod daemon;
 pub mod error;
 pub mod error_details;
 pub mod gateway;
+pub mod host;
+pub mod load;
 pub mod logging;
 pub mod markdown;
 pub mod mcp;
