@@ -80,6 +80,10 @@ pub enum ClientFrameType {
     ProjectDelete = 34,
     /// Switch the active project.
     ProjectSwitch = 35,
+    /// Request host hardware capabilities.
+    HostInfoRequest = 36,
+    /// Request current system load status.
+    LoadStatusRequest = 37,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -172,6 +176,10 @@ pub enum ServerFrameType {
     ThreadMessages = 40,
     /// Project list update.
     ProjectsUpdate = 41,
+    /// Host info result.
+    HostInfoResult = 42,
+    /// Load status result.
+    LoadStatusResult = 43,
 }
 
 /// Status frame sub-types.
@@ -383,6 +391,10 @@ pub enum ClientPayload {
     ProjectSwitch {
         project_id: u64,
     },
+    /// Request host hardware capabilities.
+    HostInfoRequest,
+    /// Request current system load status.
+    LoadStatusRequest,
 }
 
 /// Generic server frame envelope.
@@ -589,6 +601,38 @@ pub enum ServerPayload {
         projects: Vec<ProjectInfoDto>,
         active_id: u64,
     },
+    /// Host hardware capabilities result.
+    HostInfoResult {
+        hostname: String,
+        os: String,
+        arch: String,
+        cpu_brand: String,
+        cpu_cores_physical: usize,
+        cpu_cores_logical: usize,
+        cpu_frequency_mhz: u64,
+        total_memory_bytes: u64,
+        total_swap_bytes: u64,
+        disk_total_bytes: u64,
+        disk_available_bytes: u64,
+        gpus: Vec<GpuInfoDto>,
+        summary: String,
+    },
+    /// Current system load status result.
+    LoadStatusResult {
+        load_score: f64,
+        avg_load_score: f64,
+        cpu_percent: f32,
+        memory_percent: f32,
+        summary: String,
+    },
+}
+
+/// DTO for GPU info in host capabilities results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GpuInfoDto {
+    pub name: String,
+    pub vendor: String,
+    pub vram_bytes: u64,
 }
 
 /// DTO for task info in updates.

@@ -145,6 +145,15 @@ pub struct AppState {
 
     /// File browser data for the right sidebar.
     pub file_browser: rustyclaw_view::FileBrowserData,
+
+    /// Gateway host hardware capabilities.
+    pub host_info: Option<rustyclaw_view::HostInfoData>,
+
+    /// Current system load status.
+    pub load_status: Option<rustyclaw_view::LoadStatusData>,
+
+    /// Whether the system info panel is visible.
+    pub show_system_info: bool,
 }
 
 impl Default for AppState {
@@ -211,6 +220,9 @@ impl Default for AppState {
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
                 .unwrap_or_default(),
+            host_info: None,
+            load_status: None,
+            show_system_info: false,
         }
     }
 }

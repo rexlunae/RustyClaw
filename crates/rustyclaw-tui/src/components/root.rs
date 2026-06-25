@@ -21,6 +21,7 @@ use crate::components::secrets_dialog::SecretsDialog;
 use crate::components::sidebar::Sidebar;
 use crate::components::skills_dialog::SkillsDialog;
 use crate::components::status_bar::StatusBar;
+use crate::components::system_info_dialog::SystemInfoDialog;
 use crate::components::thread_tabs::ThreadTabs;
 use crate::components::tool_approval_dialog::ToolApprovalDialog;
 use crate::components::tool_perms_dialog::ToolPermsDialog;
@@ -153,6 +154,11 @@ pub struct RootProps {
     // pairing dialog overlay (SSH pairing)
     pub show_pairing: bool,
     pub pairing: PairingDialogData,
+
+    // system info dialog overlay (Ctrl-H)
+    pub show_system_info: bool,
+    pub host_info: Option<rustyclaw_view::HostInfoData>,
+    pub load_status: Option<rustyclaw_view::LoadStatusData>,
 }
 
 #[component]
@@ -211,6 +217,11 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     // Pairing dialog state
     let show_pairing = props.show_pairing;
     let pairing = props.pairing.clone();
+
+    // System info dialog state
+    let show_sysinfo = props.show_system_info;
+    let sysinfo_host = props.host_info.clone();
+    let sysinfo_load = props.load_status.clone();
 
     element! {
         View(
@@ -579,6 +590,26 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         PairingDialog(
                             data: pairing,
                             success: String::new(),
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── System info dialog overlay (Ctrl-H) ─────────────────────
+            #(if show_sysinfo {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        SystemInfoDialog(
+                            host: sysinfo_host,
+                            load: sysinfo_load,
                         )
                     }
                 }.into_any()

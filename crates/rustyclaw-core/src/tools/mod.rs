@@ -16,6 +16,7 @@ pub mod exo_ai;
 mod file;
 mod gateway_tools;
 pub(crate) mod helpers;
+mod kernel_tools;
 mod memory_tools;
 pub mod npm;
 pub mod ollama;
@@ -117,6 +118,9 @@ mod model_tools;
 use model_tools::{
     exec_model_disable, exec_model_enable, exec_model_list, exec_model_recommend, exec_model_set,
 };
+
+// Kernel awareness (host hardware + load)
+use kernel_tools::{exec_host_info_stub, exec_load_status_stub};
 
 // Secrets operations
 use secrets_tools::exec_secrets_stub;
@@ -297,6 +301,8 @@ pub fn tool_summary(name: &str) -> &'static str {
         "model_disable" => "Disable a model",
         "model_set" => "Set the active model",
         "model_recommend" => "Get model recommendation for task complexity",
+        "host_info" => "View gateway host hardware capabilities",
+        "load_status" => "View current system load and resource usage",
         "disk_usage" => "Scan disk usage by folder",
         "classify_files" => "Categorize files as docs, caches, etc.",
         "system_monitor" => "View CPU, memory & process info",
@@ -432,6 +438,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &MODEL_DISABLE,
         &MODEL_SET,
         &MODEL_RECOMMEND,
+        &HOST_INFO,
+        &LOAD_STATUS,
         &DISK_USAGE,
         &CLASSIFY_FILES,
         &SYSTEM_MONITOR,

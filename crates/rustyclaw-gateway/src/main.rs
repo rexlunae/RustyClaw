@@ -14,6 +14,7 @@ mod concurrent;
 mod dispatch;
 mod errors;
 mod helpers;
+mod kernel_handler;
 mod listen;
 mod mcp_handler;
 mod messenger_handler;

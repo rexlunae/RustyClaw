@@ -16,6 +16,7 @@ pub mod secrets_dialog;
 pub mod sidebar;
 pub mod skills_dialog;
 pub mod status_bar;
+pub mod system_info_dialog;
 pub mod thread_tabs;
 pub mod tool_approval_dialog;
 pub mod tool_call;

@@ -595,6 +595,26 @@ pub static MODEL_RECOMMEND: ToolDef = ToolDef {
     execute: exec_model_recommend,
 };
 
+// ── Kernel awareness tools ──────────────────────────────────────────────────
+
+pub static HOST_INFO: ToolDef = ToolDef {
+    name: "host_info",
+    description: "Return the gateway host's hardware capabilities: CPU (brand, cores, frequency), \
+                  GPU (name, vendor, VRAM), RAM, swap, disk, OS, and architecture. \
+                  Use this to understand what the system can run locally.",
+    parameters: vec![],
+    execute: exec_host_info_stub,
+};
+
+pub static LOAD_STATUS: ToolDef = ToolDef {
+    name: "load_status",
+    description: "Return the current system load: composite load score (0.0–1.0), \
+                  CPU usage, memory usage, swap, active models and inferences. \
+                  Use this to decide whether to run local models or defer to external providers.",
+    parameters: vec![],
+    execute: exec_load_status_stub,
+};
+
 // ── System tools ────────────────────────────────────────────────────────────
 
 pub static DISK_USAGE: ToolDef = ToolDef {

@@ -120,4 +120,7 @@ pub(super) struct Ui {
     pub tool_perms_selected: State<Option<usize>>,
     pub skills_scroll_offset: State<usize>,
     pub tool_perms_scroll_offset: State<usize>,
+    pub host_info: State<Option<rustyclaw_view::HostInfoData>>,
+    pub load_status: State<Option<rustyclaw_view::LoadStatusData>>,
+    pub show_system_info: State<bool>,
 }

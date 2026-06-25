@@ -185,6 +185,60 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         // DOM queries require a webview; the TUI cannot evaluate JS.
         E::DomQuery { .. } => return None,
 
+        // ── Kernel awareness ────────────────────────────────────────────
+        E::HostInfo {
+            hostname,
+            os,
+            arch,
+            cpu_brand,
+            cpu_cores_physical,
+            cpu_cores_logical,
+            cpu_frequency_mhz,
+            total_memory_bytes,
+            total_swap_bytes,
+            disk_total_bytes,
+            disk_available_bytes,
+            gpus,
+            summary,
+        } => {
+            let gib = |b: u64| b as f64 / (1024.0 * 1024.0 * 1024.0);
+            GwEvent::HostInfo(rustyclaw_view::HostInfoData {
+                hostname,
+                os,
+                arch,
+                cpu_brand,
+                cpu_cores_physical,
+                cpu_cores_logical,
+                cpu_frequency_mhz,
+                total_memory_gib: gib(total_memory_bytes),
+                total_swap_gib: gib(total_swap_bytes),
+                disk_total_gib: gib(disk_total_bytes),
+                disk_available_gib: gib(disk_available_bytes),
+                gpus: gpus
+                    .into_iter()
+                    .map(|g| rustyclaw_view::GpuDisplayInfo {
+                        name: g.name,
+                        vendor: g.vendor,
+                        vram_gib: gib(g.vram_bytes),
+                    })
+                    .collect(),
+                summary,
+            })
+        }
+        E::LoadStatus {
+            load_score,
+            avg_load_score,
+            cpu_percent,
+            memory_percent,
+            summary,
+        } => GwEvent::LoadStatus(rustyclaw_view::LoadStatusData {
+            load_score,
+            avg_load_score,
+            cpu_percent,
+            memory_percent,
+            summary,
+        }),
+
         // ── Secrets results ─────────────────────────────────────────────
         E::SecretsListResult { entries, .. } => {
             let secrets: Vec<rustyclaw_view::SecretInfoData> = entries

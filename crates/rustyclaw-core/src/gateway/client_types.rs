@@ -209,6 +209,32 @@ pub enum GatewayEvent {
 
     /// Result of removing TOTP
     SecretsRemoveTotpResult { ok: bool },
+
+    /// Host hardware capabilities received from gateway
+    HostInfo {
+        hostname: String,
+        os: String,
+        arch: String,
+        cpu_brand: String,
+        cpu_cores_physical: usize,
+        cpu_cores_logical: usize,
+        cpu_frequency_mhz: u64,
+        total_memory_bytes: u64,
+        total_swap_bytes: u64,
+        disk_total_bytes: u64,
+        disk_available_bytes: u64,
+        gpus: Vec<crate::gateway::protocol::frames::GpuInfoDto>,
+        summary: String,
+    },
+
+    /// Current system load status received from gateway
+    LoadStatus {
+        load_score: f64,
+        avg_load_score: f64,
+        cpu_percent: f32,
+        memory_percent: f32,
+        summary: String,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -352,6 +378,14 @@ pub enum GatewayCommand {
     /// Request the current task list (optionally filtered by session)
     #[serde(rename = "tasks_request")]
     TasksRequest { session: Option<String> },
+
+    /// Request host hardware capabilities
+    #[serde(rename = "host_info_request")]
+    HostInfoRequest,
+
+    /// Request current system load status
+    #[serde(rename = "load_status_request")]
+    LoadStatusRequest,
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -534,6 +568,14 @@ impl GatewayCommand {
             GatewayCommand::TasksRequest { session } => ClientFrame {
                 frame_type: ClientFrameType::TasksRequest,
                 payload: ClientPayload::TasksRequest { session },
+            },
+            GatewayCommand::HostInfoRequest => ClientFrame {
+                frame_type: ClientFrameType::HostInfoRequest,
+                payload: ClientPayload::HostInfoRequest,
+            },
+            GatewayCommand::LoadStatusRequest => ClientFrame {
+                frame_type: ClientFrameType::LoadStatusRequest,
+                payload: ClientPayload::LoadStatusRequest,
             },
         }
     }
@@ -762,6 +804,48 @@ impl GatewayEvent {
             ServerPayload::Error { message, .. } => Some(GatewayEvent::Error { message }),
             ServerPayload::Info { message } => Some(GatewayEvent::Info { message }),
             ServerPayload::DomQuery { id, js } => Some(GatewayEvent::DomQuery { id, js }),
+            ServerPayload::HostInfoResult {
+                hostname,
+                os,
+                arch,
+                cpu_brand,
+                cpu_cores_physical,
+                cpu_cores_logical,
+                cpu_frequency_mhz,
+                total_memory_bytes,
+                total_swap_bytes,
+                disk_total_bytes,
+                disk_available_bytes,
+                gpus,
+                summary,
+            } => Some(GatewayEvent::HostInfo {
+                hostname,
+                os,
+                arch,
+                cpu_brand,
+                cpu_cores_physical,
+                cpu_cores_logical,
+                cpu_frequency_mhz,
+                total_memory_bytes,
+                total_swap_bytes,
+                disk_total_bytes,
+                disk_available_bytes,
+                gpus,
+                summary,
+            }),
+            ServerPayload::LoadStatusResult {
+                load_score,
+                avg_load_score,
+                cpu_percent,
+                memory_percent,
+                summary,
+            } => Some(GatewayEvent::LoadStatus {
+                load_score,
+                avg_load_score,
+                cpu_percent,
+                memory_percent,
+                summary,
+            }),
             // Frames with no client-visible state.
             ServerPayload::Empty
             | ServerPayload::TasksUpdate { .. }
