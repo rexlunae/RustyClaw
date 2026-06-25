@@ -462,6 +462,12 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 on_close: move |_| state.write().show_system_info = false,
             }
 
+            ServicesDialog {
+                visible: state.read().show_services_dialog,
+                services: state.read().services_data.clone(),
+                on_close: move |_| state.write().show_services_dialog = false,
+            }
+
             // TOTP authentication modal
             if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
                 RcModal {

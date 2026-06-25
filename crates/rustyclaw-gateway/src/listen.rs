@@ -126,6 +126,30 @@ pub async fn run_gateway(
     );
     rustyclaw_core::runtime_ctx::set_load_tracker(load_tracker);
 
+    // ── Managed services ────────────────────────────────────────────
+    //
+    // If the config has [services.*] entries, create a ServiceManager,
+    // store it in the global runtime context, and auto-start any
+    // services marked with `auto_start = true`.
+    if !config.services.is_empty() {
+        let svc_config = rustyclaw_core::services::ServicesConfig {
+            services: config.services.clone(),
+        };
+        let svc_mgr = rustyclaw_core::services::create_service_manager(svc_config);
+        info!(count = config.services.len(), "Managed services configured");
+        // Auto-start services
+        {
+            let mut mgr = svc_mgr.write().await;
+            mgr.auto_start_all().await;
+        }
+        // Spawn background poller for lifecycle management and health checks
+        let _svc_poller_handle = rustyclaw_core::services::spawn_service_poller(
+            svc_mgr.clone(),
+            None, // use default 2 s interval
+        );
+        rustyclaw_core::runtime_ctx::set_service_manager(svc_mgr);
+    }
+
     // Register the credentials directory so file-access tools can enforce
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());
@@ -350,6 +374,13 @@ pub async fn run_gateway(
                 }
             }
         }
+    }
+
+    // Graceful shutdown: stop all managed services.
+    if let Some(svc_mgr) = rustyclaw_core::runtime_ctx::get_service_manager() {
+        info!("Stopping managed services…");
+        let mut mgr = svc_mgr.write().await;
+        mgr.stop_all().await;
     }
 
     Ok(())

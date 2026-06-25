@@ -47,6 +47,7 @@ pub mod runtime_ctx;
 pub mod sandbox;
 pub mod secrets;
 pub mod security;
+pub mod services;
 pub mod sessions;
 pub mod skills;
 pub mod soul;

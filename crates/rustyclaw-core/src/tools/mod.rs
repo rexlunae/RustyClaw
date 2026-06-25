@@ -122,6 +122,13 @@ use model_tools::{
 // Kernel awareness (host hardware + load)
 use kernel_tools::{exec_host_info_stub, exec_load_status_stub};
 
+// Managed service tools
+mod service_tools;
+use service_tools::{
+    exec_service_list_stub, exec_service_logs_stub, exec_service_restart_stub,
+    exec_service_start_stub, exec_service_stop_stub,
+};
+
 // Secrets operations
 use secrets_tools::exec_secrets_stub;
 
@@ -303,6 +310,11 @@ pub fn tool_summary(name: &str) -> &'static str {
         "model_recommend" => "Get model recommendation for task complexity",
         "host_info" => "View gateway host hardware capabilities",
         "load_status" => "View current system load and resource usage",
+        "service_list" => "List managed backend services and their status",
+        "service_start" => "Start a managed backend service",
+        "service_stop" => "Stop a managed backend service",
+        "service_restart" => "Restart a managed backend service",
+        "service_logs" => "Get recent logs from a managed service",
         "disk_usage" => "Scan disk usage by folder",
         "classify_files" => "Categorize files as docs, caches, etc.",
         "system_monitor" => "View CPU, memory & process info",
@@ -440,6 +452,11 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &MODEL_RECOMMEND,
         &HOST_INFO,
         &LOAD_STATUS,
+        &SERVICE_LIST,
+        &SERVICE_START,
+        &SERVICE_STOP,
+        &SERVICE_RESTART,
+        &SERVICE_LOGS,
         &DISK_USAGE,
         &CLASSIFY_FILES,
         &SYSTEM_MONITOR,

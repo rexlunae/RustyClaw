@@ -18,6 +18,7 @@ use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
 use crate::components::secrets_dialog::SecretsDialog;
+use crate::components::services_dialog::ServicesDialog;
 use crate::components::sidebar::Sidebar;
 use crate::components::skills_dialog::SkillsDialog;
 use crate::components::status_bar::StatusBar;
@@ -159,6 +160,10 @@ pub struct RootProps {
     pub show_system_info: bool,
     pub host_info: Option<rustyclaw_view::HostInfoData>,
     pub load_status: Option<rustyclaw_view::LoadStatusData>,
+
+    // services dialog overlay (Ctrl-J)
+    pub show_services_dialog: bool,
+    pub services_data: Option<rustyclaw_view::ServiceListData>,
 }
 
 #[component]
@@ -222,6 +227,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let show_sysinfo = props.show_system_info;
     let sysinfo_host = props.host_info.clone();
     let sysinfo_load = props.load_status.clone();
+
+    // Services dialog state
+    let show_services = props.show_services_dialog;
+    let services = props.services_data.clone();
 
     element! {
         View(
@@ -610,6 +619,25 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                         SystemInfoDialog(
                             host: sysinfo_host,
                             load: sysinfo_load,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Services dialog overlay (Ctrl-J) ────────────────────────
+            #(if show_services {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        ServicesDialog(
+                            services: services,
                         )
                     }
                 }.into_any()

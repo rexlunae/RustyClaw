@@ -13,6 +13,7 @@ pub mod pairing_dialog;
 pub mod provider_selector_dialog;
 pub mod root;
 pub mod secrets_dialog;
+pub mod services_dialog;
 pub mod sidebar;
 pub mod skills_dialog;
 pub mod status_bar;

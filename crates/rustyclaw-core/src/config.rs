@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::memory_flush::MemoryFlushConfig;
+use crate::services::ServiceDef;
 use crate::workspace_context::WorkspaceContextConfig;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -159,6 +160,9 @@ pub struct Config {
     /// Workspace context injection configuration.
     #[serde(default)]
     pub workspace_context: WorkspaceContextConfig,
+    /// Managed backend services.
+    #[serde(default)]
+    pub services: HashMap<String, ServiceDef>,
 }
 
 /// Configuration for a messenger backend.
@@ -311,6 +315,7 @@ impl Default for Config {
             ssh: None,
             memory_flush: MemoryFlushConfig::default(),
             workspace_context: WorkspaceContextConfig::default(),
+            services: HashMap::new(),
         }
     }
 }

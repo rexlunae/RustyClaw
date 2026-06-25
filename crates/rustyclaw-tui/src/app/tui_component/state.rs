@@ -13,6 +13,7 @@ use iocraft::prelude::*;
 use crate::types::DisplayMessage;
 
 #[derive(Clone, Copy)]
+#[allow(dead_code)]
 pub(super) struct Ui {
     pub messages: State<Vec<DisplayMessage>>,
     pub input_value: State<String>,
@@ -123,4 +124,6 @@ pub(super) struct Ui {
     pub host_info: State<Option<rustyclaw_view::HostInfoData>>,
     pub load_status: State<Option<rustyclaw_view::LoadStatusData>>,
     pub show_system_info: State<bool>,
+    pub show_services_dialog: State<bool>,
+    pub services_data: State<Option<rustyclaw_view::ServiceListData>>,
 }

@@ -661,6 +661,9 @@ pub fn App() -> Element {
             } else if event.id == ids.system_info {
                 let v = state.read().show_system_info;
                 state.write().show_system_info = !v;
+            } else if event.id == ids.services {
+                let v = state.read().show_services_dialog;
+                state.write().show_services_dialog = !v;
             } else if event.id == ids.quit {
                 dioxus::desktop::window().close();
             }

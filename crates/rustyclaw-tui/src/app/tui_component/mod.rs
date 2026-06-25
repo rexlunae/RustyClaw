@@ -211,6 +211,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let host_info: State<Option<rustyclaw_view::HostInfoData>> = hooks.use_state(|| None);
     let load_status: State<Option<rustyclaw_view::LoadStatusData>> = hooks.use_state(|| None);
     let show_system_info = hooks.use_state(|| false);
+    let show_services_dialog = hooks.use_state(|| false);
+    let services_data: State<Option<rustyclaw_view::ServiceListData>> = hooks.use_state(|| None);
 
     // ── Channel access ──────────────────────────────────────────────
     let gw_rx: Arc<StdMutex<Option<sync_mpsc::Receiver<GwEvent>>>> =
@@ -330,6 +332,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         host_info,
         load_status,
         show_system_info,
+        show_services_dialog,
+        services_data,
     };
 
     // ── Poll gateway channel on a timer ─────────────────────────────
@@ -454,6 +458,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_model_selector.get()
                 && !show_pairing.get()
                 && !show_system_info.get()
+                && !show_services_dialog.get()
                 && !tab_focused.get(),
             on_change: move |_new_val: String| {},
             on_submit: move |_val: String| {
@@ -572,6 +577,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             show_system_info: show_system_info.get(),
             host_info: host_info.read().clone(),
             load_status: load_status.read().clone(),
+            show_services_dialog: show_services_dialog.get(),
+            services_data: services_data.read().clone(),
             show_pairing: show_pairing.get(),
             pairing: rustyclaw_view::PairingDialogData {
                 step: *pairing_step.read(),

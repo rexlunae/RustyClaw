@@ -135,12 +135,22 @@ pub(super) fn handle_normal_key(
         mut host_info,
         mut load_status,
         mut show_system_info,
+        mut show_services_dialog,
+        services_data: _,
     } = ui;
     // ── Normal mode keyboard ────────────────────────
     // System info dialog: Esc to close
     if show_system_info.get() {
         if code == KeyCode::Esc {
             show_system_info.set(false);
+        }
+        return;
+    }
+
+    // Services dialog: Esc to close
+    if show_services_dialog.get() {
+        if code == KeyCode::Esc {
+            show_services_dialog.set(false);
         }
         return;
     }
@@ -923,6 +933,9 @@ pub(super) fn handle_normal_key(
         }
         KeyCode::Char('h') if modifiers.contains(KeyModifiers::CONTROL) => {
             show_system_info.set(!show_system_info.get());
+        }
+        KeyCode::Char('j') if modifiers.contains(KeyModifiers::CONTROL) => {
+            show_services_dialog.set(!show_services_dialog.get());
         }
         _ => {}
     }

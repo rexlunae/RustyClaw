@@ -133,6 +133,8 @@ pub(super) fn apply_key_event(
         mut host_info,
         mut load_status,
         mut show_system_info,
+        mut show_services_dialog,
+        services_data: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {

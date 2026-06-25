@@ -84,6 +84,16 @@ pub enum ClientFrameType {
     HostInfoRequest = 36,
     /// Request current system load status.
     LoadStatusRequest = 37,
+    /// Request list of managed services.
+    ServiceListRequest = 38,
+    /// Start a managed service.
+    ServiceStartRequest = 39,
+    /// Stop a managed service.
+    ServiceStopRequest = 40,
+    /// Restart a managed service.
+    ServiceRestartRequest = 41,
+    /// Request logs for a managed service.
+    ServiceLogsRequest = 42,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -180,6 +190,16 @@ pub enum ServerFrameType {
     HostInfoResult = 42,
     /// Load status result.
     LoadStatusResult = 43,
+    /// Service list result.
+    ServiceListResult = 44,
+    /// Service start result.
+    ServiceStartResult = 45,
+    /// Service stop result.
+    ServiceStopResult = 46,
+    /// Service restart result.
+    ServiceRestartResult = 47,
+    /// Service logs result.
+    ServiceLogsResult = 48,
 }
 
 /// Status frame sub-types.
@@ -395,6 +415,25 @@ pub enum ClientPayload {
     HostInfoRequest,
     /// Request current system load status.
     LoadStatusRequest,
+    /// Request list of managed services.
+    ServiceListRequest,
+    /// Start a managed service by name.
+    ServiceStartRequest {
+        name: String,
+    },
+    /// Stop a managed service by name.
+    ServiceStopRequest {
+        name: String,
+    },
+    /// Restart a managed service by name.
+    ServiceRestartRequest {
+        name: String,
+    },
+    /// Request recent logs for a managed service.
+    ServiceLogsRequest {
+        name: String,
+        tail: Option<usize>,
+    },
 }
 
 /// Generic server frame envelope.
@@ -625,6 +664,53 @@ pub enum ServerPayload {
         memory_percent: f32,
         summary: String,
     },
+    /// Service list result.
+    ServiceListResult {
+        services: Vec<ServiceInfoDto>,
+    },
+    /// Service action result (start/stop/restart).
+    ServiceActionResult {
+        ok: bool,
+        service: Option<ServiceInfoDto>,
+        message: Option<String>,
+    },
+    /// Service logs result.
+    ServiceLogsResult {
+        ok: bool,
+        name: String,
+        lines: Vec<String>,
+        message: Option<String>,
+    },
+}
+
+/// DTO for service info in protocol results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServiceInfoDto {
+    pub name: String,
+    pub service_type: String,
+    pub status: String,
+    pub pid: Option<u32>,
+    pub uptime_secs: Option<u64>,
+    pub restart_count: u32,
+    pub exit_code: Option<i32>,
+    pub health_ok: Option<bool>,
+    pub mcp_tools: u32,
+}
+
+impl From<crate::services::ServiceInfo> for ServiceInfoDto {
+    fn from(info: crate::services::ServiceInfo) -> Self {
+        Self {
+            name: info.name,
+            service_type: info.service_type.display_name().to_string(),
+            status: info.status.display_name().to_string(),
+            pid: info.pid,
+            uptime_secs: info.uptime_secs,
+            restart_count: info.restart_count,
+            exit_code: info.exit_code,
+            health_ok: info.health_ok,
+            mcp_tools: info.mcp_tools,
+        }
+    }
 }
 
 /// DTO for GPU info in host capabilities results.

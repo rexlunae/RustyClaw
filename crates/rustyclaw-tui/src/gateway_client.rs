@@ -337,6 +337,42 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                 GwEvent::error("TOTP removal failed")
             }
         }
+        E::ServiceList { services } => {
+            let dto_to_info = |d: rustyclaw_core::gateway::protocol::frames::ServiceInfoDto| {
+                rustyclaw_view::ServiceInfoData {
+                    name: d.name,
+                    service_type: d.service_type,
+                    status: d.status,
+                    pid: d.pid,
+                    uptime_secs: d.uptime_secs,
+                    restart_count: d.restart_count,
+                    exit_code: d.exit_code,
+                    health_ok: d.health_ok,
+                    mcp_tools: d.mcp_tools,
+                }
+            };
+            GwEvent::ServiceList(rustyclaw_view::ServiceListData {
+                services: services.into_iter().map(dto_to_info).collect(),
+            })
+        }
+        E::ServiceActionResult { service, .. } => {
+            let info = service.map(|d| rustyclaw_view::ServiceInfoData {
+                name: d.name,
+                service_type: d.service_type,
+                status: d.status,
+                pid: d.pid,
+                uptime_secs: d.uptime_secs,
+                restart_count: d.restart_count,
+                exit_code: d.exit_code,
+                health_ok: d.health_ok,
+                mcp_tools: d.mcp_tools,
+            });
+            GwEvent::ServiceActionResult { service: info }
+        }
+        E::ServiceLogs { .. } => {
+            // Logs are displayed in a separate dialog; no GwEvent needed.
+            return None;
+        }
     };
 
     Some(ev)
