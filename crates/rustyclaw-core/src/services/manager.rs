@@ -21,6 +21,10 @@ struct RunningService {
     health_failures: u32,
     log_lines: VecDeque<String>,
     mcp_tool_count: u32,
+    /// Partial line buffer for stdout (incomplete lines between reads).
+    stdout_partial: String,
+    /// Partial line buffer for stderr (incomplete lines between reads).
+    stderr_partial: String,
 }
 
 impl RunningService {
@@ -141,6 +145,8 @@ impl ServiceManager {
             health_failures: 0,
             log_lines: VecDeque::new(),
             mcp_tool_count: 0,
+            stdout_partial: String::new(),
+            stderr_partial: String::new(),
         };
 
         let info = svc.to_info(name);
@@ -279,6 +285,8 @@ impl ServiceManager {
             &svc.log_lines
         } else if let Some(entry) = self.stopped.get(name) {
             &entry.log_lines
+        } else if self.config.services.contains_key(name) {
+            return Ok(Vec::new());
         } else {
             return Err(format!("Unknown service: '{}'", name));
         };
@@ -512,9 +520,9 @@ impl ServiceManager {
     }
 
     fn read_child_output(svc: &mut RunningService) {
-        // Collect output lines first, then append them to the log.
-        // This avoids holding a mutable borrow of svc.child while
-        // calling svc.append_log().
+        // Collect complete lines first, then append them to the log.
+        // Partial lines (no trailing newline) are buffered in
+        // stdout_partial / stderr_partial for the next read cycle.
         let mut lines: Vec<String> = Vec::new();
 
         // Read stdout
@@ -525,14 +533,13 @@ impl ServiceManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]);
-                        for line in text.lines() {
-                            lines.push(line.to_string());
-                        }
+                        svc.stdout_partial.push_str(&text);
                     }
                     Err(_) => break,
                 }
             }
         }
+        drain_lines(&mut svc.stdout_partial, &mut lines, None);
 
         // Read stderr
         if let Some(ref mut stderr) = svc.child.stderr {
@@ -542,14 +549,13 @@ impl ServiceManager {
                     Ok(0) => break,
                     Ok(n) => {
                         let text = String::from_utf8_lossy(&buf[..n]);
-                        for line in text.lines() {
-                            lines.push(format!("[stderr] {}", line));
-                        }
+                        svc.stderr_partial.push_str(&text);
                     }
                     Err(_) => break,
                 }
             }
         }
+        drain_lines(&mut svc.stderr_partial, &mut lines, Some("[stderr] "));
 
         for line in &lines {
             svc.append_log(line);
@@ -586,10 +592,29 @@ impl ServiceManager {
     }
 }
 
+/// Extract complete lines from `partial`, leaving an incomplete trailing
+/// fragment in `partial` for the next read cycle.  If `prefix` is `Some`,
+/// each line is prefixed (e.g. `"[stderr] "`).
+fn drain_lines(partial: &mut String, out: &mut Vec<String>, prefix: Option<&str>) {
+    if partial.is_empty() {
+        return;
+    }
+    // Only split on complete lines (those terminated by '\n').
+    while let Some(pos) = partial.find('\n') {
+        let line = partial[..pos].to_string();
+        partial.drain(..=pos);
+        match prefix {
+            Some(p) => out.push(format!("{}{}", p, line)),
+            None => out.push(line),
+        }
+    }
+    // Whatever remains in `partial` is an incomplete line — kept for next read.
+}
+
 /// Non-blocking read from a tokio ChildStdout/ChildStderr.
 ///
-/// Uses `try_read` on Unix (the underlying fd). Falls back to returning 0
-/// on other platforms.
+/// Uses `libc::poll` + synchronous `std::io::Read` on Unix (the underlying
+/// fd). Falls back to returning 0 on other platforms.
 fn try_read_async<T: tokio::io::AsyncRead + std::os::unix::io::AsRawFd>(
     reader: &mut T,
     buf: &mut [u8],
@@ -602,17 +627,21 @@ fn try_read_async<T: tokio::io::AsyncRead + std::os::unix::io::AsRawFd>(
         revents: 0,
     };
 
+    // SAFETY: `poll_fd` is a valid, stack-allocated `pollfd` struct pointing
+    // at an fd owned by the `Child`.  Timeout 0 makes this a non-blocking check.
     let ready = unsafe { libc::poll(&mut poll_fd, 1, 0) };
 
     if ready > 0 && (poll_fd.revents & libc::POLLIN) != 0 {
         use std::io::Read;
-        // Safety: we only read when poll says data is ready
+        // SAFETY: `fd` is a valid, open file descriptor owned by the tokio
+        // `Child`.  We wrap it in a `File` only to call `read`, then
+        // immediately `mem::forget` the `File` so its destructor does not
+        // close the fd.  `ManuallyDrop` ensures the fd is never closed even
+        // if `read` panics.
         unsafe {
-            let mut file = std::fs::File::from_raw_fd(fd);
-            let n = file.read(buf);
-            // Prevent drop from closing the fd — it's owned by the Child
-            std::mem::forget(file);
-            n
+            let file = std::fs::File::from_raw_fd(fd);
+            let mut file = std::mem::ManuallyDrop::new(file);
+            file.read(buf)
         }
     } else {
         Ok(0)

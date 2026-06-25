@@ -142,6 +142,11 @@ pub async fn run_gateway(
             let mut mgr = svc_mgr.write().await;
             mgr.auto_start_all().await;
         }
+        // Spawn background poller for lifecycle management and health checks
+        let _svc_poller_handle = rustyclaw_core::services::spawn_service_poller(
+            svc_mgr.clone(),
+            None, // use default 2 s interval
+        );
         rustyclaw_core::runtime_ctx::set_service_manager(svc_mgr);
     }
 
@@ -369,6 +374,13 @@ pub async fn run_gateway(
                 }
             }
         }
+    }
+
+    // Graceful shutdown: stop all managed services.
+    if let Some(svc_mgr) = rustyclaw_core::runtime_ctx::get_service_manager() {
+        info!("Stopping managed services…");
+        let mut mgr = svc_mgr.write().await;
+        mgr.stop_all().await;
     }
 
     Ok(())

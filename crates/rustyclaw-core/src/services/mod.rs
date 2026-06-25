@@ -36,12 +36,47 @@ pub use manager::ServiceManager;
 pub use types::*;
 
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tracing::debug;
 
 /// Thread-safe shared service manager.
 pub type SharedServiceManager = Arc<RwLock<ServiceManager>>;
 
+/// Default interval for the service poller (2 seconds).
+const DEFAULT_POLL_INTERVAL: Duration = Duration::from_secs(2);
+
 /// Create a new shared service manager.
 pub fn create_service_manager(config: ServicesConfig) -> SharedServiceManager {
     Arc::new(RwLock::new(ServiceManager::new(config)))
+}
+
+/// Spawn a background task that periodically polls service status and runs
+/// health checks.
+///
+/// Returns a [`tokio::task::JoinHandle`] that can be used to abort the
+/// polling loop on shutdown.
+pub fn spawn_service_poller(
+    mgr: SharedServiceManager,
+    interval: Option<Duration>,
+) -> tokio::task::JoinHandle<()> {
+    let interval = interval.unwrap_or(DEFAULT_POLL_INTERVAL);
+
+    tokio::spawn(async move {
+        loop {
+            {
+                let mut m = mgr.write().await;
+                let changed = m.poll().await;
+                if !changed.is_empty() {
+                    debug!(services = ?changed, "Service status changed");
+                }
+                let hc_changed = m.run_health_checks().await;
+                if !hc_changed.is_empty() {
+                    debug!(services = ?hc_changed, "Health check status changed");
+                }
+            }
+
+            tokio::time::sleep(interval).await;
+        }
+    })
 }
