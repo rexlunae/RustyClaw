@@ -90,7 +90,7 @@ pub fn encode_assistant_message(model_resp: &ModelResponse) -> String {
             json!({
                 "id": tc.id,
                 "name": tc.name,
-                "arguments": tc.arguments,
+                "arguments": normalize_tool_arguments(tc.arguments.clone()),
             })
         })
         .collect();
@@ -352,10 +352,11 @@ fn decode_assistant(content: &str) -> GenChatMessage {
             for (idx, tc) in calls.iter().enumerate() {
                 let call_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let fn_name = tc.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let fn_arguments = tc
+                let raw = tc
                     .get("arguments")
                     .cloned()
                     .unwrap_or(serde_json::Value::Null);
+                let fn_arguments = normalize_tool_arguments(raw);
 
                 debug!(
                     tool_call_index = idx,
@@ -440,7 +441,41 @@ fn to_parsed_call(tc: ToolCall) -> ParsedToolCall {
     ParsedToolCall {
         id: tc.call_id,
         name: tc.fn_name,
-        arguments: tc.fn_arguments,
+        arguments: normalize_tool_arguments(tc.fn_arguments),
+    }
+}
+
+/// Ensure tool call arguments are always a JSON object.
+///
+/// The OpenAI API requires the `arguments` field on tool calls in the
+/// conversation history to be a string containing a valid JSON **object**.
+/// genai's adapter serialises `fn_arguments` via `Value::to_string()`, which
+/// only produces correct output for `Value::Object`. Non-object values
+/// (e.g. `Value::Null` from a missing key, or `Value::String` from a
+/// streaming-parse fallback) would produce `"null"` or double-escaped
+/// strings that the provider rejects with *"Invalid JSON format in tool
+/// call arguments"*.
+fn normalize_tool_arguments(value: serde_json::Value) -> serde_json::Value {
+    match &value {
+        serde_json::Value::Object(_) => value,
+        serde_json::Value::String(s) => match serde_json::from_str::<serde_json::Value>(s) {
+            Ok(v @ serde_json::Value::Object(_)) => v,
+            _ => {
+                warn!(
+                    arguments_preview = %s.chars().take(100).collect::<String>(),
+                    "Tool call arguments string did not parse to a JSON object, using empty object"
+                );
+                json!({})
+            }
+        },
+        serde_json::Value::Null => json!({}),
+        other => {
+            warn!(
+                arguments_type = %other,
+                "Tool call arguments in unexpected format, using empty object"
+            );
+            json!({})
+        }
     }
 }
 
