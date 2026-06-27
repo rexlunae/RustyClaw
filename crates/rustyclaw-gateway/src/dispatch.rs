@@ -942,19 +942,22 @@ pub(crate) async fn dispatch_text_message(
         //
         // We remap BEFORE appending to the in-memory conversation so that
         // both the live tool loop and persisted history use unique IDs.
-        let mut id_remap: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
         for tc in &mut model_resp.tool_calls {
             if is_likely_non_unique_tool_id(&tc.id) || seen_tool_ids.contains(&tc.id) {
                 let new_id = format!("toolu_{}", uuid::Uuid::new_v4().as_simple());
-                id_remap.insert(tc.id.clone(), new_id.clone());
                 tc.id = new_id;
             }
             seen_tool_ids.insert(tc.id.clone());
         }
-        for tr in &mut tool_results {
-            if let Some(new_id) = id_remap.get(&tr.id) {
-                tr.id = new_id.clone();
+        // Match tool_results to tool_calls POSITIONALLY: since the tool
+        // execution loop iterates model_resp.tool_calls in order, the Nth
+        // result corresponds to the Nth tool_call. A HashMap lookup would
+        // fail when multiple tool_calls share the same original ID (the
+        // last insert overwrites earlier entries, causing all matching
+        // results to receive the same remapped ID).
+        for (idx, tr) in tool_results.iter_mut().enumerate() {
+            if idx < model_resp.tool_calls.len() {
+                tr.id = model_resp.tool_calls[idx].id.clone();
             }
         }
 
