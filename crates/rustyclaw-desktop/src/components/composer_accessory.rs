@@ -4,10 +4,7 @@
 //! intentionally doesn't know about.
 
 use dioxus::prelude::*;
-use dioxus_bulma::prelude::{
-    BulmaColor, BulmaSize, Button, Dropdown, DropdownItem, DropdownMenu, DropdownTrigger, Help,
-    Select,
-};
+use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Help, Select};
 use rustyclaw_core::providers;
 
 /// (provider_id, model_id) pair emitted when the user changes model.
@@ -24,7 +21,6 @@ pub struct ComposerAccessoryProps {
     pub directory_selector: rustyclaw_view::DirectorySelectorState,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
-    pub on_toggle_directory_selector: EventHandler<()>,
     pub on_select_directory: EventHandler<String>,
 }
 
@@ -40,7 +36,6 @@ pub fn ComposerAccessory(props: ComposerAccessoryProps) -> Element {
         }
         DirectorySelectorBar {
             state: props.directory_selector.clone(),
-            on_toggle: props.on_toggle_directory_selector,
             on_select: props.on_select_directory,
         }
     }
@@ -51,7 +46,6 @@ pub fn ComposerAccessory(props: ComposerAccessoryProps) -> Element {
 #[derive(Props, Clone, PartialEq)]
 struct DirectorySelectorBarProps {
     state: rustyclaw_view::DirectorySelectorState,
-    on_toggle: EventHandler<()>,
     on_select: EventHandler<String>,
 }
 
@@ -65,46 +59,16 @@ fn DirectorySelectorBar(props: DirectorySelectorBarProps) -> Element {
             .unwrap_or_else(|| "No directory".to_string())
     });
 
-    let arrow = if state.is_expanded { "▾" } else { "▸" };
-    let directories = state.available_directories.clone();
-
     rsx! {
         div { class: "directory-selector-bar",
-            Dropdown {
-                active: state.is_expanded,
-                up: true,
-                class: "directory-selector",
-                DropdownTrigger {
-                    onclick: move |_| props.on_toggle.call(()),
-                    Button {
-                        size: BulmaSize::Small,
-                        class: "directory-selector-toggle",
-                        span { class: "directory-selector-label", "Dir" }
-                        span { class: "directory-path", "{display}" }
-                        span { class: "directory-arrow", "{arrow}" }
-                    }
-                }
-                DropdownMenu { class: "directory-selector-menu",
-                    for dir in directories.into_iter() {
-                        DropdownItem {
-                            key: "{dir.path}",
-                            active: dir.is_selected,
-                            onclick: {
-                                let path = dir.path.clone();
-                                let on_select = props.on_select;
-                                move |_| on_select.call(path.clone())
-                            },
-                            "{dir.display_name}"
-                        }
-                    }
-                    DropdownItem {
-                        class: "directory-item-other",
-                        onclick: move |_| {
-                            props.on_select.call(DIRECTORY_OTHER_SENTINEL.to_string())
-                        },
-                        "Other…"
-                    }
-                }
+            Button {
+                size: BulmaSize::Small,
+                class: "directory-selector-toggle",
+                onclick: move |_| {
+                    props.on_select.call(DIRECTORY_OTHER_SENTINEL.to_string())
+                },
+                span { class: "directory-selector-label", "Dir" }
+                span { class: "directory-path", "{display}" }
             }
 
             if let Some(err) = &state.error {
