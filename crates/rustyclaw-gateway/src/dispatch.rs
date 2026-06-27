@@ -940,13 +940,27 @@ pub(crate) async fn dispatch_text_message(
         // We store a normalized form (Vec<{id,name,arguments}>) so any
         // client can faithfully replay this round regardless of which
         // provider produced it.
+        //
+        // Some OpenAI-compatible adapters (e.g. proxies to Claude) generate
+        // non-unique tool call IDs like "call_0", "call_1" per turn. These
+        // collide across turns and violate Anthropic's uniqueness requirement
+        // when replayed. Detect and replace such IDs with proper UUIDs.
         if let Some(thread) = thread_mgr.foreground_mut() {
+            let mut id_remap: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
             let normalized: Vec<serde_json::Value> = model_resp
                 .tool_calls
                 .iter()
                 .map(|tc| {
+                    let id = if is_likely_non_unique_tool_id(&tc.id) {
+                        let new_id = format!("toolu_{}", uuid::Uuid::new_v4().as_simple());
+                        id_remap.insert(tc.id.clone(), new_id.clone());
+                        new_id
+                    } else {
+                        tc.id.clone()
+                    };
                     serde_json::json!({
-                        "id": tc.id,
+                        "id": id,
                         "name": tc.name,
                         "arguments": tc.arguments,
                     })
@@ -957,7 +971,11 @@ pub(crate) async fn dispatch_text_message(
                 serde_json::Value::Array(normalized),
             );
             for tr in &tool_results {
-                thread.add_tool_result(tr.id.clone(), tr.output.clone());
+                let id = id_remap
+                    .get(&tr.id)
+                    .cloned()
+                    .unwrap_or_else(|| tr.id.clone());
+                thread.add_tool_result(id, tr.output.clone());
             }
         }
         let _ = thread_mgr.save_to_file(threads_path);
@@ -979,4 +997,27 @@ pub(crate) async fn dispatch_text_message(
     )
     .await?;
     Ok(())
+}
+
+/// Detect tool call IDs that are likely non-unique across turns.
+///
+/// Some OpenAI-compatible streaming adapters don't provide proper tool call IDs,
+/// causing genai to fall back to `"call_0"`, `"call_1"`, etc. These collide
+/// across assistant turns and violate the Anthropic API requirement that all
+/// `tool_use` IDs in a conversation be unique.
+fn is_likely_non_unique_tool_id(id: &str) -> bool {
+    if id.is_empty() {
+        return true;
+    }
+    // Match the genai fallback pattern: "call_" followed by a small number.
+    if let Some(suffix) = id.strip_prefix("call_") {
+        if let Ok(n) = suffix.parse::<u32>() {
+            // Genuine OpenAI IDs are "call_" + 24 alphanumeric chars (e.g.
+            // "call_abc123def456ghi789jkl"). The genai fallback is "call_" +
+            // a small integer. Heuristic: if the numeric suffix is < 100,
+            // it's almost certainly the fallback, not a real ID.
+            return n < 100;
+        }
+    }
+    false
 }

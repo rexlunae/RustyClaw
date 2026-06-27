@@ -1,3 +1,5 @@
+use std::collections::{HashMap, HashSet};
+
 use anyhow::{Context, Result};
 use serde_json::json;
 use tracing::debug;
@@ -208,6 +210,11 @@ pub fn thread_history_to_chat_messages(
     use rustyclaw_core::threads::MessageRole;
 
     let mut out: Vec<ChatMessage> = Vec::with_capacity(history.len());
+    // Track seen tool_use IDs across the entire conversation to detect and
+    // fix duplicates. Some OpenAI-compatible adapters generate non-unique IDs
+    // (e.g. "call_0", "call_1") per turn, which violates the Anthropic API's
+    // requirement that tool_use IDs be unique across the full message array.
+    let mut seen_ids: HashSet<String> = HashSet::new();
     let mut i = 0;
     while i < history.len() {
         let m = &history[i];
@@ -281,13 +288,45 @@ pub fn thread_history_to_chat_messages(
                     continue;
                 }
 
+                // Deduplicate tool call IDs: if an ID was already used in
+                // an earlier assistant turn, generate a unique replacement
+                // and build a mapping so tool_result messages can reference
+                // the new ID.
+                let mut id_remap: HashMap<String, String> = HashMap::new();
+                let tool_calls: Vec<ParsedToolCall> = tool_calls
+                    .into_iter()
+                    .map(|mut tc| {
+                        if seen_ids.contains(&tc.id) {
+                            // Generate a unique ID by appending a disambiguator.
+                            let mut new_id = format!("{}_{:x}", tc.id, seen_ids.len());
+                            while seen_ids.contains(&new_id) {
+                                new_id.push('x');
+                            }
+                            tracing::debug!(
+                                old_id = %tc.id,
+                                new_id = %new_id,
+                                tool_name = %tc.name,
+                                "Remapping duplicate tool_use ID"
+                            );
+                            id_remap.insert(tc.id.clone(), new_id.clone());
+                            tc.id = new_id;
+                        }
+                        seen_ids.insert(tc.id.clone());
+                        tc
+                    })
+                    .collect();
+
                 // Gather the contiguous run of following Tool results so we
                 // can attach a name (Google needs it) when available.
                 let mut j = i + 1;
                 let mut results: Vec<ToolCallResult> = Vec::new();
                 while j < history.len() && matches!(history[j].role, MessageRole::Tool) {
                     let tm = &history[j];
-                    let id = tm.tool_call_id.clone().unwrap_or_default();
+                    let mut id = tm.tool_call_id.clone().unwrap_or_default();
+                    // If this tool_call_id was remapped above, use the new ID.
+                    if let Some(new_id) = id_remap.get(&id) {
+                        id = new_id.clone();
+                    }
                     // Recover the tool name from the matching call.
                     let name = tool_calls
                         .iter()
