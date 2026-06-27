@@ -940,24 +940,31 @@ pub fn App() -> Element {
                                     match std::env::set_current_dir(&selected) {
                                         Ok(()) => {
                                             let options = build_directory_options(&selected);
-                                            let mut s = state.write();
-                                            s.working_directory = Some(selected.clone());
-                                            s.available_directories = options;
-                                            s.file_browser = rustyclaw_view::FileBrowserData::load(
-                                                &selected,
-                                            );
-                                            s.directory_selector_expanded = false;
-                                            s.directory_selector_error = None;
-                                            s.status_message = Some(format!(
-                                                "Working directory set to {}",
-                                                display_path(&selected)
-                                            ));
+                                            {
+                                                let mut s = state.write();
+                                                s.working_directory = Some(selected.clone());
+                                                s.available_directories = options;
+                                                s.file_browser =
+                                                    rustyclaw_view::FileBrowserData::load(
+                                                        &selected,
+                                                    );
+                                                s.directory_selector_expanded = false;
+                                                s.directory_selector_error = None;
+                                                s.status_message = Some(format!(
+                                                    "Working directory set to {}",
+                                                    display_path(&selected)
+                                                ));
+                                            }
                                             // Tell the gateway so agent tools use the new dir.
+                                            // Guard must be dropped before .await to avoid
+                                            // panics if Dioxus re-renders during suspension.
                                             let gw = gateway.read().clone();
                                             if let Some(client) = gw {
                                                 let path = selected.clone();
                                                 let _ = client
-                                                    .send(GatewayCommand::SetWorkingDirectory { path })
+                                                    .send(GatewayCommand::SetWorkingDirectory {
+                                                        path,
+                                                    })
                                                     .await;
                                             }
                                         }
