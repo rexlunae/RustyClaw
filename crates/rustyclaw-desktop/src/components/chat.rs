@@ -29,7 +29,6 @@ pub struct ChatProps {
     pub on_add_file_attachment: EventHandler<()>,
     pub on_add_directory_attachment: EventHandler<()>,
     pub on_remove_attachment: EventHandler<String>,
-    pub on_toggle_directory_selector: EventHandler<()>,
     pub on_select_directory: EventHandler<String>,
 }
 
@@ -109,7 +108,6 @@ pub fn Chat(props: ChatProps) -> Element {
             directory_selector: props.bottom_bar.directory_selector.clone(),
             on_model_change: props.on_model_change,
             on_add_provider: props.on_add_provider,
-            on_toggle_directory_selector: props.on_toggle_directory_selector,
             on_select_directory: props.on_select_directory,
         }
     };

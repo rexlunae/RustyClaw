@@ -922,25 +922,7 @@ pub fn App() -> Element {
                     on_add_file_attachment: on_add_file_attachment,
                     on_add_directory_attachment: on_add_directory_attachment,
                     on_remove_attachment: on_remove_attachment,
-                    on_toggle_directory_selector: move |_| {
-                        let is_expanded = state.read().directory_selector_expanded;
-                        if is_expanded {
-                            state.write().directory_selector_expanded = false;
-                        } else {
-                            let base = state
-                                .read()
-                                .working_directory
-                                .clone()
-                                .or_else(|| std::env::current_dir().ok().map(|p| p.display().to_string()));
-                            if let Some(path) = base {
-                                let options = build_directory_options(&path);
-                                let mut s = state.write();
-                                s.available_directories = options;
-                                s.directory_selector_expanded = true;
-                                s.directory_selector_error = None;
-                            }
-                        }
-                    },
+
                     on_select_directory: move |path: String| {
                         if path == DIRECTORY_OTHER_SENTINEL {
                             let start_dir = state
