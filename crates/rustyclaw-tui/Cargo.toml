@@ -22,25 +22,20 @@ rustyclaw-view.workspace = true
 iocraft.workspace = true
 smol.workspace = true
 
-# Also needed directly by TUI code
-anyhow.workspace = true
+# clap must remain a direct dependency because its derive macros expand to
+# `::clap::…` absolute paths that require it in the extern prelude.
+clap.workspace = true
+
+# TUI-specific dependencies (not shared with desktop)
 anyhow-tracing.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
 tokio-util.workspace = true
 futures-util.workspace = true
-clap.workspace = true
-tracing.workspace = true
 colored.workspace = true
 indicatif.workspace = true
 unicode-width.workspace = true
 rpassword.workspace = true
-url.workspace = true
 strum.workspace = true
-chrono.workspace = true
 totp-rs.workspace = true
-dirs.workspace = true
 reqwest.workspace = true
 shellexpand.workspace = true
 

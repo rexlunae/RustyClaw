@@ -13,6 +13,7 @@ use dioxus_genai_chat::{
 };
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ChatMessage;
+use rustyclaw_view::serde_json;
 use rustyclaw_view::{ChatSurfaceData, PromptAttachment, PromptAttachmentKind};
 
 /// Build the transcript shown by `ChatSurface` from the live message list and

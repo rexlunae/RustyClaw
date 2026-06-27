@@ -6,12 +6,13 @@
 
 use std::sync::OnceLock;
 
-use anyhow::Result;
 use clap::Parser;
 use dioxus::desktop::tao::window::Icon;
 use dioxus::desktop::{Config as DesktopConfig, LogicalSize, WindowBuilder};
+use rustyclaw_view::anyhow::Result;
+use rustyclaw_view::tracing;
+use rustyclaw_view::url::Url;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
-use url::Url;
 
 use rustyclaw_core::args::CommonArgs;
 use rustyclaw_core::config::Config;

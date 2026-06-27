@@ -8,7 +8,8 @@
 
 use std::io::{self, BufRead, Write};
 
-use anyhow::Result;
+use rustyclaw_view::anyhow;
+use rustyclaw_view::anyhow::Result;
 
 use rustyclaw_core::client_prefs::{
     DEFAULT_GATEWAY_URL, load_auto_connect_gateway_urls, load_default_startup_gateway_urls,

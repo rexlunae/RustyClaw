@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification};
+use rustyclaw_view::{tokio, tracing};
 use std::sync::{Arc, Mutex as StdMutex};
 
 use crate::components::{Chat, NewProjectDialog, Sidebar};

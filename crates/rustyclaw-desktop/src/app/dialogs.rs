@@ -7,6 +7,7 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{
     BulmaColor, BulmaSize, Button, Buttons, Control, Field, FieldLabel, Notification,
 };
+use rustyclaw_view::tracing;
 
 use crate::app_support::{
     connect_to_gateway, create_swarm_from_template, get_swarm_infos, stop_swarm,
