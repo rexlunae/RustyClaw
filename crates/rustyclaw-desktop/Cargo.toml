@@ -23,9 +23,6 @@ path = "src/main.rs"
 rustyclaw-core = { path = "../rustyclaw-core", version = "0.3.0", default-features = false }
 rustyclaw-view.workspace = true
 
-# CLI argument parsing for the standalone binary
-clap = { workspace = true }
-
 # Dioxus framework
 # Note: "desktop" feature requires GTK dev libraries (libgtk-3-dev on Debian/Ubuntu)
 # For webview-based desktop: libwebkit2gtk-4.1-dev plus libxdo-dev (-lxdo at link time)
@@ -35,46 +32,20 @@ dioxus-bulma = "0.7.3"
 # the gateway ourselves); `markdown` renders assistant Markdown payloads.
 dioxus-genai-chat = { version = "0.2", default-features = false, features = ["markdown"] }
 
-# UUID generation for message IDs
-uuid = { version = "1", features = ["v4"] }
+# clap must remain a direct dependency because its derive macros expand to
+# `::clap::…` absolute paths that require it in the extern prelude.
+clap = { workspace = true }
 
-# Time handling
-chrono = { version = "0.4", features = ["serde"] }
-
-# Async runtime
-tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros"] }
+# Desktop-specific dependencies (not shared with TUI)
 futures = "0.3"
-
-# WebSocket client
 tokio-tungstenite = "0.28"
-url = "2"
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
 bincode = "2"
-
-# QR code generation for pairing
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
-
-# Logging
-tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-
-# Error handling
-anyhow = "1"
 thiserror = "2"
-
-# Markdown sanitisation (strip dangerous raw-HTML from LLM output before the
-# crate renders it via pulldown-cmark → dangerous_inner_html)
 ammonia = "4"
-
-# Config directory lookup for SSH known_hosts handling
-dirs.workspace = true
-
-# Native file/folder picker dialogs
 rfd = "0.15"
 
 # Build-time icon generation: render logo.svg into the window icon and the

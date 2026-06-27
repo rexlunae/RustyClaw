@@ -4,6 +4,8 @@ use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
+use rustyclaw_view::tracing;
+
 use super::display_message_from_gateway;
 use super::state;
 use crate::app::{GwEvent, UserInput};

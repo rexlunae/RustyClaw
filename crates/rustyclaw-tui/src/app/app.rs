@@ -11,7 +11,8 @@
 //   The iocraft component owns ALL UI state and runs entirely on smol.
 //   No Arc<Mutex<_>> shared state — just channels.
 
-use anyhow::Result;
+use rustyclaw_view::anyhow::Result;
+use rustyclaw_view::{tokio, tracing, url};
 use std::sync::mpsc as sync_mpsc;
 
 use rustyclaw_core::commands::{CommandContext, CommandResponse, handle_command};

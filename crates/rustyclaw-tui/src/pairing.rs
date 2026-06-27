@@ -2,7 +2,9 @@
 //!
 //! This module handles the actual SSH connection to a gateway for pairing.
 
-use anyhow::{Context, Result};
+use rustyclaw_view::anyhow;
+use rustyclaw_view::anyhow::{Context, Result};
+use rustyclaw_view::tracing;
 
 /// Connect to a gateway via SSH and register this client's public key.
 ///

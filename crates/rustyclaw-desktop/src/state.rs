@@ -10,6 +10,7 @@ use std::collections::{HashMap, VecDeque};
 use rustyclaw_core::gateway::protocol;
 use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
+use rustyclaw_view::{chrono, uuid};
 use rustyclaw_view::{PromptAttachment, SecretsDialogData};
 
 /// UI theme preference.

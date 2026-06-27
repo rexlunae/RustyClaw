@@ -36,6 +36,21 @@
 //! change to how the bubble looks (`MessageBubbleData`) doesn't
 //! require touching event-processing code.
 
+// ── Re-exported shared dependencies ─────────────────────────────────────────
+// Client crates (`rustyclaw-tui`, `rustyclaw-desktop`) import these through
+// `rustyclaw_view` so the dependency is compiled once for the entire workspace
+// tree rooted at `rustyclaw-view`.
+pub use anyhow;
+pub use chrono;
+pub use clap;
+pub use dirs;
+pub use serde;
+pub use serde_json;
+pub use tokio;
+pub use tracing;
+pub use url;
+pub use uuid;
+
 /// Canonical braille spinner frames for "busy" animations.
 ///
 /// Single source of truth so every client (and every component within a
