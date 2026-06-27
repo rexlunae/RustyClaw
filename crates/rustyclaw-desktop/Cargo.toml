@@ -36,15 +36,11 @@ dioxus-genai-chat = { version = "0.2", default-features = false, features = ["ma
 # `::clap::…` absolute paths that require it in the extern prelude.
 clap = { workspace = true }
 
-# Desktop-specific dependencies (not shared with TUI)
-futures = "0.3"
-tokio-tungstenite = "0.28"
-bincode = "2"
+# Desktop-specific dependencies
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-thiserror = "2"
 ammonia = "4"
 rfd = "0.15"
 
