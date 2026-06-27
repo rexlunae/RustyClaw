@@ -388,6 +388,11 @@ pub(crate) async fn dispatch_text_message(
     let context_limit = helpers::context_window_for_model(&resolved.model);
     let mut consecutive_continues: usize = 0;
 
+    // Track all tool_use IDs already present in the conversation. New model
+    // responses are checked against this set to prevent collisions — some
+    // adapters/proxies can re-emit the same ID across turns.
+    let mut seen_tool_ids = collect_existing_tool_ids(&resolved.messages);
+
     // Memory flush controller - tracks whether we've flushed this conversation
     use rustyclaw_core::memory_flush::MemoryFlush;
     let flush_config = {
@@ -926,22 +931,26 @@ pub(crate) async fn dispatch_text_message(
             });
         }
 
-        // ── Remap non-unique tool call IDs ──
-        // Some OpenAI-compatible adapters (e.g. proxies to Claude) generate
-        // non-unique tool call IDs like "call_0", "call_1" per turn. These
-        // collide across turns and violate the Anthropic API's requirement
-        // that tool_use IDs be unique across the full message array.
+        // ── Remap non-unique or colliding tool call IDs ──
+        // Two cases require remapping:
+        // 1. IDs matching the genai fallback pattern ("call_0", "call_1")
+        //    which are always non-unique across turns.
+        // 2. IDs that collide with ones already in the conversation history
+        //    (some adapters/proxies deterministically regenerate the same
+        //    IDs across turns, or the model itself returns a previously-used
+        //    ID).
         //
-        // We remap them BEFORE appending to the in-memory conversation so
-        // that both the live tool loop and persisted history use unique IDs.
+        // We remap BEFORE appending to the in-memory conversation so that
+        // both the live tool loop and persisted history use unique IDs.
         let mut id_remap: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for tc in &mut model_resp.tool_calls {
-            if is_likely_non_unique_tool_id(&tc.id) {
+            if is_likely_non_unique_tool_id(&tc.id) || seen_tool_ids.contains(&tc.id) {
                 let new_id = format!("toolu_{}", uuid::Uuid::new_v4().as_simple());
                 id_remap.insert(tc.id.clone(), new_id.clone());
                 tc.id = new_id;
             }
+            seen_tool_ids.insert(tc.id.clone());
         }
         for tr in &mut tool_results {
             if let Some(new_id) = id_remap.get(&tr.id) {
@@ -1027,4 +1036,36 @@ fn is_likely_non_unique_tool_id(id: &str) -> bool {
         }
     }
     false
+}
+
+/// Extract all tool_use IDs present in a conversation message array.
+///
+/// Parses assistant messages encoded in the canonical `assistant_tools`
+/// envelope and collects their `tool_calls[].id` fields. This allows us
+/// to detect collisions when a new model response produces an ID that
+/// already exists in the replayed history.
+fn collect_existing_tool_ids(
+    messages: &[rustyclaw_core::gateway::ChatMessage],
+) -> std::collections::HashSet<String> {
+    let mut ids = std::collections::HashSet::new();
+    for msg in messages {
+        if msg.role != "assistant" {
+            continue;
+        }
+        // Try to parse the canonical envelope
+        if let Ok(env) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+            if env.get("__rustyclaw_kind").and_then(|v| v.as_str()) == Some("assistant_tools") {
+                if let Some(calls) = env.get("tool_calls").and_then(|v| v.as_array()) {
+                    for tc in calls {
+                        if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
+                            if !id.is_empty() {
+                                ids.insert(id.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    ids
 }
