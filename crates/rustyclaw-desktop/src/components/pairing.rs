@@ -5,8 +5,8 @@ use dioxus_bulma::components::{Title, TitleSize};
 use dioxus_bulma::prelude::{
     BulmaBox, BulmaColor, BulmaSize, Button, Buttons, Control, Field, FieldLabel,
 };
-use rustyclaw_view::{tokio, tracing};
 use rustyclaw_view::PairingDialogData;
+use rustyclaw_view::{tokio, tracing};
 
 use super::RcModal;
 

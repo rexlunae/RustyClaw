@@ -10,8 +10,8 @@ use clap::Parser;
 use dioxus::desktop::tao::window::Icon;
 use dioxus::desktop::{Config as DesktopConfig, LogicalSize, WindowBuilder};
 use rustyclaw_view::anyhow::Result;
-use rustyclaw_view::url::Url;
 use rustyclaw_view::tracing;
+use rustyclaw_view::url::Url;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use rustyclaw_core::args::CommonArgs;
