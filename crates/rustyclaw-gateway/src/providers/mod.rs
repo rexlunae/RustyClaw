@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anyhow::{Context, Result};
 use serde_json::json;
@@ -289,10 +289,13 @@ pub fn thread_history_to_chat_messages(
                 }
 
                 // Deduplicate tool call IDs: if an ID was already used in
-                // an earlier assistant turn, generate a unique replacement
-                // and build a mapping so tool_result messages can reference
-                // the new ID.
-                let mut id_remap: HashMap<String, String> = HashMap::new();
+                // an earlier assistant turn, generate a unique replacement.
+                //
+                // We track the final (deduplicated) IDs in order so that
+                // tool_results can be matched POSITIONALLY — a HashMap
+                // would incorrectly remap ALL results sharing the same
+                // original ID to the same new ID when a single turn has
+                // multiple tool_calls with identical IDs.
                 let tool_calls: Vec<ParsedToolCall> = tool_calls
                     .into_iter()
                     .map(|mut tc| {
@@ -308,7 +311,6 @@ pub fn thread_history_to_chat_messages(
                                 tool_name = %tc.name,
                                 "Remapping duplicate tool_use ID"
                             );
-                            id_remap.insert(tc.id.clone(), new_id.clone());
                             tc.id = new_id;
                         }
                         seen_ids.insert(tc.id.clone());
@@ -318,15 +320,25 @@ pub fn thread_history_to_chat_messages(
 
                 // Gather the contiguous run of following Tool results so we
                 // can attach a name (Google needs it) when available.
+                //
+                // Match tool_results to tool_calls POSITIONALLY: since
+                // dispatch stores results in the same order as the calls,
+                // the Nth result corresponds to the Nth (deduplicated)
+                // tool_call ID. This avoids the HashMap overwrite bug where
+                // multiple tool_calls sharing the same original ID would
+                // cause all their results to reference only the last remap.
                 let mut j = i + 1;
                 let mut results: Vec<ToolCallResult> = Vec::new();
+                let mut result_index: usize = 0;
                 while j < history.len() && matches!(history[j].role, MessageRole::Tool) {
                     let tm = &history[j];
-                    let mut id = tm.tool_call_id.clone().unwrap_or_default();
-                    // If this tool_call_id was remapped above, use the new ID.
-                    if let Some(new_id) = id_remap.get(&id) {
-                        id = new_id.clone();
-                    }
+                    // Use the deduplicated tool_call ID at the corresponding
+                    // position, falling back to the stored tool_call_id.
+                    let id = if result_index < tool_calls.len() {
+                        tool_calls[result_index].id.clone()
+                    } else {
+                        tm.tool_call_id.clone().unwrap_or_default()
+                    };
                     // Recover the tool name from the matching call.
                     let name = tool_calls
                         .iter()
@@ -339,6 +351,7 @@ pub fn thread_history_to_chat_messages(
                         output: tm.content.clone(),
                         is_error: false,
                     });
+                    result_index += 1;
                     j += 1;
                 }
 
