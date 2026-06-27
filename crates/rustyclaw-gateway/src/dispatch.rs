@@ -565,7 +565,7 @@ pub(crate) async fn dispatch_text_message(
             });
         }
 
-        let model_resp = match result {
+        let mut model_resp = match result {
             Ok(Some(r)) => r,
             Ok(None) => {
                 let traced = errors::GatewayError::Cancelled.into_traced();
@@ -926,9 +926,34 @@ pub(crate) async fn dispatch_text_message(
             });
         }
 
+        // ── Remap non-unique tool call IDs ──
+        // Some OpenAI-compatible adapters (e.g. proxies to Claude) generate
+        // non-unique tool call IDs like "call_0", "call_1" per turn. These
+        // collide across turns and violate the Anthropic API's requirement
+        // that tool_use IDs be unique across the full message array.
+        //
+        // We remap them BEFORE appending to the in-memory conversation so
+        // that both the live tool loop and persisted history use unique IDs.
+        let mut id_remap: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for tc in &mut model_resp.tool_calls {
+            if is_likely_non_unique_tool_id(&tc.id) {
+                let new_id = format!("toolu_{}", uuid::Uuid::new_v4().as_simple());
+                id_remap.insert(tc.id.clone(), new_id.clone());
+                tc.id = new_id;
+            }
+        }
+        for tr in &mut tool_results {
+            if let Some(new_id) = id_remap.get(&tr.id) {
+                tr.id = new_id.clone();
+            }
+        }
+
         // ── Append assistant + tool-result messages to conversation ──
         // The model's response (possibly with text + tool calls) becomes
         // an assistant message, and each tool result becomes a tool message.
+        // IDs have already been remapped above, so no duplicates enter the
+        // in-memory conversation.
         providers::append_tool_round(
             &resolved.provider,
             &mut resolved.messages,
@@ -940,27 +965,13 @@ pub(crate) async fn dispatch_text_message(
         // We store a normalized form (Vec<{id,name,arguments}>) so any
         // client can faithfully replay this round regardless of which
         // provider produced it.
-        //
-        // Some OpenAI-compatible adapters (e.g. proxies to Claude) generate
-        // non-unique tool call IDs like "call_0", "call_1" per turn. These
-        // collide across turns and violate Anthropic's uniqueness requirement
-        // when replayed. Detect and replace such IDs with proper UUIDs.
         if let Some(thread) = thread_mgr.foreground_mut() {
-            let mut id_remap: std::collections::HashMap<String, String> =
-                std::collections::HashMap::new();
             let normalized: Vec<serde_json::Value> = model_resp
                 .tool_calls
                 .iter()
                 .map(|tc| {
-                    let id = if is_likely_non_unique_tool_id(&tc.id) {
-                        let new_id = format!("toolu_{}", uuid::Uuid::new_v4().as_simple());
-                        id_remap.insert(tc.id.clone(), new_id.clone());
-                        new_id
-                    } else {
-                        tc.id.clone()
-                    };
                     serde_json::json!({
-                        "id": id,
+                        "id": tc.id,
                         "name": tc.name,
                         "arguments": tc.arguments,
                     })
@@ -971,11 +982,7 @@ pub(crate) async fn dispatch_text_message(
                 serde_json::Value::Array(normalized),
             );
             for tr in &tool_results {
-                let id = id_remap
-                    .get(&tr.id)
-                    .cloned()
-                    .unwrap_or_else(|| tr.id.clone());
-                thread.add_tool_result(id, tr.output.clone());
+                thread.add_tool_result(tr.id.clone(), tr.output.clone());
             }
         }
         let _ = thread_mgr.save_to_file(threads_path);
