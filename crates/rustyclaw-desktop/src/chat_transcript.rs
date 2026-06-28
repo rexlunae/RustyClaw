@@ -8,8 +8,8 @@
 //! `rustyclaw-view` stays framework-agnostic for the TUI.
 
 use dioxus_genai_chat::{
-    ChatMessagePayload, ChatRole, ChatTranscript, ContextItem, ContextKind, ToolCall,
-    ToolCallStatus,
+    ChatMessagePayload, ChatRole, ChatTranscript, ContextItem, ContextKind, SearchMatch, ToolCall,
+    ToolCallHint, ToolCallStatus, ToolResultHint,
 };
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ChatMessage;
@@ -92,14 +92,23 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         };
         // Arguments are stored as a JSON string; surface them as structured
         // JSON when parseable, else as a bare string.
-        let arguments = serde_json::from_str(&tc.arguments)
+        let arguments: serde_json::Value = serde_json::from_str(&tc.arguments)
             .unwrap_or_else(|_| serde_json::Value::String(tc.arguments.clone()));
+
+        let hint = tool_call_hint(&tc.name, &arguments);
+        let result_hint = tc
+            .result
+            .as_deref()
+            .map(|r| tool_result_hint(&tc.name, &arguments, r));
+
         transcript.push(
             ChatRole::Assistant,
             ChatMessagePayload::ToolCall(ToolCall {
                 name: tc.name.clone(),
                 arguments,
                 status,
+                hint,
+                result_hint,
             }),
         );
         if let Some(result) = &tc.result {
@@ -131,6 +140,126 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
 
 fn sanitize_markdown(src: &str) -> String {
     ammonia::clean(src)
+}
+
+// ── Tool call hints ──────────────────────────────────────────────────────────
+//
+// Extract semantic metadata from tool name + arguments so `dioxus-genai-chat`
+// can render tool-specific panels (collapsed file headers, terminal blocks,
+// search match lists, etc.) instead of raw JSON dumps.
+
+fn str_field(args: &serde_json::Value, key: &str) -> Option<String> {
+    args.get(key).and_then(|v| v.as_str()).map(String::from)
+}
+
+fn u32_field(args: &serde_json::Value, key: &str) -> Option<u32> {
+    args.get(key).and_then(|v| v.as_u64()).map(|n| n as u32)
+}
+
+fn tool_call_hint(name: &str, args: &serde_json::Value) -> ToolCallHint {
+    match name {
+        "read_file" => ToolCallHint::FileRead {
+            path: str_field(args, "path").unwrap_or_default(),
+            start_line: u32_field(args, "start_line"),
+            end_line: u32_field(args, "end_line"),
+        },
+        "write_file" => ToolCallHint::FileWrite {
+            path: str_field(args, "path").unwrap_or_default(),
+            lines: str_field(args, "content").map(|c| c.lines().count() as u32),
+        },
+        "edit_file" | "apply_patch" => ToolCallHint::FileEdit {
+            path: str_field(args, "path").unwrap_or_default(),
+        },
+        "execute_command" => ToolCallHint::Shell {
+            command: str_field(args, "command").unwrap_or_default(),
+            working_dir: str_field(args, "working_dir"),
+        },
+        "search_files" => ToolCallHint::Search {
+            pattern: str_field(args, "pattern").unwrap_or_default(),
+            path: str_field(args, "path"),
+        },
+        "find_files" | "list_directory" => ToolCallHint::FindFiles {
+            query: str_field(args, "pattern").unwrap_or_default(),
+            path: str_field(args, "path"),
+        },
+        "web_search" => ToolCallHint::WebSearch {
+            query: str_field(args, "query").unwrap_or_default(),
+        },
+        "web_fetch" | "browser" => ToolCallHint::WebFetch {
+            url: str_field(args, "url").unwrap_or_default(),
+        },
+        "memory_search" | "memory_get" | "save_memory" | "add_memory" | "search_history" => {
+            ToolCallHint::Memory {
+                action: name.to_string(),
+            }
+        }
+        _ => ToolCallHint::Other,
+    }
+}
+
+fn tool_result_hint(name: &str, args: &serde_json::Value, result: &str) -> ToolResultHint {
+    match name {
+        "read_file" => {
+            let path = str_field(args, "path").unwrap_or_default();
+            let language = path.rsplit('.').next().map(String::from);
+            ToolResultHint::Code {
+                path,
+                content: result.to_string(),
+                language,
+            }
+        }
+        "execute_command" => {
+            let exit_code = result.lines().rev().find_map(|line| {
+                let trimmed = line.trim();
+                trimmed
+                    .strip_prefix("Exit code: ")
+                    .or_else(|| trimmed.strip_prefix("exit code: "))
+                    .and_then(|s| s.trim().parse::<i32>().ok())
+            });
+            ToolResultHint::Terminal {
+                exit_code,
+                output: result.to_string(),
+            }
+        }
+        "search_files" => {
+            let matches: Vec<SearchMatch> = result
+                .lines()
+                .filter_map(parse_search_match)
+                .take(50)
+                .collect();
+            if matches.is_empty() {
+                ToolResultHint::Plain(result.to_string())
+            } else {
+                ToolResultHint::SearchMatches(matches)
+            }
+        }
+        _ => ToolResultHint::Plain(result.to_string()),
+    }
+}
+
+/// Parse a grep-style match line: `path:line:content`
+fn parse_search_match(line: &str) -> Option<SearchMatch> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    // Find the first colon after a path component (skip Windows drive letters like C:)
+    let after_drive = if line.len() >= 2 && line.as_bytes()[1] == b':' {
+        2
+    } else {
+        0
+    };
+    let first_colon = line[after_drive..].find(':')? + after_drive;
+    let rest = &line[first_colon + 1..];
+    let second_colon = rest.find(':')?;
+    let line_no: u32 = rest[..second_colon].parse().ok()?;
+    let content = rest[second_colon + 1..].to_string();
+    let path = line[..first_colon].to_string();
+    Some(SearchMatch {
+        path,
+        line: line_no,
+        content,
+    })
 }
 
 /// Map prompt attachments to the chat surface's context-item model. The
