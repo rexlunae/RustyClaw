@@ -730,6 +730,18 @@ impl GatewayEvent {
                 result,
                 is_error,
             }),
+            ServerPayload::ToolResultMedia {
+                id,
+                name,
+                result,
+                is_error,
+                media: _,
+            } => Some(GatewayEvent::ToolResult {
+                id,
+                name,
+                result,
+                is_error,
+            }),
             ServerPayload::ToolApprovalRequest {
                 id,
                 name,
@@ -932,6 +944,34 @@ impl GatewayEvent {
             ServerPayload::Empty
             | ServerPayload::TasksUpdate { .. }
             | ServerPayload::ThreadCreated { .. } => None,
+            // New panel results — handled by UI directly, not as GatewayEvent.
+            ServerPayload::CronListResult { .. }
+            | ServerPayload::CronUpsertResult { .. }
+            | ServerPayload::CronActionResult { .. }
+            | ServerPayload::MemoryListResult { .. }
+            | ServerPayload::MemoryUpsertResult { .. }
+            | ServerPayload::MemoryDeleteResult { .. }
+            | ServerPayload::HistorySearchResult { .. }
+            | ServerPayload::UsageStatsResult { .. }
+            | ServerPayload::LogsResult { .. }
+            | ServerPayload::LogsAppend { .. }
+            | ServerPayload::McpListResult { .. }
+            | ServerPayload::McpConnectResult { .. }
+            | ServerPayload::McpDisconnectResult { .. }
+            | ServerPayload::ToolConfigResult { .. }
+            | ServerPayload::ToolToggleResult { .. }
+            | ServerPayload::ChannelStatusResult { .. }
+            | ServerPayload::ChannelPairResult { .. }
+            | ServerPayload::PendingApprovalsResult { .. }
+            | ServerPayload::ApprovalsBatchResult { .. }
+            | ServerPayload::ToolOutputStart { .. }
+            | ServerPayload::ToolOutputDelta { .. }
+            | ServerPayload::ToolOutputEnd { .. }
+            | ServerPayload::VoiceTranscript { .. }
+            | ServerPayload::VoiceStateUpdate { .. }
+            | ServerPayload::VoiceTtsChunk { .. }
+            | ServerPayload::PreviewResult { .. }
+            | ServerPayload::PreviewUpdate { .. } => None,
         }
     }
 }

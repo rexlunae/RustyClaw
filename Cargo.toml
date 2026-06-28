@@ -10,6 +10,8 @@ members = [
     "crates/tokenjuice",
     "crates/memory-tree",
 ]
+# WASM-only crates (require wasm32 target, excluded from default workspace build)
+exclude = ["crates/rustyclaw-web"]
 resolver = "3"
 
 [workspace.package]

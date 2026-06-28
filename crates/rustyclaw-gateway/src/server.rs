@@ -722,6 +722,32 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ServiceLogsRequest { name, tail } => {
                                 crate::service_handler::handle_service_logs(&mut *writer, &name, tail).await?;
                             }
+                            // ── New UI panel requests (stub handlers) ──
+                            payload @ (ClientPayload::CronListRequest
+                            | ClientPayload::CronUpsertRequest { .. }
+                            | ClientPayload::CronActionRequest { .. }
+                            | ClientPayload::MemoryListRequest { .. }
+                            | ClientPayload::MemoryUpsertRequest { .. }
+                            | ClientPayload::MemoryDeleteRequest { .. }
+                            | ClientPayload::HistorySearchRequest { .. }
+                            | ClientPayload::UsageStatsRequest { .. }
+                            | ClientPayload::LogsRequest { .. }
+                            | ClientPayload::McpListRequest
+                            | ClientPayload::McpConnectRequest { .. }
+                            | ClientPayload::McpDisconnectRequest { .. }
+                            | ClientPayload::ToolConfigRequest
+                            | ClientPayload::ToolToggleRequest { .. }
+                            | ClientPayload::ChannelStatusRequest
+                            | ClientPayload::ChannelPairRequest { .. }
+                            | ClientPayload::PendingApprovalsRequest
+                            | ClientPayload::ApprovalsBatchAction { .. }
+                            | ClientPayload::VoiceStart { .. }
+                            | ClientPayload::VoiceStop
+                            | ClientPayload::VoiceAudioChunk { .. }
+                            | ClientPayload::PreviewRequest { .. }
+                            | ClientPayload::PreviewFollowToggle { .. }) => {
+                                crate::panel_handler::handle_panel_request(&mut *writer, payload).await?;
+                            }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.
