@@ -81,10 +81,15 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
                         let loaded_mark = if model.loaded { "*" } else { " " };
                         let size = model.size_display();
                         let quant = model.quantization.as_deref().unwrap_or("");
+                        let fit_indicator = if !model.fits_host { " \u{26a0}" } else { "" };
                         rows.push((
-                            format!(" {}{}", loaded_mark, model.name),
+                            format!(" {}{}{}", loaded_mark, model.name, fit_indicator),
                             format!("{} {}", size, quant),
                         ));
+                        // P6: Show host-fit warning if model doesn't fit.
+                        if let Some(warning) = model.fit_warning() {
+                            rows.push(("   \u{26a0}".into(), warning.to_string()));
+                        }
                     }
                 }
             }

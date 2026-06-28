@@ -682,12 +682,21 @@ pub enum ClientPayload {
     EngineModelPull {
         engine: String,
         model: String,
+        /// Optional expected size hint for disk pre-flight (bytes).
+        #[serde(default)]
+        expected_size_bytes: Option<u64>,
     },
     /// Perform a model action (remove/load/unload).
     EngineModelAction {
         engine: String,
         model: String,
         action: String, // "remove" | "load" | "unload"
+        /// Per-model knobs: context length override for load.
+        #[serde(default)]
+        context_length: Option<u32>,
+        /// Per-model knobs: extra engine-specific args for load.
+        #[serde(default)]
+        extra_args: Vec<String>,
     },
     /// Set per-engine configuration.
     EngineConfigSet {
@@ -1153,10 +1162,21 @@ pub struct EngineModelDto {
     pub vram_bytes: Option<u64>,
     pub family: Option<String>,
     pub format: Option<String>,
+    /// Whether the model fits the current host's resources.
+    #[serde(default = "default_true")]
+    pub fits_host: bool,
+    /// Warning message if the model doesn't fit (empty if it does).
+    #[serde(default)]
+    pub fit_warning: String,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl From<crate::engines::LocalModel> for EngineModelDto {
     fn from(m: crate::engines::LocalModel) -> Self {
+        let fit = crate::engines::check_model_fit(&m);
         Self {
             name: m.name,
             size_bytes: m.size_bytes,
@@ -1166,6 +1186,8 @@ impl From<crate::engines::LocalModel> for EngineModelDto {
             vram_bytes: m.vram_bytes,
             family: m.family,
             format: m.format,
+            fits_host: fit.fits,
+            fit_warning: fit.warning,
         }
     }
 }

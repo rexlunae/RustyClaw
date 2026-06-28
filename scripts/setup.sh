@@ -8,6 +8,7 @@
 #   • Ollama (local model server)
 #   • Node.js + npm (for exo dashboard)
 #   • Exo (distributed AI cluster)
+#   • llama.cpp (llama-server for local GGUF inference)
 #
 # Usage:
 #   ./scripts/setup.sh              # interactive mode — choose what to install
@@ -39,9 +40,9 @@ err()     { echo -e "${RED}[FAIL]${NC}  $1"; }
 step()    { echo -e "\n${CYAN}${BOLD}── $1 ──${NC}"; }
 
 # ── Argument parsing ─────────────────────────────────────────────────────────
-ALL_COMPONENTS="rust rustyclaw uv ollama node exo"
+ALL_COMPONENTS="rust rustyclaw uv ollama node exo llamacpp"
 CORE_COMPONENTS="rust rustyclaw"
-OPTIONAL_COMPONENTS="uv ollama node exo"
+OPTIONAL_COMPONENTS="uv ollama node exo llamacpp"
 SKIP=""
 ONLY=""
 EXO_DIR="${EXO_DIR:-$HOME/exo}"
@@ -721,6 +722,67 @@ if should_install exo; then
     fi
 else
     SKIPPED="$SKIPPED exo"
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. llama.cpp (llama-server for local GGUF inference)
+# ─────────────────────────────────────────────────────────────────────────────
+if should_install llamacpp; then
+    step "llama.cpp (llama-server)"
+
+    if has llama-server; then
+        success "llama-server already installed ($(llama-server --version 2>/dev/null || echo 'found'))"
+        INSTALLED="$INSTALLED llamacpp"
+    else
+        info "Installing llama.cpp (llama-server)..."
+        case "$PLATFORM" in
+            macos)
+                if has brew; then
+                    brew install llama.cpp 2>&1 && success "llama.cpp installed via Homebrew" && INSTALLED="$INSTALLED llamacpp" \
+                        || { err "Homebrew install failed"; FAILED="$FAILED llamacpp"; }
+                else
+                    err "Homebrew required on macOS — install Homebrew first"
+                    FAILED="$FAILED llamacpp"
+                fi
+                ;;
+            linux)
+                # Try to download prebuilt release from GitHub
+                LLAMACPP_VER=$(curl -fsSL "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest" 2>/dev/null \
+                    | grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"//;s/".*//')
+                if [[ -n "$LLAMACPP_VER" ]]; then
+                    ARCH=$(uname -m)
+                    case "$ARCH" in
+                        x86_64)  LLAMACPP_ARCH="ubuntu-x64" ;;
+                        aarch64) LLAMACPP_ARCH="ubuntu-arm64" ;;
+                        *)       LLAMACPP_ARCH="" ;;
+                    esac
+                    if [[ -n "$LLAMACPP_ARCH" ]]; then
+                        LLAMACPP_URL="https://github.com/ggml-org/llama.cpp/releases/download/${LLAMACPP_VER}/llama-${LLAMACPP_VER}-bin-${LLAMACPP_ARCH}.zip"
+                        LLAMACPP_TMP="/tmp/llamacpp-release.zip"
+                        if curl -fsSL "$LLAMACPP_URL" -o "$LLAMACPP_TMP" 2>/dev/null; then
+                            sudo unzip -o "$LLAMACPP_TMP" -d /usr/local/bin/ "*/llama-server" 2>/dev/null \
+                                && sudo chmod +x /usr/local/bin/llama-server \
+                                && success "llama-server installed to /usr/local/bin" \
+                                && INSTALLED="$INSTALLED llamacpp" \
+                                || { err "Failed to extract llama-server"; FAILED="$FAILED llamacpp"; }
+                            rm -f "$LLAMACPP_TMP"
+                        else
+                            warn "Could not download prebuilt llama.cpp; try building from source"
+                            FAILED="$FAILED llamacpp"
+                        fi
+                    else
+                        warn "Unsupported architecture ($ARCH) for prebuilt llama.cpp"
+                        FAILED="$FAILED llamacpp"
+                    fi
+                else
+                    warn "Could not determine latest llama.cpp release"
+                    FAILED="$FAILED llamacpp"
+                fi
+                ;;
+        esac
+    fi
+else
+    SKIPPED="$SKIPPED llamacpp"
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
