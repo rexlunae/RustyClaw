@@ -58,21 +58,33 @@ pub use uuid;
 /// Index with `tick % SPINNER_FRAMES.len()`.
 pub const SPINNER_FRAMES: &[char] = &['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 
+pub mod analytics;
 pub mod app_menu;
+pub mod approvals;
 pub mod banner;
+pub mod channels;
 pub mod client;
 pub mod command_menu;
+pub mod command_palette;
 pub mod composer;
 pub mod conversation;
+pub mod cron;
 pub mod dialogs;
 pub mod file_browser;
 pub mod kernel;
+pub mod logs;
+pub mod mcp;
+pub mod media;
+pub mod memory;
 pub mod message;
+pub mod preview;
 pub mod services;
 pub mod sidebar;
 pub mod status;
 pub mod swarm;
 pub mod tone;
+pub mod tools_config;
+pub mod voice;
 
 // Re-export at crate root for convenience.
 pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
@@ -102,3 +114,17 @@ pub use sidebar::{ProjectGroupData, SidebarItemData, SidebarTree};
 pub use status::StatusBarData;
 pub use swarm::{SwarmAgentData, SwarmData};
 pub use tone::Tone;
+
+// New panel data types.
+pub use analytics::{AnalyticsPanelData, ModelUsageData, SessionUsageData, UsageTotalsData};
+pub use approvals::{ApprovalsPanelData, PendingApprovalData};
+pub use channels::{ChannelStatusData, ChannelsPanelData};
+pub use command_palette::{CommandPaletteData, PaletteEntry, ShortcutMapping, ZoomState};
+pub use cron::{CronJobData, CronPanelData};
+pub use logs::{LogSource, LogsPanelData};
+pub use mcp::{McpPanelData, McpServerData};
+pub use media::{MediaData, MediaKind};
+pub use memory::{HistoryEntryData, MemoryEntryData, MemoryPanelData};
+pub use preview::PreviewPanelData;
+pub use tools_config::{ToolConfigData, ToolConfigPanelData};
+pub use voice::VoiceData;

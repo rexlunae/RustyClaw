@@ -94,6 +94,52 @@ pub enum ClientFrameType {
     ServiceRestartRequest = 41,
     /// Request logs for a managed service.
     ServiceLogsRequest = 42,
+    /// Request cron job list.
+    CronListRequest = 43,
+    /// Create or update a cron job.
+    CronUpsertRequest = 44,
+    /// Perform an action on a cron job (pause/resume/run/remove).
+    CronActionRequest = 45,
+    /// Request memory entries (search/list).
+    MemoryListRequest = 46,
+    /// Create or update a memory entry.
+    MemoryUpsertRequest = 47,
+    /// Delete a memory entry.
+    MemoryDeleteRequest = 48,
+    /// Search conversation history.
+    HistorySearchRequest = 49,
+    /// Request usage/analytics stats.
+    UsageStatsRequest = 50,
+    /// Request general logs (agent/gateway/cron).
+    LogsRequest = 51,
+    /// Request MCP server list.
+    McpListRequest = 52,
+    /// Connect an MCP server.
+    McpConnectRequest = 53,
+    /// Disconnect an MCP server.
+    McpDisconnectRequest = 54,
+    /// Request tool configuration.
+    ToolConfigRequest = 55,
+    /// Toggle a tool's enabled state.
+    ToolToggleRequest = 56,
+    /// Request channel/messenger status.
+    ChannelStatusRequest = 57,
+    /// Pair/unpair a channel.
+    ChannelPairRequest = 58,
+    /// Request pending approvals list.
+    PendingApprovalsRequest = 59,
+    /// Batch approve/deny pending approvals.
+    ApprovalsBatchAction = 60,
+    /// Start voice recording (STT).
+    VoiceStart = 61,
+    /// Stop voice recording.
+    VoiceStop = 62,
+    /// Send voice audio chunk.
+    VoiceAudioChunk = 63,
+    /// Request file preview.
+    PreviewRequest = 64,
+    /// Toggle file-follow mode.
+    PreviewFollowToggle = 65,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -200,6 +246,60 @@ pub enum ServerFrameType {
     ServiceRestartResult = 47,
     /// Service logs result.
     ServiceLogsResult = 48,
+    /// Cron job list result.
+    CronListResult = 49,
+    /// Cron upsert result.
+    CronUpsertResult = 50,
+    /// Cron action result.
+    CronActionResult = 51,
+    /// Memory list/search result.
+    MemoryListResult = 52,
+    /// Memory upsert result.
+    MemoryUpsertResult = 53,
+    /// Memory delete result.
+    MemoryDeleteResult = 54,
+    /// History search result.
+    HistorySearchResult = 55,
+    /// Usage/analytics stats result.
+    UsageStatsResult = 56,
+    /// General logs result.
+    LogsResult = 57,
+    /// Streaming log append (for follow/tail).
+    LogsAppend = 58,
+    /// MCP server list result.
+    McpListResult = 59,
+    /// MCP connect result.
+    McpConnectResult = 60,
+    /// MCP disconnect result.
+    McpDisconnectResult = 61,
+    /// Tool configuration result.
+    ToolConfigResult = 62,
+    /// Tool toggle result.
+    ToolToggleResult = 63,
+    /// Channel status result.
+    ChannelStatusResult = 64,
+    /// Channel pair result.
+    ChannelPairResult = 65,
+    /// Pending approvals list result.
+    PendingApprovalsResult = 66,
+    /// Approvals batch action result.
+    ApprovalsBatchResult = 67,
+    /// Streaming tool output start.
+    ToolOutputStart = 68,
+    /// Streaming tool output delta.
+    ToolOutputDelta = 69,
+    /// Streaming tool output end.
+    ToolOutputEnd = 70,
+    /// Voice transcription result (STT).
+    VoiceTranscript = 71,
+    /// Voice state update.
+    VoiceStateUpdate = 72,
+    /// TTS audio chunk for playback.
+    VoiceTtsChunk = 73,
+    /// File preview result.
+    PreviewResult = 74,
+    /// File preview update (file-follow).
+    PreviewUpdate = 75,
 }
 
 /// Status frame sub-types.
@@ -434,6 +534,116 @@ pub enum ClientPayload {
         name: String,
         tail: Option<usize>,
     },
+    // ── Cron ──────────────────────────────────────────────────────────────
+    /// Request cron job list.
+    CronListRequest,
+    /// Create or update a cron job.
+    CronUpsertRequest {
+        id: Option<String>,
+        name: String,
+        expr: String,
+        payload: String,
+        paused: bool,
+    },
+    /// Perform an action on a cron job.
+    CronActionRequest {
+        id: String,
+        action: String, // "pause" | "resume" | "run" | "remove"
+    },
+    // ── Memory ────────────────────────────────────────────────────────────
+    /// Request memory entries.
+    MemoryListRequest {
+        query: Option<String>,
+        limit: Option<usize>,
+    },
+    /// Create or update a memory entry.
+    MemoryUpsertRequest {
+        id: Option<String>,
+        content: String,
+        category: Option<String>,
+    },
+    /// Delete a memory entry.
+    MemoryDeleteRequest {
+        id: String,
+    },
+    /// Search conversation history.
+    HistorySearchRequest {
+        query: String,
+        limit: Option<usize>,
+    },
+    // ── Analytics ─────────────────────────────────────────────────────────
+    /// Request usage/analytics stats.
+    UsageStatsRequest {
+        period: Option<String>, // "day" | "week" | "month" | "all"
+    },
+    // ── Logs ──────────────────────────────────────────────────────────────
+    /// Request general logs.
+    LogsRequest {
+        source: String, // "gateway" | "agent" | "cron" | service name
+        tail: Option<usize>,
+        follow: bool,
+    },
+    // ── MCP ───────────────────────────────────────────────────────────────
+    /// Request MCP server list.
+    McpListRequest,
+    /// Connect an MCP server.
+    McpConnectRequest {
+        name: String,
+        command: Option<String>,
+        url: Option<String>,
+        env: Vec<(String, String)>,
+    },
+    /// Disconnect an MCP server.
+    McpDisconnectRequest {
+        name: String,
+    },
+    // ── Tool Config ───────────────────────────────────────────────────────
+    /// Request tool configuration.
+    ToolConfigRequest,
+    /// Toggle a tool's enabled state.
+    ToolToggleRequest {
+        tool_name: String,
+        enabled: bool,
+    },
+    // ── Channels ──────────────────────────────────────────────────────────
+    /// Request channel/messenger status.
+    ChannelStatusRequest,
+    /// Pair/unpair a channel.
+    ChannelPairRequest {
+        channel: String,
+        action: String, // "pair" | "unpair"
+    },
+    // ── Approvals ─────────────────────────────────────────────────────────
+    /// Request pending approvals list.
+    PendingApprovalsRequest,
+    /// Batch approve/deny pending approvals.
+    ApprovalsBatchAction {
+        ids: Vec<String>,
+        approved: bool,
+        always_allow: bool,
+    },
+    // ── Voice ────────────────────────────────────────────────────────────
+    /// Start voice recording.
+    VoiceStart {
+        /// Preferred language code (e.g. "en-US").
+        language: Option<String>,
+    },
+    /// Stop voice recording.
+    VoiceStop,
+    /// Audio chunk (PCM/opus bytes).
+    VoiceAudioChunk {
+        data: Vec<u8>,
+    },
+    // ── Preview ──────────────────────────────────────────────────────────
+    /// Request file preview.
+    PreviewRequest {
+        path: String,
+    },
+    /// Toggle file-follow mode for the current preview.
+    PreviewFollowToggle {
+        path: String,
+        follow: bool,
+    },
 }
 
 /// Generic server frame envelope.
@@ -557,6 +767,7 @@ pub enum ServerPayload {
         name: String,
         result: String,
         is_error: bool,
+        media: Option<MediaPayload>,
     },
     ResponseDone {
         ok: bool,
@@ -681,6 +892,131 @@ pub enum ServerPayload {
         lines: Vec<String>,
         message: Option<String>,
     },
+    // ── Cron ──────────────────────────────────────────────────────────────
+    CronListResult {
+        jobs: Vec<CronJobDto>,
+    },
+    CronUpsertResult {
+        ok: bool,
+        job: Option<CronJobDto>,
+        message: Option<String>,
+    },
+    CronActionResult {
+        ok: bool,
+        message: Option<String>,
+    },
+    // ── Memory ────────────────────────────────────────────────────────────
+    MemoryListResult {
+        entries: Vec<MemoryEntryDto>,
+    },
+    MemoryUpsertResult {
+        ok: bool,
+        id: Option<String>,
+        message: Option<String>,
+    },
+    MemoryDeleteResult {
+        ok: bool,
+        message: Option<String>,
+    },
+    HistorySearchResult {
+        entries: Vec<HistoryEntryDto>,
+    },
+    // ── Analytics ─────────────────────────────────────────────────────────
+    UsageStatsResult {
+        totals: UsageTotalsDto,
+        per_model: Vec<ModelUsageDto>,
+        per_session: Vec<SessionUsageDto>,
+    },
+    // ── Logs ──────────────────────────────────────────────────────────────
+    LogsResult {
+        ok: bool,
+        source: String,
+        lines: Vec<String>,
+        message: Option<String>,
+    },
+    LogsAppend {
+        source: String,
+        lines: Vec<String>,
+    },
+    // ── MCP ───────────────────────────────────────────────────────────────
+    McpListResult {
+        servers: Vec<McpServerDto>,
+    },
+    McpConnectResult {
+        ok: bool,
+        server: Option<McpServerDto>,
+        message: Option<String>,
+    },
+    McpDisconnectResult {
+        ok: bool,
+        message: Option<String>,
+    },
+    // ── Tool Config ───────────────────────────────────────────────────────
+    ToolConfigResult {
+        tools: Vec<ToolConfigDto>,
+    },
+    ToolToggleResult {
+        ok: bool,
+        message: Option<String>,
+    },
+    // ── Channels ──────────────────────────────────────────────────────────
+    ChannelStatusResult {
+        channels: Vec<ChannelStatusDto>,
+    },
+    ChannelPairResult {
+        ok: bool,
+        channel: Option<ChannelStatusDto>,
+        message: Option<String>,
+    },
+    // ── Approvals ─────────────────────────────────────────────────────────
+    PendingApprovalsResult {
+        approvals: Vec<PendingApprovalDto>,
+    },
+    ApprovalsBatchResult {
+        ok: bool,
+        message: Option<String>,
+    },
+    // ── Streaming tool output ─────────────────────────────────────────────
+    ToolOutputStart {
+        tool_id: String,
+        name: String,
+    },
+    ToolOutputDelta {
+        tool_id: String,
+        chunk: String,
+        is_stderr: bool,
+    },
+    ToolOutputEnd {
+        tool_id: String,
+    },
+    // ── Voice ────────────────────────────────────────────────────────────
+    /// Transcription result from STT.
+    VoiceTranscript {
+        text: String,
+        is_final: bool,
+    },
+    /// Voice state changed (listening, processing, etc.)
+    VoiceStateUpdate {
+        state: String,
+    },
+    /// TTS audio chunk for playback.
+    VoiceTtsChunk {
+        data: Vec<u8>,
+        is_final: bool,
+    },
+    // ── Preview ──────────────────────────────────────────────────────────
+    /// File preview content.
+    PreviewResult {
+        path: String,
+        kind: String,
+        content: String,
+        error: Option<String>,
+    },
+    /// File preview update (file-follow push).
+    PreviewUpdate {
+        path: String,
+        content: String,
+    },
 }
 
 /// DTO for service info in protocol results.
@@ -771,6 +1107,166 @@ pub struct SecretEntryDto {
     pub kind: String,
     pub policy: String,
     pub disabled: bool,
+}
+
+// ============================================================================
+// Media payload (A1)
+// ============================================================================
+
+/// Kind of media attached to a tool result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaKind {
+    Image,
+    Audio,
+    Pdf,
+    Html,
+    Canvas,
+}
+
+/// A media payload attached to a `ToolResult` frame.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MediaPayload {
+    pub kind: MediaKind,
+    /// Path to the media file on the agent's filesystem.
+    pub path: Option<String>,
+    /// MIME type (e.g. "image/png", "audio/wav").
+    pub mime: Option<String>,
+    /// Inline bytes (base64-encoded for transport where needed).
+    pub data: Option<Vec<u8>>,
+}
+
+// ============================================================================
+// Cron DTOs (A2)
+// ============================================================================
+
+/// DTO for a scheduled cron job.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CronJobDto {
+    pub id: String,
+    pub name: String,
+    pub expr: String,
+    pub payload: String,
+    pub paused: bool,
+    pub next_run: Option<String>,
+    pub last_run: Option<String>,
+    pub last_status: Option<String>,
+    pub run_count: u64,
+}
+
+// ============================================================================
+// Memory DTOs (A3)
+// ============================================================================
+
+/// DTO for a memory entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryEntryDto {
+    pub id: String,
+    pub content: String,
+    pub category: Option<String>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub score: Option<f64>,
+}
+
+/// DTO for a history entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HistoryEntryDto {
+    pub timestamp: String,
+    pub role: String,
+    pub content: String,
+    pub thread_id: Option<u64>,
+}
+
+// ============================================================================
+// Analytics DTOs (A4)
+// ============================================================================
+
+/// Aggregate usage totals.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct UsageTotalsDto {
+    pub total_requests: u64,
+    pub total_input_tokens: u64,
+    pub total_output_tokens: u64,
+    pub total_latency_ms: u64,
+    pub period: String,
+}
+
+/// Per-model usage breakdown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelUsageDto {
+    pub provider: String,
+    pub model: String,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub avg_latency_ms: u64,
+}
+
+/// Per-session usage breakdown.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionUsageDto {
+    pub session_id: String,
+    pub thread_label: Option<String>,
+    pub requests: u64,
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
+// ============================================================================
+// MCP DTOs (A6)
+// ============================================================================
+
+/// DTO for an MCP server connection.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct McpServerDto {
+    pub name: String,
+    pub status: String,
+    pub command: Option<String>,
+    pub url: Option<String>,
+    pub tools: Vec<String>,
+    pub health_ok: Option<bool>,
+}
+
+// ============================================================================
+// Tool Config DTOs (A7)
+// ============================================================================
+
+/// DTO for tool configuration.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolConfigDto {
+    pub name: String,
+    pub category: String,
+    pub enabled: bool,
+    pub policy: String,
+    pub description: String,
+}
+
+// ============================================================================
+// Channel DTOs (A8)
+// ============================================================================
+
+/// DTO for messenger channel status.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChannelStatusDto {
+    pub name: String,
+    pub channel_type: String,
+    pub paired: bool,
+    pub online: bool,
+    pub last_message: Option<String>,
+}
+
+// ============================================================================
+// Approvals DTOs (B4)
+// ============================================================================
+
+/// DTO for a pending approval entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingApprovalDto {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: String,
+    pub requested_at: String,
 }
 
 // ============================================================================
