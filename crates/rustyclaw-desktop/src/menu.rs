@@ -83,6 +83,22 @@ pub fn build_app_menu() -> muda::Menu {
     )
     .expect("failed to build File menu");
 
+    // ── Edit ───────────────────────────────────────────────────────────────
+    // Predefined items wire Ctrl+X/C/V/A to the webview's clipboard and
+    // text-selection commands on all platforms.
+    let edit_menu = muda::Submenu::with_items(
+        "Edit",
+        true,
+        &[
+            &muda::PredefinedMenuItem::cut(None),
+            &muda::PredefinedMenuItem::copy(None),
+            &muda::PredefinedMenuItem::paste(None),
+            &muda::PredefinedMenuItem::separator(),
+            &muda::PredefinedMenuItem::select_all(None),
+        ],
+    )
+    .expect("failed to build Edit menu");
+
     let view_menu = muda::Submenu::with_items(
         "View",
         true,
@@ -98,7 +114,7 @@ pub fn build_app_menu() -> muda::Menu {
     .expect("failed to build Tools menu");
 
     let menu = muda::Menu::new();
-    menu.append_items(&[&file_menu, &view_menu, &tools_menu])
+    menu.append_items(&[&file_menu, &edit_menu, &view_menu, &tools_menu])
         .expect("failed to append submenus");
     menu
 }
