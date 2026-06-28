@@ -16,6 +16,8 @@ pub mod exo_ai;
 mod file;
 mod gateway_tools;
 pub(crate) mod helpers;
+#[cfg(feature = "image-gen")]
+mod image_gen;
 mod kernel_tools;
 mod memory_tools;
 pub mod npm;
@@ -26,17 +28,15 @@ mod runtime;
 mod schema;
 mod secrets_tools;
 mod sessions_tools;
+mod skill_curator;
 mod skills_tools;
 mod swarm_tools;
 mod sysadmin;
 mod system_tools;
+mod todo_tool;
 pub mod uv;
 mod web;
 mod web_extract;
-mod todo_tool;
-mod skill_curator;
-#[cfg(feature = "image-gen")]
-mod image_gen;
 // ast-grep structural code tool
 use ast_grep::exec_ast_grep;
 

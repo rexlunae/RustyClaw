@@ -103,8 +103,12 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                 .and_then(|v| v.as_str())
                 .unwrap_or("pending");
 
-            let status = TodoStatus::from_str(status_str)
-                .ok_or_else(|| format!("Invalid status: '{}'. Use: pending, in_progress, done", status_str))?;
+            let status = TodoStatus::from_str(status_str).ok_or_else(|| {
+                format!(
+                    "Invalid status: '{}'. Use: pending, in_progress, done",
+                    status_str
+                )
+            })?;
 
             let id = next_id();
             let item = TodoItem {
@@ -123,7 +127,8 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                     "content": content,
                     "status": status.to_string(),
                 }
-            }).to_string())
+            })
+            .to_string())
         }
 
         "update_status" => {
@@ -138,8 +143,12 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                 .and_then(|v| v.as_str())
                 .ok_or("Missing required parameter: status")?;
 
-            let status = TodoStatus::from_str(status_str)
-                .ok_or_else(|| format!("Invalid status: '{}'. Use: pending, in_progress, done", status_str))?;
+            let status = TodoStatus::from_str(status_str).ok_or_else(|| {
+                format!(
+                    "Invalid status: '{}'. Use: pending, in_progress, done",
+                    status_str
+                )
+            })?;
 
             let updated = with_list(|list| {
                 if let Some(item) = list.iter_mut().find(|i| i.id == id) {
@@ -160,7 +169,8 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                             "content": item.content,
                             "status": item.status.to_string(),
                         }
-                    }).to_string())
+                    })
+                    .to_string())
                 }
                 None => Err(format!("Todo item not found: {}", id)),
             }
@@ -187,7 +197,8 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                             "id": item.id,
                             "content": item.content,
                         }
-                    }).to_string())
+                    })
+                    .to_string())
                 }
                 None => Err(format!("Todo item not found: {}", id)),
             }
@@ -211,12 +222,24 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                 ));
             }
 
-            let pending = items.iter().filter(|i| i.status == TodoStatus::Pending).count();
-            let in_progress = items.iter().filter(|i| i.status == TodoStatus::InProgress).count();
-            let done = items.iter().filter(|i| i.status == TodoStatus::Done).count();
+            let pending = items
+                .iter()
+                .filter(|i| i.status == TodoStatus::Pending)
+                .count();
+            let in_progress = items
+                .iter()
+                .filter(|i| i.status == TodoStatus::InProgress)
+                .count();
+            let done = items
+                .iter()
+                .filter(|i| i.status == TodoStatus::Done)
+                .count();
             output.push_str(&format!(
                 "\nSummary: {} pending, {} in progress, {} done ({} total)",
-                pending, in_progress, done, items.len()
+                pending,
+                in_progress,
+                done,
+                items.len()
             ));
 
             Ok(output)
@@ -233,7 +256,8 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
             Ok(json!({
                 "action": "clear",
                 "removed_count": count,
-            }).to_string())
+            })
+            .to_string())
         }
 
         _ => Err(format!(
@@ -249,8 +273,10 @@ pub fn todo_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
             name: "action".into(),
-            description: "Action to perform: 'add' (create item), 'update_status' (change status), \
-                          'remove' (delete item), 'list' (show all), 'clear' (remove all).".into(),
+            description:
+                "Action to perform: 'add' (create item), 'update_status' (change status), \
+                          'remove' (delete item), 'list' (show all), 'clear' (remove all)."
+                    .into(),
             param_type: "string".into(),
             required: true,
         },
@@ -269,7 +295,8 @@ pub fn todo_params() -> Vec<ToolParam> {
         ToolParam {
             name: "status".into(),
             description: "Status value: 'pending', 'in_progress', or 'done'. \
-                          Used with 'add' (default: pending) and 'update_status' (required).".into(),
+                          Used with 'add' (default: pending) and 'update_status' (required)."
+                .into(),
             param_type: "string".into(),
             required: false,
         },

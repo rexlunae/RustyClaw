@@ -209,7 +209,10 @@ impl RuntimeAdapter for SshRuntime {
         cmd.args(&args);
 
         // Suppress SSH warnings on stderr for cleaner output
-        cmd.env("SSH_AUTH_SOCK", std::env::var("SSH_AUTH_SOCK").unwrap_or_default());
+        cmd.env(
+            "SSH_AUTH_SOCK",
+            std::env::var("SSH_AUTH_SOCK").unwrap_or_default(),
+        );
 
         Ok(cmd)
     }

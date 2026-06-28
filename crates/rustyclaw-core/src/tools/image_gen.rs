@@ -39,9 +39,7 @@ pub async fn exec_image_generate_async(
         .and_then(|v| v.as_str())
         .unwrap_or("standard");
 
-    let output_path = args
-        .get("output_path")
-        .and_then(|v| v.as_str());
+    let output_path = args.get("output_path").and_then(|v| v.as_str());
 
     let provider = args
         .get("provider")
@@ -55,8 +53,21 @@ pub async fn exec_image_generate_async(
 
     // Dispatch to the appropriate provider
     match provider {
-        "openai" => generate_openai(prompt, model, size, quality, &api_key, output_path, workspace_dir).await,
-        "gemini" => generate_gemini(prompt, model, size, &api_key, output_path, workspace_dir).await,
+        "openai" => {
+            generate_openai(
+                prompt,
+                model,
+                size,
+                quality,
+                &api_key,
+                output_path,
+                workspace_dir,
+            )
+            .await
+        }
+        "gemini" => {
+            generate_gemini(prompt, model, size, &api_key, output_path, workspace_dir).await
+        }
         _ => Err(format!(
             "Unsupported image generation provider: '{}'. Supported: openai, gemini",
             provider
@@ -134,7 +145,8 @@ async fn generate_openai(
         "quality": quality,
         "path": file_path,
         "url": image_url,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Generate image via Google Gemini / Imagen API.
@@ -210,7 +222,8 @@ async fn generate_gemini(
         "prompt": prompt,
         "size": size,
         "path": file_path,
-    }).to_string())
+    })
+    .to_string())
 }
 
 // ── Helper functions ────────────────────────────────────────────────────────
@@ -278,8 +291,7 @@ async fn download_image(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    std::fs::write(&file_path, &bytes)
-        .map_err(|e| format!("Failed to write image file: {}", e))?;
+    std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write image file: {}", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -314,8 +326,7 @@ fn save_base64_image(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    std::fs::write(&file_path, &bytes)
-        .map_err(|e| format!("Failed to write image file: {}", e))?;
+    std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write image file: {}", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -333,13 +344,15 @@ pub fn image_generate_params() -> Vec<ToolParam> {
         ToolParam {
             name: "model".into(),
             description: "Model to use for generation. Default: 'dall-e-3' (OpenAI) or \
-                          'imagen-3.0-generate-001' (Gemini).".into(),
+                          'imagen-3.0-generate-001' (Gemini)."
+                .into(),
             param_type: "string".into(),
             required: false,
         },
         ToolParam {
             name: "size".into(),
-            description: "Image dimensions: '1024x1024' (default), '1792x1024', '1024x1792'.".into(),
+            description: "Image dimensions: '1024x1024' (default), '1792x1024', '1024x1792'."
+                .into(),
             param_type: "string".into(),
             required: false,
         },

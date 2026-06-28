@@ -62,19 +62,11 @@ fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         .and_then(|v| v.as_u64())
         .unwrap_or(DEFAULT_TOOL_CALL_THRESHOLD as u64) as u32;
 
-    let skill_name = args
-        .get("skill_name")
-        .and_then(|v| v.as_str());
+    let skill_name = args.get("skill_name").and_then(|v| v.as_str());
 
-    let skill_body = args
-        .get("skill_body")
-        .and_then(|v| v.as_str());
+    let skill_body = args.get("skill_body").and_then(|v| v.as_str());
 
-    debug!(
-        tool_calls_used,
-        threshold,
-        "Evaluating skill proposal"
-    );
+    debug!(tool_calls_used, threshold, "Evaluating skill proposal");
 
     // If tool calls are below threshold and no explicit skill content, suggest skipping
     if tool_calls_used < threshold && skill_body.is_none() {
@@ -86,28 +78,32 @@ fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                  Provide skill_body to override.",
                 tool_calls_used, threshold
             ),
-        }).to_string());
+        })
+        .to_string());
     }
 
     // Generate skill name from summary if not provided
-    let name = skill_name
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| {
-            let slug: String = task_summary
-                .chars()
-                .take(40)
-                .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
-                .collect();
-            slug.trim_matches('-').to_string()
-        });
+    let name = skill_name.map(|s| s.to_string()).unwrap_or_else(|| {
+        let slug: String = task_summary
+            .chars()
+            .take(40)
+            .map(|c| {
+                if c.is_alphanumeric() {
+                    c.to_ascii_lowercase()
+                } else {
+                    '-'
+                }
+            })
+            .collect();
+        slug.trim_matches('-').to_string()
+    });
 
     // Write a draft skill file to workspace
     let skills_dir = workspace_dir.join("skills");
     let skill_dir = skills_dir.join(&name);
     let skill_file = skill_dir.join("SKILL.md");
 
-    let body = skill_body
-        .unwrap_or("<!-- Auto-drafted by skill curator. Review and refine. -->");
+    let body = skill_body.unwrap_or("<!-- Auto-drafted by skill curator. Review and refine. -->");
 
     // Create the skill directory structure
     if let Err(e) = std::fs::create_dir_all(&skill_dir) {
@@ -135,7 +131,8 @@ fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         "path": skill_file.to_string_lossy(),
         "tool_calls_used": tool_calls_used,
         "note": "Draft skill created. Use skill_create to formalize, or edit SKILL.md directly.",
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Run the full curation cycle: grade → merge duplicates → prune low-value.
@@ -162,7 +159,8 @@ fn exec_curate(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             "action": "curate",
             "skills_found": 0,
             "note": "No skills found to curate.",
-        }).to_string());
+        })
+        .to_string());
     }
 
     // Grade each skill
@@ -200,7 +198,8 @@ fn exec_curate(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         } else {
             "Curation cycle complete."
         },
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Grade a specific skill by name.
@@ -216,7 +215,8 @@ fn exec_grade(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     Ok(json!({
         "action": "grade",
         "result": grade,
-    }).to_string())
+    })
+    .to_string())
 }
 
 /// Merge two skills into one.
@@ -254,7 +254,8 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             "source": source,
             "target": target,
             "note": "Would merge source into target. Set dry_run=false to apply.",
-        }).to_string())
+        })
+        .to_string())
     } else {
         // Read both files and append source content to target
         let source_content = std::fs::read_to_string(&source_file)
@@ -281,7 +282,8 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             "source": source,
             "target": target,
             "result": "merged",
-        }).to_string())
+        })
+        .to_string())
     }
 }
 
@@ -316,7 +318,8 @@ fn exec_prune(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             "name": name,
             "reason": reason,
             "note": "Would remove skill. Set dry_run=false to apply.",
-        }).to_string())
+        })
+        .to_string())
     } else {
         std::fs::remove_dir_all(&skill_dir)
             .map_err(|e| format!("Failed to remove skill directory: {}", e))?;
@@ -328,7 +331,8 @@ fn exec_prune(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             "name": name,
             "reason": reason,
             "result": "removed",
-        }).to_string())
+        })
+        .to_string())
     }
 }
 
@@ -346,7 +350,8 @@ fn exec_status(_args: &Value, workspace_dir: &Path) -> Result<String, String> {
         "note": "Use cron tool to schedule periodic curation: \
                  cron(action='add', job={schedule: {every_ms: 604800000}, \
                  command: 'skill_curator(action=curate)'})",
-    }).to_string())
+    })
+    .to_string())
 }
 
 // ── Helper functions ────────────────────────────────────────────────────────
@@ -437,11 +442,7 @@ fn find_merge_candidates(skills: &[String]) -> Vec<Vec<&str>> {
     for (i, a) in skills.iter().enumerate() {
         for b in skills.iter().skip(i + 1) {
             // Simple heuristic: check if names share a significant prefix
-            let common_prefix_len = a
-                .chars()
-                .zip(b.chars())
-                .take_while(|(x, y)| x == y)
-                .count();
+            let common_prefix_len = a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count();
 
             let min_len = a.len().min(b.len());
             if min_len > 3 && common_prefix_len as f64 / min_len as f64 > 0.6 {
@@ -461,7 +462,8 @@ pub fn skill_curator_params() -> Vec<ToolParam> {
             name: "action".into(),
             description: "Action: 'propose' (draft skill from task), 'curate' (run full cycle), \
                           'grade' (score a skill), 'merge' (combine two skills), \
-                          'prune' (remove a skill), 'status' (show curator state).".into(),
+                          'prune' (remove a skill), 'status' (show curator state)."
+                .into(),
             param_type: "string".into(),
             required: true,
         },
@@ -474,7 +476,8 @@ pub fn skill_curator_params() -> Vec<ToolParam> {
         ToolParam {
             name: "tool_calls_used".into(),
             description: "Number of tool calls used in the task (for 'propose'). \
-                          Default threshold: 10.".into(),
+                          Default threshold: 10."
+                .into(),
             param_type: "integer".into(),
             required: false,
         },
@@ -486,7 +489,8 @@ pub fn skill_curator_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "skill_name".into(),
-            description: "Name for the proposed skill (auto-generated from summary if omitted).".into(),
+            description: "Name for the proposed skill (auto-generated from summary if omitted)."
+                .into(),
             param_type: "string".into(),
             required: false,
         },
@@ -516,7 +520,8 @@ pub fn skill_curator_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "dry_run".into(),
-            description: "Preview changes without applying (default: true for curate/merge/prune).".into(),
+            description: "Preview changes without applying (default: true for curate/merge/prune)."
+                .into(),
             param_type: "boolean".into(),
             required: false,
         },

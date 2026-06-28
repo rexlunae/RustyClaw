@@ -969,8 +969,8 @@ pub fn client_dom_query_params() -> Vec<ToolParam> {
 
 // ── Re-exported parameter functions from new tool modules ───────────────────
 
-pub use crate::tools::todo_tool::todo_params;
-pub use crate::tools::skill_curator::skill_curator_params;
-pub use crate::tools::web_extract::web_extract_params;
 #[cfg(feature = "image-gen")]
 pub use crate::tools::image_gen::image_generate_params;
+pub use crate::tools::skill_curator::skill_curator_params;
+pub use crate::tools::todo_tool::todo_params;
+pub use crate::tools::web_extract::web_extract_params;

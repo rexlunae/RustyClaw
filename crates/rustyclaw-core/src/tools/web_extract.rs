@@ -16,10 +16,7 @@ use super::ToolParam;
 
 /// Extract clean, readable content from a URL (async).
 #[instrument(skip(args, _workspace_dir), fields(url))]
-pub async fn exec_web_extract_async(
-    args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
     let url = args
         .get("url")
         .and_then(|v| v.as_str())
@@ -46,10 +43,7 @@ pub async fn exec_web_extract_async(
 
     debug!(
         ?selector,
-        include_metadata,
-        max_chars,
-        output_format,
-        "Extracting content"
+        include_metadata, max_chars, output_format, "Extracting content"
     );
 
     // Validate URL
@@ -119,7 +113,8 @@ pub async fn exec_web_extract_async(
             "metadata": meta,
             "content": content,
             "chars": content.len(),
-        }).to_string())
+        })
+        .to_string())
     } else {
         Ok(content)
     }
@@ -173,16 +168,17 @@ fn extract_with_selector(html: &str, selector: &str, format: &str) -> Result<Str
 
     let elements: Vec<String> = document
         .select(&sel)
-        .map(|el| {
-            match format {
-                "markdown" => html2md::parse_html(&el.html()),
-                _ => el.text().collect::<Vec<_>>().join(" "),
-            }
+        .map(|el| match format {
+            "markdown" => html2md::parse_html(&el.html()),
+            _ => el.text().collect::<Vec<_>>().join(" "),
         })
         .collect();
 
     if elements.is_empty() {
-        Err(format!("No elements found matching selector: '{}'", selector))
+        Err(format!(
+            "No elements found matching selector: '{}'",
+            selector
+        ))
     } else {
         Ok(elements.join("\n\n---\n\n"))
     }
@@ -288,7 +284,9 @@ fn strip_html_tags(html: &str) -> String {
 fn collect_text_content(element: &scraper::ElementRef, parts: &mut Vec<String>) {
     use scraper::Node;
 
-    let skip_tags = ["script", "style", "nav", "footer", "header", "aside", "noscript"];
+    let skip_tags = [
+        "script", "style", "nav", "footer", "header", "aside", "noscript",
+    ];
 
     for child in element.children() {
         match child.value() {
@@ -324,7 +322,8 @@ pub fn web_extract_params() -> Vec<ToolParam> {
         ToolParam {
             name: "selector".into(),
             description: "Optional CSS selector to target specific elements. \
-                          If omitted, extracts the full page using readability heuristics.".into(),
+                          If omitted, extracts the full page using readability heuristics."
+                .into(),
             param_type: "string".into(),
             required: false,
         },
@@ -336,7 +335,8 @@ pub fn web_extract_params() -> Vec<ToolParam> {
         },
         ToolParam {
             name: "include_metadata".into(),
-            description: "Include page metadata (title, description, author). Default: false.".into(),
+            description: "Include page metadata (title, description, author). Default: false."
+                .into(),
             param_type: "boolean".into(),
             required: false,
         },
