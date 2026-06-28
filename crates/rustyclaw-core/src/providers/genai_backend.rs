@@ -347,133 +347,46 @@ fn to_genai_chat_request(req: &ProviderRequest) -> ChatRequest {
     chat_req
 }
 
-/// Deduplicate tool_use and tool_result IDs in the message stream.
+/// Deduplicate tool_result IDs in the message stream.
 ///
-/// Ensures:
-/// - Every `tool_use` ID (inside assistant messages) is globally unique.
-///   Duplicates are remapped to fresh UUIDs.
-/// - Every `tool_result` references a valid `tool_use` ID, updated if the
-///   original was remapped.
-/// - No two `tool_result` messages share the same ID (second one dropped).
+/// This is a lightweight safety net that ensures no two `tool_result`
+/// messages share the same `call_id` — the only condition that causes the
+/// "each tool_use must have a single result" API rejection.
+///
+/// It intentionally does NOT rewrite assistant-message tool_use IDs, because
+/// doing so risks mismatching tool_use/tool_result pairs (leaving a tool_use
+/// with no result, which hangs the API). Tool_use dedup is handled upstream
+/// by `thread_history_to_chat_messages` and the dispatch positional remap.
 fn deduplicate_tool_ids(
     messages: &[crate::gateway::ChatMessage],
 ) -> Vec<crate::gateway::ChatMessage> {
     use crate::gateway::ChatMessage;
 
     let mut out: Vec<ChatMessage> = Vec::with_capacity(messages.len());
-    let mut seen_tool_use_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    // Maps original_id → remapped_id for tool_uses that needed dedup.
-    let mut tool_use_remap: std::collections::HashMap<String, String> =
-        std::collections::HashMap::new();
     // Track which tool_result IDs we've already emitted.
     let mut seen_tool_result_ids: std::collections::HashSet<String> =
         std::collections::HashSet::new();
 
     for msg in messages {
-        match msg.role.as_str() {
-            "assistant" => {
-                // Check if this assistant message has tool_calls with
-                // duplicate IDs and remap them.
-                if let Some(env) = parse_canonical(&msg.content, "assistant_tools") {
-                    if let Some(calls) = env.get("tool_calls").and_then(|v| v.as_array()) {
-                        let mut needs_rewrite = false;
-                        for tc in calls {
-                            if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                if !id.is_empty() && seen_tool_use_ids.contains(id) {
-                                    needs_rewrite = true;
-                                    break;
-                                }
-                            }
-                        }
+        if msg.role == "tool" {
+            if let Some(env) = parse_canonical(&msg.content, "tool_result") {
+                let id = env
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
 
-                        if needs_rewrite {
-                            // Rebuild with remapped IDs.
-                            let mut new_calls = calls.clone();
-                            for tc in new_calls.iter_mut() {
-                                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                    let id_s = id.to_string();
-                                    if !id_s.is_empty() && !seen_tool_use_ids.insert(id_s.clone()) {
-                                        let new_id =
-                                            format!("toolu_{}", uuid::Uuid::new_v4().as_simple());
-                                        tool_use_remap.insert(id_s, new_id.clone());
-                                        if let Some(obj) = tc.as_object_mut() {
-                                            obj.insert(
-                                                "id".to_string(),
-                                                serde_json::Value::String(new_id.clone()),
-                                            );
-                                        }
-                                        seen_tool_use_ids.insert(new_id);
-                                    }
-                                }
-                            }
-                            // Reconstruct the envelope.
-                            let new_env = serde_json::json!({
-                                "__rustyclaw_kind": "assistant_tools",
-                                "text": env.get("text").cloned().unwrap_or(serde_json::Value::Null),
-                                "tool_calls": new_calls,
-                            });
-                            out.push(ChatMessage::text("assistant", &new_env.to_string()));
-                        } else {
-                            // Register all IDs as seen.
-                            for tc in calls {
-                                if let Some(id) = tc.get("id").and_then(|v| v.as_str()) {
-                                    if !id.is_empty() {
-                                        seen_tool_use_ids.insert(id.to_string());
-                                    }
-                                }
-                            }
-                            out.push(msg.clone());
-                        }
-                    } else {
-                        out.push(msg.clone());
-                    }
-                } else {
-                    out.push(msg.clone());
+                // Skip duplicate tool_results for the same ID.
+                if !id.is_empty() && !seen_tool_result_ids.insert(id.clone()) {
+                    debug!(
+                        call_id = %id,
+                        "Skipping duplicate tool_result (safety-net dedup)"
+                    );
+                    continue;
                 }
             }
-            "tool" => {
-                if let Some(mut env) = parse_canonical(&msg.content, "tool_result") {
-                    let original_id = env
-                        .get("id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string();
-
-                    // If this ID was remapped during tool_use dedup, use
-                    // the new ID instead.
-                    let effective_id = tool_use_remap
-                        .get(&original_id)
-                        .cloned()
-                        .unwrap_or_else(|| original_id.clone());
-
-                    // Skip duplicate tool_results for the same ID.
-                    if !effective_id.is_empty()
-                        && !seen_tool_result_ids.insert(effective_id.clone())
-                    {
-                        debug!(
-                            original_id = %original_id,
-                            effective_id = %effective_id,
-                            "Skipping duplicate tool_result (safety-net dedup)"
-                        );
-                        continue;
-                    }
-
-                    // Update the ID in the envelope if it was remapped.
-                    if effective_id != original_id {
-                        if let Some(obj) = env.as_object_mut() {
-                            obj.insert("id".to_string(), serde_json::Value::String(effective_id));
-                        }
-                        out.push(ChatMessage::text("tool", &env.to_string()));
-                    } else {
-                        out.push(msg.clone());
-                    }
-                } else {
-                    // Non-canonical tool message — pass through.
-                    out.push(msg.clone());
-                }
-            }
-            _ => out.push(msg.clone()),
         }
+        out.push(msg.clone());
     }
     out
 }
