@@ -8,6 +8,20 @@ use super::types::{
     AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString,
 };
 
+/// Restrict a file to owner read/write only (mode `0o600`) on Unix.
+///
+/// No-op on non-Unix platforms (Windows ACLs are inherited from the
+/// parent directory, which the vault places under the user profile).
+#[allow(unused_variables)]
+fn set_owner_only_permissions(path: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
 impl SecretsManager {
     /// Ensure the vault is loaded (or created if it doesn't exist yet).
     pub(super) fn ensure_vault(&mut self) -> Result<&mut securestore::SecretsManager> {
@@ -49,6 +63,11 @@ impl SecretsManager {
                         .context("Failed to create new secrets vault")?;
                     sman.export_key(&self.key_path)
                         .context("Failed to export secrets key")?;
+                    // Restrict the master key to owner-only (0o600). securestore
+                    // does not set permissions itself, so without this the key
+                    // inherits the process umask and may be group/world-readable.
+                    set_owner_only_permissions(&self.key_path)
+                        .context("Failed to secure secrets key permissions")?;
                     sman.save_as(&self.vault_path)
                         .context("Failed to save new secrets vault")?;
                     securestore::SecretsManager::load(

@@ -59,6 +59,33 @@ fn test_store_and_retrieve() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[cfg(unix)]
+#[test]
+fn test_key_file_permissions_owner_only() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = temp_dir();
+    let mut manager = SecretsManager::new(&dir);
+    manager.set_agent_access(true);
+
+    // Storing a secret lazily creates the key-file-based vault.
+    manager.store_secret("api_key", "hunter2").unwrap();
+
+    let key_path = dir.join("secrets.key");
+    assert!(key_path.exists(), "key file should exist");
+
+    let mode = std::fs::metadata(&key_path).unwrap().permissions().mode();
+    // Mask to the permission bits; must be exactly owner read/write (0o600),
+    // i.e. no group/other access.
+    assert_eq!(
+        mode & 0o777,
+        0o600,
+        "secrets.key must be owner-only (0o600), got {:o}",
+        mode & 0o777
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn test_list_and_delete() {
     let dir = temp_dir();

@@ -309,6 +309,45 @@ fn test_web_fetch_invalid_url() {
 }
 
 #[test]
+fn test_web_fetch_blocks_localhost_ssrf() {
+    // SSRF: requests to loopback must be rejected before any network I/O.
+    let args = json!({ "url": "http://127.0.0.1/" });
+    let result = exec_web_fetch(&args, ws());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("blocked") || err.contains("Security"),
+        "expected SSRF rejection, got: {err}"
+    );
+}
+
+#[test]
+fn test_web_fetch_blocks_private_ip_ssrf() {
+    // SSRF: RFC-1918 private range must be rejected.
+    let args = json!({ "url": "http://10.0.0.1/" });
+    let result = exec_web_fetch(&args, ws());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("blocked") || err.contains("Security"),
+        "expected SSRF rejection, got: {err}"
+    );
+}
+
+#[test]
+fn test_web_fetch_blocks_cloud_metadata_ssrf() {
+    // SSRF: the cloud metadata endpoint is the classic exfiltration target.
+    let args = json!({ "url": "http://169.254.169.254/latest/meta-data/" });
+    let result = exec_web_fetch(&args, ws());
+    assert!(result.is_err());
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("blocked") || err.contains("Security"),
+        "expected SSRF rejection, got: {err}"
+    );
+}
+
+#[test]
 fn test_web_fetch_params_defined() {
     let params = web_fetch_params();
     assert_eq!(params.len(), 6);
