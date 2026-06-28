@@ -109,6 +109,9 @@ pub struct LocalModelData {
     pub format: Option<String>,
     /// Whether this model fits the host's available resources.
     pub fits_host: bool,
+    /// Specific warning message from host-fit analysis.
+    #[serde(default)]
+    pub fit_warning_msg: String,
 }
 
 impl LocalModelData {
@@ -128,10 +131,15 @@ impl LocalModelData {
         if self.loaded { "loaded" } else { "on disk" }
     }
 
-    /// Warning message if model doesn't fit.
-    pub fn fit_warning(&self) -> Option<String> {
+    /// Warning message if model doesn't fit (returns the detailed message
+    /// from the host-fit analysis, or None if it fits).
+    pub fn fit_warning(&self) -> Option<&str> {
         if !self.fits_host {
-            Some("may not fit host VRAM/RAM".into())
+            if self.fit_warning_msg.is_empty() {
+                Some("may not fit host VRAM/RAM")
+            } else {
+                Some(&self.fit_warning_msg)
+            }
         } else {
             None
         }

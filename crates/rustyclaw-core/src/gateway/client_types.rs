@@ -467,7 +467,12 @@ pub enum GatewayCommand {
 
     /// Pull/download a model.
     #[serde(rename = "engine_model_pull")]
-    EngineModelPull { engine: String, model: String },
+    EngineModelPull {
+        engine: String,
+        model: String,
+        #[serde(default)]
+        expected_size_bytes: Option<u64>,
+    },
 
     /// Perform a model action (remove/load/unload).
     #[serde(rename = "engine_model_action")]
@@ -475,6 +480,10 @@ pub enum GatewayCommand {
         engine: String,
         model: String,
         action: String,
+        #[serde(default)]
+        context_length: Option<u32>,
+        #[serde(default)]
+        extra_args: Vec<String>,
     },
 }
 
@@ -700,20 +709,32 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::EngineModelList,
                 payload: ClientPayload::EngineModelList { engine },
             },
-            GatewayCommand::EngineModelPull { engine, model } => ClientFrame {
+            GatewayCommand::EngineModelPull {
+                engine,
+                model,
+                expected_size_bytes,
+            } => ClientFrame {
                 frame_type: ClientFrameType::EngineModelPull,
-                payload: ClientPayload::EngineModelPull { engine, model },
+                payload: ClientPayload::EngineModelPull {
+                    engine,
+                    model,
+                    expected_size_bytes,
+                },
             },
             GatewayCommand::EngineModelAction {
                 engine,
                 model,
                 action,
+                context_length,
+                extra_args,
             } => ClientFrame {
                 frame_type: ClientFrameType::EngineModelAction,
                 payload: ClientPayload::EngineModelAction {
                     engine,
                     model,
                     action,
+                    context_length,
+                    extra_args,
                 },
             },
         }

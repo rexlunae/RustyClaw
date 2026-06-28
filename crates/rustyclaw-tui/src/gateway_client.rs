@@ -413,7 +413,8 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                     vram_bytes: m.vram_bytes,
                     family: m.family,
                     format: m.format,
-                    fits_host: true, // Host-fit check is P6
+                    fits_host: m.fits_host,
+                    fit_warning_msg: m.fit_warning,
                 })
                 .collect(),
         },

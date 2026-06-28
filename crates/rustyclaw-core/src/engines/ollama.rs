@@ -307,11 +307,26 @@ impl LocalEngine for OllamaEngine {
 
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
         let endpoint = Self::endpoint(cfg);
-        let body = serde_json::json!({
+
+        // P6: Extract per-model knobs from extra_args.
+        let mut options = serde_json::Map::new();
+        for arg in &cfg.extra_args {
+            if let Some(val) = arg.strip_prefix("--num-ctx=") {
+                if let Ok(n) = val.parse::<u32>() {
+                    options.insert("num_ctx".to_string(), serde_json::Value::Number(n.into()));
+                }
+            }
+        }
+
+        let mut body = serde_json::json!({
             "model": model,
             "prompt": "",
             "keep_alive": "10m"
         });
+        if !options.is_empty() {
+            body["options"] = serde_json::Value::Object(options);
+        }
+
         Self::api(&endpoint, "POST", "/api/generate", Some(&body)).await?;
         Ok(format!("Model '{}' loaded (keep_alive: 10m)", model))
     }

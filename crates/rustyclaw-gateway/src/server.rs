@@ -755,11 +755,21 @@ pub(crate) async fn handle_connection(
                             | ClientPayload::EngineAction { .. }
                             | ClientPayload::EngineModelList { .. }
                             | ClientPayload::EngineModelPull { .. }
-                            | ClientPayload::EngineModelAction { .. }
-                            | ClientPayload::EngineConfigSet { .. }) => {
+                            | ClientPayload::EngineModelAction { .. }) => {
                                 crate::engine_handler::handle_engine_request(
                                     &mut *writer,
                                     payload,
+                                    &engine_registry,
+                                    &config.engines,
+                                ).await?;
+                            }
+                            ClientPayload::EngineConfigSet { engine, config: new_cfg } => {
+                                // Persist engine config change, then ack.
+                                config.engines.insert(engine.clone(), new_cfg.clone());
+                                let _ = config.save(None);
+                                crate::engine_handler::handle_engine_request(
+                                    &mut *writer,
+                                    ClientPayload::EngineConfigSet { engine, config: new_cfg },
                                     &engine_registry,
                                     &config.engines,
                                 ).await?;

@@ -158,7 +158,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                 class: if model.loaded { "tag is-success" } else { "tag is-light" },
                                                 "{model.load_badge()}"
                                             }
-                                            if let Some(ref warning) = model.fit_warning() {
+                                            if let Some(warning) = model.fit_warning() {
                                                 span { class: "tag is-warning ml-1", "{warning}" }
                                             }
                                         }

@@ -102,33 +102,51 @@ pub async fn handle_engine_request(
             send_frame(writer, &frame).await?;
         }
 
-        ClientPayload::EngineModelPull { engine, model } => {
+        ClientPayload::EngineModelPull {
+            engine,
+            model,
+            expected_size_bytes,
+        } => {
             let cfg = configs.get(&engine).cloned().unwrap_or_default();
+
+            // P6: Disk space pre-flight check.
+            if let Some(expected) = expected_size_bytes {
+                if let Err(e) = rustyclaw_core::engines::preflight_disk_check(expected) {
+                    let frame = ServerFrame {
+                        frame_type: ServerFrameType::EngineActionResult,
+                        payload: ServerPayload::EngineActionResult {
+                            engine,
+                            model: Some(model),
+                            ok: false,
+                            message: e.to_string(),
+                        },
+                    };
+                    send_frame(writer, &frame).await?;
+                    return Ok(());
+                }
+            }
+
             let (tx, rx) = tokio::sync::mpsc::channel(32);
 
             // Spawn the pull in background and stream progress
             let eng_id = engine.clone();
             let model_clone = model.clone();
             if let Some(eng) = registry.get(&engine) {
-                // We need to clone the trait object — instead we spawn inline
                 let cfg_clone = cfg.clone();
-                let writer_needs_progress = true;
 
-                if writer_needs_progress {
-                    // Send initial progress
-                    let frame = ServerFrame {
-                        frame_type: ServerFrameType::EnginePullProgress,
-                        payload: ServerPayload::EnginePullProgress {
-                            engine: eng_id.clone(),
-                            model: model_clone.clone(),
-                            percent: 0.0,
-                            downloaded_bytes: 0,
-                            total_bytes: 0,
-                            status: "starting".into(),
-                        },
-                    };
-                    send_frame(writer, &frame).await?;
-                }
+                // Send initial progress
+                let frame = ServerFrame {
+                    frame_type: ServerFrameType::EnginePullProgress,
+                    payload: ServerPayload::EnginePullProgress {
+                        engine: eng_id.clone(),
+                        model: model_clone.clone(),
+                        percent: 0.0,
+                        downloaded_bytes: 0,
+                        total_bytes: 0,
+                        status: "starting".into(),
+                    },
+                };
+                send_frame(writer, &frame).await?;
 
                 // Pull synchronously (streamed progress TBD with background task)
                 let result = eng.pull(&model_clone, &cfg_clone, Some(tx)).await;
@@ -167,8 +185,30 @@ pub async fn handle_engine_request(
             engine,
             model,
             action,
+            context_length,
+            extra_args,
         } => {
-            let cfg = configs.get(&engine).cloned().unwrap_or_default();
+            let mut cfg = configs.get(&engine).cloned().unwrap_or_default();
+            // P6: Apply per-model knobs to the config for this operation.
+            if let Some(ctx) = context_length {
+                // Inject context length as extra arg (engine-specific).
+                match engine.as_str() {
+                    "ollama" => {
+                        // Ollama uses num_ctx parameter at load time via API.
+                        // We'll pass it as an extra_arg marker for the engine impl.
+                        cfg.extra_args.push(format!("--num-ctx={}", ctx));
+                    }
+                    "llamacpp" => {
+                        cfg.extra_args.push("--ctx-size".to_string());
+                        cfg.extra_args.push(ctx.to_string());
+                    }
+                    _ => {}
+                }
+            }
+            if !extra_args.is_empty() {
+                cfg.extra_args.extend(extra_args);
+            }
+
             let result = if let Some(eng) = registry.get(&engine) {
                 match action.as_str() {
                     "load" => eng.load(&model, &cfg).await,

@@ -131,23 +131,39 @@ pub async fn run_gateway(
     // If the config has [services.*] entries, create a ServiceManager,
     // store it in the global runtime context, and auto-start any
     // services marked with `auto_start = true`.
-    if !config.services.is_empty() {
-        let svc_config = rustyclaw_core::services::ServicesConfig {
-            services: config.services.clone(),
-        };
-        let svc_mgr = rustyclaw_core::services::create_service_manager(svc_config);
-        info!(count = config.services.len(), "Managed services configured");
-        // Auto-start services
-        {
-            let mut mgr = svc_mgr.write().await;
-            mgr.auto_start_all().await;
+    {
+        // Merge explicit [services.*] with auto-start engine service defs.
+        let mut all_services = config.services.clone();
+        let engine_svcs = rustyclaw_core::engines::engine_service_defs(&config.engines);
+        if !engine_svcs.is_empty() {
+            info!(
+                count = engine_svcs.len(),
+                "Registering auto-start engine services"
+            );
+            for (name, def) in engine_svcs {
+                all_services.entry(name).or_insert(def);
+            }
         }
-        // Spawn background poller for lifecycle management and health checks
-        let _svc_poller_handle = rustyclaw_core::services::spawn_service_poller(
-            svc_mgr.clone(),
-            None, // use default 2 s interval
-        );
-        rustyclaw_core::runtime_ctx::set_service_manager(svc_mgr);
+
+        if !all_services.is_empty() {
+            let svc_count = all_services.len();
+            let svc_config = rustyclaw_core::services::ServicesConfig {
+                services: all_services,
+            };
+            let svc_mgr = rustyclaw_core::services::create_service_manager(svc_config);
+            info!(count = svc_count, "Managed services configured");
+            // Auto-start services
+            {
+                let mut mgr = svc_mgr.write().await;
+                mgr.auto_start_all().await;
+            }
+            // Spawn background poller for lifecycle management and health checks
+            let _svc_poller_handle = rustyclaw_core::services::spawn_service_poller(
+                svc_mgr.clone(),
+                None, // use default 2 s interval
+            );
+            rustyclaw_core::runtime_ctx::set_service_manager(svc_mgr);
+        }
     }
 
     // Register the credentials directory so file-access tools can enforce
