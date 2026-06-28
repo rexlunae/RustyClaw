@@ -883,6 +883,25 @@ pub(super) fn apply_gw_event(
                 services_data.set(Some(current));
             }
         }
+        // ── Engines ──────────────────────────────────────────────────────
+        // Currently stored in messages; full panel state tracked in P5+.
+        GwEvent::EngineListResult { .. }
+        | GwEvent::EngineModelListResult { .. }
+        | GwEvent::EnginePullProgress { .. } => {
+            // Will be rendered in the engines dialog panel in P5.
+        }
+        GwEvent::EngineActionResult { ok, message, .. } => {
+            let mut m = messages.read().clone();
+            if ok {
+                m.push(DisplayMessage::info(format!("Engine: {}", message)));
+            } else {
+                m.push(DisplayMessage::warning(format!(
+                    "Engine error: {}",
+                    message
+                )));
+            }
+            messages.set(m);
+        }
     }
 }
 

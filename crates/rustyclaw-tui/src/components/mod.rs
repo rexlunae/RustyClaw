@@ -8,6 +8,7 @@ pub mod credential_request_dialog;
 pub mod cron_dialog;
 pub mod details_dialog;
 pub mod device_flow_dialog;
+pub mod engines_dialog;
 pub mod hatching_dialog;
 pub mod input_bar;
 pub mod logs_dialog;

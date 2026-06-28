@@ -166,6 +166,36 @@ pub(crate) enum GwEvent {
     },
     /// SSH pairing connection failed.
     PairingError(String),
+    /// Engine list result received.
+    #[allow(dead_code)]
+    EngineListResult {
+        engines: Vec<rustyclaw_view::LocalEngineData>,
+    },
+    /// Engine model list result received.
+    #[allow(dead_code)]
+    EngineModelListResult {
+        engine: String,
+        models: Vec<rustyclaw_view::LocalModelData>,
+    },
+    /// Pull progress update.
+    #[allow(dead_code)]
+    EnginePullProgress {
+        engine: String,
+        model: String,
+        percent: f32,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+        status: String,
+    },
+    /// Engine action completed.
+    EngineActionResult {
+        #[allow(dead_code)]
+        engine: String,
+        #[allow(dead_code)]
+        model: Option<String>,
+        ok: bool,
+        message: String,
+    },
     /// Host hardware capabilities received.
     HostInfo(rustyclaw_view::HostInfoData),
     /// Current system load status received.

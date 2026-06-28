@@ -254,6 +254,19 @@ pub const PROVIDERS: &[ProviderDef] = &[
         ),
     },
     ProviderDef {
+        id: "llamacpp",
+        display: "llama.cpp (local)",
+        auth_method: AuthMethod::None,
+        secret_key: None,
+        device_flow: None,
+        base_url: Some("http://localhost:8080/v1"),
+        models: &[],
+        help_url: Some("https://github.com/ggml-org/llama.cpp"),
+        help_text: Some(
+            "No key needed — local llama-server. Default port 8080. Serves GGUF models.",
+        ),
+    },
+    ProviderDef {
         id: "opencode",
         display: "OpenCode Zen",
         auth_method: AuthMethod::ApiKey,

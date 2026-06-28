@@ -136,6 +136,7 @@ fn base_command_names() -> Vec<String> {
         "mcp".into(),
         "channels".into(),
         "approvals".into(),
+        "engines".into(),
     ];
     for p in providers::provider_ids() {
         names.push(format!("provider {}", p));

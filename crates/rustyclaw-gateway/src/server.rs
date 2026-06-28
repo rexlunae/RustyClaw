@@ -70,6 +70,9 @@ pub(crate) async fn handle_connection(
     }
     let _ = project_mgr.save_to_file(&projects_path);
 
+    // Local engine registry for model management.
+    let engine_registry = rustyclaw_core::engines::EngineRegistry::new();
+
     // Subscribe to thread events for push-based sidebar updates
     let mut thread_events_rx = thread_mgr.subscribe();
 
@@ -747,6 +750,19 @@ pub(crate) async fn handle_connection(
                             | ClientPayload::PreviewRequest { .. }
                             | ClientPayload::PreviewFollowToggle { .. }) => {
                                 crate::panel_handler::handle_panel_request(&mut *writer, payload).await?;
+                            }
+                            payload @ (ClientPayload::EngineList
+                            | ClientPayload::EngineAction { .. }
+                            | ClientPayload::EngineModelList { .. }
+                            | ClientPayload::EngineModelPull { .. }
+                            | ClientPayload::EngineModelAction { .. }
+                            | ClientPayload::EngineConfigSet { .. }) => {
+                                crate::engine_handler::handle_engine_request(
+                                    &mut *writer,
+                                    payload,
+                                    &engine_registry,
+                                    &config.engines,
+                                ).await?;
                             }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.

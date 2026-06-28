@@ -12,6 +12,7 @@ mod cli;
 mod command_wrapper;
 mod concurrent;
 mod dispatch;
+mod engine_handler;
 mod errors;
 mod helpers;
 mod kernel_handler;

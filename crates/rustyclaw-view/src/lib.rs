@@ -70,6 +70,7 @@ pub mod composer;
 pub mod conversation;
 pub mod cron;
 pub mod dialogs;
+pub mod engines;
 pub mod file_browser;
 pub mod kernel;
 pub mod logs;
@@ -121,6 +122,9 @@ pub use approvals::{ApprovalsPanelData, PendingApprovalData};
 pub use channels::{ChannelStatusData, ChannelsPanelData};
 pub use command_palette::{CommandPaletteData, PaletteEntry, ShortcutMapping, ZoomState};
 pub use cron::{CronJobData, CronPanelData};
+pub use engines::{
+    EngineCapsData, EnginesPanelData, LocalEngineData, LocalModelData, PullProgressData,
+};
 pub use logs::{LogSource, LogsPanelData};
 pub use mcp::{McpPanelData, McpServerData};
 pub use media::{MediaData, MediaKind};
