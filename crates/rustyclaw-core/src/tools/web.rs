@@ -3,10 +3,46 @@
 //! Provides async HTTP operations using reqwest.
 
 use super::helpers::vault;
+use crate::security::SsrfValidator;
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 use tracing::{debug, instrument, warn};
+
+/// Build a reqwest redirect policy that re-validates **every** hop against the
+/// SSRF validator and caps the chain length.
+///
+/// `reqwest` resolves and follows redirects internally, so validating only the
+/// initial URL is insufficient — a public URL can 30x-redirect to
+/// `http://169.254.169.254/` or an internal address. This policy blocks
+/// private, loopback, link-local, and cloud-metadata targets on each hop.
+///
+/// Note: the validator performs its own DNS resolution; the kernel resolves
+/// again when connecting, so a determined DNS-rebinding attacker could still
+/// race the two lookups. The validator's double-resolution check narrows that
+/// window but does not fully close it (documented limitation).
+fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() >= max {
+            return attempt.error(format!("too many redirects (>{max})"));
+        }
+        match SsrfValidator::default().validate_url(attempt.url().as_str()) {
+            Ok(()) => attempt.follow(),
+            Err(e) => attempt.error(format!(
+                "SSRF: blocked redirect to {}: {e}",
+                attempt.url()
+            )),
+        }
+    })
+}
+
+/// Validate a URL against the SSRF validator (blocking DNS resolution).
+///
+/// Returns a user-facing error string prefixed so callers/tests can recognise
+/// a security rejection.
+fn ssrf_check_blocking(url: &str) -> Result<(), String> {
+    SsrfValidator::default().validate_url(url)
+}
 
 // ── Async implementations ───────────────────────────────────────────────────
 
@@ -45,6 +81,17 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
         return Err("URL must start with http:// or https://".to_string());
     }
 
+    // SSRF protection: block private/loopback/link-local/cloud-metadata targets.
+    // validate_url performs blocking DNS resolution, so run it off the async
+    // executor. Redirects are re-validated per-hop by the client's redirect
+    // policy below.
+    {
+        let url_owned = url.to_string();
+        tokio::task::spawn_blocking(move || ssrf_check_blocking(&url_owned))
+            .await
+            .map_err(|e| format!("SSRF validation task failed: {e}"))??;
+    }
+
     // Parse URL for domain extraction
     let parsed_url = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
     let domain = parsed_url
@@ -57,7 +104,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("RustyClaw/0.1 (web_fetch tool)")
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(ssrf_redirect_policy(10))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
@@ -364,6 +411,10 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
         return Err("URL must start with http:// or https://".to_string());
     }
 
+    // SSRF protection: block private/loopback/link-local/cloud-metadata targets.
+    // Redirects are re-validated per-hop by the client's redirect policy below.
+    ssrf_check_blocking(url)?;
+
     let parsed_url = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
     let domain = parsed_url
         .host_str()
@@ -374,7 +425,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent("RustyClaw/0.1 (web_fetch tool)")
-        .redirect(reqwest::redirect::Policy::limited(10))
+        .redirect(ssrf_redirect_policy(10))
         .build()
         .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
 
