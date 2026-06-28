@@ -30,7 +30,7 @@ dioxus = { version = "0.7", features = ["desktop"] }
 dioxus-bulma = "0.7.3"
 # Chat surface. `default-features = false` drops the `genai` feature (we drive
 # the gateway ourselves); `markdown` renders assistant Markdown payloads.
-dioxus-genai-chat = { git = "https://github.com/rexlunae/dioxus-genai-chat.git", branch = "main", default-features = false, features = ["markdown"] }
+dioxus-genai-chat = { version = "0.3", default-features = false, features = ["markdown"] }
 
 # clap must remain a direct dependency because its derive macros expand to
 # `::clap::…` absolute paths that require it in the extern prelude.

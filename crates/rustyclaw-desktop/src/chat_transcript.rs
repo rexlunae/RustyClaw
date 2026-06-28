@@ -201,10 +201,7 @@ fn tool_result_hint(name: &str, args: &serde_json::Value, result: &str) -> ToolR
     match name {
         "read_file" => {
             let path = str_field(args, "path").unwrap_or_default();
-            let language = path
-                .rsplit('.')
-                .next()
-                .map(String::from);
+            let language = path.rsplit('.').next().map(String::from);
             ToolResultHint::Code {
                 path,
                 content: result.to_string(),
@@ -212,16 +209,13 @@ fn tool_result_hint(name: &str, args: &serde_json::Value, result: &str) -> ToolR
             }
         }
         "execute_command" => {
-            let exit_code = result
-                .lines()
-                .rev()
-                .find_map(|line| {
-                    let trimmed = line.trim();
-                    trimmed
-                        .strip_prefix("Exit code: ")
-                        .or_else(|| trimmed.strip_prefix("exit code: "))
-                        .and_then(|s| s.trim().parse::<i32>().ok())
-                });
+            let exit_code = result.lines().rev().find_map(|line| {
+                let trimmed = line.trim();
+                trimmed
+                    .strip_prefix("Exit code: ")
+                    .or_else(|| trimmed.strip_prefix("exit code: "))
+                    .and_then(|s| s.trim().parse::<i32>().ok())
+            });
             ToolResultHint::Terminal {
                 exit_code,
                 output: result.to_string(),
