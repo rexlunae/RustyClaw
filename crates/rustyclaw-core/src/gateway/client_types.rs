@@ -13,6 +13,7 @@ use crate::user_prompt_types::UserPrompt;
 
 pub use crate::gateway::protocol::SecretEntryDto;
 pub use crate::gateway::protocol::ServiceInfoDto;
+pub use crate::gateway::protocol::frames::{EngineInfoDto, EngineModelDto};
 
 // ── Events (server → client) ────────────────────────────────────────────────
 
@@ -254,6 +255,31 @@ pub enum GatewayEvent {
         lines: Vec<String>,
         message: Option<String>,
     },
+
+    // ── Engines ──────────────────────────────────────────────────────────
+    /// Engine list result.
+    EngineListResult { engines: Vec<EngineInfoDto> },
+    /// Engine model list result.
+    EngineModelListResult {
+        engine: String,
+        models: Vec<EngineModelDto>,
+    },
+    /// Engine pull progress (streaming).
+    EnginePullProgress {
+        engine: String,
+        model: String,
+        percent: f32,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+        status: String,
+    },
+    /// Engine action result.
+    EngineActionResult {
+        engine: String,
+        model: Option<String>,
+        ok: bool,
+        message: String,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -425,6 +451,31 @@ pub enum GatewayCommand {
     /// Request logs for a managed service
     #[serde(rename = "service_logs")]
     ServiceLogs { name: String, tail: Option<usize> },
+
+    // ── Engine commands ────────────────────────────────────────────────
+    /// List local engines and their status.
+    #[serde(rename = "engine_list")]
+    EngineList,
+
+    /// Perform an engine action (install/start/stop).
+    #[serde(rename = "engine_action")]
+    EngineAction { engine: String, action: String },
+
+    /// List models for a specific engine.
+    #[serde(rename = "engine_model_list")]
+    EngineModelList { engine: String },
+
+    /// Pull/download a model.
+    #[serde(rename = "engine_model_pull")]
+    EngineModelPull { engine: String, model: String },
+
+    /// Perform a model action (remove/load/unload).
+    #[serde(rename = "engine_model_action")]
+    EngineModelAction {
+        engine: String,
+        model: String,
+        action: String,
+    },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -635,6 +686,35 @@ impl GatewayCommand {
             GatewayCommand::ServiceLogs { name, tail } => ClientFrame {
                 frame_type: ClientFrameType::ServiceLogsRequest,
                 payload: ClientPayload::ServiceLogsRequest { name, tail },
+            },
+            // ── Engines ──────────────────────────────────────────────
+            GatewayCommand::EngineList => ClientFrame {
+                frame_type: ClientFrameType::EngineList,
+                payload: ClientPayload::EngineList,
+            },
+            GatewayCommand::EngineAction { engine, action } => ClientFrame {
+                frame_type: ClientFrameType::EngineAction,
+                payload: ClientPayload::EngineAction { engine, action },
+            },
+            GatewayCommand::EngineModelList { engine } => ClientFrame {
+                frame_type: ClientFrameType::EngineModelList,
+                payload: ClientPayload::EngineModelList { engine },
+            },
+            GatewayCommand::EngineModelPull { engine, model } => ClientFrame {
+                frame_type: ClientFrameType::EngineModelPull,
+                payload: ClientPayload::EngineModelPull { engine, model },
+            },
+            GatewayCommand::EngineModelAction {
+                engine,
+                model,
+                action,
+            } => ClientFrame {
+                frame_type: ClientFrameType::EngineModelAction,
+                payload: ClientPayload::EngineModelAction {
+                    engine,
+                    model,
+                    action,
+                },
             },
         }
     }
@@ -972,6 +1052,39 @@ impl GatewayEvent {
             | ServerPayload::VoiceTtsChunk { .. }
             | ServerPayload::PreviewResult { .. }
             | ServerPayload::PreviewUpdate { .. } => None,
+            // ── Engines ──────────────────────────────────────────────
+            ServerPayload::EngineListResult { engines } => {
+                Some(GatewayEvent::EngineListResult { engines })
+            }
+            ServerPayload::EngineModelListResult { engine, models } => {
+                Some(GatewayEvent::EngineModelListResult { engine, models })
+            }
+            ServerPayload::EnginePullProgress {
+                engine,
+                model,
+                percent,
+                downloaded_bytes,
+                total_bytes,
+                status,
+            } => Some(GatewayEvent::EnginePullProgress {
+                engine,
+                model,
+                percent,
+                downloaded_bytes,
+                total_bytes,
+                status,
+            }),
+            ServerPayload::EngineActionResult {
+                engine,
+                model,
+                ok,
+                message,
+            } => Some(GatewayEvent::EngineActionResult {
+                engine,
+                model,
+                ok,
+                message,
+            }),
         }
     }
 }

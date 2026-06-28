@@ -163,6 +163,9 @@ pub struct Config {
     /// Managed backend services.
     #[serde(default)]
     pub services: HashMap<String, ServiceDef>,
+    /// Local inference engine configurations.
+    #[serde(default)]
+    pub engines: HashMap<String, crate::engines::EngineConfig>,
 }
 
 /// Configuration for a messenger backend.
@@ -316,6 +319,7 @@ impl Default for Config {
             memory_flush: MemoryFlushConfig::default(),
             workspace_context: WorkspaceContextConfig::default(),
             services: HashMap::new(),
+            engines: HashMap::new(),
         }
     }
 }

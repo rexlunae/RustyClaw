@@ -140,6 +140,18 @@ pub enum ClientFrameType {
     PreviewRequest = 64,
     /// Toggle file-follow mode.
     PreviewFollowToggle = 65,
+    /// List all local engines and their status.
+    EngineList = 66,
+    /// Perform an engine action (install/start/stop).
+    EngineAction = 67,
+    /// List models for a specific engine.
+    EngineModelList = 68,
+    /// Pull/download a model for an engine.
+    EngineModelPull = 69,
+    /// Perform a model action (remove/load/unload).
+    EngineModelAction = 70,
+    /// Set per-engine configuration.
+    EngineConfigSet = 71,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -302,6 +314,14 @@ pub enum ServerFrameType {
     PreviewUpdate = 75,
     /// Tool result with attached media.
     ToolResultMedia = 76,
+    /// Engine list result.
+    EngineListResult = 77,
+    /// Engine model list result.
+    EngineModelListResult = 78,
+    /// Engine pull progress (streamed).
+    EnginePullProgress = 79,
+    /// Engine action result (start/stop/install/remove/load/unload).
+    EngineActionResult = 80,
 }
 
 /// Status frame sub-types.
@@ -645,6 +665,34 @@ pub enum ClientPayload {
     PreviewFollowToggle {
         path: String,
         follow: bool,
+    },
+    // ── Engines ──────────────────────────────────────────────────────────
+    /// List all local engines and their status.
+    EngineList,
+    /// Perform an engine action (install/start/stop).
+    EngineAction {
+        engine: String,
+        action: String, // "install" | "start" | "stop"
+    },
+    /// List models for a specific engine.
+    EngineModelList {
+        engine: String,
+    },
+    /// Pull/download a model.
+    EngineModelPull {
+        engine: String,
+        model: String,
+    },
+    /// Perform a model action (remove/load/unload).
+    EngineModelAction {
+        engine: String,
+        model: String,
+        action: String, // "remove" | "load" | "unload"
+    },
+    /// Set per-engine configuration.
+    EngineConfigSet {
+        engine: String,
+        config: crate::engines::EngineConfig,
     },
 }
 
@@ -1026,6 +1074,100 @@ pub enum ServerPayload {
         is_error: bool,
         media: MediaPayload,
     },
+    // ── Engines ──────────────────────────────────────────────────────────
+    /// Engine list result.
+    EngineListResult {
+        engines: Vec<EngineInfoDto>,
+    },
+    /// Engine model list result.
+    EngineModelListResult {
+        engine: String,
+        models: Vec<EngineModelDto>,
+    },
+    /// Streaming pull progress.
+    EnginePullProgress {
+        engine: String,
+        model: String,
+        percent: f32,
+        downloaded_bytes: u64,
+        total_bytes: u64,
+        status: String,
+    },
+    /// Engine action result (start/stop/install/remove/load/unload/config).
+    EngineActionResult {
+        engine: String,
+        model: Option<String>,
+        ok: bool,
+        message: String,
+    },
+}
+
+/// DTO for local engine info in protocol results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineInfoDto {
+    pub id: String,
+    pub display_name: String,
+    pub installed: bool,
+    pub running: bool,
+    pub version: Option<String>,
+    pub endpoint: Option<String>,
+    pub available_models: u32,
+    pub loaded_models: u32,
+    pub capabilities: EngineInfoCaps,
+}
+
+/// Capability flags exposed to the client.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineInfoCaps {
+    pub can_install: bool,
+    pub can_start: bool,
+    pub can_stop: bool,
+    pub can_pull: bool,
+    pub can_remove: bool,
+    pub can_load: bool,
+    pub can_unload: bool,
+}
+
+impl From<crate::engines::EngineCaps> for EngineInfoCaps {
+    fn from(caps: crate::engines::EngineCaps) -> Self {
+        Self {
+            can_install: caps.can_install,
+            can_start: caps.can_start,
+            can_stop: caps.can_stop,
+            can_pull: caps.can_pull,
+            can_remove: caps.can_remove,
+            can_load: caps.can_load,
+            can_unload: caps.can_unload,
+        }
+    }
+}
+
+/// DTO for a local model in protocol results.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EngineModelDto {
+    pub name: String,
+    pub size_bytes: u64,
+    pub quantization: Option<String>,
+    pub context_length: Option<u32>,
+    pub loaded: bool,
+    pub vram_bytes: Option<u64>,
+    pub family: Option<String>,
+    pub format: Option<String>,
+}
+
+impl From<crate::engines::LocalModel> for EngineModelDto {
+    fn from(m: crate::engines::LocalModel) -> Self {
+        Self {
+            name: m.name,
+            size_bytes: m.size_bytes,
+            quantization: m.quantization,
+            context_length: m.context_length,
+            loaded: m.loaded,
+            vram_bytes: m.vram_bytes,
+            family: m.family,
+            format: m.format,
+        }
+    }
 }
 
 /// DTO for service info in protocol results.

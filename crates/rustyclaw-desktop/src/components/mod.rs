@@ -32,6 +32,7 @@ mod connection;
 mod credential_request;
 mod cron;
 mod device_flow;
+mod engines;
 mod file_browser;
 mod hatching;
 mod logs;
@@ -62,6 +63,8 @@ pub use credential_request::CredentialRequestDialog;
 #[allow(unused_imports)]
 pub use cron::CronDialog;
 pub use device_flow::DeviceFlowDialog;
+#[allow(unused_imports)]
+pub use engines::EnginesDialog;
 pub use file_browser::FileBrowser;
 pub use hatching::HatchingDialog;
 #[allow(unused_imports)]

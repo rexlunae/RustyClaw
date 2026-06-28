@@ -373,6 +373,76 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             // Logs are displayed in a separate dialog; no GwEvent needed.
             return None;
         }
+
+        // ── Engines ──────────────────────────────────────────────────────
+        E::EngineListResult { engines } => GwEvent::EngineListResult {
+            engines: engines
+                .into_iter()
+                .map(|e| rustyclaw_view::LocalEngineData {
+                    id: e.id,
+                    display_name: e.display_name,
+                    installed: e.installed,
+                    running: e.running,
+                    version: e.version,
+                    endpoint: e.endpoint,
+                    available_models: e.available_models,
+                    loaded_models: e.loaded_models,
+                    caps: rustyclaw_view::EngineCapsData {
+                        can_install: e.capabilities.can_install,
+                        can_start: e.capabilities.can_start,
+                        can_stop: e.capabilities.can_stop,
+                        can_pull: e.capabilities.can_pull,
+                        can_remove: e.capabilities.can_remove,
+                        can_load: e.capabilities.can_load,
+                        can_unload: e.capabilities.can_unload,
+                    },
+                })
+                .collect(),
+        },
+        E::EngineModelListResult { engine, models } => GwEvent::EngineModelListResult {
+            engine: engine.clone(),
+            models: models
+                .into_iter()
+                .map(|m| rustyclaw_view::LocalModelData {
+                    engine: engine.clone(),
+                    name: m.name,
+                    size_bytes: m.size_bytes,
+                    quantization: m.quantization,
+                    context_length: m.context_length,
+                    loaded: m.loaded,
+                    vram_bytes: m.vram_bytes,
+                    family: m.family,
+                    format: m.format,
+                    fits_host: true, // Host-fit check is P6
+                })
+                .collect(),
+        },
+        E::EnginePullProgress {
+            engine,
+            model,
+            percent,
+            downloaded_bytes,
+            total_bytes,
+            status,
+        } => GwEvent::EnginePullProgress {
+            engine,
+            model,
+            percent,
+            downloaded_bytes,
+            total_bytes,
+            status,
+        },
+        E::EngineActionResult {
+            engine,
+            model,
+            ok,
+            message,
+        } => GwEvent::EngineActionResult {
+            engine,
+            model,
+            ok,
+            message,
+        },
     };
 
     Some(ev)

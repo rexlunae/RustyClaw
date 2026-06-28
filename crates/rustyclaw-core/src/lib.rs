@@ -21,6 +21,7 @@ pub mod commands;
 pub mod config;
 pub mod cron;
 pub mod daemon;
+pub mod engines;
 pub mod error;
 pub mod error_details;
 pub mod gateway;

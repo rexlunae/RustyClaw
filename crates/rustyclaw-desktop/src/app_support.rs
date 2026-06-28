@@ -517,6 +517,20 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::ServiceLogs { .. } => {
             // Logs are displayed in a separate dialog; no state update needed.
         }
+        // ── Engines ──────────────────────────────────────────────────────
+        GatewayEvent::EngineListResult { .. }
+        | GatewayEvent::EngineModelListResult { .. }
+        | GatewayEvent::EnginePullProgress { .. } => {
+            // Will be rendered in the engines dialog panel in P5.
+        }
+        GatewayEvent::EngineActionResult { ok, message, .. } => {
+            let mut s = state.write();
+            if ok {
+                s.status_message = Some(format!("Engine: {}", message));
+            } else {
+                s.status_message = Some(format!("Engine error: {}", message));
+            }
+        }
     }
 }
 
