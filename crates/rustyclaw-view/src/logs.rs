@@ -54,9 +54,9 @@ impl LogsPanelData {
         }
     }
 
-    /// Scroll to the last line.
+    /// Scroll to show the last page of lines.
     pub fn scroll_to_bottom(&mut self) {
-        self.scroll_offset = self.lines.len().saturating_sub(1);
+        self.scroll_offset = self.lines.len().saturating_sub(30);
     }
 
     /// Toggle follow mode.

@@ -300,6 +300,8 @@ pub enum ServerFrameType {
     PreviewResult = 74,
     /// File preview update (file-follow).
     PreviewUpdate = 75,
+    /// Tool result with attached media.
+    ToolResultMedia = 76,
 }
 
 /// Status frame sub-types.
@@ -767,7 +769,6 @@ pub enum ServerPayload {
         name: String,
         result: String,
         is_error: bool,
-        media: Option<MediaPayload>,
     },
     ResponseDone {
         ok: bool,
@@ -1016,6 +1017,14 @@ pub enum ServerPayload {
     PreviewUpdate {
         path: String,
         content: String,
+    },
+    /// Tool result with attached media (separate from ToolResult for wire compat).
+    ToolResultMedia {
+        id: String,
+        name: String,
+        result: String,
+        is_error: bool,
+        media: MediaPayload,
     },
 }
 

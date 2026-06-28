@@ -429,7 +429,6 @@ pub async fn send_tool_result(
             name: name.into(),
             result: result.into(),
             is_error,
-            media: None,
         },
     };
     send_frame(writer, &frame).await

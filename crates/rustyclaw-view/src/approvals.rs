@@ -23,12 +23,8 @@ impl PendingApprovalData {
     }
 
     /// Truncated arguments preview.
-    pub fn arguments_preview(&self, max_chars: usize) -> &str {
-        if self.arguments.len() <= max_chars {
-            &self.arguments
-        } else {
-            &self.arguments[..max_chars]
-        }
+    pub fn arguments_preview(&self, max_chars: usize) -> String {
+        rustyclaw_core::ui::truncate_content(&self.arguments, max_chars, usize::MAX)
     }
 }
 

@@ -724,6 +724,17 @@ impl GatewayEvent {
                 name,
                 result,
                 is_error,
+            } => Some(GatewayEvent::ToolResult {
+                id,
+                name,
+                result,
+                is_error,
+            }),
+            ServerPayload::ToolResultMedia {
+                id,
+                name,
+                result,
+                is_error,
                 media: _,
             } => Some(GatewayEvent::ToolResult {
                 id,

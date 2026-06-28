@@ -30,12 +30,8 @@ impl MemoryEntryData {
     }
 
     /// Truncated content preview for list views.
-    pub fn preview(&self, max_chars: usize) -> &str {
-        if self.content.len() <= max_chars {
-            &self.content
-        } else {
-            &self.content[..max_chars]
-        }
+    pub fn preview(&self, max_chars: usize) -> String {
+        rustyclaw_core::ui::truncate_content(&self.content, max_chars, usize::MAX)
     }
 
     /// Relevance score as percentage string (for search results).
