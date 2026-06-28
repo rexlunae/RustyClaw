@@ -301,7 +301,26 @@ impl LocalEngine for LlamaCppEngine {
 
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
         let endpoint = Self::endpoint(cfg);
-        let body = serde_json::json!({ "model": model });
+
+        // P6: Extract per-model knobs from extra_args.
+        let mut ctx_size: Option<u32> = None;
+        let mut i = 0;
+        while i < cfg.extra_args.len() {
+            if cfg.extra_args[i] == "--ctx-size" {
+                if let Some(val) = cfg.extra_args.get(i + 1) {
+                    ctx_size = val.parse().ok();
+                }
+                i += 2;
+            } else {
+                i += 1;
+            }
+        }
+
+        let mut body = serde_json::json!({ "model": model });
+        if let Some(n) = ctx_size {
+            body["n_ctx"] = serde_json::json!(n);
+        }
+
         Self::api(&endpoint, "POST", "/models/load", Some(&body)).await?;
         Ok(format!("Model '{}' loaded", model))
     }

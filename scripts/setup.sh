@@ -135,10 +135,11 @@ STATUS_uv="missing"; VERSION_uv=""
 STATUS_ollama="missing"; VERSION_ollama=""
 STATUS_node="missing"; VERSION_node=""
 STATUS_exo="missing"; VERSION_exo=""
+STATUS_llamacpp="missing"; VERSION_llamacpp=""
 
 # Selection state (1=selected, 0=not selected)
 SEL_rust=1; SEL_rustyclaw=1  # Core: selected by default
-SEL_uv=0; SEL_ollama=0; SEL_node=0; SEL_exo=0  # Optional: not selected
+SEL_uv=0; SEL_ollama=0; SEL_node=0; SEL_exo=0; SEL_llamacpp=0  # Optional: not selected
 
 detect_components() {
     if has rustc; then
@@ -164,6 +165,10 @@ detect_components() {
     if [[ -d "$EXO_DIR" && -f "$EXO_DIR/setup.py" ]]; then
         STATUS_exo="installed"
         VERSION_exo="at $EXO_DIR"
+    fi
+    if has llama-server; then
+        STATUS_llamacpp="installed"
+        VERSION_llamacpp="$(llama-server --version 2>/dev/null || echo 'found')"
     fi
 }
 
@@ -236,6 +241,7 @@ show_menu() {
             ollama)    desc="Local model server" ;;
             node)      desc="Node.js + npm (for exo dashboard)" ;;
             exo)       desc="Distributed AI cluster" ;;
+            llamacpp)  desc="llama.cpp local GGUF inference" ;;
         esac
         
         echo -e "  ${BOLD}$i)${NC} $check ${CYAN}$comp${NC} - $desc"
@@ -263,6 +269,7 @@ if [[ "$INTERACTIVE" == true ]]; then
             4) toggle_selected ollama ;;
             5) toggle_selected node ;;
             6) toggle_selected exo ;;
+            7) toggle_selected llamacpp ;;
             a|A)
                 for comp in $ALL_COMPONENTS; do
                     set_selected "$comp" 1
