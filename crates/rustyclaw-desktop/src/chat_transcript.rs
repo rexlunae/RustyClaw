@@ -96,10 +96,13 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             .unwrap_or_else(|_| serde_json::Value::String(tc.arguments.clone()));
 
         let hint = tool_call_hint(&tc.name, &arguments);
-        let result_hint = tc
-            .result
-            .as_deref()
-            .map(|r| tool_result_hint(&tc.name, &arguments, r));
+        let result_hint = tc.result.as_deref().map(|r| {
+            if tc.is_error {
+                ToolResultHint::Plain(r.to_string())
+            } else {
+                tool_result_hint(&tc.name, &arguments, r)
+            }
+        });
 
         transcript.push(
             ChatRole::Assistant,
