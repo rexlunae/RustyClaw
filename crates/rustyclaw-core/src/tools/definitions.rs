@@ -1000,6 +1000,56 @@ pub static SWARM_TEMPLATES: ToolDef = ToolDef {
     execute: exec_swarm_templates,
 };
 
+// ── Todo planning tool ──────────────────────────────────────────────────────
+
+pub static TODO: ToolDef = ToolDef {
+    name: "todo",
+    description: "Manage an in-session task checklist for planning multi-step work. \
+                  Actions: 'add' (create item), 'update_status' (change to pending/in_progress/done), \
+                  'remove' (delete item), 'list' (show all items), 'clear' (remove all). \
+                  Use this to lay out a plan before complex tasks and track progress.",
+    parameters: vec![],
+    execute: exec_todo,
+};
+
+// ── Skill curator ───────────────────────────────────────────────────────────
+
+pub static SKILL_CURATOR: ToolDef = ToolDef {
+    name: "skill_curator",
+    description: "Autonomous skill curation: propose new skills after complex tasks, \
+                  grade existing skills, merge duplicates, and prune low-value ones. \
+                  Actions: 'propose' (draft skill from task), 'curate' (full cycle), \
+                  'grade' (score a skill), 'merge' (combine two), 'prune' (remove), \
+                  'status' (show curator state). Schedule periodic curation via the cron tool.",
+    parameters: vec![],
+    execute: exec_skill_curator,
+};
+
+// ── Web extract tool ────────────────────────────────────────────────────────
+
+pub static WEB_EXTRACT: ToolDef = ToolDef {
+    name: "web_extract",
+    description: "Extract clean, readable content from a web page using readability \
+                  heuristics. Optionally target specific elements via CSS selector. \
+                  Returns markdown or plain text with optional metadata (title, author, \
+                  description). For full HTTP control (headers, cookies, methods), use \
+                  web_fetch instead.",
+    parameters: vec![],
+    execute: exec_web_extract_stub,
+};
+
+// ── Image generation tool ───────────────────────────────────────────────────
+
+#[cfg(feature = "image-gen")]
+pub static IMAGE_GENERATE: ToolDef = ToolDef {
+    name: "image_generate",
+    description: "Generate an image from a text prompt using the configured provider \
+                  (OpenAI DALL-E or Google Gemini/Imagen). Returns a local file path to \
+                  the generated image. Requires an API key in the vault or environment.",
+    parameters: vec![],
+    execute: exec_image_generate_stub,
+};
+
 // Re-export parameter functions from params module
 pub use params::*;
 

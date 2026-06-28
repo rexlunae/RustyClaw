@@ -16,6 +16,8 @@ pub mod exo_ai;
 mod file;
 mod gateway_tools;
 pub(crate) mod helpers;
+#[cfg(feature = "image-gen")]
+mod image_gen;
 mod kernel_tools;
 mod memory_tools;
 pub mod npm;
@@ -26,12 +28,15 @@ mod runtime;
 mod schema;
 mod secrets_tools;
 mod sessions_tools;
+mod skill_curator;
 mod skills_tools;
 mod swarm_tools;
 mod sysadmin;
 mod system_tools;
+mod todo_tool;
 pub mod uv;
 mod web;
+mod web_extract;
 // ast-grep structural code tool
 use ast_grep::exec_ast_grep;
 
@@ -69,6 +74,18 @@ use runtime::{exec_execute_command, exec_process};
 
 // Web operations
 use web::{exec_web_fetch, exec_web_search};
+use web_extract::exec_web_extract_stub;
+
+// Todo planning tool
+use todo_tool::exec_todo;
+pub use todo_tool::{TodoItem, TodoStatus, get_todo_snapshot};
+
+// Skill curator
+use skill_curator::exec_skill_curator;
+
+// Image generation
+#[cfg(feature = "image-gen")]
+use image_gen::exec_image_generate_stub;
 
 // Memory operations
 #[cfg(feature = "semantic-memory")]
@@ -342,6 +359,10 @@ pub fn tool_summary(name: &str) -> &'static str {
         "swarm_send" => "Send a task to a swarm agent",
         "swarm_stop" => "Stop a running swarm",
         "swarm_templates" => "List available swarm templates",
+        "todo" => "Plan and track multi-step tasks with a checklist",
+        "skill_curator" => "Auto-propose, grade, merge, and prune skills",
+        "web_extract" => "Extract clean readable content from web pages",
+        "image_generate" => "Generate images from text prompts",
         _ => "Unknown tool",
     }
 }
@@ -490,6 +511,11 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SWARM_SEND,
         &SWARM_STOP,
         &SWARM_TEMPLATES,
+        &TODO,
+        &SKILL_CURATOR,
+        &WEB_EXTRACT,
+        #[cfg(feature = "image-gen")]
+        &IMAGE_GENERATE,
     ]
 }
 
@@ -575,6 +601,9 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "summarize_file",
     "nodes",
     "canvas",
+    "web_extract",
+    #[cfg(feature = "image-gen")]
+    "image_generate",
 ];
 
 /// Find a tool by name and execute it with the given arguments.
@@ -632,6 +661,9 @@ pub async fn execute_tool(
             "summarize_file" => system_tools::exec_summarize_file_async(args, workspace_dir).await,
             "nodes" => devices::exec_nodes_async(args, workspace_dir).await,
             "canvas" => devices::exec_canvas_async(args, workspace_dir).await,
+            "web_extract" => web_extract::exec_web_extract_async(args, workspace_dir).await,
+            #[cfg(feature = "image-gen")]
+            "image_generate" => image_gen::exec_image_generate_async(args, workspace_dir).await,
             _ => unreachable!(),
         };
         if result.is_err() {

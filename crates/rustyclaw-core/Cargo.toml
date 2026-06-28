@@ -23,6 +23,8 @@ mcp = ["dep:rmcp", "dep:schemars"]
 matrix = ["chat-system/matrix"]
 whatsapp = ["chat-system/whatsapp"]
 qr = ["dep:image"]
+# Text-to-image generation via provider APIs (OpenAI DALL-E, Google Imagen).
+image-gen = []
 # Semantic vector memory (steel-memory → fastembed → ONNX Runtime).
 # Heavy native dep that does not cross-compile (no armv7 ONNX binaries and
 # the ort-sys build script breaks under cross); enabled by default in the
@@ -31,7 +33,7 @@ semantic-memory = ["dep:steel-memory"]
 # CLI-based messengers (tier 1) - no heavy deps, just HTTP
 signal-cli = ["chat-system/signal-cli"]
 all-messengers = ["whatsapp", "signal-cli", "matrix"]
-full = ["web-tools", "browser", "mcp", "all-messengers", "semantic-memory"]
+full = ["web-tools", "browser", "mcp", "all-messengers", "semantic-memory", "image-gen"]
 
 [dependencies]
 serde.workspace = true
