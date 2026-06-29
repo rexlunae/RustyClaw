@@ -74,7 +74,7 @@ pub async fn handle_engine_request(
                 Ok(msg) => (true, msg),
                 Err(e) => {
                     warn!(engine = %engine, action = %action, error = ?e, "Engine action failed");
-                    (false, format!("{e}"))
+                    (false, format!("{e:#}"))
                 }
             };
             let frame = ServerFrame {
@@ -123,7 +123,7 @@ pub async fn handle_engine_request(
                             engine,
                             model: Some(model),
                             ok: false,
-                            message: format!("{e}"),
+                            message: format!("{e:#}"),
                         },
                     };
                     send_frame(writer, &frame).await?;
@@ -161,7 +161,7 @@ pub async fn handle_engine_request(
                     Ok(msg) => (true, msg),
                     Err(e) => {
                         warn!(engine = %eng_id, model = %model_clone, error = ?e, "Engine pull failed");
-                        (false, format!("{e}"))
+                        (false, format!("{e:#}"))
                     }
                 };
                 let frame = ServerFrame {
@@ -231,7 +231,7 @@ pub async fn handle_engine_request(
                 Ok(msg) => (true, msg),
                 Err(e) => {
                     warn!(engine = %engine, model = %model, action = %action, error = ?e, "Engine model action failed");
-                    (false, format!("{e}"))
+                    (false, format!("{e:#}"))
                 }
             };
             let frame = ServerFrame {
