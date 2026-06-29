@@ -450,7 +450,11 @@ pub async fn compact_conversation(
     for m in old_turns {
         // Truncate very large tool results to avoid blowing up the summary request.
         let content = if m.content.len() > 2000 {
-            format!("{}… [truncated]", &m.content[..2000])
+            let mut boundary = 2000;
+            while !m.content.is_char_boundary(boundary) {
+                boundary -= 1;
+            }
+            format!("{}… [truncated]", &m.content[..boundary])
         } else {
             m.content.clone()
         };
@@ -466,18 +470,23 @@ pub async fn compact_conversation(
         api_key: resolved.api_key.clone(),
     };
 
-    let summary_result = if resolved.provider == "anthropic" {
-        call_anthropic_with_tools(http, &summary_req, None).await
-    } else if resolved.provider == "google" {
-        call_google_with_tools(http, &summary_req).await
-    } else {
-        call_openai_with_tools(http, &summary_req, None).await
-    };
+    let summary_result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
+        if resolved.provider == "anthropic" {
+            call_anthropic_with_tools(http, &summary_req, None).await
+        } else if resolved.provider == "google" {
+            call_google_with_tools(http, &summary_req).await
+        } else {
+            call_openai_with_tools(http, &summary_req, None).await
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("compaction summary request timed out after 60s"))
+    .and_then(|r| r);
 
     let summary = match summary_result {
         Ok(resp) if !resp.text.is_empty() => resp.text,
         Ok(_) => anyhow::bail!("Model returned empty summary"),
-        Err(e) => anyhow::bail!("Summary request failed: {}", e),
+        Err(e) => anyhow::bail!("Summary request failed: {:#}", e),
     };
 
     // Rebuild messages: system + summary + recent turns.
