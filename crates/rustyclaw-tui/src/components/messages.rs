@@ -55,16 +55,26 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                     let name = assistant_name.clone();
                     let has_details = latest_details_idx == Some(i);
                     let bubble_data = msg.to_bubble_data(name, has_details);
+                    // An assistant turn that only carries tool calls has empty
+                    // text — don't render an empty bubble box (which would also
+                    // show an action bar). Render just the tool panels instead.
+                    let show_bubble = !msg.content.trim().is_empty() || msg.tool_calls.is_empty();
                     element! {
                         View(
                             key: i as u64,
                             flex_direction: FlexDirection::Column,
                             width: 100pct,
                         ) {
-                            MessageBubble(
-                                data: bubble_data,
-                                is_selected: props.selected_idx == Some(i),
-                            )
+                            #(if show_bubble {
+                                element! {
+                                    MessageBubble(
+                                        data: bubble_data,
+                                        is_selected: props.selected_idx == Some(i),
+                                    )
+                                }.into_any()
+                            } else {
+                                element! { View() }.into_any()
+                            })
                             #(msg.tool_calls.iter().enumerate().map(|(ti, tool)| {
                                 element! {
                                     ToolCallPanel(

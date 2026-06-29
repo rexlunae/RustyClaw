@@ -9,32 +9,74 @@ pub struct ToolCallPanelProps {
 #[component]
 pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static>> {
     let (_, status_label, status_icon) = props.data.status_label();
-    let status = format!("{status_icon} {status_label}");
+    let color = if props.data.is_error {
+        theme::ERROR
+    } else {
+        theme::INFO
+    };
 
-    let args = props.data.arguments_preview(600, 12);
-    let result = props.data.result_preview(2000, 40);
+    // Collapsed (default) → single dim line: header + status + arg/result peek.
+    // Expanded → header line plus truncated args and result beneath.
+    let collapsed = props.data.collapsed;
+
+    let header = format!(
+        "{} · {} {}",
+        props.data.summary(),
+        status_icon,
+        status_label
+    );
+
+    // Short inline peek shown when collapsed so the row is one line but still
+    // hints at what ran / what came back.
+    let peek = if collapsed {
+        let src = props
+            .data
+            .result_preview(80, 1)
+            .unwrap_or_else(|| props.data.arguments_preview(80, 1));
+        let one = src.replace('\n', " ");
+        if one.trim().is_empty() {
+            String::new()
+        } else {
+            format!("  {one}")
+        }
+    } else {
+        String::new()
+    };
+
+    let args = if collapsed {
+        String::new()
+    } else {
+        props.data.arguments_preview(600, 12)
+    };
+    let result = if collapsed {
+        None
+    } else {
+        props.data.result_preview(2000, 40)
+    };
 
     element! {
         View(
             width: 100pct,
-            margin_bottom: 1,
             padding_left: 2,
             padding_right: 1,
-            border_style: BorderStyle::Round,
-            border_color: if props.data.is_error { theme::ERROR } else { theme::INFO },
-            border_edges: Edges::Left,
             flex_direction: FlexDirection::Column,
         ) {
             Text(
-                content: format!("{} · {}", props.data.summary(), status),
-                color: if props.data.is_error { theme::ERROR } else { theme::ACCENT },
-                weight: Weight::Bold,
+                content: format!("{header}{peek}"),
+                color,
+                weight: if collapsed { Weight::Normal } else { Weight::Bold },
             )
-            Text(content: args, color: theme::TEXT_DIM, wrap: TextWrap::Wrap)
+            #(if !args.is_empty() {
+                element! {
+                    Text(content: format!("→ {args}"), color: theme::TEXT_DIM, wrap: TextWrap::Wrap)
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
             #(if let Some(result) = result {
                 element! {
                     Text(
-                        content: result,
+                        content: format!("↳ {result}"),
                         color: if props.data.is_error { theme::ERROR } else { theme::TEXT },
                         wrap: TextWrap::Wrap,
                     )
