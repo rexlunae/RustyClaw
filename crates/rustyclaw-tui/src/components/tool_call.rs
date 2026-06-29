@@ -19,7 +19,12 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
     // Expanded → header line plus truncated args and result beneath.
     let collapsed = props.data.collapsed;
 
-    let header = format!("{} · {} {}", props.data.summary(), status_icon, status_label);
+    let header = format!(
+        "{} · {} {}",
+        props.data.summary(),
+        status_icon,
+        status_label
+    );
 
     // Short inline peek shown when collapsed so the row is one line but still
     // hints at what ran / what came back.

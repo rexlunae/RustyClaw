@@ -100,9 +100,8 @@ impl SecretsManager {
         use ssh_key::private::PrivateKey;
 
         // Generate keypair.
-        let private =
-            PrivateKey::random(&mut rand::rng(), ssh_key::Algorithm::Ed25519)
-                .map_err(|e| anyhow::anyhow!("Failed to generate SSH key: {}", e))?;
+        let private = PrivateKey::random(&mut rand::rng(), ssh_key::Algorithm::Ed25519)
+            .map_err(|e| anyhow::anyhow!("Failed to generate SSH key: {}", e))?;
 
         let private_pem = private
             .to_openssh(ssh_key::LineEnding::LF)
