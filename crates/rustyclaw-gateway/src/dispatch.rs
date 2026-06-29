@@ -433,12 +433,9 @@ pub(crate) async fn dispatch_text_message(
                 }
             }
             Err(err) => {
-                let traced = errors::GatewayError::TokenRefresh {
-                    message: err.to_string(),
-                }
-                .into_traced();
                 match errors::handle(
-                    traced,
+                    errors::GatewayError::TokenRefresh,
+                    Some(err),
                     writer,
                     &mut resolved,
                     &mut original_api_key,
@@ -497,13 +494,10 @@ pub(crate) async fn dispatch_text_message(
             {
                 Ok(()) => {} // compacted in-place
                 Err(err) => {
-                    let traced = errors::GatewayError::ContextCompaction {
-                        message: err.to_string(),
-                    }
-                    .into_traced();
                     // Non-fatal — handle logs and continues.
                     let _ = errors::handle(
-                        traced,
+                        errors::GatewayError::ContextCompaction,
+                        Some(err),
                         writer,
                         &mut resolved,
                         &mut original_api_key,
@@ -573,9 +567,9 @@ pub(crate) async fn dispatch_text_message(
         let mut model_resp = match result {
             Ok(Some(r)) => r,
             Ok(None) => {
-                let traced = errors::GatewayError::Cancelled.into_traced();
                 match errors::handle(
-                    traced,
+                    errors::GatewayError::Cancelled,
+                    None,
                     writer,
                     &mut resolved,
                     &mut original_api_key,
@@ -590,9 +584,10 @@ pub(crate) async fn dispatch_text_message(
                 }
             }
             Err(err) => {
-                let traced = errors::classify_model_error(err, &resolved.provider);
+                let (gw, source) = errors::classify_model_error(err, &resolved.provider);
                 match errors::handle(
-                    traced,
+                    gw,
+                    Some(source),
                     writer,
                     &mut resolved,
                     &mut original_api_key,
@@ -714,9 +709,9 @@ pub(crate) async fn dispatch_text_message(
                 }
                 return Ok(());
             } else if finish_reason == "length" {
-                let traced = errors::GatewayError::TokenLimit.into_traced();
                 match errors::handle(
-                    traced,
+                    errors::GatewayError::TokenLimit,
+                    None,
                     writer,
                     &mut resolved,
                     &mut original_api_key,
@@ -730,12 +725,11 @@ pub(crate) async fn dispatch_text_message(
                     std::ops::ControlFlow::Break(()) => return Ok(()),
                 }
             } else {
-                let traced = errors::GatewayError::UnexpectedFinish {
-                    reason: finish_reason.to_string(),
-                }
-                .into_traced();
                 match errors::handle(
-                    traced,
+                    errors::GatewayError::UnexpectedFinish {
+                        reason: finish_reason.to_string(),
+                    },
+                    None,
                     writer,
                     &mut resolved,
                     &mut original_api_key,
@@ -1001,12 +995,11 @@ pub(crate) async fn dispatch_text_message(
     }
 
     // If we exhausted all rounds, send what we have and stop.
-    let traced = errors::GatewayError::ToolLoopExhausted {
-        rounds: MAX_TOOL_ROUNDS,
-    }
-    .into_traced();
     let _ = errors::handle(
-        traced,
+        errors::GatewayError::ToolLoopExhausted {
+            rounds: MAX_TOOL_ROUNDS,
+        },
+        None,
         writer,
         &mut resolved,
         &mut original_api_key,

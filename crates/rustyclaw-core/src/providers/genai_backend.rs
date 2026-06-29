@@ -154,15 +154,13 @@ async fn genai_chat(
                 .with_capture_reasoning_content(true);
             let stream = client
                 .exec_chat_stream(&req.model, chat_req, Some(&options))
-                .await
-                .map_err(genai_err)?;
+                .await?;
             consume_stream(stream.stream, w).await
         }
         None => {
             let resp = client
                 .exec_chat(&req.model, chat_req, Some(&options))
-                .await
-                .map_err(genai_err)?;
+                .await?;
             Ok(chat_response_to_model_response(resp))
         }
     }
@@ -179,7 +177,7 @@ async fn consume_stream(
     let mut thinking_started = false;
 
     while let Some(event) = stream.next().await {
-        match event.map_err(genai_err)? {
+        match event? {
             ChatStreamEvent::Start => {
                 server::send_stream_start(writer).await?;
                 stream_started = true;
@@ -585,32 +583,6 @@ fn copilot_extra_headers(req: &ProviderRequest) -> Option<genai::Headers> {
         ("X-Initiator".to_string(), x_initiator.to_string()),
     ];
     Some(genai::Headers::from(headers))
-}
-
-/// Wrap a genai error as an `anyhow::Error`, preserving the full message chain
-/// (status code + response body) so callers' auth-error detection still works.
-fn genai_err(err: genai::Error) -> anyhow::Error {
-    // Log the full error for debugging, including any nested causes
-    warn!(
-        error = %err,
-        error_debug = ?err,
-        "genai API call failed"
-    );
-
-    // Extract additional context from the error if available
-    let error_msg = format!("{err}");
-
-    // Check for common error patterns and add helpful context
-    if error_msg.to_lowercase().contains("invalid json")
-        || error_msg.to_lowercase().contains("json format")
-    {
-        anyhow::anyhow!(
-            "Web stream error for model. Cause: HTTP error. Body: {}",
-            error_msg
-        )
-    } else {
-        anyhow::anyhow!("{err}")
-    }
 }
 
 #[cfg(test)]
