@@ -433,6 +433,14 @@ pub async fn compact_conversation(
         keep_from = i;
     }
 
+    // Ensure the kept tail doesn't start with orphaned tool results.
+    // A "tool" message references a tool_use_id from the preceding "assistant"
+    // message; if we split them, the model rejects the request.  Walk backward
+    // to include the matching assistant turn.
+    while keep_from > start_idx && msgs[keep_from].role == "tool" {
+        keep_from -= 1;
+    }
+
     // The middle section to summarize: everything between system and keep_from.
     if keep_from <= start_idx + 1 {
         // Nothing meaningful to summarize.
