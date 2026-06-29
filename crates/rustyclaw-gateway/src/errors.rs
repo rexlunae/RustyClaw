@@ -1,27 +1,23 @@
 //! Unified gateway error types and centralised handling.
 //!
-//! All errors that the gateway can encounter during a dispatch cycle are
-//! represented by [`GatewayError`], which implements [`std::error::Error`]
-//! so it can be wrapped inside an [`anyhow_tracing::Error`] for structured
-//! field propagation.
+//! [`GatewayError`] is a classification tag — it identifies *what kind*
+//! of failure occurred without duplicating the error message.  The
+//! original `anyhow::Error` (with its full cause chain) travels
+//! alongside it.
 //!
 //! Flow:
 //!
-//! 1. **Classify** — [`GatewayError::classify_model_error`] inspects a raw
-//!    `anyhow::Error` (plus provider context) and returns an
-//!    `anyhow_tracing::Error` wrapping the appropriate `GatewayError`
-//!    variant, with structured fields (`provider`, `gateway_error_kind`,
-//!    etc.) attached.
+//! 1. **Classify** — [`classify_model_error`] inspects a raw
+//!    `anyhow::Error` and returns a `(GatewayError, anyhow::Error)` pair.
 //!
-//! 2. **Handle** — [`handle`] downcasts the `anyhow_tracing::Error` to
-//!    recover the `GatewayError` variant and executes the correct recovery
-//!    or reporting logic (device flow, API key prompt, info/error frame to
-//!    the client, etc.).  Returns a [`ControlFlow`] telling the caller
-//!    whether to retry or abort.
+//! 2. **Handle** — [`handle`] takes the pair, logs the error with
+//!    structured fields, and executes recovery or reporting logic.
+//!    Returns a [`ControlFlow`] telling the caller whether to retry
+//!    or abort.
 //!
-//! 3. **Log** — because the error carries `anyhow_tracing` fields, any
-//!    `tracing::warn!(error = %err, …)` automatically includes the
-//!    structured context in JSON log output.
+//! 3. **Display** — the user-facing message is formatted from the
+//!    source `anyhow::Error` at the point of display, not stored
+//!    as a string in the classification.
 
 use std::fmt;
 use std::ops::ControlFlow;
@@ -81,17 +77,18 @@ impl ErrorKind {
     }
 }
 
-/// Categories of errors the gateway can encounter and report to the client.
+/// Classification tag for gateway errors.
 ///
-/// Implements [`std::error::Error`] so it can be wrapped in an
-/// [`anyhow_tracing::Error`] with `.with_field()` for structured logging.
+/// This is a *tag*, not a message carrier.  The original `anyhow::Error`
+/// (with its full cause chain) is passed alongside it — never flattened
+/// into a `String` field here.
 #[derive(Debug, Clone)]
 pub enum GatewayError {
     /// Authentication failure — 401/403, token refresh, expired key, etc.
-    Auth { provider: String, message: String },
+    Auth { provider: String },
 
     /// Model API returned an error that is not auth-related.
-    Provider { message: String },
+    Provider,
 
     /// The response was truncated because the model hit its token limit.
     TokenLimit,
@@ -100,29 +97,25 @@ pub enum GatewayError {
     ToolLoopExhausted { rounds: usize },
 
     /// Context compaction failed (non-fatal — the call can proceed).
-    ContextCompaction { message: String },
+    ContextCompaction,
 
     /// The user cancelled the current run.
     Cancelled,
 
-    // The Vault/DeviceFlow/Config variants round out the gateway error
-    // taxonomy but are not yet produced by the dispatch paths (vault ops and
-    // device flow currently surface errors through other channels). Kept for
-    // completeness and pending wiring; allowed dead until then.
     /// Vault operation failed (unlock, store, get, delete, etc.).
     #[allow(dead_code)]
-    Vault { message: String },
+    Vault,
 
     /// Device flow initiation or polling failed.
     #[allow(dead_code)]
-    DeviceFlow { provider: String, message: String },
+    DeviceFlow { provider: String },
 
     /// Provider/model not found or misconfigured.
     #[allow(dead_code)]
-    Config { message: String },
+    Config,
 
     /// Token refresh (bearer / Copilot session) failed.
-    TokenRefresh { message: String },
+    TokenRefresh,
 
     /// The model finished with an unexpected reason but no tool calls.
     /// This is informational (not an error) — logged via `send_info`.
@@ -132,28 +125,24 @@ pub enum GatewayError {
 impl fmt::Display for GatewayError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Auth { provider, message } => {
-                write!(f, "Authentication failed for {}: {}", provider, message)
+            Self::Auth { provider } => {
+                write!(f, "Authentication failed for {}", provider)
             }
-            Self::Provider { message } => write!(f, "{}", message),
+            Self::Provider => write!(f, "Provider error"),
             Self::TokenLimit => write!(f, "Response truncated due to token limit."),
             Self::ToolLoopExhausted { rounds } => write!(
                 f,
                 "Safety limit reached ({} tool rounds) — stopping to prevent infinite loop.",
                 rounds
             ),
-            Self::ContextCompaction { message } => {
-                write!(f, "Context compaction failed: {}", message)
-            }
+            Self::ContextCompaction => write!(f, "Context compaction failed"),
             Self::Cancelled => write!(f, "Run cancelled by user."),
-            Self::Vault { message } => write!(f, "{}", message),
-            Self::DeviceFlow { provider, message } => {
-                write!(f, "Device flow for {} failed: {}", provider, message)
+            Self::Vault => write!(f, "Vault error"),
+            Self::DeviceFlow { provider } => {
+                write!(f, "Device flow for {} failed", provider)
             }
-            Self::Config { message } => write!(f, "{}", message),
-            Self::TokenRefresh { message } => {
-                write!(f, "Token refresh failed: {}", message)
-            }
+            Self::Config => write!(f, "Configuration error"),
+            Self::TokenRefresh => write!(f, "Token refresh failed"),
             Self::UnexpectedFinish { reason } => {
                 write!(
                     f,
@@ -172,73 +161,23 @@ impl GatewayError {
     pub fn kind(&self) -> ErrorKind {
         match self {
             Self::Auth { .. } => ErrorKind::Auth,
-            Self::Provider { .. } => ErrorKind::Provider,
+            Self::Provider => ErrorKind::Provider,
             Self::TokenLimit => ErrorKind::TokenLimit,
             Self::ToolLoopExhausted { .. } => ErrorKind::ToolLoopExhausted,
-            Self::ContextCompaction { .. } => ErrorKind::ContextCompaction,
+            Self::ContextCompaction => ErrorKind::ContextCompaction,
             Self::Cancelled => ErrorKind::Cancelled,
-            Self::Vault { .. } => ErrorKind::Vault,
+            Self::Vault => ErrorKind::Vault,
             Self::DeviceFlow { .. } => ErrorKind::DeviceFlow,
-            Self::Config { .. } => ErrorKind::Config,
-            Self::TokenRefresh { .. } => ErrorKind::TokenRefresh,
+            Self::Config => ErrorKind::Config,
+            Self::TokenRefresh => ErrorKind::TokenRefresh,
             Self::UnexpectedFinish { .. } => ErrorKind::UnexpectedFinish,
         }
     }
 
     /// Whether this error is non-fatal (the dispatch loop should continue).
-    #[allow(dead_code)] // used once the producing paths above are wired in
+    #[allow(dead_code)]
     pub fn is_non_fatal(&self) -> bool {
-        matches!(self, Self::ContextCompaction { .. })
-    }
-
-    /// Wrap this error in an [`anyhow_tracing::Error`] with structured
-    /// fields attached (`gateway_error_kind`, and `provider` when
-    /// available).
-    ///
-    /// Use [`into_traced_with_source`](Self::into_traced_with_source)
-    /// when you have an original `anyhow::Error` whose cause chain
-    /// should be preserved.  This standalone variant is for errors
-    /// that originate inside the gateway itself (e.g. `Cancelled`,
-    /// `ToolLoopExhausted`, `UnexpectedFinish`).
-    pub fn into_traced(self) -> anyhow_tracing::Error {
-        let kind = self.kind();
-        let provider = match &self {
-            Self::Auth { provider, .. } | Self::DeviceFlow { provider, .. } => {
-                Some(provider.clone())
-            }
-            _ => None,
-        };
-        let mut err = anyhow_tracing::Error::from(anyhow::Error::from(self))
-            .with_field("gateway_error_kind", kind.as_str());
-        if let Some(p) = provider {
-            err = err.with_field("provider", p);
-        }
-        err
-    }
-
-    /// Wrap this error in an [`anyhow_tracing::Error`], chaining
-    /// `source` as the underlying cause so the original error chain
-    /// is preserved for logging and debugging.
-    ///
-    /// The [`GatewayError`] is added as context on top of `source`,
-    /// so [`downcast_ref::<GatewayError>()`] still finds the
-    /// classification while the full original cause chain (e.g.
-    /// reqwest → hyper → IO) remains accessible via
-    /// [`anyhow::Error::chain`].
-    pub fn into_traced_with_source(self, source: anyhow::Error) -> anyhow_tracing::Error {
-        let kind = self.kind();
-        let provider = match &self {
-            Self::Auth { provider, .. } | Self::DeviceFlow { provider, .. } => {
-                Some(provider.clone())
-            }
-            _ => None,
-        };
-        let mut err = anyhow_tracing::Error::from(source.context(self))
-            .with_field("gateway_error_kind", kind.as_str());
-        if let Some(p) = provider {
-            err = err.with_field("provider", p);
-        }
-        err
+        matches!(self, Self::ContextCompaction)
     }
 }
 
@@ -261,55 +200,36 @@ fn is_auth_error(error_msg: &str) -> bool {
     patterns.iter().any(|p| lower.contains(&p.to_lowercase()))
 }
 
-/// Inspect a raw model-call error and return a traced error wrapping the
-/// appropriate [`GatewayError`] variant.
+/// Inspect a raw model-call error and classify it.
 ///
-/// The original `err` is preserved as the source cause so the full
-/// error chain (e.g. genai → reqwest → hyper → IO) remains available
-/// in logs and debug output.  The [`GatewayError`] classification is
-/// added as context on top.
-///
-/// The returned [`anyhow_tracing::Error`] carries structured fields
-/// (`gateway_error_kind`, `provider`) suitable for JSON log output.
-pub fn classify_model_error(err: anyhow::Error, provider: &str) -> anyhow_tracing::Error {
-    // Use alternate Display to search the full cause chain for auth patterns.
+/// Returns the `(GatewayError, anyhow::Error)` pair.  The original
+/// error is returned unchanged — no wrapping, no stringification.
+pub fn classify_model_error(err: anyhow::Error, provider: &str) -> (GatewayError, anyhow::Error) {
     let full_msg = format!("{err:#}");
     let gw = if is_auth_error(&full_msg) {
-        let display = crate_providers::display_name_for_provider(provider);
         GatewayError::Auth {
             provider: provider.to_string(),
-            message: format!("Authentication failed for {}", display),
         }
     } else {
-        // Top-level message for user display; the full chain is preserved
-        // in the source error for debug logging.
-        GatewayError::Provider {
-            message: format!("{err}"),
-        }
+        GatewayError::Provider
     };
-    gw.into_traced_with_source(err)
-}
-
-/// Recover the [`GatewayError`] from an `anyhow_tracing::Error` produced
-/// by [`classify_model_error`] or [`GatewayError::into_traced`].
-fn downcast_gateway_error(err: &anyhow_tracing::Error) -> Option<&GatewayError> {
-    // anyhow_tracing wraps an anyhow::Error; downcast through it.
-    err.downcast_ref::<GatewayError>()
+    (gw, err)
 }
 
 // ── Centralised handling ────────────────────────────────────────────────────
 
-/// Handle a gateway error by sending the appropriate frames to the client
-/// and performing any recovery (device flow, credential prompt, etc.).
+/// Handle a classified gateway error.
 ///
-/// Returns `ControlFlow::Continue(())` when the caller should retry the
-/// model call (e.g. after obtaining fresh credentials) and
-/// `ControlFlow::Break(())` when the conversation should stop.
+/// `kind` is the classification tag.  `source` is the original error
+/// (with its full cause chain) when one exists — gateway-internal errors
+/// like `Cancelled` or `TokenLimit` have no external source.
 ///
-/// The incoming `anyhow_tracing::Error` carries structured fields that are
-/// logged automatically via `tracing::warn!`.
+/// Returns `ControlFlow::Continue(())` when the caller should retry
+/// (e.g. after obtaining fresh credentials) and `ControlFlow::Break(())`
+/// when the conversation should stop.
 pub async fn handle(
-    err: anyhow_tracing::Error,
+    kind: GatewayError,
+    source: Option<anyhow::Error>,
     writer: &mut dyn TransportWriter,
     resolved: &mut ProviderRequest,
     original_api_key: &mut Option<String>,
@@ -319,31 +239,34 @@ pub async fn handle(
     >,
     tool_cancel: &Arc<AtomicBool>,
 ) -> anyhow::Result<ControlFlow<(), ()>> {
-    // Try to recover the typed GatewayError.
-    let gw_err = match downcast_gateway_error(&err) {
-        Some(e) => e.clone(),
-        None => {
-            // Fallback: unknown error — report as generic provider error.
-            warn!(error = %err, "Unclassified gateway error");
-            protocol::server::send_error(writer, &err.to_string()).await?;
-            providers::send_response_done(writer).await?;
-            return Ok(ControlFlow::Break(()));
+    // Log the classified error with structured fields and the full cause
+    // chain (when available).
+    if let Some(ref err) = source {
+        warn!(
+            gateway_error_kind = %kind.kind(),
+            error = %err,
+            error_debug = ?err,
+            "Gateway error"
+        );
+    } else {
+        warn!(
+            gateway_error_kind = %kind.kind(),
+            "{kind}"
+        );
+    }
+
+    /// Format the source error for user display, falling back to the
+    /// classification tag's Display if no source is available.
+    fn user_message(kind: &GatewayError, source: &Option<anyhow::Error>) -> String {
+        match source {
+            Some(err) => format!("{err}"),
+            None => kind.to_string(),
         }
-    };
+    }
 
-    // Log the classified error with structured fields.
-    warn!(
-        gateway_error_kind = %gw_err.kind(),
-        error = %err,
-        "Gateway error"
-    );
-
-    match gw_err {
+    match kind {
         // ── Auth errors ─────────────────────────────────────────────
-        GatewayError::Auth {
-            ref provider,
-            ref message,
-        } => {
+        GatewayError::Auth { ref provider } => {
             let provider_def = crate_providers::provider_by_id(provider);
             let secret_name =
                 crate_providers::secret_key_for_provider(provider).unwrap_or("API_KEY");
@@ -352,6 +275,7 @@ pub async fn handle(
                 .map(|p| p.auth_method)
                 .unwrap_or(crate_providers::AuthMethod::ApiKey);
 
+            let trigger = user_message(&kind, &source);
             match auth_method {
                 crate_providers::AuthMethod::DeviceFlow => {
                     handle_device_flow(
@@ -363,7 +287,7 @@ pub async fn handle(
                         secret_name,
                         display,
                         tool_cancel,
-                        Some(message.as_str()),
+                        Some(&trigger),
                     )
                     .await
                 }
@@ -387,12 +311,11 @@ pub async fn handle(
         }
 
         // ── Non-fatal: context compaction ────────────────────────────
-        GatewayError::ContextCompaction { ref message } => {
-            let _ = protocol::server::send_info(
-                writer,
-                &format!("Context compaction failed: {}", message),
-            )
-            .await;
+        GatewayError::ContextCompaction => {
+            let msg = user_message(&kind, &source);
+            let _ =
+                protocol::server::send_info(writer, &format!("Context compaction failed: {msg}"))
+                    .await;
             Ok(ControlFlow::Continue(()))
         }
 
@@ -404,10 +327,7 @@ pub async fn handle(
         }
 
         // ── Token refresh ───────────────────────────────────────────
-        GatewayError::TokenRefresh { ref message } => {
-            // For DeviceFlow providers, a failed token refresh means the
-            // stored OAuth token is stale — re-run the device flow instead
-            // of just showing an error.
+        GatewayError::TokenRefresh => {
             let provider_def = crate_providers::provider_by_id(&resolved.provider);
             let auth_method = provider_def
                 .map(|p| p.auth_method)
@@ -418,6 +338,7 @@ pub async fn handle(
                 let secret_name =
                     crate_providers::secret_key_for_provider(&provider_id).unwrap_or("API_KEY");
                 let display = crate_providers::display_name_for_provider(&provider_id);
+                let trigger = user_message(&kind, &source);
                 handle_device_flow(
                     writer,
                     resolved,
@@ -427,11 +348,12 @@ pub async fn handle(
                     secret_name,
                     display,
                     tool_cancel,
-                    Some(message.as_str()),
+                    Some(&trigger),
                 )
                 .await
             } else {
-                protocol::server::send_error(writer, &format!("Token refresh failed: {}", message))
+                let msg = user_message(&kind, &source);
+                protocol::server::send_error(writer, &format!("Token refresh failed: {msg}"))
                     .await?;
                 providers::send_response_done(writer).await?;
                 Ok(ControlFlow::Break(()))
@@ -450,8 +372,7 @@ pub async fn handle(
             protocol::server::send_error(
                 writer,
                 &format!(
-                    "Safety limit reached ({} tool rounds) — stopping to prevent infinite loop.",
-                    rounds
+                    "Safety limit reached ({rounds} tool rounds) — stopping to prevent infinite loop.",
                 ),
             )
             .await?;
@@ -460,13 +381,11 @@ pub async fn handle(
         }
 
         // ── Device flow failure (standalone, not during auth retry) ──
-        GatewayError::DeviceFlow {
-            ref provider,
-            ref message,
-        } => {
+        GatewayError::DeviceFlow { ref provider } => {
+            let msg = user_message(&kind, &source);
             protocol::server::send_error(
                 writer,
-                &format!("Device flow for {} failed: {}", provider, message),
+                &format!("Device flow for {provider} failed: {msg}"),
             )
             .await?;
             providers::send_response_done(writer).await?;
@@ -474,15 +393,17 @@ pub async fn handle(
         }
 
         // ── Config error ────────────────────────────────────────────
-        GatewayError::Config { ref message } => {
-            protocol::server::send_error(writer, message).await?;
+        GatewayError::Config => {
+            let msg = user_message(&kind, &source);
+            protocol::server::send_error(writer, &msg).await?;
             providers::send_response_done(writer).await?;
             Ok(ControlFlow::Break(()))
         }
 
         // ── Vault error ─────────────────────────────────────────────
-        GatewayError::Vault { ref message } => {
-            protocol::server::send_error(writer, message).await?;
+        GatewayError::Vault => {
+            let msg = user_message(&kind, &source);
+            protocol::server::send_error(writer, &msg).await?;
             Ok(ControlFlow::Break(()))
         }
 
@@ -490,7 +411,7 @@ pub async fn handle(
         GatewayError::UnexpectedFinish { ref reason } => {
             protocol::server::send_info(
                 writer,
-                &format!("Model finished with reason '{}' but no tool calls.", reason),
+                &format!("Model finished with reason '{reason}' but no tool calls."),
             )
             .await?;
             providers::send_response_done(writer).await?;
@@ -498,8 +419,9 @@ pub async fn handle(
         }
 
         // ── Generic provider error ──────────────────────────────────
-        GatewayError::Provider { ref message } => {
-            protocol::server::send_error(writer, message).await?;
+        GatewayError::Provider => {
+            let msg = user_message(&kind, &source);
+            protocol::server::send_error(writer, &msg).await?;
             providers::send_response_done(writer).await?;
             Ok(ControlFlow::Break(()))
         }
@@ -743,19 +665,18 @@ mod tests {
     #[test]
     fn test_classify_model_error_auth() {
         let err = anyhow::anyhow!("Provider returned 401 Unauthorized");
-        let traced = classify_model_error(err, "anthropic");
-        let gw = downcast_gateway_error(&traced);
-        assert!(gw.is_some());
-        assert!(matches!(gw.unwrap(), GatewayError::Auth { .. }));
+        let (gw, source) = classify_model_error(err, "anthropic");
+        assert!(matches!(gw, GatewayError::Auth { .. }));
+        // Source error is returned unchanged.
+        assert!(source.to_string().contains("401 Unauthorized"));
     }
 
     #[test]
     fn test_classify_model_error_provider() {
         let err = anyhow::anyhow!("Connection timeout after 30s");
-        let traced = classify_model_error(err, "openai");
-        let gw = downcast_gateway_error(&traced);
-        assert!(gw.is_some());
-        assert!(matches!(gw.unwrap(), GatewayError::Provider { .. }));
+        let (gw, source) = classify_model_error(err, "openai");
+        assert!(matches!(gw, GatewayError::Provider));
+        assert!(source.to_string().contains("timeout"));
     }
 
     #[test]
@@ -774,31 +695,9 @@ mod tests {
     }
 
     #[test]
-    fn test_into_traced_carries_fields() {
-        let gw = GatewayError::Auth {
-            provider: "anthropic".into(),
-            message: "invalid key".into(),
-        };
-        let traced = gw.into_traced();
-        // The error should carry the gateway_error_kind field.
-        let fields: Vec<_> = traced.fields().iter().map(|(k, _)| *k).collect();
-        assert!(
-            fields.contains(&"gateway_error_kind"),
-            "missing gateway_error_kind in {:?}",
-            fields
-        );
-        assert!(
-            fields.contains(&"provider"),
-            "missing provider in {:?}",
-            fields
-        );
-    }
-
-    #[test]
     fn test_display_variants() {
         let auth = GatewayError::Auth {
             provider: "anthropic".into(),
-            message: "invalid key".into(),
         };
         assert!(auth.to_string().contains("anthropic"));
 
@@ -811,15 +710,10 @@ mod tests {
         let cancelled = GatewayError::Cancelled;
         assert!(cancelled.to_string().contains("cancelled"));
 
-        let ctx = GatewayError::ContextCompaction {
-            message: "OOM".into(),
-        };
-        assert!(ctx.to_string().contains("OOM"));
+        let ctx = GatewayError::ContextCompaction;
         assert!(ctx.is_non_fatal());
 
-        let provider = GatewayError::Provider {
-            message: "timeout".into(),
-        };
+        let provider = GatewayError::Provider;
         assert!(!provider.is_non_fatal());
 
         let unexpected = GatewayError::UnexpectedFinish {
@@ -830,54 +724,16 @@ mod tests {
     }
 
     #[test]
-    fn test_downcast_roundtrip() {
-        let gw = GatewayError::TokenLimit;
-        let traced = gw.into_traced();
-        let recovered = downcast_gateway_error(&traced).unwrap();
-        assert!(matches!(recovered, GatewayError::TokenLimit));
-    }
-
-    #[test]
-    fn test_into_traced_with_source_preserves_chain() {
-        let original = anyhow::anyhow!("TCP connect failed")
-            .context("TLS handshake error")
-            .context("error sending request");
-        let gw = GatewayError::Provider {
-            message: "error sending request".into(),
-        };
-        let traced = gw.into_traced_with_source(original);
-
-        // Downcast still finds the GatewayError classification.
-        let recovered = downcast_gateway_error(&traced).unwrap();
-        assert!(matches!(recovered, GatewayError::Provider { .. }));
-
-        // The full cause chain is preserved (GatewayError + original causes).
-        let chain: Vec<String> = traced.chain().map(|c| c.to_string()).collect();
-        assert!(
-            chain.len() >= 3,
-            "expected at least 3 causes in chain, got {}: {:?}",
-            chain.len(),
-            chain
-        );
-        assert!(
-            chain.iter().any(|c| c.contains("TCP connect failed")),
-            "original root cause lost: {:?}",
-            chain
-        );
-    }
-
-    #[test]
     fn test_classify_preserves_source_chain() {
         let original =
             anyhow::anyhow!("DNS resolution failed").context("Connection timeout after 30s");
-        let traced = classify_model_error(original, "openai");
+        let (gw, source) = classify_model_error(original, "openai");
 
-        // Classified as Provider.
-        let gw = downcast_gateway_error(&traced).unwrap();
-        assert!(matches!(gw, GatewayError::Provider { .. }));
+        assert!(matches!(gw, GatewayError::Provider));
 
-        // Original root cause is accessible in the chain.
-        let chain: Vec<String> = traced.chain().map(|c| c.to_string()).collect();
+        // The original error chain is returned intact — no wrapping,
+        // no stringification.
+        let chain: Vec<String> = source.chain().map(|c| c.to_string()).collect();
         assert!(
             chain.iter().any(|c| c.contains("DNS resolution failed")),
             "original root cause lost: {:?}",
