@@ -550,7 +550,7 @@ pub(crate) async fn dispatch_text_message(
         let request_duration = request_start.elapsed();
         let (success, error_msg) = match &result {
             Ok(_) => (true, None),
-            Err(e) => (false, Some(e.to_string())),
+            Err(e) => (false, Some(format!("{e:#}"))),
         };
         if let Some(obs) = observer {
             obs.record_event(&ObserverEvent::LlmResponse {

@@ -322,7 +322,7 @@ pub(crate) async fn handle_chat_frame(
             frame_type: ServerFrameType::Error,
             payload: ServerPayload::Error {
                 ok: false,
-                message: format!("{err}"),
+                message: format!("{err:#}"),
             },
         };
         send_frame(&mut stream_writer, &error_frame).await?;

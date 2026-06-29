@@ -257,9 +257,12 @@ pub async fn handle(
 
     /// Format the source error for user display, falling back to the
     /// classification tag's Display if no source is available.
+    ///
+    /// Uses alternate Display (`{:#}`) to render the full cause chain,
+    /// matching the detail level emitted by the tracing events above.
     fn user_message(kind: &GatewayError, source: &Option<anyhow::Error>) -> String {
         match source {
-            Some(err) => format!("{err}"),
+            Some(err) => format!("{err:#}"),
             None => kind.to_string(),
         }
     }
