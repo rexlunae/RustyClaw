@@ -154,15 +154,13 @@ async fn genai_chat(
                 .with_capture_reasoning_content(true);
             let stream = client
                 .exec_chat_stream(&req.model, chat_req, Some(&options))
-                .await
-                .map_err(genai_err)?;
+                .await?;
             consume_stream(stream.stream, w).await
         }
         None => {
             let resp = client
                 .exec_chat(&req.model, chat_req, Some(&options))
-                .await
-                .map_err(genai_err)?;
+                .await?;
             Ok(chat_response_to_model_response(resp))
         }
     }
@@ -179,7 +177,7 @@ async fn consume_stream(
     let mut thinking_started = false;
 
     while let Some(event) = stream.next().await {
-        match event.map_err(genai_err)? {
+        match event? {
             ChatStreamEvent::Start => {
                 server::send_stream_start(writer).await?;
                 stream_started = true;
@@ -585,33 +583,6 @@ fn copilot_extra_headers(req: &ProviderRequest) -> Option<genai::Headers> {
         ("X-Initiator".to_string(), x_initiator.to_string()),
     ];
     Some(genai::Headers::from(headers))
-}
-
-/// Convert a genai error into an `anyhow::Error`, preserving the original
-/// error type in the chain so callers can downcast or inspect causes.
-///
-/// Previously this stringified the error via `anyhow::anyhow!("{err}")`,
-/// which discarded the typed `genai::Error` and its nested causes.  Now
-/// we keep the original error and optionally add context for common
-/// patterns.
-fn genai_err(err: genai::Error) -> anyhow::Error {
-    warn!(
-        error = %err,
-        error_debug = ?err,
-        "genai API call failed"
-    );
-
-    let needs_json_context = {
-        let lower = format!("{err}").to_lowercase();
-        lower.contains("invalid json") || lower.contains("json format")
-    };
-
-    let base: anyhow::Error = err.into();
-    if needs_json_context {
-        base.context("Web stream error: HTTP error with invalid JSON body")
-    } else {
-        base
-    }
 }
 
 #[cfg(test)]

@@ -868,8 +868,8 @@ mod tests {
 
     #[test]
     fn test_classify_preserves_source_chain() {
-        let original = anyhow::anyhow!("DNS resolution failed")
-            .context("Connection timeout after 30s");
+        let original =
+            anyhow::anyhow!("DNS resolution failed").context("Connection timeout after 30s");
         let traced = classify_model_error(original, "openai");
 
         // Classified as Provider.
