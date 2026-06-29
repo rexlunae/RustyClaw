@@ -490,6 +490,7 @@ pub(crate) async fn dispatch_text_message(
         // ── Auto-compact if context is getting large ────────────────
         // Proceed with compaction if over threshold
         if estimated > threshold {
+            let _ = protocol::server::send_info(writer, "⏳ Compacting context…").await;
             match providers::compact_conversation(http, &mut resolved, context_limit, writer).await
             {
                 Ok(()) => {} // compacted in-place
