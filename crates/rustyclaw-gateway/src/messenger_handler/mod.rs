@@ -132,7 +132,11 @@ pub async fn run_messenger_loop(
     // Per-chat conversation history
     let conversations: ConversationStore = Arc::new(Mutex::new(HashMap::new()));
 
-    let http = Arc::new(reqwest::Client::new());
+    let http = Arc::new(
+        reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(30))
+            .build()?,
+    );
 
     eprintln!(
         "DEBUG: Starting messenger loop with poll_interval={}ms",
