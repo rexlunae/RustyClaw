@@ -317,11 +317,12 @@ pub(crate) async fn handle_chat_frame(
     )
     .await
     {
+        warn!(error = %err, error_debug = ?err, "Chat dispatch failed");
         let error_frame = ServerFrame {
             frame_type: ServerFrameType::Error,
             payload: ServerPayload::Error {
                 ok: false,
-                message: err.to_string(),
+                message: format!("{err}"),
             },
         };
         send_frame(&mut stream_writer, &error_frame).await?;

@@ -8,6 +8,7 @@ use rustyclaw_core::gateway::TransportWriter;
 use rustyclaw_core::gateway::protocol::frames::*;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use std::collections::HashMap;
+use tracing::warn;
 
 /// Handle engine management client frames.
 pub async fn handle_engine_request(
@@ -71,7 +72,10 @@ pub async fn handle_engine_request(
             };
             let (ok, message) = match result {
                 Ok(msg) => (true, msg),
-                Err(e) => (false, e.to_string()),
+                Err(e) => {
+                    warn!(engine = %engine, action = %action, error = ?e, "Engine action failed");
+                    (false, format!("{e}"))
+                }
             };
             let frame = ServerFrame {
                 frame_type: ServerFrameType::EngineActionResult,
@@ -112,13 +116,14 @@ pub async fn handle_engine_request(
             // P6: Disk space pre-flight check.
             if let Some(expected) = expected_size_bytes {
                 if let Err(e) = rustyclaw_core::engines::preflight_disk_check(expected) {
+                    warn!(engine = %engine, model = %model, error = ?e, "Disk space pre-flight check failed");
                     let frame = ServerFrame {
                         frame_type: ServerFrameType::EngineActionResult,
                         payload: ServerPayload::EngineActionResult {
                             engine,
                             model: Some(model),
                             ok: false,
-                            message: e.to_string(),
+                            message: format!("{e}"),
                         },
                     };
                     send_frame(writer, &frame).await?;
@@ -154,7 +159,10 @@ pub async fn handle_engine_request(
 
                 let (ok, message) = match result {
                     Ok(msg) => (true, msg),
-                    Err(e) => (false, e.to_string()),
+                    Err(e) => {
+                        warn!(engine = %eng_id, model = %model_clone, error = ?e, "Engine pull failed");
+                        (false, format!("{e}"))
+                    }
                 };
                 let frame = ServerFrame {
                     frame_type: ServerFrameType::EngineActionResult,
@@ -221,7 +229,10 @@ pub async fn handle_engine_request(
             };
             let (ok, message) = match result {
                 Ok(msg) => (true, msg),
-                Err(e) => (false, e.to_string()),
+                Err(e) => {
+                    warn!(engine = %engine, model = %model, action = %action, error = ?e, "Engine model action failed");
+                    (false, format!("{e}"))
+                }
             };
             let frame = ServerFrame {
                 frame_type: ServerFrameType::EngineActionResult,

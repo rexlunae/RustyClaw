@@ -194,6 +194,12 @@ impl GatewayError {
     /// Wrap this error in an [`anyhow_tracing::Error`] with structured
     /// fields attached (`gateway_error_kind`, and `provider` when
     /// available).
+    ///
+    /// Use [`into_traced_with_source`](Self::into_traced_with_source)
+    /// when you have an original `anyhow::Error` whose cause chain
+    /// should be preserved.  This standalone variant is for errors
+    /// that originate inside the gateway itself (e.g. `Cancelled`,
+    /// `ToolLoopExhausted`, `UnexpectedFinish`).
     pub fn into_traced(self) -> anyhow_tracing::Error {
         let kind = self.kind();
         let provider = match &self {
@@ -203,6 +209,31 @@ impl GatewayError {
             _ => None,
         };
         let mut err = anyhow_tracing::Error::from(anyhow::Error::from(self))
+            .with_field("gateway_error_kind", kind.as_str());
+        if let Some(p) = provider {
+            err = err.with_field("provider", p);
+        }
+        err
+    }
+
+    /// Wrap this error in an [`anyhow_tracing::Error`], chaining
+    /// `source` as the underlying cause so the original error chain
+    /// is preserved for logging and debugging.
+    ///
+    /// The [`GatewayError`] is added as context on top of `source`,
+    /// so [`downcast_ref::<GatewayError>()`] still finds the
+    /// classification while the full original cause chain (e.g.
+    /// reqwest → hyper → IO) remains accessible via
+    /// [`anyhow::Error::chain`].
+    pub fn into_traced_with_source(self, source: anyhow::Error) -> anyhow_tracing::Error {
+        let kind = self.kind();
+        let provider = match &self {
+            Self::Auth { provider, .. } | Self::DeviceFlow { provider, .. } => {
+                Some(provider.clone())
+            }
+            _ => None,
+        };
+        let mut err = anyhow_tracing::Error::from(source.context(self))
             .with_field("gateway_error_kind", kind.as_str());
         if let Some(p) = provider {
             err = err.with_field("provider", p);
@@ -233,20 +264,30 @@ fn is_auth_error(error_msg: &str) -> bool {
 /// Inspect a raw model-call error and return a traced error wrapping the
 /// appropriate [`GatewayError`] variant.
 ///
+/// The original `err` is preserved as the source cause so the full
+/// error chain (e.g. genai → reqwest → hyper → IO) remains available
+/// in logs and debug output.  The [`GatewayError`] classification is
+/// added as context on top.
+///
 /// The returned [`anyhow_tracing::Error`] carries structured fields
 /// (`gateway_error_kind`, `provider`) suitable for JSON log output.
 pub fn classify_model_error(err: anyhow::Error, provider: &str) -> anyhow_tracing::Error {
-    let msg = err.to_string();
-    let gw = if is_auth_error(&msg) {
+    // Use alternate Display to search the full cause chain for auth patterns.
+    let full_msg = format!("{err:#}");
+    let gw = if is_auth_error(&full_msg) {
         let display = crate_providers::display_name_for_provider(provider);
         GatewayError::Auth {
             provider: provider.to_string(),
             message: format!("Authentication failed for {}", display),
         }
     } else {
-        GatewayError::Provider { message: msg }
+        // Top-level message for user display; the full chain is preserved
+        // in the source error for debug logging.
+        GatewayError::Provider {
+            message: format!("{err}"),
+        }
     };
-    gw.into_traced()
+    gw.into_traced_with_source(err)
 }
 
 /// Recover the [`GatewayError`] from an `anyhow_tracing::Error` produced
@@ -794,5 +835,53 @@ mod tests {
         let traced = gw.into_traced();
         let recovered = downcast_gateway_error(&traced).unwrap();
         assert!(matches!(recovered, GatewayError::TokenLimit));
+    }
+
+    #[test]
+    fn test_into_traced_with_source_preserves_chain() {
+        let original = anyhow::anyhow!("TCP connect failed")
+            .context("TLS handshake error")
+            .context("error sending request");
+        let gw = GatewayError::Provider {
+            message: "error sending request".into(),
+        };
+        let traced = gw.into_traced_with_source(original);
+
+        // Downcast still finds the GatewayError classification.
+        let recovered = downcast_gateway_error(&traced).unwrap();
+        assert!(matches!(recovered, GatewayError::Provider { .. }));
+
+        // The full cause chain is preserved (GatewayError + original causes).
+        let chain: Vec<String> = traced.chain().map(|c| c.to_string()).collect();
+        assert!(
+            chain.len() >= 3,
+            "expected at least 3 causes in chain, got {}: {:?}",
+            chain.len(),
+            chain
+        );
+        assert!(
+            chain.iter().any(|c| c.contains("TCP connect failed")),
+            "original root cause lost: {:?}",
+            chain
+        );
+    }
+
+    #[test]
+    fn test_classify_preserves_source_chain() {
+        let original = anyhow::anyhow!("DNS resolution failed")
+            .context("Connection timeout after 30s");
+        let traced = classify_model_error(original, "openai");
+
+        // Classified as Provider.
+        let gw = downcast_gateway_error(&traced).unwrap();
+        assert!(matches!(gw, GatewayError::Provider { .. }));
+
+        // Original root cause is accessible in the chain.
+        let chain: Vec<String> = traced.chain().map(|c| c.to_string()).collect();
+        assert!(
+            chain.iter().any(|c| c.contains("DNS resolution failed")),
+            "original root cause lost: {:?}",
+            chain
+        );
     }
 }

@@ -434,9 +434,9 @@ pub(crate) async fn dispatch_text_message(
             }
             Err(err) => {
                 let traced = errors::GatewayError::TokenRefresh {
-                    message: err.to_string(),
+                    message: format!("{err}"),
                 }
-                .into_traced();
+                .into_traced_with_source(err);
                 match errors::handle(
                     traced,
                     writer,
@@ -498,9 +498,9 @@ pub(crate) async fn dispatch_text_message(
                 Ok(()) => {} // compacted in-place
                 Err(err) => {
                     let traced = errors::GatewayError::ContextCompaction {
-                        message: err.to_string(),
+                        message: format!("{err}"),
                     }
-                    .into_traced();
+                    .into_traced_with_source(err);
                     // Non-fatal — handle logs and continues.
                     let _ = errors::handle(
                         traced,

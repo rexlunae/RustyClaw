@@ -587,29 +587,30 @@ fn copilot_extra_headers(req: &ProviderRequest) -> Option<genai::Headers> {
     Some(genai::Headers::from(headers))
 }
 
-/// Wrap a genai error as an `anyhow::Error`, preserving the full message chain
-/// (status code + response body) so callers' auth-error detection still works.
+/// Convert a genai error into an `anyhow::Error`, preserving the original
+/// error type in the chain so callers can downcast or inspect causes.
+///
+/// Previously this stringified the error via `anyhow::anyhow!("{err}")`,
+/// which discarded the typed `genai::Error` and its nested causes.  Now
+/// we keep the original error and optionally add context for common
+/// patterns.
 fn genai_err(err: genai::Error) -> anyhow::Error {
-    // Log the full error for debugging, including any nested causes
     warn!(
         error = %err,
         error_debug = ?err,
         "genai API call failed"
     );
 
-    // Extract additional context from the error if available
-    let error_msg = format!("{err}");
+    let needs_json_context = {
+        let lower = format!("{err}").to_lowercase();
+        lower.contains("invalid json") || lower.contains("json format")
+    };
 
-    // Check for common error patterns and add helpful context
-    if error_msg.to_lowercase().contains("invalid json")
-        || error_msg.to_lowercase().contains("json format")
-    {
-        anyhow::anyhow!(
-            "Web stream error for model. Cause: HTTP error. Body: {}",
-            error_msg
-        )
+    let base: anyhow::Error = err.into();
+    if needs_json_context {
+        base.context("Web stream error: HTTP error with invalid JSON body")
     } else {
-        anyhow::anyhow!("{err}")
+        base
     }
 }
 
