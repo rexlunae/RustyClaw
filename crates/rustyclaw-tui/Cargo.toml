@@ -30,7 +30,7 @@ clap.workspace = true
 anyhow-tracing.workspace = true
 
 # SSH pairing (used directly in pairing.rs)
-russh = { version = "0.52.1", features = ["async-trait"] }
+russh = { version = "0.61.2", features = ["async-trait"] }
 
 [features]
 default = []

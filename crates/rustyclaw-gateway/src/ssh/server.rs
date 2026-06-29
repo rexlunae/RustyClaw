@@ -44,9 +44,10 @@ impl SshServer {
         } else {
             info!("Generating new SSH host key");
 
-            // Generate a new Ed25519 key
+            // Generate a new Ed25519 key. Use ssh-key's re-exported OsRng so the
+            // rand_core version matches russh (its OsRng impls CryptoRng).
             let key = russh::keys::PrivateKey::random(
-                &mut rand_core::OsRng,
+                &mut rand::rng(),
                 russh::keys::Algorithm::Ed25519,
             )
             .context("Failed to generate host key")?;

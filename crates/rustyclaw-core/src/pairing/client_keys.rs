@@ -27,10 +27,10 @@ impl ClientKeyPair {
     }
 
     /// Load the private key for SSH authentication.
-    pub fn load_private_key(&self) -> Result<russh_keys::PrivateKey> {
+    pub fn load_private_key(&self) -> Result<russh::keys::PrivateKey> {
         let path = default_client_key_path();
         let key_data = std::fs::read_to_string(&path).context("Failed to read private key")?;
-        russh_keys::decode_secret_key(&key_data, None).context("Failed to decode private key")
+        russh::keys::decode_secret_key(&key_data, None).context("Failed to decode private key")
     }
 
     /// Get the public key in OpenSSH format (for display/copy).
@@ -71,8 +71,9 @@ pub fn default_client_key_path() -> PathBuf {
 pub fn generate_client_keypair(comment: Option<String>) -> Result<ClientKeyPair> {
     use russh::keys::{Algorithm, PrivateKey};
 
-    // Generate Ed25519 key
-    let private_key = PrivateKey::random(&mut rand_core::OsRng, Algorithm::Ed25519)
+    // Generate Ed25519 key. russh 0.61 / ssh-key 0.7 take a CryptoRng; use
+    // rand's thread RNG (matches russh's own key-gen usage).
+    let private_key = PrivateKey::random(&mut rand::rng(), Algorithm::Ed25519)
         .context("Failed to generate Ed25519 keypair")?;
 
     let public_key = private_key.public_key().clone();

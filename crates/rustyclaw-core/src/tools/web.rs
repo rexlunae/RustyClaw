@@ -26,12 +26,10 @@ fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
         if attempt.previous().len() >= max {
             return attempt.error(format!("too many redirects (>{max})"));
         }
-        match SsrfValidator::default().validate_url(attempt.url().as_str()) {
+        let url = attempt.url().clone();
+        match SsrfValidator::default().validate_url(url.as_str()) {
             Ok(()) => attempt.follow(),
-            Err(e) => attempt.error(format!(
-                "SSRF: blocked redirect to {}: {e}",
-                attempt.url()
-            )),
+            Err(e) => attempt.error(format!("SSRF: blocked redirect to {url}: {e}")),
         }
     })
 }

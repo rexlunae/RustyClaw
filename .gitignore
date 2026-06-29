@@ -31,3 +31,4 @@ Cargo.lock
 
 # Rasterized app icons — generated from logo.svg by rustyclaw-desktop/build.rs
 crates/rustyclaw-desktop/icons/
+/~/
