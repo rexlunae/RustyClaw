@@ -58,7 +58,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                     // An assistant turn that only carries tool calls has empty
                     // text — don't render an empty bubble box (which would also
                     // show an action bar). Render just the tool panels instead.
-                    let show_bubble = !(msg.content.trim().is_empty() && !msg.tool_calls.is_empty());
+                    let show_bubble = !msg.content.trim().is_empty() || msg.tool_calls.is_empty();
                     element! {
                         View(
                             key: i as u64,
