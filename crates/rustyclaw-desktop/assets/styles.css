@@ -634,6 +634,47 @@ body,
 
 /* ── 5. Composer ────────────────────────────────────────────────────────── */
 
+/* Pin the composer to the bottom of the chat column so it never scrolls
+   offscreen. The embedded ChatSurface renders transcript + input box +
+   buttons in document order inside .chat-scroll; the input box and button
+   row are sticky so they stay anchored while the transcript scrolls. */
+.gc-embedded .gc-input-box {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    background: var(--rc-bg);
+    padding: 8px 0 0;
+    border-top: 1px solid var(--rc-border);
+}
+
+/* The textarea is the bubble; give it room on the right for the send button. */
+.gc-embedded .gc-input-box .textarea {
+    border-radius: 14px;
+    padding-right: 56px;
+    resize: none;
+}
+
+/* Compact, modern Send/Stop kept pinned bottom-right with the composer. */
+.gc-embedded .buttons {
+    position: sticky;
+    bottom: 0;
+    z-index: 6;
+    justify-content: flex-end;
+    background: var(--rc-bg);
+    margin: 0;
+    padding: 8px 0 10px;
+}
+
+.gc-embedded .buttons .button {
+    border-radius: 999px;
+    min-width: 40px;
+    height: 40px;
+    padding: 0 18px;
+    font-weight: 600;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
+    margin: 0;
+}
+
 .model-bar {
     display: flex;
     gap: 6px;
