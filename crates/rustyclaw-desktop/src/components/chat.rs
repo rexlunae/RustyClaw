@@ -3,10 +3,13 @@
 //! composer accessory (model + working-directory selectors).
 //!
 //! This component owns the local input value (`Signal<String>`) for snappy
-//! typing and the auto-scroll behaviour; everything below the textarea — the
-//! transcript, attachment chips, send/stop buttons — is rendered by the crate.
+//! typing and the auto-scroll behaviour; the transcript and attachment chips
+//! are rendered by the crate. The send/stop buttons are rendered by us through
+//! the crate's `input_accessory` slot so they sit *inside* the input box (the
+//! crate's own send/stop buttons render outside it, so they stay disabled).
 
 use dioxus::prelude::*;
+use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button};
 use dioxus_genai_chat::{ChatControls, ChatSurface, ContextEvent};
 use rustyclaw_core::ui::ChatMessage;
 
@@ -75,10 +78,12 @@ pub fn Chat(props: ChatProps) -> Element {
     let is_processing = props.surface.is_processing;
     let has_messages = !props.messages.is_empty();
 
+    // The crate renders its send/stop buttons *below* the input box, so keep
+    // them off; ours live in the accessory row inside the box instead.
     let controls = ChatControls {
         show_input: true,
-        show_send_button: !is_processing,
-        show_stop_button: is_processing,
+        show_send_button: false,
+        show_stop_button: false,
         show_retry_button: false,
         show_clear_button: false,
         input_enabled: !is_processing,
@@ -92,7 +97,7 @@ pub fn Chat(props: ChatProps) -> Element {
 
     let on_submit = props.on_submit;
     let on_input_change = props.on_input_change;
-    let send = move |text: String| {
+    let mut send = move |text: String| {
         let text = text.trim().to_string();
         if !text.is_empty() && !is_processing {
             on_submit.call(text);
@@ -101,6 +106,7 @@ pub fn Chat(props: ChatProps) -> Element {
         }
     };
 
+    let on_cancel = props.on_cancel;
     let accessory = rsx! {
         ComposerAccessory {
             current_provider: props.bottom_bar.composer.current_provider.clone(),
@@ -109,6 +115,25 @@ pub fn Chat(props: ChatProps) -> Element {
             on_model_change: props.on_model_change,
             on_add_provider: props.on_add_provider,
             on_select_directory: props.on_select_directory,
+        }
+        if is_processing {
+            Button {
+                size: BulmaSize::Small,
+                color: BulmaColor::Warning,
+                outlined: true,
+                class: "composer-stop",
+                onclick: move |_| on_cancel.call(()),
+                "Stop"
+            }
+        } else {
+            Button {
+                size: BulmaSize::Small,
+                color: BulmaColor::Primary,
+                class: "composer-send",
+                disabled: input_ref().trim().is_empty(),
+                onclick: move |_| send(input_ref()),
+                "Send"
+            }
         }
     };
 
