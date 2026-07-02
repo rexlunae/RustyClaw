@@ -62,8 +62,23 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             ChatRole::Assistant,
             ChatMessagePayload::Error(msg.content.clone()),
         ),
-        // Info / Success / Warning / System and the (rare, usually folded)
-        // tool roles all render as a neutral system line.
+        // Inline notices keep their tone via an icon prefix; the crate
+        // renders System rows as neutral lines, so the glyph carries the
+        // severity. Full text is preserved (no truncation).
+        MessageRole::Info => (
+            ChatRole::System,
+            ChatMessagePayload::Text(format!("ℹ️ {}", msg.content)),
+        ),
+        MessageRole::Success => (
+            ChatRole::System,
+            ChatMessagePayload::Text(format!("✅ {}", msg.content)),
+        ),
+        MessageRole::Warning => (
+            ChatRole::System,
+            ChatMessagePayload::Text(format!("⚠️ {}", msg.content)),
+        ),
+        // System and the (rare, usually folded) tool roles render as a
+        // neutral system line.
         _ => (
             ChatRole::System,
             ChatMessagePayload::Text(msg.content.clone()),

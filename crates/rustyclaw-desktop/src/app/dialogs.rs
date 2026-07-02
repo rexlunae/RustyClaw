@@ -16,6 +16,7 @@ use crate::components::*;
 use crate::state::{AppState, Theme};
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
+use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 use rustyclaw_view::*;
@@ -135,7 +136,10 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 on_update: move |data| hatching_dialog.set(data),
                 on_complete: move |result: rustyclaw_view::HatchingResult| {
                     if let Some(personality) = result.personality.clone() {
-                        state.write().status_message = Some(format!("Personality set: {}", personality));
+                        state.write().push_notice(
+                            MessageRole::Success,
+                            format!("Personality set: {}", personality),
+                        );
                     }
                     let name = result.name.clone();
                     state.write().agent_name = Some(result.name);
@@ -207,10 +211,13 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                             }
                         });
                     }
-                    state.write().status_message = Some(format!(
-                        "API key saved for {}",
-                        rustyclaw_core::providers::display_name_for_provider(&provider_id)
-                    ));
+                    state.write().push_notice(
+                        MessageRole::Success,
+                        format!(
+                            "API key saved for {}",
+                            rustyclaw_core::providers::display_name_for_provider(&provider_id)
+                        ),
+                    );
                 },
                 on_close: move |_| show_settings.set(false),
             }
@@ -225,15 +232,19 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         let result = create_swarm_from_template(&template);
                         swarm_creating.set(false);
                         if let Err(e) = result {
-                            state.write().status_message =
-                                Some(format!("Failed to create swarm: {}", e));
+                            state.write().push_notice(
+                                MessageRole::Error,
+                                format!("Failed to create swarm: {}", e),
+                            );
                         }
                     });
                 },
                 on_stop: move |name: String| {
                     if let Err(e) = stop_swarm(&name) {
-                        state.write().status_message =
-                            Some(format!("Failed to stop swarm: {}", e));
+                        state.write().push_notice(
+                            MessageRole::Error,
+                            format!("Failed to stop swarm: {}", e),
+                        );
                     }
                 },
                 on_close: move |_| show_swarm.set(false),
@@ -390,7 +401,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 },
                 on_close: move |_| {
                     state.write().pending_device_flow = None;
-                    state.write().status_message = Some("Device flow cancelled.".to_string());
+                    state
+                        .write()
+                        .push_notice(MessageRole::Info, "Device flow cancelled.");
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {

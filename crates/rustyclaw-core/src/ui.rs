@@ -121,6 +121,19 @@ impl ChatMessage {
         }
     }
 
+    /// Create an inline notice (Info, Success, Warning, or Error banner
+    /// rendered in the transcript at the point it occurred).
+    pub fn notice(role: MessageRole, content: impl Into<String>) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            role,
+            content: content.into(),
+            timestamp: chrono::Utc::now(),
+            tool_calls: Vec::new(),
+            is_streaming: false,
+        }
+    }
+
     /// Append text content to this message (used during streaming).
     pub fn append_content(&mut self, delta: &str) {
         if self.is_streaming {

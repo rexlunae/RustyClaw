@@ -93,9 +93,6 @@ pub struct AppState {
     /// Files and directories attached to the next prompt.
     pub prompt_attachments: Vec<PromptAttachment>,
 
-    /// Status messages
-    pub status_message: Option<String>,
-
     /// Whether the sidebar is collapsed.
     pub sidebar_collapsed: bool,
 
@@ -206,7 +203,6 @@ impl Default for AppState {
             model,
             provider,
             prompt_attachments: Vec::new(),
-            status_message: None,
             sidebar_collapsed: false,
             theme: Theme::default(),
             pending_tool_approval: None,
@@ -241,6 +237,17 @@ impl AppState {
     pub fn add_user_message(&mut self, content: String) {
         let msg = ChatMessage::user(content);
         self.messages.push_back(msg);
+    }
+
+    /// Append an inline notice banner (Info/Success/Warning/Error) to the
+    /// transcript. Notices render in the chat at the point they occurred,
+    /// replacing the old transient status snackbar.
+    pub fn push_notice(
+        &mut self,
+        role: rustyclaw_core::types::MessageRole,
+        content: impl Into<String>,
+    ) {
+        self.messages.push_back(ChatMessage::notice(role, content));
     }
 
     /// Mark a request as submitted: the response that follows belongs to the

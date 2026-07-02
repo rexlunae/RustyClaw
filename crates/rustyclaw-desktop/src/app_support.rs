@@ -9,6 +9,7 @@ use rustyclaw_view::{chrono, serde_json, tracing, uuid};
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
+use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_view::{SecretInfoData, SecretsDialogData, SwarmAgentData, SwarmData};
 
@@ -101,7 +102,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             let mut s = state.write();
             s.connection = ConnectionStatus::Disconnected;
             if let Some(r) = reason {
-                s.status_message = Some(format!("Disconnected: {}", r));
+                s.push_notice(MessageRole::Warning, format!("Disconnected: {}", r));
             }
             // The in-flight request (if any) died with the connection.
             s.is_processing = false;
@@ -116,11 +117,12 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             state.write().connection = ConnectionStatus::Authenticated;
         }
         GatewayEvent::AuthFailed { message, retry } => {
-            state.write().status_message = Some(if retry {
+            let text = if retry {
                 format!("Auth failed (retry allowed): {}", message)
             } else {
                 format!("Auth failed: {}", message)
-            });
+            };
+            state.write().push_notice(MessageRole::Error, text);
         }
         GatewayEvent::VaultLocked => {
             state.write().vault_locked = true;
@@ -132,7 +134,9 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             state.write().model = Some(model);
         }
         GatewayEvent::ModelError { message } => {
-            state.write().status_message = Some(format!("Model error: {}", message));
+            state
+                .write()
+                .push_notice(MessageRole::Error, format!("Model error: {}", message));
         }
         // Live stream events carry no thread id; they belong to the thread
         // that submitted the request (`streaming_thread_id`). When the user
@@ -184,14 +188,13 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         }
         GatewayEvent::ToolResult {
             id,
-            name,
+            name: _,
             result,
             is_error,
         } => {
             let mut s = state.write();
-            if is_error {
-                s.status_message = Some(format!("Tool '{}' failed", name));
-            }
+            // A failed tool call already surfaces inline: the tool panel
+            // shows Failed status with the full error result. No banner.
             if s.stream_targets_foreground() {
                 s.set_tool_result(&id, result, is_error);
             }
@@ -377,40 +380,54 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 );
                 state.write().secrets_data = data;
             } else {
-                state.write().status_message = Some("Failed to list secrets.".to_string());
+                state
+                    .write()
+                    .push_notice(MessageRole::Error, "Failed to list secrets.");
             }
         }
         GatewayEvent::SecretsStoreResult { ok, message } => {
             if ok {
-                state.write().status_message = Some("Secret stored successfully.".to_string());
+                state
+                    .write()
+                    .push_notice(MessageRole::Success, "Secret stored successfully.");
                 // Trigger refresh to show new secret
                 // (parent doesn't have gateway handle here, so we just update status)
             } else {
-                state.write().status_message = Some(format!("Failed to store secret: {}", message));
+                state.write().push_notice(
+                    MessageRole::Error,
+                    format!("Failed to store secret: {}", message),
+                );
             }
         }
         GatewayEvent::SecretsDeleteResult { ok, message } => {
             if ok {
-                state.write().status_message = Some("Secret deleted.".to_string());
+                state
+                    .write()
+                    .push_notice(MessageRole::Success, "Secret deleted.");
             } else {
-                state.write().status_message = Some(format!(
-                    "Failed to delete secret: {}",
-                    message.unwrap_or_default()
-                ));
+                state.write().push_notice(
+                    MessageRole::Error,
+                    format!("Failed to delete secret: {}", message.unwrap_or_default()),
+                );
             }
         }
         GatewayEvent::SecretsSetPolicyResult { ok, message } => {
             if ok {
-                state.write().status_message = Some("Policy updated.".to_string());
+                state
+                    .write()
+                    .push_notice(MessageRole::Success, "Policy updated.");
             } else {
-                state.write().status_message = Some(format!(
-                    "Failed to set policy: {}",
-                    message.unwrap_or_default()
-                ));
+                state.write().push_notice(
+                    MessageRole::Error,
+                    format!("Failed to set policy: {}", message.unwrap_or_default()),
+                );
             }
         }
         GatewayEvent::ModelReloaded { provider, model } => {
-            state.write().status_message = Some(format!("Model reloaded: {provider}/{model}"));
+            state.write().push_notice(
+                MessageRole::Success,
+                format!("Model reloaded: {provider}/{model}"),
+            );
         }
         GatewayEvent::ThinkingDelta => {
             // Keeps the thinking clock alive server-side; the desktop tracks
@@ -420,7 +437,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             // Thread state syncs via ThreadsUpdate/ThreadHistory.
         }
         GatewayEvent::Warning { message } => {
-            state.write().status_message = Some(message);
+            state.write().push_notice(MessageRole::Warning, message);
         }
         // Secrets-management results without a desktop UI surface. These are
         // driven from the TUI's secrets manager; the desktop ignores them.
@@ -433,11 +450,12 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         | GatewayEvent::SecretsVerifyTotpResult { .. }
         | GatewayEvent::SecretsRemoveTotpResult { .. } => {}
         GatewayEvent::Error { message } => {
-            state.write().status_message = Some(message);
-            state.write().is_processing = false;
+            let mut s = state.write();
+            s.push_notice(MessageRole::Error, message);
+            s.is_processing = false;
         }
         GatewayEvent::Info { message } => {
-            state.write().status_message = Some(message);
+            state.write().push_notice(MessageRole::Info, message);
         }
         GatewayEvent::DomQuery { .. } => {
             // Handled directly in the UI updater task via handle_dom_query.
@@ -526,9 +544,9 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::EngineActionResult { ok, message, .. } => {
             let mut s = state.write();
             if ok {
-                s.status_message = Some(format!("Engine: {}", message));
+                s.push_notice(MessageRole::Success, format!("Engine: {}", message));
             } else {
-                s.status_message = Some(format!("Engine error: {}", message));
+                s.push_notice(MessageRole::Error, format!("Engine error: {}", message));
             }
         }
     }
