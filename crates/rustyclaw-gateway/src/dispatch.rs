@@ -483,8 +483,17 @@ pub(crate) async fn dispatch_text_message(
         // the user's message would make the model answer the flush instead of
         // the user — the prompt would never be answered. Mid-tool-loop rounds
         // (trailing tool results) skip the flush and retry on a later round.
+        //
+        // The once-per-cycle state lives on the thread (persisted), not just
+        // in this request: near the threshold every prompt would otherwise
+        // re-trigger the flush, since compaction — which starts the next
+        // cycle — only fires at the (higher) compaction threshold.
         let ends_with_user = resolved.messages.last().is_some_and(|m| m.role == "user");
-        if ends_with_user && memory_flush.should_flush(estimated, context_limit, COMPACTION_THRESHOLD)
+        let thread_already_flushed = thread_mgr.foreground().is_some_and(|t| t.memory_flushed);
+        let mut flushed_this_round = false;
+        if ends_with_user
+            && !thread_already_flushed
+            && memory_flush.should_flush(estimated, context_limit, COMPACTION_THRESHOLD)
         {
             let flush_msg = memory_flush.build_inline_flush_message();
             let insert_at = resolved.messages.len() - 1;
@@ -494,7 +503,12 @@ pub(crate) async fn dispatch_text_message(
 
             // Mark as flushed to prevent repeated injections
             memory_flush.mark_flushed();
+            if let Some(thread) = thread_mgr.foreground_mut() {
+                thread.memory_flushed = true;
+            }
+            let _ = thread_mgr.save_to_file(threads_path);
             flush_pending_resume = true;
+            flushed_this_round = true;
 
             // Notify the TUI about the memory flush
             let _ =
@@ -503,8 +517,12 @@ pub(crate) async fn dispatch_text_message(
         }
 
         // ── Auto-compact if context is getting large ────────────────
-        // Proceed with compaction if over threshold
-        if estimated > threshold {
+        // Proceed with compaction if over threshold. When the flush was
+        // injected this round, give the model one round with the *full*
+        // context to save memories first — compaction picks up on a later
+        // round — unless the window is critically full.
+        let critically_full = estimated > (context_limit as f64 * 0.95) as usize;
+        if estimated > threshold && (!flushed_this_round || critically_full) {
             let _ = protocol::server::send_info(writer, "⏳ Compacting context…").await;
             match providers::compact_conversation(http, &mut resolved, context_limit, writer).await
             {
@@ -675,8 +693,7 @@ pub(crate) async fn dispatch_text_message(
                 // prompt hasn't been answered yet. The acknowledgement was
                 // already streamed to the client; nudge the model to
                 // continue with the actual request (once).
-                if flush_pending_resume
-                    && tool_executor::is_flush_acknowledgement(&model_resp.text)
+                if flush_pending_resume && tool_executor::is_flush_acknowledgement(&model_resp.text)
                 {
                     flush_pending_resume = false;
                     resolved

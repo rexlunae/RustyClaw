@@ -243,6 +243,13 @@ pub struct AgentThread {
 
     /// Should this thread's context be shared with parent?
     pub share_context: bool,
+
+    /// Whether a pre-compaction memory flush already ran in the current
+    /// compaction cycle. Set when the flush instruction is injected and
+    /// cleared when compaction runs, so the flush fires once per cycle
+    /// rather than on every prompt near the threshold.
+    #[serde(default)]
+    pub memory_flushed: bool,
 }
 
 impl AgentThread {
@@ -269,6 +276,7 @@ impl AgentThread {
             compact_summary: None,
             result: None,
             share_context: true,
+            memory_flushed: false,
         }
     }
 
@@ -301,6 +309,7 @@ impl AgentThread {
             compact_summary: None,
             result: None,
             share_context: true,
+            memory_flushed: false,
         }
     }
 
@@ -331,6 +340,7 @@ impl AgentThread {
             compact_summary: None,
             result: None,
             share_context: false,
+            memory_flushed: false,
         }
     }
 
@@ -361,6 +371,7 @@ impl AgentThread {
             compact_summary: None,
             result: None,
             share_context: true,
+            memory_flushed: false,
         }
     }
 
@@ -473,6 +484,9 @@ impl AgentThread {
         }
 
         self.compact_summary = Some(summary);
+        // A new compaction cycle begins: allow the next pre-compaction
+        // memory flush to fire again.
+        self.memory_flushed = false;
         self.last_activity = SystemTime::now();
     }
 
