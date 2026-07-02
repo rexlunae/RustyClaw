@@ -11,6 +11,7 @@ use crate::app_support::*;
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
+use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ConnectionStatus;
 use rustyclaw_core::user_prompt_types::UserPrompt;
 
@@ -449,7 +450,7 @@ pub fn App() -> Element {
                 {
                     s.prompt_attachments.push(attachment);
                 }
-                s.status_message = Some(format!("Attached file {}", path));
+                s.push_notice(MessageRole::Info, format!("Attached file {}", path));
             }
         });
     };
@@ -476,7 +477,7 @@ pub fn App() -> Element {
                 {
                     s.prompt_attachments.push(attachment);
                 }
-                s.status_message = Some(format!("Attached directory {}", path));
+                s.push_notice(MessageRole::Info, format!("Attached directory {}", path));
             }
         });
     };
@@ -486,7 +487,7 @@ pub fn App() -> Element {
         let before = s.prompt_attachments.len();
         s.prompt_attachments.retain(|item| item.path != path);
         if s.prompt_attachments.len() != before {
-            s.status_message = Some(format!("Removed attachment {}", path));
+            s.push_notice(MessageRole::Info, format!("Removed attachment {}", path));
         }
     };
 
@@ -598,8 +599,10 @@ pub fn App() -> Element {
     };
 
     let on_cancel = move |_| {
-        state.write().status_message = Some("Cancellation requested…".to_string());
-        state.write().finish_current_message();
+        let mut s = state.write();
+        s.push_notice(MessageRole::Info, "Cancellation requested…");
+        s.finish_current_message();
+        drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -657,8 +660,9 @@ pub fn App() -> Element {
             } else if event.id == ids.swarm {
                 show_swarm.set(true);
             } else if event.id == ids.skills {
-                state.write().status_message =
-                    Some("Skills manager coming soon on desktop".to_string());
+                state
+                    .write()
+                    .push_notice(MessageRole::Info, "Skills manager coming soon on desktop");
             } else if event.id == ids.system_info {
                 let v = state.read().show_system_info;
                 state.write().show_system_info = !v;
@@ -686,7 +690,7 @@ pub fn App() -> Element {
         {
             s.prompt_attachments.push(attachment);
         }
-        s.status_message = Some(format!("Attached {}", path.display()));
+        s.push_notice(MessageRole::Info, format!("Attached {}", path.display()));
     };
 
     // Top-bar title: "Project — Thread" for the active project / foreground thread.
@@ -818,11 +822,13 @@ pub fn App() -> Element {
                 }
 
             div { class: "main",
-                // Connection / status banners — which banners appear, and
-                // which actions each offers, is decided by the view layer.
+                // Connection banners (connecting / lost link). Transient
+                // status and error text now lands inline in the transcript
+                // as notice messages, so only live connection state renders
+                // as a top banner.
                 for banner in rustyclaw_view::build_banners(
                     &state.read().connection,
-                    state.read().status_message.as_deref(),
+                    None,
                 ) {
                     Notification {
                         color: crate::components::tone_color(banner.tone),
@@ -849,7 +855,9 @@ pub fn App() -> Element {
                                             BannerActionKind::Reconnect => do_reconnect(sig),
                                             BannerActionKind::PairGateway => show_pairing.set(true),
                                             BannerActionKind::DismissStatus => {
-                                                state.write().status_message = None;
+                                                // Status text now lives inline in the
+                                                // transcript; connection banners have
+                                                // no dismissable status to clear.
                                             }
                                             BannerActionKind::CopyText => {
                                                 crate::components::copy_to_clipboard(
@@ -950,10 +958,13 @@ pub fn App() -> Element {
                                                     );
                                                 s.directory_selector_expanded = false;
                                                 s.directory_selector_error = None;
-                                                s.status_message = Some(format!(
-                                                    "Working directory set to {}",
-                                                    display_path(&selected)
-                                                ));
+                                                s.push_notice(
+                                                    MessageRole::Info,
+                                                    format!(
+                                                        "Working directory set to {}",
+                                                        display_path(&selected)
+                                                    ),
+                                                );
                                             }
                                             // Tell the gateway so agent tools use the new dir.
                                             // Guard must be dropped before .await to avoid
@@ -992,10 +1003,10 @@ pub fn App() -> Element {
                                 s.file_browser = rustyclaw_view::FileBrowserData::load(&path);
                                 s.directory_selector_expanded = false;
                                 s.directory_selector_error = None;
-                                s.status_message = Some(format!(
-                                    "Working directory set to {}",
-                                    display_path(&path)
-                                ));
+                                s.push_notice(
+                                    MessageRole::Info,
+                                    format!("Working directory set to {}", display_path(&path)),
+                                );
                                 // Tell the gateway so agent tools use the new dir.
                                 let gw = gateway.read().clone();
                                 if let Some(client) = gw {
