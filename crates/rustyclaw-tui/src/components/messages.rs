@@ -66,7 +66,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                     let show_bubble = !is_empty_turn;
                     // Only the live tail shows a heartbeat; stale empty turns in
                     // history are dropped so they don't leave a frozen "working…".
-                    let show_activity = is_empty_turn && msg.tool_calls.is_empty() && is_last;
+                    let show_activity = is_empty_turn && msg.tool_calls.is_empty() && is_last && (props.surface.is_streaming || props.surface.is_thinking);
                     element! {
                         View(
                             key: i as u64,
