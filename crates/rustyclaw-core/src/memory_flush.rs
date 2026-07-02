@@ -1,8 +1,10 @@
 //! Pre-compaction memory flush.
 //!
-//! Triggers a silent agent turn before compaction to persist durable memories.
-//! This prevents important context from being lost when conversation history
-//! is compacted to fit within the model's context window.
+//! Injects an instruction into the conversation shortly before compaction so
+//! the agent persists durable memories while the full context is still
+//! available. The instruction is inserted *before* the user's latest message
+//! so the model flushes memories via tools and then still answers the user —
+//! it must never replace the user's turn.
 
 use chrono::{Local, Utc};
 use serde::{Deserialize, Serialize};
@@ -37,16 +39,19 @@ fn default_soft_threshold() -> usize {
 }
 
 fn default_flush_system_prompt() -> String {
-    "Pre-compaction memory flush. Session context is approaching limits. \
-     Store any durable memories now (use memory/YYYY-MM-DD.md; create memory/ if needed). \
+    "Pre-compaction memory flush. Session context is approaching limits and \
+     older messages will soon be summarized. Before answering the user's next \
+     message, store any durable memories using your file tools \
+     (use memory/YYYY-MM-DD.md; create memory/ if needed). \
      IMPORTANT: If the file already exists, APPEND new content only — do not overwrite existing entries. \
-     If nothing important needs to be stored, reply with NO_REPLY."
+     Then answer the user's message as normal. If nothing important needs to \
+     be stored, just answer the user's message directly."
         .to_string()
 }
 
 fn default_flush_user_prompt() -> String {
-    "Write any lasting notes or context to memory files before compaction. \
-     Reply with NO_REPLY if nothing needs to be stored."
+    "Write any lasting notes or context to memory files before compaction, \
+     then continue with the conversation."
         .to_string()
 }
 
@@ -104,21 +109,22 @@ impl MemoryFlush {
         current_tokens >= flush_point
     }
 
-    /// Build the flush messages to inject.
-    ///
-    /// Returns (system_message, user_message) with date/time substituted.
-    pub fn build_flush_messages(&self) -> (String, String) {
+    /// Build a single system message to inject *before* the user's latest
+    /// message, combining the configured system and user prompts. Used by the
+    /// dispatch loop so the flush becomes an additional instruction for the
+    /// current turn rather than a replacement turn that would swallow the
+    /// user's prompt.
+    pub fn build_inline_flush_message(&self) -> String {
         let date = Local::now().format("%Y-%m-%d").to_string();
         let time = Utc::now().format("%H:%M UTC").to_string();
 
-        let system = format!(
-            "{}\nCurrent time: {}. Today's date: {}.",
-            self.config.system_prompt, time, date
-        );
-
-        let user = self.config.user_prompt.replace("YYYY-MM-DD", &date);
-
-        (system, user)
+        format!(
+            "{}\n{}\nCurrent time: {}. Today's date: {}.",
+            self.config.system_prompt.replace("YYYY-MM-DD", &date),
+            self.config.user_prompt.replace("YYYY-MM-DD", &date),
+            time,
+            date
+        )
     }
 
     /// Mark that we've flushed this cycle.
@@ -178,14 +184,17 @@ mod tests {
     }
 
     #[test]
-    fn test_build_flush_messages() {
+    fn test_build_inline_flush_message() {
         let config = MemoryFlushConfig::default();
         let flush = MemoryFlush::new(config);
 
-        let (system, user) = flush.build_flush_messages();
+        let msg = flush.build_inline_flush_message();
 
-        assert!(system.contains("Pre-compaction memory flush"));
-        assert!(system.contains("UTC"));
-        assert!(!user.contains("YYYY-MM-DD")); // Should be substituted
+        assert!(msg.contains("Pre-compaction memory flush"));
+        assert!(msg.contains("UTC"));
+        assert!(!msg.contains("YYYY-MM-DD")); // Should be substituted
+        // The instruction must direct the model to still answer the user,
+        // never to swallow the turn.
+        assert!(!msg.contains("NO_REPLY"));
     }
 }
