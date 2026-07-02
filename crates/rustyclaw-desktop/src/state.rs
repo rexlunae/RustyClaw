@@ -155,6 +155,16 @@ pub struct AppState {
 
     /// Service list data for the services dialog.
     pub services_data: Option<rustyclaw_view::ServiceListData>,
+
+    /// Whether the local engines/models dialog is visible.
+    pub show_engines_dialog: bool,
+
+    /// Local engine + model data for the engines dialog.
+    pub engines_data: Option<rustyclaw_view::EnginesPanelData>,
+
+    /// Set when an engine action completed and the engine/model lists
+    /// should be re-fetched from the gateway.
+    pub engines_stale: bool,
 }
 
 impl Default for AppState {
@@ -224,6 +234,9 @@ impl Default for AppState {
             show_system_info: false,
             show_services_dialog: false,
             services_data: None,
+            show_engines_dialog: false,
+            engines_data: None,
+            engines_stale: false,
         }
     }
 }

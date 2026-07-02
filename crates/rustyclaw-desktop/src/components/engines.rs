@@ -13,10 +13,18 @@ pub struct EnginesDialogProps {
     pub on_engine_action: EventHandler<(String, String)>,
     pub on_model_action: EventHandler<(String, String, String)>,
     pub on_pull: EventHandler<(String, String)>,
+    /// Select an engine to browse its models (sends a model-list request).
+    pub on_select_engine: EventHandler<String>,
+    /// Switch the active chat provider/model to this local (engine, model).
+    pub on_use_model: EventHandler<(String, String)>,
+    /// Re-fetch the engine list (and selected engine's models).
+    pub on_refresh: EventHandler<()>,
 }
 
 #[component]
 pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
+    let mut pull_input = use_signal(String::new);
+
     if !props.visible {
         return rsx! {};
     }
@@ -29,6 +37,10 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
             onclose: move |_| props.on_close.call(()),
             footer: rsx! {
                 dioxus_bulma::prelude::Buttons {
+                    dioxus_bulma::prelude::Button {
+                        onclick: move |_| props.on_refresh.call(()),
+                        "Refresh"
+                    }
                     dioxus_bulma::prelude::Button {
                         color: BulmaColor::Primary,
                         onclick: move |_| props.on_close.call(()),
@@ -115,6 +127,21 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                         }
                                     }
                                 }
+                                if engine.running {
+                                    div { class: "level-item",
+                                        {
+                                            let eid = engine.id.clone();
+                                            let is_selected = data.selected_engine.as_deref() == Some(engine.id.as_str());
+                                            rsx! {
+                                                dioxus_bulma::prelude::Button {
+                                                    color: if is_selected { BulmaColor::Link } else { BulmaColor::Ghost },
+                                                    onclick: move |_| props.on_select_engine.call(eid.clone()),
+                                                    "Models"
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         if engine.running {
@@ -167,9 +194,24 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                 let eid = selected.clone();
                                                 let mname = model.name.clone();
                                                 let loaded = model.loaded;
+                                                let engine_caps = data.engine(selected).cloned();
+                                                let can_load = engine_caps.as_ref().is_some_and(|e| e.can("load"));
+                                                let can_unload = engine_caps.as_ref().is_some_and(|e| e.can("unload"));
+                                                let can_remove = engine_caps.as_ref().is_some_and(|e| e.can("remove"));
                                                 rsx! {
                                                     dioxus_bulma::prelude::Buttons {
-                                                        if !loaded {
+                                                        {
+                                                            let eid2 = eid.clone();
+                                                            let mname2 = mname.clone();
+                                                            rsx! {
+                                                                dioxus_bulma::prelude::Button {
+                                                                    color: BulmaColor::Primary,
+                                                                    onclick: move |_| props.on_use_model.call((eid2.clone(), mname2.clone())),
+                                                                    "Use"
+                                                                }
+                                                            }
+                                                        }
+                                                        if !loaded && can_load {
                                                             {
                                                                 let eid2 = eid.clone();
                                                                 let mname2 = mname.clone();
@@ -182,7 +224,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                                 }
                                                             }
                                                         }
-                                                        if loaded {
+                                                        if loaded && can_unload {
                                                             {
                                                                 let eid2 = eid.clone();
                                                                 let mname2 = mname.clone();
@@ -195,8 +237,56 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                                 }
                                                             }
                                                         }
+                                                        if can_remove {
+                                                            {
+                                                                let eid2 = eid.clone();
+                                                                let mname2 = mname.clone();
+                                                                rsx! {
+                                                                    dioxus_bulma::prelude::Button {
+                                                                        color: BulmaColor::Danger,
+                                                                        outlined: true,
+                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), "remove".into())),
+                                                                        "Remove"
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
                                                     }
                                                 }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Pull a new model by name (engines that support it).
+                        if data.engine(selected).is_some_and(|e| e.can("pull")) {
+                            div { class: "field has-addons mt-3",
+                                div { class: "control is-expanded",
+                                    input {
+                                        class: "input",
+                                        placeholder: "Model to pull (e.g. llama3.1:8b)",
+                                        value: "{pull_input}",
+                                        oninput: move |evt| pull_input.set(evt.value()),
+                                    }
+                                }
+                                div { class: "control",
+                                    {
+                                        let eid = selected.clone();
+                                        let pulling = data.pull_progress.is_some();
+                                        rsx! {
+                                            dioxus_bulma::prelude::Button {
+                                                color: BulmaColor::Info,
+                                                disabled: pull_input.read().trim().is_empty() || pulling,
+                                                onclick: move |_| {
+                                                    let model = pull_input.read().trim().to_string();
+                                                    if !model.is_empty() {
+                                                        props.on_pull.call((eid.clone(), model));
+                                                        pull_input.set(String::new());
+                                                    }
+                                                },
+                                                "Pull"
                                             }
                                         }
                                     }

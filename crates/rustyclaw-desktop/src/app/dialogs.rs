@@ -482,6 +482,122 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 on_close: move |_| state.write().show_services_dialog = false,
             }
 
+            EnginesDialog {
+                visible: state.read().show_engines_dialog,
+                data: state.read().engines_data.clone(),
+                on_close: move |_| state.write().show_engines_dialog = false,
+                on_engine_action: move |(engine, action): (String, String)| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::EngineAction { engine, action })
+                                .await
+                            {
+                                tracing::error!("Failed to send engine action: {}", e);
+                            }
+                        });
+                    }
+                },
+                on_model_action: move |(engine, model, action): (String, String, String)| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::EngineModelAction {
+                                    engine,
+                                    model,
+                                    action,
+                                    context_length: None,
+                                    extra_args: Vec::new(),
+                                })
+                                .await
+                            {
+                                tracing::error!("Failed to send model action: {}", e);
+                            }
+                        });
+                    }
+                },
+                on_pull: move |(engine, model): (String, String)| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::EngineModelPull {
+                                    engine,
+                                    model,
+                                    expected_size_bytes: None,
+                                })
+                                .await
+                            {
+                                tracing::error!("Failed to send model pull: {}", e);
+                            }
+                        });
+                    }
+                },
+                on_select_engine: move |engine: String| {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::EngineModelList { engine })
+                                .await
+                            {
+                                tracing::error!("Failed to request engine models: {}", e);
+                            }
+                        });
+                    }
+                },
+                on_use_model: move |(engine, model): (String, String)| {
+                    // Local engine ids double as provider ids (ollama,
+                    // lmstudio, llamacpp, exo), so switching the chat to a
+                    // local model is a regular provider/model switch.
+                    let gw = gateway.read().clone();
+                    let provider = engine.clone();
+                    let model_for_state = model.clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::ModelSwitch { provider, model })
+                                .await
+                            {
+                                tracing::error!("Failed to switch to local model: {}", e);
+                            }
+                        });
+                    }
+                    let mut s = state.write();
+                    s.provider = Some(engine.clone());
+                    s.model = Some(model_for_state.clone());
+                    s.show_engines_dialog = false;
+                    s.push_notice(
+                        MessageRole::Success,
+                        format!("Switched to {} / {}", engine, model_for_state),
+                    );
+                },
+                on_refresh: move |_| {
+                    let gw = gateway.read().clone();
+                    let selected = state
+                        .read()
+                        .engines_data
+                        .as_ref()
+                        .and_then(|d| d.selected_engine.clone());
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if let Err(e) = client.send(GatewayCommand::EngineList).await {
+                                tracing::error!("Failed to request engine list: {}", e);
+                            }
+                            if let Some(engine) = selected
+                                && let Err(e) = client
+                                    .send(GatewayCommand::EngineModelList { engine })
+                                    .await
+                            {
+                                tracing::error!("Failed to request engine models: {}", e);
+                            }
+                        });
+                    }
+                },
+            }
+
             // TOTP authentication modal
             if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
                 RcModal {

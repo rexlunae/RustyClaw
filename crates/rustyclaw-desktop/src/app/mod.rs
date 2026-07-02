@@ -206,6 +206,34 @@ pub fn App() -> Element {
         }
     });
 
+    // Re-fetch engine/model lists after an engine action completes, so the
+    // Local Models dialog reflects installs/starts/pulls/removals.
+    use_effect(move || {
+        if !state.read().engines_stale {
+            return;
+        }
+        state.write().engines_stale = false;
+        if !state.read().show_engines_dialog {
+            return;
+        }
+        let selected = state
+            .read()
+            .engines_data
+            .as_ref()
+            .and_then(|d| d.selected_engine.clone());
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client.send(GatewayCommand::EngineList).await;
+                if let Some(engine) = selected {
+                    let _ = client
+                        .send(GatewayCommand::EngineModelList { engine })
+                        .await;
+                }
+            });
+        }
+    });
+
     // Handle gateway events
     use_effect(move || {
         let gw = gateway.read().clone();
@@ -669,6 +697,23 @@ pub fn App() -> Element {
             } else if event.id == ids.services {
                 let v = state.read().show_services_dialog;
                 state.write().show_services_dialog = !v;
+            } else if event.id == ids.local_models {
+                let v = state.read().show_engines_dialog;
+                state.write().show_engines_dialog = !v;
+                if !v {
+                    // Opening: fetch the engine list (and host info for the
+                    // resource header, if we don't have it yet).
+                    let need_host = state.read().host_info.is_none();
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::EngineList).await;
+                            if need_host {
+                                let _ = client.send(GatewayCommand::HostInfoRequest).await;
+                            }
+                        });
+                    }
+                }
             } else if event.id == ids.quit {
                 dioxus::desktop::window().close();
             }
@@ -818,6 +863,19 @@ pub fn App() -> Element {
                             }
                         },
                         on_settings: move |_| show_settings.set(true),
+                        on_local_models: move |_| {
+                            state.write().show_engines_dialog = true;
+                            let need_host = state.read().host_info.is_none();
+                            let gw = gateway.read().clone();
+                            if let Some(client) = gw {
+                                spawn(async move {
+                                    let _ = client.send(GatewayCommand::EngineList).await;
+                                    if need_host {
+                                        let _ = client.send(GatewayCommand::HostInfoRequest).await;
+                                    }
+                                });
+                            }
+                        },
                     }
                 }
 
