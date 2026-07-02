@@ -42,6 +42,7 @@ pub struct SidebarProps {
     pub on_pair: EventHandler<()>,
     pub on_secrets: EventHandler<()>,
     pub on_settings: EventHandler<()>,
+    pub on_local_models: EventHandler<()>,
     /// The full project → thread tree.
     pub tree: SidebarTree,
     pub foreground_id: Option<u64>,
@@ -92,6 +93,7 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 on_pair: props.on_pair,
                 on_secrets: props.on_secrets,
                 on_settings: props.on_settings,
+                on_local_models: props.on_local_models,
             }
         }
     }
@@ -532,6 +534,7 @@ struct FooterActionsProps {
     on_pair: EventHandler<()>,
     on_secrets: EventHandler<()>,
     on_settings: EventHandler<()>,
+    on_local_models: EventHandler<()>,
 }
 
 /// Pair, Secrets, and Settings buttons at the bottom of the sidebar.
@@ -556,6 +559,15 @@ fn FooterActions(props: FooterActionsProps) -> Element {
                 onclick: move |_| props.on_secrets.call(()),
                 span { class: "icon-only", "🔑" }
                 if !props.collapsed { span { "Secrets" } }
+            }
+            Button {
+                color: BulmaColor::Ghost,
+                size: BulmaSize::Small,
+                fullwidth: true,
+                class: "sidebar-action",
+                onclick: move |_| props.on_local_models.call(()),
+                span { class: "icon-only", "🧠" }
+                if !props.collapsed { span { "Local models" } }
             }
             Button {
                 color: BulmaColor::Ghost,

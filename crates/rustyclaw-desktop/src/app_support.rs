@@ -536,19 +536,126 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             // Logs are displayed in a separate dialog; no state update needed.
         }
         // ── Engines ──────────────────────────────────────────────────────
-        GatewayEvent::EngineListResult { .. }
-        | GatewayEvent::EngineModelListResult { .. }
-        | GatewayEvent::EnginePullProgress { .. } => {
-            // Will be rendered in the engines dialog panel in P5.
-        }
-        GatewayEvent::EngineActionResult { ok, message, .. } => {
+        GatewayEvent::EngineListResult { engines } => {
             let mut s = state.write();
+            let (host_ram, host_vram, host_gpu) = host_resources(&s);
+            let panel = s
+                .engines_data
+                .get_or_insert_with(rustyclaw_view::EnginesPanelData::default);
+            panel.engines = engines.into_iter().map(dto_to_engine_data).collect();
+            panel.host_ram_bytes = host_ram;
+            panel.host_vram_bytes = host_vram;
+            panel.host_gpu_name = host_gpu;
+        }
+        GatewayEvent::EngineModelListResult { engine, models } => {
+            let mut s = state.write();
+            let panel = s
+                .engines_data
+                .get_or_insert_with(rustyclaw_view::EnginesPanelData::default);
+            panel.models = models
+                .into_iter()
+                .map(|m| dto_to_model_data(&engine, m))
+                .collect();
+            panel.selected_engine = Some(engine);
+        }
+        GatewayEvent::EnginePullProgress {
+            engine,
+            model,
+            percent,
+            downloaded_bytes,
+            total_bytes,
+            status,
+        } => {
+            let mut s = state.write();
+            let panel = s
+                .engines_data
+                .get_or_insert_with(rustyclaw_view::EnginesPanelData::default);
+            panel.pull_progress = Some(rustyclaw_view::PullProgressData {
+                engine,
+                model,
+                percent,
+                downloaded_bytes,
+                total_bytes,
+                status,
+            });
+        }
+        GatewayEvent::EngineActionResult {
+            engine: _,
+            model,
+            ok,
+            message,
+        } => {
+            let mut s = state.write();
+            // A pull just finished (successfully or not) — clear the bar.
+            if model.is_some()
+                && let Some(ref mut panel) = s.engines_data
+            {
+                panel.pull_progress = None;
+            }
+            // Refresh engine/model lists so the dialog reflects the change.
             if ok {
+                s.engines_stale = true;
                 s.push_notice(MessageRole::Success, format!("Engine: {}", message));
             } else {
                 s.push_notice(MessageRole::Error, format!("Engine error: {}", message));
             }
         }
+    }
+}
+
+/// Extract host RAM/VRAM/GPU-name for the engines panel header from the
+/// gateway host info (if it has been fetched).
+fn host_resources(s: &AppState) -> (u64, u64, Option<String>) {
+    let Some(ref host) = s.host_info else {
+        return (0, 0, None);
+    };
+    let gib = 1024.0 * 1024.0 * 1024.0;
+    let ram = (host.total_memory_gib * gib) as u64;
+    let vram = (host.gpus.iter().map(|g| g.vram_gib).sum::<f64>() * gib) as u64;
+    let gpu = host.gpus.first().map(|g| g.name.clone());
+    (ram, vram, gpu)
+}
+
+fn dto_to_engine_data(
+    dto: rustyclaw_core::gateway::protocol::frames::EngineInfoDto,
+) -> rustyclaw_view::LocalEngineData {
+    rustyclaw_view::LocalEngineData {
+        id: dto.id,
+        display_name: dto.display_name,
+        installed: dto.installed,
+        running: dto.running,
+        version: dto.version,
+        endpoint: dto.endpoint,
+        available_models: dto.available_models,
+        loaded_models: dto.loaded_models,
+        caps: rustyclaw_view::EngineCapsData {
+            can_install: dto.capabilities.can_install,
+            can_start: dto.capabilities.can_start,
+            can_stop: dto.capabilities.can_stop,
+            can_pull: dto.capabilities.can_pull,
+            can_remove: dto.capabilities.can_remove,
+            can_load: dto.capabilities.can_load,
+            can_unload: dto.capabilities.can_unload,
+        },
+    }
+}
+
+fn dto_to_model_data(
+    engine: &str,
+    dto: rustyclaw_core::gateway::protocol::frames::EngineModelDto,
+) -> rustyclaw_view::LocalModelData {
+    rustyclaw_view::LocalModelData {
+        engine: engine.to_string(),
+        name: dto.name,
+        size_bytes: dto.size_bytes,
+        quantization: dto.quantization,
+        context_length: dto.context_length,
+        loaded: dto.loaded,
+        vram_bytes: dto.vram_bytes,
+        family: dto.family,
+        format: dto.format,
+        fits_host: dto.fits_host,
+        fit_warning_msg: dto.fit_warning,
     }
 }
 

@@ -208,7 +208,7 @@ async fn handle_engine_model_pull(
         }
     }
 
-    let (tx, rx) = tokio::sync::mpsc::channel(32);
+    let (tx, mut rx) = tokio::sync::mpsc::channel(32);
 
     let Some(eng) = registry.get(&engine) else {
         drop(rx);
@@ -236,8 +236,55 @@ async fn handle_engine_model_pull(
     };
     send_frame(writer, &frame).await?;
 
-    let result = eng.pull(&model, &cfg, Some(tx)).await;
-    drop(rx);
+    // Drive the pull while draining the progress channel and forwarding
+    // each update to the client. The channel MUST be drained concurrently:
+    // engines await `send` on the sink, so a full, unread channel would
+    // stall the pull indefinitely.
+    let result = {
+        let mut pull_fut = std::pin::pin!(eng.pull(&model, &cfg, Some(tx)));
+        let mut rx_open = true;
+        loop {
+            tokio::select! {
+                progress = rx.recv(), if rx_open => {
+                    match progress {
+                        Some(p) => {
+                            let frame = ServerFrame {
+                                frame_type: ServerFrameType::EnginePullProgress,
+                                payload: ServerPayload::EnginePullProgress {
+                                    engine: engine.clone(),
+                                    model: model.clone(),
+                                    percent: p.percent,
+                                    downloaded_bytes: p.downloaded_bytes,
+                                    total_bytes: p.total_bytes,
+                                    status: p.status,
+                                },
+                            };
+                            send_frame(writer, &frame).await?;
+                        }
+                        // Sink dropped inside pull — stop polling the channel
+                        // and just wait for the pull future to finish.
+                        None => rx_open = false,
+                    }
+                }
+                res = &mut pull_fut => break res,
+            }
+        }
+    };
+    // Forward any progress updates still buffered after completion.
+    while let Ok(p) = rx.try_recv() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::EnginePullProgress,
+            payload: ServerPayload::EnginePullProgress {
+                engine: engine.clone(),
+                model: model.clone(),
+                percent: p.percent,
+                downloaded_bytes: p.downloaded_bytes,
+                total_bytes: p.total_bytes,
+                status: p.status,
+            },
+        };
+        send_frame(writer, &frame).await?;
+    }
 
     let (ok, message) = match result {
         Ok(msg) => (true, msg),
