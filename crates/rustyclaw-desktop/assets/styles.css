@@ -658,14 +658,10 @@ body,
     display: none;
 }
 
-/* Compact Send/Stop pill at the right end of the accessory row, inside the
-   input box alongside the model and directory selectors. */
-.gc-input-accessory .composer-send.button,
-.gc-input-accessory .composer-stop.button {
-    border-radius: 999px;
-    min-width: 64px;
-    font-weight: 600;
-}
+/* Send/Stop lives at the right end of the accessory row, inside the input
+   box. It inherits the same small-button geometry as the directory selector
+   next to it (no custom shape) — only its Bulma color marks it as the
+   primary action. */
 
 .model-bar {
     display: flex;
