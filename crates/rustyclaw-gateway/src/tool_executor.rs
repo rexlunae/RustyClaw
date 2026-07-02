@@ -189,6 +189,24 @@ pub fn should_auto_continue(
     text_suggests_action || ends_with_continuation
 }
 
+/// Detect a response that only acknowledges a pre-compaction memory flush
+/// ("Memory saved to memory/… Ready to resume after compaction.") without
+/// answering the user's actual message. Used by the dispatch loop to
+/// auto-resume once after a flush instead of ending the turn on the
+/// acknowledgement.
+pub fn is_flush_acknowledgement(response_text: &str) -> bool {
+    let lower = response_text.to_lowercase();
+    const ACK_PATTERNS: &[&str] = &[
+        "memory saved",
+        "saved to memory",
+        "memory flush",
+        "ready to resume",
+        "resume after compaction",
+        "before compaction",
+    ];
+    ACK_PATTERNS.iter().any(|p| lower.contains(p))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -215,5 +233,19 @@ mod tests {
     #[test]
     fn test_should_not_continue_max_reached() {
         assert!(!should_auto_continue("Let me check.", 2, 2));
+    }
+
+    #[test]
+    fn test_flush_acknowledgement_detection() {
+        assert!(is_flush_acknowledgement(
+            "Memory saved to memory/2026-07-01.md — appended a snapshot. \
+             Ready to resume after compaction."
+        ));
+        assert!(is_flush_acknowledgement(
+            "I've completed the memory flush and stored the notes."
+        ));
+        assert!(!is_flush_acknowledgement(
+            "The banner is rendered in banner.rs; here's the fix you asked for."
+        ));
     }
 }

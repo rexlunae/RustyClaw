@@ -384,9 +384,19 @@ pub(crate) async fn dispatch_text_message(
     /// Prevents infinite loops when the model keeps narrating intent
     /// but never actually makes tool calls.
     const MAX_AUTO_CONTINUES: usize = 2;
+    /// Maximum consecutive rounds where every tool call failed before the
+    /// loop bails out. Without this, a persistently failing tool can spin
+    /// the loop for hundreds of model calls with no visible progress —
+    /// which looks like a hang to the user.
+    const MAX_FAILED_TOOL_ROUNDS: usize = 3;
 
     let context_limit = helpers::context_window_for_model(&resolved.model);
     let mut consecutive_continues: usize = 0;
+    let mut consecutive_failed_tool_rounds: usize = 0;
+    // Set when a memory-flush instruction is injected: if the model then
+    // ends its turn with only a flush acknowledgement, we auto-resume once
+    // so the user's prompt still gets answered.
+    let mut flush_pending_resume = false;
 
     // Track all tool_use IDs already present in the conversation. New model
     // responses are checked against this set to prevent collisions — some
@@ -468,18 +478,37 @@ pub(crate) async fn dispatch_text_message(
         let estimated = helpers::estimate_tokens(&resolved.messages);
         let threshold = (context_limit as f64 * COMPACTION_THRESHOLD) as usize;
 
-        if memory_flush.should_flush(estimated, context_limit, COMPACTION_THRESHOLD) {
-            let (system_msg, user_msg) = memory_flush.build_flush_messages();
-
-            // Inject memory flush prompt
-            // The agent will process this and can use tools to write to memory files
+        // Only inject when the conversation ends with the user's message, and
+        // insert the instruction *before* it. Appending a flush prompt after
+        // the user's message would make the model answer the flush instead of
+        // the user — the prompt would never be answered. Mid-tool-loop rounds
+        // (trailing tool results) skip the flush and retry on a later round.
+        //
+        // The once-per-cycle state lives on the thread (persisted), not just
+        // in this request: near the threshold every prompt would otherwise
+        // re-trigger the flush, since compaction — which starts the next
+        // cycle — only fires at the (higher) compaction threshold.
+        let ends_with_user = resolved.messages.last().is_some_and(|m| m.role == "user");
+        let thread_already_flushed = thread_mgr.foreground().is_some_and(|t| t.memory_flushed);
+        let mut flushed_this_round = false;
+        if ends_with_user
+            && !thread_already_flushed
+            && memory_flush.should_flush(estimated, context_limit, COMPACTION_THRESHOLD)
+        {
+            let flush_msg = memory_flush.build_inline_flush_message();
+            let insert_at = resolved.messages.len() - 1;
             resolved
                 .messages
-                .push(ChatMessage::text("system", &system_msg));
-            resolved.messages.push(ChatMessage::text("user", &user_msg));
+                .insert(insert_at, ChatMessage::text("system", &flush_msg));
 
             // Mark as flushed to prevent repeated injections
             memory_flush.mark_flushed();
+            if let Some(thread) = thread_mgr.foreground_mut() {
+                thread.memory_flushed = true;
+            }
+            let _ = thread_mgr.save_to_file(threads_path);
+            flush_pending_resume = true;
+            flushed_this_round = true;
 
             // Notify the TUI about the memory flush
             let _ =
@@ -488,8 +517,12 @@ pub(crate) async fn dispatch_text_message(
         }
 
         // ── Auto-compact if context is getting large ────────────────
-        // Proceed with compaction if over threshold
-        if estimated > threshold {
+        // Proceed with compaction if over threshold. When the flush was
+        // injected this round, give the model one round with the *full*
+        // context to save memories first — compaction picks up on a later
+        // round — unless the window is critically full.
+        let critically_full = estimated > (context_limit as f64 * 0.95) as usize;
+        if estimated > threshold && (!flushed_this_round || critically_full) {
             let _ = protocol::server::send_info(writer, "⏳ Compacting context…").await;
             match providers::compact_conversation(http, &mut resolved, context_limit, writer).await
             {
@@ -654,6 +687,26 @@ pub(crate) async fn dispatch_text_message(
         if model_resp.tool_calls.is_empty() {
             // No tool calls requested
             if finish_reason == "stop" || finish_reason == "end_turn" {
+                // ── Auto-resume after a memory flush ────────────────────
+                // If the model ended its turn by only acknowledging the
+                // flush ("Memory saved… ready to resume"), the user's
+                // prompt hasn't been answered yet. The acknowledgement was
+                // already streamed to the client; nudge the model to
+                // continue with the actual request (once).
+                if flush_pending_resume && tool_executor::is_flush_acknowledgement(&model_resp.text)
+                {
+                    flush_pending_resume = false;
+                    resolved
+                        .messages
+                        .push(ChatMessage::text("assistant", &model_resp.text));
+                    resolved.messages.push(ChatMessage::text(
+                        "user",
+                        "Memory flush noted. Now continue with my original request above.",
+                    ));
+                    continue;
+                }
+                flush_pending_resume = false;
+
                 // ── Auto-continuation for incomplete intent ─────────────
                 // Sometimes the model narrates what it plans to do ("Let me check...")
                 // but returns finish_reason=stop without making a tool call.
@@ -1008,6 +1061,33 @@ pub(crate) async fn dispatch_text_message(
             }
         }
         let _ = thread_mgr.save_to_file(threads_path);
+
+        // ── Bail out if tools keep failing with no progress ─────────
+        // A round where every tool call errored may still recover (the
+        // model can adjust its arguments), but several such rounds in a
+        // row means we're burning model calls with nothing to show —
+        // stop and report instead of looking hung.
+        let all_failed = !tool_results.is_empty() && tool_results.iter().all(|r| r.is_error);
+        if all_failed {
+            consecutive_failed_tool_rounds += 1;
+        } else {
+            consecutive_failed_tool_rounds = 0;
+        }
+        if consecutive_failed_tool_rounds >= MAX_FAILED_TOOL_ROUNDS {
+            let last_error = tool_results
+                .last()
+                .map(|r| r.output.clone())
+                .unwrap_or_default();
+            let _ = protocol::server::send_info(
+                writer,
+                &format!(
+                    "Stopping after {MAX_FAILED_TOOL_ROUNDS} consecutive rounds of failed tool calls. Last error: {last_error}"
+                ),
+            )
+            .await;
+            providers::send_response_done(writer).await?;
+            return Ok(());
+        }
     }
 
     // If we exhausted all rounds, send what we have and stop.
