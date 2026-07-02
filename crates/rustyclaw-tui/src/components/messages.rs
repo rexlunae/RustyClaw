@@ -37,6 +37,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
     // only on that bubble (older ones have already scrolled out of
     // focus and would just be visual noise).
     let latest_details_idx: Option<usize> = latest_details_index(&props.messages);
+    let msg_count = props.messages.len();
 
     element! {
         View(
@@ -55,10 +56,17 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                     let name = assistant_name.clone();
                     let has_details = latest_details_idx == Some(i);
                     let bubble_data = msg.to_bubble_data(name, has_details);
-                    // An assistant turn that only carries tool calls has empty
-                    // text — don't render an empty bubble box (which would also
-                    // show an action bar). Render just the tool panels instead.
-                    let show_bubble = !msg.content.trim().is_empty() || msg.tool_calls.is_empty();
+                    // An assistant turn with empty text is just activity scaffolding
+                    // (tool calls land underneath, or the model is mid-work). Don't
+                    // render a full empty bubble + action bar. If it carries tool
+                    // calls, the panels alone are enough; otherwise show a slim
+                    // one-line activity indicator so there's still a heartbeat.
+                    let is_empty_turn = msg.content.trim().is_empty();
+                    let is_last = i + 1 == msg_count;
+                    let show_bubble = !is_empty_turn;
+                    // Only the live tail shows a heartbeat; stale empty turns in
+                    // history are dropped so they don't leave a frozen "working…".
+                    let show_activity = is_empty_turn && msg.tool_calls.is_empty() && is_last && (props.surface.is_streaming || props.surface.is_thinking);
                     element! {
                         View(
                             key: i as u64,
@@ -71,6 +79,15 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
                                         data: bubble_data,
                                         is_selected: props.selected_idx == Some(i),
                                     )
+                                }.into_any()
+                            } else if show_activity {
+                                element! {
+                                    View(padding_left: 2, margin_bottom: 1) {
+                                        Text(
+                                            content: format!("{} working…", spinner),
+                                            color: theme::MUTED,
+                                        )
+                                    }
                                 }.into_any()
                             } else {
                                 element! { View() }.into_any()
