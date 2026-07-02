@@ -33,5 +33,5 @@ pub use leak_detector::{
 };
 pub use prompt_guard::{GuardAction, GuardResult, PromptGuard};
 pub use safety_layer::{DefenseCategory, DefenseResult, PolicyAction, SafetyConfig, SafetyLayer};
-pub use ssrf::SsrfValidator;
+pub use ssrf::{SsrfError, SsrfValidator};
 pub use validator::{InputValidator, ValidationError, ValidationErrorCode, ValidationResult};

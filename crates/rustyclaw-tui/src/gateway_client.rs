@@ -9,7 +9,7 @@
 //! [`GatewayClient`]: rustyclaw_core::gateway::GatewayClient
 
 use crate::app::GwEvent;
-use rustyclaw_core::gateway::{GatewayEvent, SecretEntryDto};
+use rustyclaw_core::gateway::GatewayEvent;
 
 /// Adapt a shared gateway event into a TUI UI event.
 ///
@@ -241,20 +241,8 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
 
         // ── Secrets results ─────────────────────────────────────────────
         E::SecretsListResult { entries, .. } => {
-            let secrets: Vec<rustyclaw_view::SecretInfoData> = entries
-                .into_iter()
-                .map(|e| {
-                    // `SecretEntryInfo` and the wire `SecretEntryDto` are
-                    // field-for-field identical.
-                    rustyclaw_view::SecretInfoData::from_dto(SecretEntryDto {
-                        name: e.name,
-                        label: e.label,
-                        kind: e.kind,
-                        policy: e.policy,
-                        disabled: e.disabled,
-                    })
-                })
-                .collect();
+            let secrets: Vec<rustyclaw_view::SecretInfoData> =
+                entries.iter().map(Into::into).collect();
             GwEvent::ShowSecrets {
                 secrets,
                 agent_access: false,
@@ -337,38 +325,12 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                 GwEvent::error("TOTP removal failed")
             }
         }
-        E::ServiceList { services } => {
-            let dto_to_info = |d: rustyclaw_core::gateway::protocol::frames::ServiceInfoDto| {
-                rustyclaw_view::ServiceInfoData {
-                    name: d.name,
-                    service_type: d.service_type,
-                    status: d.status,
-                    pid: d.pid,
-                    uptime_secs: d.uptime_secs,
-                    restart_count: d.restart_count,
-                    exit_code: d.exit_code,
-                    health_ok: d.health_ok,
-                    mcp_tools: d.mcp_tools,
-                }
-            };
-            GwEvent::ServiceList(rustyclaw_view::ServiceListData {
-                services: services.into_iter().map(dto_to_info).collect(),
-            })
-        }
-        E::ServiceActionResult { service, .. } => {
-            let info = service.map(|d| rustyclaw_view::ServiceInfoData {
-                name: d.name,
-                service_type: d.service_type,
-                status: d.status,
-                pid: d.pid,
-                uptime_secs: d.uptime_secs,
-                restart_count: d.restart_count,
-                exit_code: d.exit_code,
-                health_ok: d.health_ok,
-                mcp_tools: d.mcp_tools,
-            });
-            GwEvent::ServiceActionResult { service: info }
-        }
+        E::ServiceList { services } => GwEvent::ServiceList(rustyclaw_view::ServiceListData {
+            services: services.into_iter().map(Into::into).collect(),
+        }),
+        E::ServiceActionResult { service, .. } => GwEvent::ServiceActionResult {
+            service: service.map(Into::into),
+        },
         E::ServiceLogs { .. } => {
             // Logs are displayed in a separate dialog; no GwEvent needed.
             return None;

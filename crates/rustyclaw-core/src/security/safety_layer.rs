@@ -325,7 +325,7 @@ impl SafetyLayer {
                     Ok(DefenseResult::detected(
                         DefenseCategory::Ssrf,
                         PolicyAction::Warn,
-                        vec![reason.clone()],
+                        vec![reason.to_string()],
                         1.0,
                     ))
                 }

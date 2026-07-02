@@ -423,5 +423,22 @@ pub use genai_backend::{
 };
 pub use models::*;
 
+/// Dispatch a tool-capable model request to the backend for `req.provider`.
+///
+/// Streams via `writer` for providers that support it; Google is forced
+/// non-streaming (matching prior behaviour). This is the single dispatch
+/// point — prefer it over picking a `call_*_with_tools` variant by hand.
+pub async fn call_with_tools(
+    http: &reqwest::Client,
+    req: &crate::gateway::ProviderRequest,
+    writer: Option<&mut dyn crate::gateway::TransportWriter>,
+) -> anyhow::Result<crate::gateway::ModelResponse> {
+    match req.provider.as_str() {
+        "anthropic" => call_anthropic_with_tools(http, req, writer).await,
+        "google" => call_google_with_tools(http, req).await,
+        _ => call_openai_with_tools(http, req, writer).await,
+    }
+}
+
 #[cfg(test)]
 mod tests;

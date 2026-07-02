@@ -25,8 +25,9 @@ pub use ssh_connection::{SshConnection, SshReader, SshWriter};
 
 // Re-export protocol types
 pub use protocol::{
-    ClientFrame, ClientFrameType, ClientPayload, SecretEntryDto, ServerFrame, ServerFrameType,
-    ServerPayload, ServiceInfoDto, StatusType, WireFrame, deserialize_frame,
+    ChannelPairActionKind, ClientFrame, ClientFrameType, ClientPayload, CronActionKind,
+    EngineActionKind, FrameCodecError, ModelActionKind, SecretEntryDto, ServerFrame,
+    ServerFrameType, ServerPayload, ServiceInfoDto, StatusType, WireFrame, deserialize_frame,
     deserialize_wire_frame, serialize_frame, serialize_wire_frame,
 };
 

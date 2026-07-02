@@ -43,8 +43,8 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> Result<String, 
         .lock()
         .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
 
-    mgr.create(config)?;
-    mgr.start(&name)?;
+    mgr.create(config).map_err(|e| e.to_string())?;
+    mgr.start(&name).map_err(|e| e.to_string())?;
 
     let inst = mgr.get(&name).ok_or("Swarm vanished after creation")?;
 
@@ -240,7 +240,9 @@ pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> Result<String, St
         .map_err(|_| "Failed to acquire session manager lock".to_string())?;
 
     let session_key = if let Some(existing) = existing_session {
-        sess_mgr.send_message(&existing, message)?;
+        sess_mgr
+            .send_message(&existing, message)
+            .map_err(|e| e.to_string())?;
         existing
     } else {
         let label = format!("swarm:{}:{}", swarm_name, target);
@@ -303,7 +305,7 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, St
     let mut mgr = manager
         .lock()
         .map_err(|_| "Failed to re-acquire swarm manager lock".to_string())?;
-    mgr.stop(name)?;
+    mgr.stop(name).map_err(|e| e.to_string())?;
 
     Ok(format!(
         "Swarm '{}' stopped. {} agent sessions completed.",

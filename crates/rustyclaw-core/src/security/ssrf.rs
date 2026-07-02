@@ -12,6 +12,50 @@ use std::net::{IpAddr, ToSocketAddrs};
 use std::str::FromStr;
 use tracing::warn;
 
+/// Errors produced by [`SsrfValidator`].
+///
+/// Security-sensitive callers can distinguish a hard policy rejection
+/// ([`SsrfError::Blocked`], [`SsrfError::NonAsciiHost`]) from an
+/// environmental failure such as [`SsrfError::Resolution`].
+#[derive(Debug, thiserror::Error)]
+pub enum SsrfError {
+    /// The URL could not be parsed.
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(#[from] url::ParseError),
+    /// A custom blocked range was not valid CIDR notation.
+    #[error("Invalid CIDR notation: {0}")]
+    InvalidCidr(#[from] ipnetwork::IpNetworkError),
+    /// The URL scheme is not http/https.
+    #[error("Invalid URL scheme '{0}': only http:// and https:// are allowed")]
+    InvalidScheme(String),
+    /// The URL has no host component.
+    #[error("URL has no host")]
+    NoHost,
+    /// The host contains non-ASCII characters (potential homograph attack).
+    #[error("Security: Domain contains non-ASCII characters (potential homograph attack): {0}")]
+    NonAsciiHost(String),
+    /// DNS resolution failed (initial lookup).
+    #[error("Failed to resolve hostname '{host}': {source}")]
+    Resolution {
+        host: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// DNS resolution failed (rebinding re-check).
+    #[error("DNS recheck failed for '{host}': {source}")]
+    ResolutionRecheck {
+        host: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The hostname resolved to no IP addresses.
+    #[error("Hostname '{0}' resolved to no IP addresses")]
+    NoAddresses(String),
+    /// A resolved IP falls inside a blocked range.
+    #[error("Security: Access to {ip} is blocked (matches blocked range {range})")]
+    Blocked { ip: IpAddr, range: IpNetwork },
+}
+
 /// SSRF validator with configurable blocked CIDR ranges
 #[derive(Debug, Clone)]
 pub struct SsrfValidator {
@@ -71,38 +115,29 @@ impl SsrfValidator {
     }
 
     /// Add a custom blocked CIDR range
-    pub fn add_blocked_range(&mut self, cidr: &str) -> Result<(), String> {
-        let network =
-            IpNetwork::from_str(cidr).map_err(|e| format!("Invalid CIDR notation: {}", e))?;
+    pub fn add_blocked_range(&mut self, cidr: &str) -> Result<(), SsrfError> {
+        let network = IpNetwork::from_str(cidr)?;
         self.blocked_ranges.push(network);
         Ok(())
     }
 
     /// Validate a URL for SSRF vulnerabilities
-    pub fn validate_url(&self, url: &str) -> Result<(), String> {
+    pub fn validate_url(&self, url: &str) -> Result<(), SsrfError> {
         // Parse the URL
-        let parsed_url = url::Url::parse(url).map_err(|e| format!("Invalid URL: {}", e))?;
+        let parsed_url = url::Url::parse(url)?;
 
         // 1. Validate scheme (only http/https allowed)
         let scheme = parsed_url.scheme();
         if scheme != "http" && scheme != "https" {
-            return Err(format!(
-                "Invalid URL scheme '{}': only http:// and https:// are allowed",
-                scheme
-            ));
+            return Err(SsrfError::InvalidScheme(scheme.to_string()));
         }
 
         // 2. Get the host
-        let host = parsed_url
-            .host_str()
-            .ok_or_else(|| "URL has no host".to_string())?;
+        let host = parsed_url.host_str().ok_or(SsrfError::NoHost)?;
 
         // 3. Check for Unicode homograph attacks (non-ASCII characters in domain)
         if !host.is_ascii() {
-            return Err(format!(
-                "Security: Domain contains non-ASCII characters (potential homograph attack): {}",
-                host
-            ));
+            return Err(SsrfError::NonAsciiHost(host.to_string()));
         }
 
         // 4. Resolve hostname to IP addresses
@@ -116,12 +151,15 @@ impl SsrfValidator {
 
         let ip_addrs: Vec<IpAddr> = socket_addr_str
             .to_socket_addrs()
-            .map_err(|e| format!("Failed to resolve hostname '{}': {}", host, e))?
+            .map_err(|e| SsrfError::Resolution {
+                host: host.to_string(),
+                source: e,
+            })?
             .map(|sa| sa.ip())
             .collect();
 
         if ip_addrs.is_empty() {
-            return Err(format!("Hostname '{}' resolved to no IP addresses", host));
+            return Err(SsrfError::NoAddresses(host.to_string()));
         }
 
         // 5. Check all resolved IPs against blocked ranges
@@ -133,7 +171,10 @@ impl SsrfValidator {
         // This helps detect time-of-check-time-of-use attacks
         let recheck_ips: Vec<IpAddr> = socket_addr_str
             .to_socket_addrs()
-            .map_err(|e| format!("DNS recheck failed for '{}': {}", host, e))?
+            .map_err(|e| SsrfError::ResolutionRecheck {
+                host: host.to_string(),
+                source: e,
+            })?
             .map(|sa| sa.ip())
             .collect();
 
@@ -159,13 +200,13 @@ impl SsrfValidator {
     }
 
     /// Validate a single IP address against blocked ranges
-    fn validate_ip(&self, ip: &IpAddr) -> Result<(), String> {
+    fn validate_ip(&self, ip: &IpAddr) -> Result<(), SsrfError> {
         for blocked_range in &self.blocked_ranges {
             if blocked_range.contains(*ip) {
-                return Err(format!(
-                    "Security: Access to {} is blocked (matches blocked range {})",
-                    ip, blocked_range
-                ));
+                return Err(SsrfError::Blocked {
+                    ip: *ip,
+                    range: *blocked_range,
+                });
             }
         }
         Ok(())
@@ -224,7 +265,10 @@ mod tests {
         let result = validator.validate_url("https://example.com/");
         // May fail due to DNS in test environment, but shouldn't fail for SSRF reasons
         if let Err(e) = result {
-            assert!(!e.contains("Security:"), "Should not be a security error");
+            assert!(
+                !matches!(e, SsrfError::Blocked { .. } | SsrfError::NonAsciiHost(_)),
+                "Should not be a security error: {e}"
+            );
         }
     }
 
@@ -238,7 +282,10 @@ mod tests {
         let result = validator.validate_url("http://192.168.1.1/");
         if let Err(e) = result {
             // Should fail DNS resolution, not security check
-            assert!(!e.contains("Security:") || e.contains("Failed to resolve"));
+            assert!(
+                !matches!(e, SsrfError::Blocked { .. }),
+                "Should not be blocked: {e}"
+            );
         }
     }
 

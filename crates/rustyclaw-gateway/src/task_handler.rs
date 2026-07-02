@@ -364,7 +364,7 @@ pub async fn generate_task_prompt_section(
     let mut section = String::from("## Active Tasks\n");
 
     for task in &active {
-        let icon = TaskIcon::from_status(&task.status);
+        let icon = TaskIcon::from(&task.status);
         let fg = if task.status.is_foreground() {
             " [foreground]"
         } else {

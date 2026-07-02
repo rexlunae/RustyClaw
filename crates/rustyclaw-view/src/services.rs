@@ -14,6 +14,22 @@ pub struct ServiceInfoData {
     pub mcp_tools: u32,
 }
 
+impl From<rustyclaw_core::gateway::protocol::frames::ServiceInfoDto> for ServiceInfoData {
+    fn from(dto: rustyclaw_core::gateway::protocol::frames::ServiceInfoDto) -> Self {
+        Self {
+            name: dto.name,
+            service_type: dto.service_type,
+            status: dto.status,
+            pid: dto.pid,
+            uptime_secs: dto.uptime_secs,
+            restart_count: dto.restart_count,
+            exit_code: dto.exit_code,
+            health_ok: dto.health_ok,
+            mcp_tools: dto.mcp_tools,
+        }
+    }
+}
+
 impl ServiceInfoData {
     /// Human-friendly uptime string (e.g. "2h 15m", "34s").
     pub fn uptime_display(&self) -> String {

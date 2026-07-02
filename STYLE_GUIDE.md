@@ -174,6 +174,14 @@ pub use messengers::{Messenger, Message};
 | `rustyclaw-core`, `rustyclaw-tui` | Use `thiserror` for typed errors. No `anyhow` in public API. |
 | `rustyclaw-cli`, `rustyclaw-desktop` | `anyhow::Result` is fine at the top level. |
 
+Typed errors are small per-module `thiserror` enums defined next to the code
+that produces them (`CronError` in `cron.rs`, `SsrfError` in
+`security/ssrf.rs`, …) — there is deliberately no crate-wide `CoreError`
+catch-all. One documented exception (see `rustyclaw-core/src/error.rs`):
+AI-tool implementations return `Result<String, String>` because the error
+string is the payload sent back to the model; that boundary is where typed
+errors get flattened with `.to_string()`, and no earlier.
+
 ### No naked `unwrap()` in library code
 
 ```rust

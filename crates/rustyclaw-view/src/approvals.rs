@@ -10,9 +10,8 @@ pub struct PendingApprovalData {
     pub selected: bool,
 }
 
-impl PendingApprovalData {
-    /// Convert from the protocol DTO.
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::PendingApprovalDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::PendingApprovalDto> for PendingApprovalData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::PendingApprovalDto) -> Self {
         Self {
             id: dto.id.clone(),
             tool_name: dto.tool_name.clone(),
@@ -21,7 +20,9 @@ impl PendingApprovalData {
             selected: false,
         }
     }
+}
 
+impl PendingApprovalData {
     /// Truncated arguments preview.
     pub fn arguments_preview(&self, max_chars: usize) -> String {
         rustyclaw_core::ui::truncate_content(&self.arguments, max_chars, usize::MAX)

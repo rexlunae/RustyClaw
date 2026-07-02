@@ -161,11 +161,15 @@ pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, St
     let consolidation = crate::memory_consolidation::MemoryConsolidation::new(config);
 
     // Append to HISTORY.md
-    let history_size = consolidation.append_history(workspace_dir, history_entry)?;
+    let history_size = consolidation
+        .append_history(workspace_dir, history_entry)
+        .map_err(|e| e.to_string())?;
 
     // Update MEMORY.md if provided
     let memory_size = if let Some(content) = memory_update {
-        consolidation.update_memory(workspace_dir, content)?
+        consolidation
+            .update_memory(workspace_dir, content)
+            .map_err(|e| e.to_string())?
     } else {
         consolidation
             .read_memory(workspace_dir)
@@ -206,7 +210,9 @@ pub fn exec_search_history(args: &Value, workspace_dir: &Path) -> Result<String,
     let config = crate::memory_consolidation::ConsolidationConfig::default();
     let consolidation = crate::memory_consolidation::MemoryConsolidation::new(config);
 
-    let results = consolidation.search_history(workspace_dir, pattern, max_results)?;
+    let results = consolidation
+        .search_history(workspace_dir, pattern, max_results)
+        .map_err(|e| e.to_string())?;
 
     if results.is_empty() {
         return Ok(format!(

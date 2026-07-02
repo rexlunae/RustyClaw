@@ -11,7 +11,7 @@ use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
-use rustyclaw_view::{SecretInfoData, SecretsDialogData, SwarmAgentData, SwarmData};
+use rustyclaw_view::{SecretsDialogData, SwarmAgentData, SwarmData};
 
 // ── Shared buffer for the worker → UI bridge ───────────────────────────────
 
@@ -365,16 +365,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::SecretsListResult { ok, entries } => {
             if ok {
                 let data = SecretsDialogData::from_vault(
-                    entries
-                        .into_iter()
-                        .map(|e| SecretInfoData {
-                            key: e.name,
-                            label: e.label,
-                            kind: e.kind,
-                            policy: e.policy,
-                            disabled: e.disabled,
-                        })
-                        .collect(),
+                    entries.iter().map(Into::into).collect(),
                     state.read().agent_access,
                     false, // has_totp — would need gateway peek
                 );
@@ -516,12 +507,12 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         }
         GatewayEvent::ServiceList { services } => {
             state.write().services_data = Some(rustyclaw_view::ServiceListData {
-                services: services.into_iter().map(dto_to_service_info).collect(),
+                services: services.into_iter().map(Into::into).collect(),
             });
         }
         GatewayEvent::ServiceActionResult { service, .. } => {
             if let Some(svc) = service {
-                let info = dto_to_service_info(svc);
+                let info = rustyclaw_view::ServiceInfoData::from(svc);
                 let mut st = state.write();
                 if let Some(ref mut data) = st.services_data {
                     if let Some(existing) = data.services.iter_mut().find(|s| s.name == info.name) {
@@ -549,22 +540,6 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 s.push_notice(MessageRole::Error, format!("Engine error: {}", message));
             }
         }
-    }
-}
-
-fn dto_to_service_info(
-    dto: rustyclaw_core::gateway::protocol::frames::ServiceInfoDto,
-) -> rustyclaw_view::ServiceInfoData {
-    rustyclaw_view::ServiceInfoData {
-        name: dto.name,
-        service_type: dto.service_type,
-        status: dto.status,
-        pid: dto.pid,
-        uptime_secs: dto.uptime_secs,
-        restart_count: dto.restart_count,
-        exit_code: dto.exit_code,
-        health_ok: dto.health_ok,
-        mcp_tools: dto.mcp_tools,
     }
 }
 
@@ -753,8 +728,8 @@ pub(crate) fn create_swarm_from_template(template: &str) -> Result<(), String> {
     let name = cfg.name.clone();
     let mgr = swarm_manager();
     let mut m = mgr.lock().map_err(|_| "Lock error".to_string())?;
-    m.create(cfg)?;
-    m.start(&name)?;
+    m.create(cfg).map_err(|e| e.to_string())?;
+    m.start(&name).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -764,5 +739,5 @@ pub(crate) fn stop_swarm(name: &str) -> Result<(), String> {
 
     let mgr = swarm_manager();
     let mut m = mgr.lock().map_err(|_| "Lock error".to_string())?;
-    m.stop(name)
+    m.stop(name).map_err(|e| e.to_string())
 }

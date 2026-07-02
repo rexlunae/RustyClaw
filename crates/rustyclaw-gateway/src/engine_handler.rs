@@ -145,15 +145,14 @@ async fn handle_engine_action(
     registry: &EngineRegistry,
     configs: &HashMap<String, EngineConfig>,
     engine: String,
-    action: String,
+    action: EngineActionKind,
 ) -> Result<()> {
     let cfg = configs.get(&engine).cloned().unwrap_or_default();
     let result = if let Some(eng) = registry.get(&engine) {
-        match action.as_str() {
-            "install" => eng.install(None).await,
-            "start" => eng.start(&cfg).await,
-            "stop" => eng.stop().await,
-            _ => Err(anyhow::anyhow!("Unknown engine action: {}", action)),
+        match action {
+            EngineActionKind::Install => eng.install(None).await,
+            EngineActionKind::Start => eng.start(&cfg).await,
+            EngineActionKind::Stop => eng.stop().await,
         }
     } else {
         Err(anyhow::anyhow!("Unknown engine: {}", engine))
@@ -255,7 +254,7 @@ async fn handle_engine_model_action(
     configs: &HashMap<String, EngineConfig>,
     engine: String,
     model: String,
-    action: String,
+    action: ModelActionKind,
     context_length: Option<u32>,
     extra_args: Vec<String>,
 ) -> Result<()> {
@@ -277,11 +276,10 @@ async fn handle_engine_model_action(
     }
 
     let result = if let Some(eng) = registry.get(&engine) {
-        match action.as_str() {
-            "load" => eng.load(&model, &cfg).await,
-            "unload" => eng.unload(&model, &cfg).await,
-            "remove" => eng.remove(&model, &cfg).await,
-            _ => Err(anyhow::anyhow!("Unknown model action: {}", action)),
+        match action {
+            ModelActionKind::Load => eng.load(&model, &cfg).await,
+            ModelActionKind::Unload => eng.unload(&model, &cfg).await,
+            ModelActionKind::Remove => eng.remove(&model, &cfg).await,
         }
     } else {
         Err(anyhow::anyhow!("Unknown engine: {}", engine))

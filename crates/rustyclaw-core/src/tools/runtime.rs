@@ -531,7 +531,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
 
-            session.write_stdin(data)?;
+            session.write_stdin(data).map_err(|e| e.to_string())?;
             Ok(format!("Wrote {} bytes to session {}", data.len(), id))
         }
 
@@ -546,7 +546,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
 
-            let bytes_sent = session.send_keys(keys)?;
+            let bytes_sent = session.send_keys(keys).map_err(|e| e.to_string())?;
             Ok(format!(
                 "Sent keys [{}] ({} bytes) to session {}",
                 keys, bytes_sent, id
@@ -560,7 +560,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
 
-            session.kill()?;
+            session.kill().map_err(|e| e.to_string())?;
             debug!(session_id = id, "Session killed");
             Ok(format!("Killed session {}", id))
         }
@@ -698,7 +698,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
-            session.write_stdin(data)?;
+            session.write_stdin(data).map_err(|e| e.to_string())?;
             Ok(format!("Wrote {} bytes to session {}", data.len(), id))
         }
         "send_keys" | "sendkeys" | "send-keys" => {
@@ -710,7 +710,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
-            let bytes_sent = session.send_keys(keys)?;
+            let bytes_sent = session.send_keys(keys).map_err(|e| e.to_string())?;
             Ok(format!(
                 "Sent keys [{}] ({} bytes) to session {}",
                 keys, bytes_sent, id
@@ -721,7 +721,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
-            session.kill()?;
+            session.kill().map_err(|e| e.to_string())?;
             Ok(format!("Killed session {}", id))
         }
         "clear" => {

@@ -85,7 +85,7 @@ impl ThreadManager {
         }
 
         self.foreground_id = Some(id);
-        let info = thread.to_info();
+        let info = ThreadInfo::from(&thread);
         self.threads.insert(id, thread);
 
         self.emit(ThreadEvent::Created {
@@ -140,7 +140,7 @@ impl ThreadManager {
     ) -> ThreadId {
         let thread = AgentThread::new_subagent(label, agent_id, task, parent_id);
         let id = thread.id;
-        let info = thread.to_info();
+        let info = ThreadInfo::from(&thread);
 
         self.threads.insert(id, thread);
 
@@ -161,7 +161,7 @@ impl ThreadManager {
     ) -> ThreadId {
         let thread = AgentThread::new_background(label, purpose, parent_id);
         let id = thread.id;
-        let info = thread.to_info();
+        let info = ThreadInfo::from(&thread);
 
         self.threads.insert(id, thread);
 
@@ -182,7 +182,7 @@ impl ThreadManager {
     ) -> ThreadId {
         let thread = AgentThread::new_task(label, action, parent_id);
         let id = thread.id;
-        let info = thread.to_info();
+        let info = ThreadInfo::from(&thread);
 
         self.threads.insert(id, thread);
 
@@ -228,7 +228,7 @@ impl ThreadManager {
 
     /// List thread info for sidebar display.
     pub fn list_info(&self) -> Vec<ThreadInfo> {
-        self.threads.values().map(|t| t.to_info()).collect()
+        self.threads.values().map(Into::into).collect()
     }
 
     // ── Thread Updates ──────────────────────────────────────────────────────

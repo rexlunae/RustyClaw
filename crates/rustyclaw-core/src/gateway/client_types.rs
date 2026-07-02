@@ -459,7 +459,10 @@ pub enum GatewayCommand {
 
     /// Perform an engine action (install/start/stop).
     #[serde(rename = "engine_action")]
-    EngineAction { engine: String, action: String },
+    EngineAction {
+        engine: String,
+        action: EngineActionKind,
+    },
 
     /// List models for a specific engine.
     #[serde(rename = "engine_model_list")]
@@ -479,7 +482,7 @@ pub enum GatewayCommand {
     EngineModelAction {
         engine: String,
         model: String,
-        action: String,
+        action: ModelActionKind,
         #[serde(default)]
         context_length: Option<u32>,
         #[serde(default)]
@@ -495,8 +498,8 @@ pub enum GatewayCommand {
 // exactly one place.
 
 use crate::gateway::{
-    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, ServerFrame, ServerPayload,
-    StatusType,
+    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, EngineActionKind, ModelActionKind,
+    ServerFrame, ServerPayload, StatusType,
 };
 
 impl GatewayCommand {

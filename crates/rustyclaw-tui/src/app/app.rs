@@ -477,13 +477,17 @@ impl App {
                     name,
                     current_policy,
                 }) => {
-                    // Cycle OPEN → ASK → AUTH → SKILL → OPEN
-                    let next_policy = match current_policy.as_str() {
-                        "OPEN" => "ask",
-                        "ASK" => "auth",
-                        "AUTH" => "skill_only",
-                        "SKILL" => "always",
-                        _ => "ask",
+                    // Cycle OPEN → ASK → AUTH → SKILL → OPEN, then translate
+                    // to the wire vocabulary of SecretsSetPolicy.
+                    use rustyclaw_core::secrets::AccessPolicy;
+                    let next_policy = match AccessPolicy::from_badge(&current_policy)
+                        .map(|p| p.cycled())
+                        .unwrap_or_default()
+                    {
+                        AccessPolicy::Always => "always",
+                        AccessPolicy::WithApproval => "ask",
+                        AccessPolicy::WithAuth => "auth",
+                        AccessPolicy::SkillOnly(_) => "skill_only",
                     };
                     let _ = client
                         .send(GatewayCommand::SecretsSetPolicy {

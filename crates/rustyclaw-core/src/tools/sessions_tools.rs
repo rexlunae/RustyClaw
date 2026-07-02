@@ -141,7 +141,7 @@ pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> Result<String,
         return Err("Must provide sessionKey or label".to_string());
     };
 
-    mgr.send_message(&key, message)?;
+    mgr.send_message(&key, message).map_err(|e| e.to_string())?;
 
     Ok(format!("Message sent to session: {}", key))
 }

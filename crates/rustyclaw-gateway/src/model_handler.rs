@@ -139,7 +139,7 @@ async fn exec_model_enable(
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
-    registry.enable(&model_id)?;
+    registry.enable(&model_id).map_err(|e| e.to_string())?;
 
     Ok(json!({
         "success": true,
@@ -157,7 +157,7 @@ async fn exec_model_disable(
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
-    registry.disable(&model_id)?;
+    registry.disable(&model_id).map_err(|e| e.to_string())?;
 
     Ok(json!({
         "success": true,
@@ -189,7 +189,7 @@ async fn exec_model_set(
         }
     }
 
-    registry.set_active(&model_id)?;
+    registry.set_active(&model_id).map_err(|e| e.to_string())?;
 
     Ok(json!({
         "success": true,

@@ -412,13 +412,7 @@ async fn process_incoming_message(
     let mut final_response = String::new();
 
     for _round in 0..MAX_TOOL_ROUNDS {
-        let result = if resolved.provider == "anthropic" {
-            providers::call_anthropic_with_tools(http, &resolved, None).await
-        } else if resolved.provider == "google" {
-            providers::call_google_with_tools(http, &resolved).await
-        } else {
-            providers::call_openai_with_tools(http, &resolved, None).await
-        };
+        let result = providers::call_with_tools(http, &resolved, None).await;
 
         let model_resp = match result {
             Ok(r) => r,

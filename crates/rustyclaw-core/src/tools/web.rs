@@ -39,7 +39,9 @@ fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
 /// Returns a user-facing error string prefixed so callers/tests can recognise
 /// a security rejection.
 fn ssrf_check_blocking(url: &str) -> Result<(), String> {
-    SsrfValidator::default().validate_url(url)
+    SsrfValidator::default()
+        .validate_url(url)
+        .map_err(|e| e.to_string())
 }
 
 // ── Async implementations ───────────────────────────────────────────────────

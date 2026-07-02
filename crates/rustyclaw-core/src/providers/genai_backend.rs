@@ -161,7 +161,7 @@ async fn genai_chat(
             let resp = client
                 .exec_chat(&req.model, chat_req, Some(&options))
                 .await?;
-            Ok(chat_response_to_model_response(resp))
+            Ok(resp.into())
         }
     }
 }
@@ -208,7 +208,7 @@ async fn consume_stream(
                 if let Some(content) = end.captured_content {
                     for part in content.into_parts() {
                         match part {
-                            ContentPart::ToolCall(tc) => result.tool_calls.push(to_parsed_call(tc)),
+                            ContentPart::ToolCall(tc) => result.tool_calls.push(tc.into()),
                             ContentPart::Text(t) if result.text.is_empty() => result.text = t,
                             _ => {}
                         }
@@ -227,28 +227,30 @@ async fn consume_stream(
 }
 
 /// Convert a non-streaming genai [`ChatResponse`] into a [`ModelResponse`].
-fn chat_response_to_model_response(resp: genai::chat::ChatResponse) -> ModelResponse {
-    let mut result = ModelResponse {
-        prompt_tokens: resp.usage.prompt_tokens.map(|t| t.max(0) as u64),
-        completion_tokens: resp.usage.completion_tokens.map(|t| t.max(0) as u64),
-        ..Default::default()
-    };
+impl From<genai::chat::ChatResponse> for ModelResponse {
+    fn from(resp: genai::chat::ChatResponse) -> Self {
+        let mut result = ModelResponse {
+            prompt_tokens: resp.usage.prompt_tokens.map(|t| t.max(0) as u64),
+            completion_tokens: resp.usage.completion_tokens.map(|t| t.max(0) as u64),
+            ..Default::default()
+        };
 
-    for part in resp.content.into_parts() {
-        match part {
-            ContentPart::Text(t) => {
-                if !result.text.is_empty() {
-                    result.text.push('\n');
+        for part in resp.content.into_parts() {
+            match part {
+                ContentPart::Text(t) => {
+                    if !result.text.is_empty() {
+                        result.text.push('\n');
+                    }
+                    result.text.push_str(&t);
                 }
-                result.text.push_str(&t);
+                ContentPart::ToolCall(tc) => result.tool_calls.push(tc.into()),
+                _ => {}
             }
-            ContentPart::ToolCall(tc) => result.tool_calls.push(to_parsed_call(tc)),
-            _ => {}
         }
-    }
 
-    result.finish_reason = Some(finish_reason_for(&result).to_string());
-    result
+        result.finish_reason = Some(finish_reason_for(&result).to_string());
+        result
+    }
 }
 
 // ── Conversion helpers ───────────────────────────────────────────────────────
@@ -492,11 +494,13 @@ fn tools_for_genai() -> Vec<Tool> {
 }
 
 /// Convert a genai [`ToolCall`] into RustyClaw's [`ParsedToolCall`].
-fn to_parsed_call(tc: ToolCall) -> ParsedToolCall {
-    ParsedToolCall {
-        id: tc.call_id,
-        name: tc.fn_name,
-        arguments: normalize_tool_arguments(tc.fn_arguments),
+impl From<ToolCall> for ParsedToolCall {
+    fn from(tc: ToolCall) -> Self {
+        Self {
+            id: tc.call_id,
+            name: tc.fn_name,
+            arguments: normalize_tool_arguments(tc.fn_arguments),
+        }
     }
 }
 

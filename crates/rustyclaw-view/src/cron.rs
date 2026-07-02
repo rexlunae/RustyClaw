@@ -16,9 +16,8 @@ pub struct CronJobData {
     pub run_count: u64,
 }
 
-impl CronJobData {
-    /// Convert from the protocol DTO.
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::CronJobDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::CronJobDto> for CronJobData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::CronJobDto) -> Self {
         Self {
             id: dto.id.clone(),
             name: dto.name.clone(),
@@ -31,7 +30,9 @@ impl CronJobData {
             run_count: dto.run_count,
         }
     }
+}
 
+impl CronJobData {
     /// Status badge tone.
     pub fn status_tone(&self) -> Tone {
         if self.paused {

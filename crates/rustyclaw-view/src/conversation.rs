@@ -140,11 +140,13 @@ impl DisplayMessageData {
             collapsed: self.collapsed,
         }
     }
+}
 
-    /// Convert a wire `ChatMessage` (as carried in `ThreadHistoryReply`) into a
-    /// renderer-facing `DisplayMessageData`. Unknown roles fall back to
-    /// `MessageRole::System` so the message is still surfaced.
-    pub fn from_chat_message(msg: &rustyclaw_core::gateway::protocol::types::ChatMessage) -> Self {
+/// Convert a wire `ChatMessage` (as carried in `ThreadHistoryReply`) into a
+/// renderer-facing `DisplayMessageData`. Unknown roles fall back to
+/// `MessageRole::System` so the message is still surfaced.
+impl From<&rustyclaw_core::gateway::protocol::types::ChatMessage> for DisplayMessageData {
+    fn from(msg: &rustyclaw_core::gateway::protocol::types::ChatMessage) -> Self {
         let role = msg.to_core_message_role();
         let mut data = Self::new(role, msg.content.clone());
         // Surface tool calls embedded in an assistant turn so the
@@ -198,7 +200,7 @@ pub fn convert_history(
                 }
             }
         }
-        let mut msg = DisplayMessageData::from_chat_message(m);
+        let mut msg = DisplayMessageData::from(m);
         msg.auto_collapse_if_needed();
         out.push(msg);
     }

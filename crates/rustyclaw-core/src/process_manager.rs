@@ -15,6 +15,23 @@ use std::time::{Duration, Instant};
 /// Unique identifier for a background session.
 pub type SessionId = String;
 
+/// Errors produced by [`ExecSession`] stdin/kill operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ProcessError {
+    /// The process has already exited.
+    #[error("Process has exited")]
+    Exited,
+    /// The process has no stdin handle.
+    #[error("Process stdin not available")]
+    StdinUnavailable,
+    /// A key name passed to `send_keys` could not be translated.
+    #[error("{0}")]
+    InvalidKeys(String),
+    /// An I/O operation on the process failed.
+    #[error("Process I/O error: {0}")]
+    Io(#[from] std::io::Error),
+}
+
 /// Generate a short human-readable session ID.
 fn generate_session_id() -> SessionId {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -254,21 +271,17 @@ impl ExecSession {
     }
 
     /// Write data to the process stdin.
-    pub fn write_stdin(&mut self, data: &str) -> Result<(), String> {
+    pub fn write_stdin(&mut self, data: &str) -> Result<(), ProcessError> {
         let Some(ref mut child) = self.child else {
-            return Err("Process has exited".to_string());
+            return Err(ProcessError::Exited);
         };
 
         let Some(ref mut stdin) = child.stdin else {
-            return Err("Process stdin not available".to_string());
+            return Err(ProcessError::StdinUnavailable);
         };
 
-        stdin
-            .write_all(data.as_bytes())
-            .map_err(|e| format!("Failed to write to stdin: {}", e))?;
-        stdin
-            .flush()
-            .map_err(|e| format!("Failed to flush stdin: {}", e))?;
+        stdin.write_all(data.as_bytes())?;
+        stdin.flush()?;
 
         Ok(())
     }
@@ -281,36 +294,30 @@ impl ExecSession {
     ///
     /// Multiple keys can be separated by spaces:  `"Enter"`, `"Ctrl-C"`,
     /// `"Up Up Down Down Left Right"`.
-    pub fn send_keys(&mut self, keys: &str) -> Result<usize, String> {
-        let bytes = translate_keys(keys)?;
+    pub fn send_keys(&mut self, keys: &str) -> Result<usize, ProcessError> {
+        let bytes = translate_keys(keys).map_err(ProcessError::InvalidKeys)?;
         let len = bytes.len();
 
         let Some(ref mut child) = self.child else {
-            return Err("Process has exited".to_string());
+            return Err(ProcessError::Exited);
         };
         let Some(ref mut stdin) = child.stdin else {
-            return Err("Process stdin not available".to_string());
+            return Err(ProcessError::StdinUnavailable);
         };
 
-        stdin
-            .write_all(&bytes)
-            .map_err(|e| format!("Failed to send keys: {}", e))?;
-        stdin
-            .flush()
-            .map_err(|e| format!("Failed to flush after send-keys: {}", e))?;
+        stdin.write_all(&bytes)?;
+        stdin.flush()?;
 
         Ok(len)
     }
 
     /// Kill the process.
-    pub fn kill(&mut self) -> Result<(), String> {
+    pub fn kill(&mut self) -> Result<(), ProcessError> {
         let Some(ref mut child) = self.child else {
             return Ok(()); // Already gone
         };
 
-        child
-            .kill()
-            .map_err(|e| format!("Failed to kill process: {}", e))?;
+        child.kill()?;
 
         self.status = SessionStatus::Killed;
         Ok(())

@@ -49,13 +49,15 @@ impl Project {
             last_active: now,
         }
     }
+}
 
-    /// Summary for the sidebar / wire.
-    pub fn to_info(&self) -> ProjectInfo {
-        ProjectInfo {
-            id: self.id,
-            name: self.name.clone(),
-            path: self.path.display().to_string(),
+/// Summary for the sidebar / wire.
+impl From<&Project> for ProjectInfo {
+    fn from(p: &Project) -> Self {
+        Self {
+            id: p.id,
+            name: p.name.clone(),
+            path: p.path.display().to_string(),
         }
     }
 }

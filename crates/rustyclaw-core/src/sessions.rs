@@ -159,6 +159,17 @@ impl Session {
     }
 }
 
+/// Errors produced by [`SessionManager`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum SessionError {
+    /// No session with this key exists.
+    #[error("Session not found: {0}")]
+    NotFound(String),
+    /// The session exists but is not active.
+    #[error("Session is not active: {0:?}")]
+    NotActive(SessionStatus),
+}
+
 /// Global session manager.
 pub struct SessionManager {
     sessions: HashMap<SessionKey, Session>,
@@ -261,14 +272,14 @@ impl SessionManager {
     }
 
     /// Send a message to a session.
-    pub fn send_message(&mut self, key: &str, message: &str) -> Result<(), String> {
+    pub fn send_message(&mut self, key: &str, message: &str) -> Result<(), SessionError> {
         let session = self
             .sessions
             .get_mut(key)
-            .ok_or_else(|| format!("Session not found: {}", key))?;
+            .ok_or_else(|| SessionError::NotFound(key.to_string()))?;
 
         if session.status != SessionStatus::Active {
-            return Err(format!("Session is not active: {:?}", session.status));
+            return Err(SessionError::NotActive(session.status.clone()));
         }
 
         session.add_message("user", message);
@@ -276,11 +287,11 @@ impl SessionManager {
     }
 
     /// Complete a session.
-    pub fn complete_session(&mut self, key: &str) -> Result<(), String> {
+    pub fn complete_session(&mut self, key: &str) -> Result<(), SessionError> {
         let session = self
             .sessions
             .get_mut(key)
-            .ok_or_else(|| format!("Session not found: {}", key))?;
+            .ok_or_else(|| SessionError::NotFound(key.to_string()))?;
         session.complete();
         Ok(())
     }

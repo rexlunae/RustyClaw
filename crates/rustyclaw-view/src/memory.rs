@@ -11,9 +11,8 @@ pub struct MemoryEntryData {
     pub score: Option<f64>,
 }
 
-impl MemoryEntryData {
-    /// Convert from the protocol DTO.
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::MemoryEntryDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::MemoryEntryDto> for MemoryEntryData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::MemoryEntryDto) -> Self {
         Self {
             id: dto.id.clone(),
             content: dto.content.clone(),
@@ -23,7 +22,9 @@ impl MemoryEntryData {
             score: dto.score,
         }
     }
+}
 
+impl MemoryEntryData {
     /// Category badge label (or "General" fallback).
     pub fn category_label(&self) -> &str {
         self.category.as_deref().unwrap_or("General")
@@ -49,8 +50,8 @@ pub struct HistoryEntryData {
     pub thread_id: Option<u64>,
 }
 
-impl HistoryEntryData {
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::HistoryEntryDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::HistoryEntryDto> for HistoryEntryData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::HistoryEntryDto) -> Self {
         Self {
             timestamp: dto.timestamp.clone(),
             role: dto.role.clone(),
@@ -58,7 +59,9 @@ impl HistoryEntryData {
             thread_id: dto.thread_id,
         }
     }
+}
 
+impl HistoryEntryData {
     /// Role icon for display.
     pub fn role_icon(&self) -> &'static str {
         match self.role.as_str() {

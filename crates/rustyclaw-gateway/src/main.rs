@@ -148,7 +148,7 @@ async fn main() -> Result<()> {
         .clone()
         .or_else(|| {
             config.ssh.as_ref().and_then(|s| {
-                if s.enabled && s.mode == "standalone" {
+                if s.enabled && s.mode == rustyclaw_core::config::SshMode::Standalone {
                     Some(s.bind.clone())
                 } else {
                     None

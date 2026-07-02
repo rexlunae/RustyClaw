@@ -31,15 +31,38 @@ pub struct SandboxConfig {
     pub allow_paths: Vec<PathBuf>,
 }
 
+/// SSH transport mode for the gateway.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Default,
+    Serialize,
+    Deserialize,
+    strum::Display,
+    strum::EnumString,
+)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum SshMode {
+    /// Dedicated SSH port.
+    #[default]
+    Standalone,
+    /// OpenSSH subsystem.
+    Subsystem,
+}
+
 /// SSH transport configuration for the gateway.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SshGatewayConfig {
     /// Whether the SSH transport is enabled.
     #[serde(default)]
     pub enabled: bool,
-    /// Mode: "standalone" (dedicated SSH port) or "subsystem" (OpenSSH subsystem).
-    #[serde(default = "SshGatewayConfig::default_mode")]
-    pub mode: String,
+    /// Mode: standalone (dedicated SSH port) or subsystem (OpenSSH subsystem).
+    #[serde(default)]
+    pub mode: SshMode,
     /// Bind address for standalone mode (e.g., "0.0.0.0:2222").
     #[serde(default = "SshGatewayConfig::default_bind")]
     pub bind: String,
@@ -54,10 +77,6 @@ pub struct SshGatewayConfig {
 }
 
 impl SshGatewayConfig {
-    fn default_mode() -> String {
-        "standalone".to_string()
-    }
-
     fn default_bind() -> String {
         "0.0.0.0:2222".to_string()
     }

@@ -13,9 +13,8 @@ pub struct McpServerData {
     pub health_ok: Option<bool>,
 }
 
-impl McpServerData {
-    /// Convert from the protocol DTO.
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::McpServerDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::McpServerDto> for McpServerData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::McpServerDto) -> Self {
         Self {
             name: dto.name.clone(),
             status: dto.status.clone(),
@@ -25,7 +24,9 @@ impl McpServerData {
             health_ok: dto.health_ok,
         }
     }
+}
 
+impl McpServerData {
     /// Status tone for badges.
     pub fn status_tone(&self) -> Tone {
         match self.status.as_str() {

@@ -8,6 +8,23 @@ use serde::{Deserialize, Serialize};
 
 use super::config::{SwarmConfig, SwarmStatus};
 
+/// Errors produced by [`SwarmManager`] lifecycle operations.
+#[derive(Debug, thiserror::Error)]
+pub enum SwarmError {
+    /// No swarm with this name exists.
+    #[error("Swarm '{0}' not found")]
+    NotFound(String),
+    /// A swarm with this name already exists.
+    #[error("Swarm '{0}' already exists")]
+    AlreadyExists(String),
+    /// The swarm is already running.
+    #[error("Swarm '{0}' is already running")]
+    AlreadyRunning(String),
+    /// The swarm is running and must be stopped before removal.
+    #[error("Cannot remove running swarm '{0}'; stop it first")]
+    StillRunning(String),
+}
+
 /// A live swarm instance tracking runtime state.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SwarmInstance {
@@ -98,9 +115,9 @@ impl SwarmManager {
     }
 
     /// Create a swarm from a config.  Returns an error if the name is taken.
-    pub fn create(&mut self, config: SwarmConfig) -> Result<&SwarmInstance, String> {
+    pub fn create(&mut self, config: SwarmConfig) -> Result<&SwarmInstance, SwarmError> {
         if self.swarms.contains_key(&config.name) {
-            return Err(format!("Swarm '{}' already exists", config.name));
+            return Err(SwarmError::AlreadyExists(config.name));
         }
         let name = config.name.clone();
         self.swarms.insert(name.clone(), SwarmInstance::new(config));
@@ -108,24 +125,24 @@ impl SwarmManager {
     }
 
     /// Start a swarm by name.
-    pub fn start(&mut self, name: &str) -> Result<(), String> {
+    pub fn start(&mut self, name: &str) -> Result<(), SwarmError> {
         let inst = self
             .swarms
             .get_mut(name)
-            .ok_or_else(|| format!("Swarm '{}' not found", name))?;
+            .ok_or_else(|| SwarmError::NotFound(name.to_string()))?;
         if inst.status == SwarmStatus::Running {
-            return Err(format!("Swarm '{}' is already running", name));
+            return Err(SwarmError::AlreadyRunning(name.to_string()));
         }
         inst.start();
         Ok(())
     }
 
     /// Stop a swarm by name.
-    pub fn stop(&mut self, name: &str) -> Result<(), String> {
+    pub fn stop(&mut self, name: &str) -> Result<(), SwarmError> {
         let inst = self
             .swarms
             .get_mut(name)
-            .ok_or_else(|| format!("Swarm '{}' not found", name))?;
+            .ok_or_else(|| SwarmError::NotFound(name.to_string()))?;
         inst.stop();
         Ok(())
     }
@@ -148,16 +165,13 @@ impl SwarmManager {
     }
 
     /// Remove a stopped swarm.
-    pub fn remove(&mut self, name: &str) -> Result<(), String> {
+    pub fn remove(&mut self, name: &str) -> Result<(), SwarmError> {
         let inst = self
             .swarms
             .get(name)
-            .ok_or_else(|| format!("Swarm '{}' not found", name))?;
+            .ok_or_else(|| SwarmError::NotFound(name.to_string()))?;
         if inst.status == SwarmStatus::Running {
-            return Err(format!(
-                "Cannot remove running swarm '{}'; stop it first",
-                name
-            ));
+            return Err(SwarmError::StillRunning(name.to_string()));
         }
         self.swarms.remove(name);
         Ok(())

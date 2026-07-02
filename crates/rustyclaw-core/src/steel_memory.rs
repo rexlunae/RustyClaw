@@ -123,7 +123,13 @@ fn load_embedding_model() -> Result<TextEmbedding, String> {
         .join(".rustyclaw")
         .join("cache")
         .join("fastembed");
-    let _ = std::fs::create_dir_all(&cache_dir);
+    std::fs::create_dir_all(&cache_dir).map_err(|e| {
+        format!(
+            "Failed to create embedding cache dir {}: {}",
+            cache_dir.display(),
+            e
+        )
+    })?;
     let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir);
     TextEmbedding::try_new(opts).map_err(|e| format!("Failed to load embedding model: {}", e))
 }

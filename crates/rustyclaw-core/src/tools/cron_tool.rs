@@ -18,7 +18,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     debug!("Executing cron tool");
 
     let cron_dir = workspace_dir.join(".cron");
-    let mut store = CronStore::new(&cron_dir)?;
+    let mut store = CronStore::new(&cron_dir).map_err(|e| e.to_string())?;
 
     match action {
         "status" => {
@@ -73,7 +73,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             let job: CronJob = serde_json::from_value(job_obj.clone())
                 .map_err(|e| format!("Invalid job definition: {}", e))?;
 
-            let id = store.add(job)?;
+            let id = store.add(job).map_err(|e| e.to_string())?;
             debug!(job_id = %id, "Created cron job");
             Ok(format!("Created job: {}", id))
         }
@@ -89,7 +89,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
             let patch: CronJobPatch = serde_json::from_value(patch_obj.clone())
                 .map_err(|e| format!("Invalid patch: {}", e))?;
 
-            store.update(job_id, patch)?;
+            store.update(job_id, patch).map_err(|e| e.to_string())?;
             debug!(job_id, "Updated cron job");
             Ok(format!("Updated job: {}", job_id))
         }
@@ -100,7 +100,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing jobId for remove")?;
 
-            store.remove(job_id)?;
+            store.remove(job_id).map_err(|e| e.to_string())?;
             debug!(job_id, "Removed cron job");
             Ok(format!("Removed job: {}", job_id))
         }
@@ -129,7 +129,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> Result<String, String> {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing jobId for runs")?;
 
-            let runs = store.get_runs(job_id, 10)?;
+            let runs = store.get_runs(job_id, 10).map_err(|e| e.to_string())?;
             debug!(job_id, run_count = runs.len(), "Fetching run history");
             if runs.is_empty() {
                 return Ok(format!("No run history for job: {}", job_id));

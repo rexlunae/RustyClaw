@@ -148,13 +148,8 @@ pub(crate) async fn handle_thread_switch(
                             api_key: ctx.api_key.clone(),
                         };
 
-                        let summary_result = if ctx.provider == "anthropic" {
-                            providers::call_anthropic_with_tools(http, &summary_req, None).await
-                        } else if ctx.provider == "google" {
-                            providers::call_google_with_tools(http, &summary_req).await
-                        } else {
-                            providers::call_openai_with_tools(http, &summary_req, None).await
-                        };
+                        let summary_result =
+                            providers::call_with_tools(http, &summary_req, None).await;
 
                         match summary_result {
                             Ok(resp) if !resp.text.is_empty() => {

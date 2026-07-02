@@ -9,6 +9,29 @@ use tracing::{info, warn};
 
 use super::types::*;
 
+/// Errors produced by [`ServiceManager`] lifecycle operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ServiceError {
+    /// The service is already running.
+    #[error("Service '{0}' is already running")]
+    AlreadyRunning(String),
+    /// No service with this name is configured.
+    #[error("Unknown service: '{0}'")]
+    Unknown(String),
+    /// The service is not currently running.
+    #[error("Service '{0}' is not running")]
+    NotRunning(String),
+    /// A service with this name is already registered.
+    #[error("Service '{0}' already exists")]
+    AlreadyExists(String),
+    /// The service command was rejected by security validation.
+    #[error("Service command rejected by security validation: {0}")]
+    CommandRejected(String),
+    /// Spawning the service process failed.
+    #[error("Failed to spawn service: {0}")]
+    Spawn(#[from] std::io::Error),
+}
+
 /// A running service instance tracked by the manager.
 struct RunningService {
     def: ServiceDef,
@@ -119,9 +142,9 @@ impl ServiceManager {
     }
 
     /// Start a service by name.
-    pub async fn start(&mut self, name: &str) -> Result<ServiceInfo, String> {
+    pub async fn start(&mut self, name: &str) -> Result<ServiceInfo, ServiceError> {
         if self.running.contains_key(name) {
-            return Err(format!("Service '{}' is already running", name));
+            return Err(ServiceError::AlreadyRunning(name.to_string()));
         }
 
         let def = self
@@ -129,7 +152,7 @@ impl ServiceManager {
             .services
             .get(name)
             .cloned()
-            .ok_or_else(|| format!("Unknown service: '{}'", name))?;
+            .ok_or_else(|| ServiceError::Unknown(name.to_string()))?;
 
         let child = self.spawn_process(&def).await?;
 
@@ -159,14 +182,16 @@ impl ServiceManager {
     }
 
     /// Stop a running service.
-    pub async fn stop(&mut self, name: &str) -> Result<ServiceInfo, String> {
+    pub async fn stop(&mut self, name: &str) -> Result<ServiceInfo, ServiceError> {
         let mut svc = self
             .running
             .remove(name)
-            .ok_or_else(|| format!("Service '{}' is not running", name))?;
+            .ok_or_else(|| ServiceError::NotRunning(name.to_string()))?;
 
         svc.status = ServiceStatus::Stopping;
-        let _ = svc.child.kill().await;
+        if let Err(e) = svc.child.kill().await {
+            warn!(service = %name, error = %e, "Failed to kill service process");
+        }
 
         let info = ServiceInfo {
             name: name.to_string(),
@@ -196,7 +221,7 @@ impl ServiceManager {
     }
 
     /// Restart a service (stop then start).
-    pub async fn restart(&mut self, name: &str) -> Result<ServiceInfo, String> {
+    pub async fn restart(&mut self, name: &str) -> Result<ServiceInfo, ServiceError> {
         let prev_restarts = if let Some(svc) = self.running.get(name) {
             svc.restart_count
         } else {
@@ -484,9 +509,9 @@ impl ServiceManager {
     }
 
     /// Dynamically register a new service definition (not from config file).
-    pub fn register(&mut self, name: String, def: ServiceDef) -> Result<(), String> {
+    pub fn register(&mut self, name: String, def: ServiceDef) -> Result<(), ServiceError> {
         if self.config.services.contains_key(&name) {
-            return Err(format!("Service '{}' already exists", name));
+            return Err(ServiceError::AlreadyExists(name));
         }
         self.config.services.insert(name, def);
         Ok(())
@@ -494,13 +519,10 @@ impl ServiceManager {
 
     // ── Internal helpers ────────────────────────────────────────────
 
-    async fn spawn_process(&self, def: &ServiceDef) -> Result<Child, String> {
+    async fn spawn_process(&self, def: &ServiceDef) -> Result<Child, ServiceError> {
         let full_cmd = format!("{} {}", &def.command, &def.args.join(" "));
         if let Err(e) = crate::tools::helpers::validate_command_safe(&full_cmd) {
-            return Err(format!(
-                "Service command rejected by security validation: {}",
-                e
-            ));
+            return Err(ServiceError::CommandRejected(e));
         }
 
         let mut cmd = Command::new(&def.command);
@@ -517,8 +539,7 @@ impl ServiceManager {
             cmd.current_dir(cwd);
         }
 
-        cmd.spawn()
-            .map_err(|e| format!("Failed to spawn service: {}", e))
+        Ok(cmd.spawn()?)
     }
 
     #[cfg(unix)]
