@@ -45,9 +45,6 @@ pub struct AppState {
     /// Per-thread message history (thread_id → messages)
     thread_messages: HashMap<u64, VecDeque<ChatMessage>>,
 
-    /// Current input text
-    pub input: String,
-
     /// Whether we're waiting for a response
     pub is_processing: bool,
 
@@ -188,7 +185,6 @@ impl Default for AppState {
                 .unwrap_or_else(|| crate::DEFAULT_GATEWAY_URL.to_string()),
             messages: VecDeque::new(),
             thread_messages: HashMap::new(),
-            input: String::new(),
             is_processing: false,
             is_streaming: false,
             is_thinking: false,

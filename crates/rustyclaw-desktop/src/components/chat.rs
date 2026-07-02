@@ -20,13 +20,11 @@ use crate::chat_transcript::{to_context_items, to_transcript};
 #[derive(Props, Clone, PartialEq)]
 pub struct ChatProps {
     pub messages: Vec<ChatMessage>,
-    pub input: String,
     pub surface: rustyclaw_view::ChatSurfaceData,
     pub bottom_bar: rustyclaw_view::BottomBarData,
     pub agent_name: Option<String>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
-    pub on_input_change: EventHandler<String>,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
     pub on_add_file_attachment: EventHandler<()>,
@@ -39,17 +37,12 @@ pub struct ChatProps {
 /// `ChatSurface` transcript + composer.
 #[component]
 pub fn Chat(props: ChatProps) -> Element {
-    let mut input_ref = use_signal(|| props.input.clone());
-
-    // Keep the local input in sync when the parent clears it (e.g. after submit).
-    {
-        let parent = props.input.clone();
-        use_effect(move || {
-            if parent.is_empty() && !input_ref.read().is_empty() {
-                input_ref.set(String::new());
-            }
-        });
-    }
+    // The draft input lives ONLY in this local signal. It must not be
+    // mirrored into parent/app state on each keystroke: echoing the text
+    // through a wider reactive scope triggers large re-renders while the
+    // user is typing, and a stale render patch applied to the controlled
+    // textarea eats the most recent character.
+    let mut input_ref = use_signal(String::new);
 
     // Auto-scroll: keep the transcript pinned to the bottom as content streams
     // in, unless the user has scrolled up. Observes the embedded surface.
@@ -96,13 +89,11 @@ pub fn Chat(props: ChatProps) -> Element {
     };
 
     let on_submit = props.on_submit;
-    let on_input_change = props.on_input_change;
     let mut send = move |text: String| {
         let text = text.trim().to_string();
         if !text.is_empty() && !is_processing {
             on_submit.call(text);
             input_ref.set(String::new());
-            on_input_change.call(String::new());
         }
     };
 
@@ -144,8 +135,7 @@ pub fn Chat(props: ChatProps) -> Element {
                     EmptyState {
                         agent_name: props.agent_name.clone(),
                         on_pick: move |prompt: String| {
-                            input_ref.set(prompt.clone());
-                            on_input_change.call(prompt);
+                            input_ref.set(prompt);
                         },
                     }
                 }
@@ -157,8 +147,7 @@ pub fn Chat(props: ChatProps) -> Element {
                     attachments: to_context_items(&props.bottom_bar.composer.attachments),
                     input_accessory: accessory,
                     on_input: move |value: String| {
-                        input_ref.set(value.clone());
-                        on_input_change.call(value);
+                        input_ref.set(value);
                     },
                     on_send: send,
                     on_stop: move |_| props.on_cancel.call(()),

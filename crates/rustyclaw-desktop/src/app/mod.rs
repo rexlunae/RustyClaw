@@ -875,7 +875,6 @@ pub fn App() -> Element {
 
                 Chat {
                     messages: state.read().messages.iter().cloned().collect::<Vec<_>>(),
-                    input: state.read().input.clone(),
                     surface: rustyclaw_view::ChatSurfaceData {
                         is_processing: state.read().is_processing,
                         is_thinking: state.read().is_thinking,
@@ -908,7 +907,6 @@ pub fn App() -> Element {
                     agent_name: state.read().agent_name.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
-                    on_input_change: move |value| state.write().input = value,
                     on_model_change: move |(provider, model): (String, String)| {
                         let prov_clone = provider.clone();
                         let model_clone = model.clone();
