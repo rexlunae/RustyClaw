@@ -461,9 +461,14 @@ impl AgentThread {
     /// Apply a compaction summary, keeping only recent messages.
     pub fn apply_compaction(&mut self, summary: String) {
         // Keep the last 3 messages
-        const KEEP_RECENT: usize = 3;
+        self.apply_compaction_keeping(summary, 3);
+    }
 
-        while self.messages.len() > KEEP_RECENT {
+    /// Apply a compaction summary, keeping the given number of recent
+    /// messages. Used when the caller knows exactly which tail of the
+    /// conversation the summary does *not* cover.
+    pub fn apply_compaction_keeping(&mut self, summary: String, keep_recent: usize) {
+        while self.messages.len() > keep_recent {
             self.messages.pop_front();
         }
 

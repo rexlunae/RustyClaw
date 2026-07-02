@@ -212,19 +212,39 @@ pub(crate) async fn handle_chat_frame(
             .as_deref()
             .map(|c| c.provider.as_str())
             .unwrap_or("openai");
-        let mut msgs = active_thread_id
-            .and_then(|thread_id| {
-                thread_mgr.get(thread_id).map(|thread| {
-                    let history: Vec<rustyclaw_core::threads::ThreadMessage> =
-                        thread.messages.iter().cloned().collect();
-                    providers::thread_history_to_chat_messages(provider_name, &history)
-                })
+        let thread_context = active_thread_id.and_then(|thread_id| {
+            thread_mgr.get(thread_id).map(|thread| {
+                let history: Vec<rustyclaw_core::threads::ThreadMessage> =
+                    thread.messages.iter().cloned().collect();
+                (
+                    providers::thread_history_to_chat_messages(provider_name, &history),
+                    thread.compact_summary.clone(),
+                )
             })
-            .unwrap_or_else(|| messages.clone());
+        });
+        let (mut msgs, compact_summary) =
+            thread_context.unwrap_or_else(|| (messages.clone(), None));
         if let Some(system_message) = messages.first().filter(|m| m.role == "system") {
             if msgs.first().map(|m| m.role.as_str()) != Some("system") {
                 msgs.insert(0, system_message.clone());
             }
+        }
+        // Re-inject the stored compaction summary so context from compacted
+        // turns survives across prompts (the thread history above only holds
+        // the messages kept after compaction).
+        if let Some(summary) = compact_summary {
+            let insert_pos = if msgs.first().map(|m| m.role.as_str()) == Some("system") {
+                1
+            } else {
+                0
+            };
+            msgs.insert(
+                insert_pos,
+                ChatMessage::text(
+                    "system",
+                    &format!("# Previous conversation summary\n\n{}", summary),
+                ),
+            );
         }
         if !global_ctx.is_empty() && !msgs.is_empty() && msgs[0].role == "system" {
             msgs[0].content = format!(

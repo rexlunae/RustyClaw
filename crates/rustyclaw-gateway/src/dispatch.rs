@@ -493,7 +493,22 @@ pub(crate) async fn dispatch_text_message(
             let _ = protocol::server::send_info(writer, "⏳ Compacting context…").await;
             match providers::compact_conversation(http, &mut resolved, context_limit, writer).await
             {
-                Ok(()) => {} // compacted in-place
+                Ok(Some(outcome)) => {
+                    // Compacted in-place for this request; also persist the
+                    // summary to the thread so the next prompt reuses it
+                    // instead of re-compacting the full history again.
+                    if let Some(thread) = thread_mgr.foreground_mut() {
+                        thread.apply_compaction_keeping(outcome.summary, outcome.kept_recent);
+                    }
+                    if let Err(e) = thread_mgr.save_to_file(threads_path) {
+                        tracing::warn!(
+                            error = %e,
+                            path = ?threads_path,
+                            "Failed to persist compaction summary to thread history"
+                        );
+                    }
+                }
+                Ok(None) => {} // nothing to compact
                 Err(err) => {
                     // Non-fatal — handle logs and continues.
                     let _ = errors::handle(

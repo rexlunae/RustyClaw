@@ -395,6 +395,16 @@ use crate::helpers::estimate_tokens;
 /// After compaction, we aim to keep this fraction of the window for fresh context.
 const COMPACTION_TARGET: f64 = 0.40;
 
+/// What a successful [`compact_conversation`] produced, so the caller can
+/// persist it to the thread instead of re-compacting on every prompt.
+pub struct CompactionOutcome {
+    /// The model-generated summary of the older turns.
+    pub summary: String,
+    /// How many trailing conversation messages were kept verbatim (i.e. the
+    /// summary does not cover them).
+    pub kept_recent: usize,
+}
+
 /// Compact the conversation by summarizing older turns.
 ///
 /// Strategy:
@@ -403,17 +413,19 @@ const COMPACTION_TARGET: f64 = 0.40;
 /// 3. Ask the model to produce a concise summary of the middle (old) turns.
 /// 4. Replace those old turns with a single assistant "summary" message.
 ///
-/// This modifies `resolved.messages` in-place.
+/// This modifies `resolved.messages` in-place. Returns the summary (and how
+/// many recent messages were kept) when compaction happened, `None` when the
+/// conversation was too small to compact.
 pub async fn compact_conversation(
     http: &reqwest::Client,
     resolved: &mut ProviderRequest,
     context_limit: usize,
     writer: &mut dyn TransportWriter,
-) -> Result<()> {
+) -> Result<Option<CompactionOutcome>> {
     let msgs = &resolved.messages;
     if msgs.len() < 4 {
         // Too few messages to compact meaningfully.
-        return Ok(());
+        return Ok(None);
     }
 
     // Separate system prompt from the rest.
@@ -433,6 +445,13 @@ pub async fn compact_conversation(
         keep_from = i;
     }
 
+    // Always keep the final message — it is the prompt the user just sent.
+    // Without this, a single oversized message would blow the tail budget on
+    // the first iteration and the prompt itself would get summarized away.
+    if keep_from == msgs.len() {
+        keep_from = msgs.len() - 1;
+    }
+
     // Ensure the kept tail doesn't start with orphaned tool results.
     // A "tool" message references a tool_use_id from the preceding "assistant"
     // message; if we split them, the model rejects the request.  Walk backward
@@ -444,7 +463,7 @@ pub async fn compact_conversation(
     // The middle section to summarize: everything between system and keep_from.
     if keep_from <= start_idx + 1 {
         // Nothing meaningful to summarize.
-        return Ok(());
+        return Ok(None);
     }
 
     let old_turns = &msgs[start_idx..keep_from];
@@ -498,6 +517,7 @@ pub async fn compact_conversation(
     };
 
     // Rebuild messages: system + summary + recent turns.
+    let kept_recent = msgs.len() - keep_from;
     let mut new_messages = Vec::new();
     if has_system {
         new_messages.push(msgs[0].clone());
@@ -532,7 +552,10 @@ pub async fn compact_conversation(
     .await
     .context("Failed to send compaction info frame")?;
 
-    Ok(())
+    Ok(Some(CompactionOutcome {
+        summary,
+        kept_recent,
+    }))
 }
 
 // ── Model connection probe ──────────────────────────────────────────────────
