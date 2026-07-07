@@ -49,7 +49,7 @@ pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Tool
 
     // Validate URL
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL must start with http:// or https://".to_string().into());
+        return Err("URL must start with http:// or https://".into());
     }
 
     // Fetch the page

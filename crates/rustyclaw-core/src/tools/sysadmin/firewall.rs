@@ -65,7 +65,7 @@ pub async fn exec_firewall_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                 }
                 "iptables" => "sudo iptables -L -n --line-numbers 2>&1 | head -50",
                 "nftables" => "sudo nft list ruleset 2>&1 | head -50",
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh_async(cmd).await?;
             Ok(json!({ "action": "status", "backend": backend, "output": output }).to_string())
@@ -78,7 +78,7 @@ pub async fn exec_firewall_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                 "firewalld" => "sudo firewall-cmd --list-all 2>&1",
                 "iptables" => "sudo iptables -L -n -v --line-numbers 2>&1 | head -60",
                 "nftables" => "sudo nft list ruleset 2>&1 | head -60",
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh_async(cmd).await?;
             Ok(json!({ "action": "rules", "backend": backend, "output": output }).to_string())
@@ -113,7 +113,7 @@ pub async fn exec_firewall_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                     "echo 'pass in proto {} from any to any port {}' | sudo pfctl -f - 2>&1",
                     proto, port
                 ),
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "allow", "port": port, "protocol": proto, "backend": backend, "output": if output.is_empty() { format!("Port {}/{} allowed.", port, proto) } else { output } }).to_string())
@@ -144,7 +144,7 @@ pub async fn exec_firewall_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                     "sudo iptables -A INPUT -p {} --dport {} -j DROP 2>&1",
                     proto, port
                 ),
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "deny", "port": port, "protocol": proto, "backend": backend, "output": if output.is_empty() { format!("Port {}/{} denied.", port, proto) } else { output } }).to_string())
@@ -157,7 +157,7 @@ pub async fn exec_firewall_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                     "sudo systemctl start firewalld && sudo systemctl enable firewalld 2>&1"
                 }
                 "pf" => "sudo pfctl -e 2>&1",
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh_async(cmd).await?;
             Ok(json!({ "action": "enable", "backend": backend, "output": if output.is_empty() { "Firewall enabled.".into() } else { output } }).to_string())
@@ -168,7 +168,7 @@ pub async fn exec_firewall_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                 "ufw" => "sudo ufw disable 2>&1",
                 "firewalld" => "sudo systemctl stop firewalld 2>&1",
                 "pf" => "sudo pfctl -d 2>&1",
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh_async(cmd).await?;
             Ok(json!({ "action": "disable", "backend": backend, "output": if output.is_empty() { "Firewall disabled.".into() } else { output } }).to_string())
@@ -199,7 +199,7 @@ pub fn exec_firewall(args: &Value, _workspace_dir: &Path) -> ToolResult {
                 "pf" => "sudo pfctl -s info 2>&1 | head -10",
                 "ufw" => "sudo ufw status verbose 2>&1",
                 "iptables" => "sudo iptables -L -n --line-numbers 2>&1 | head -50",
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh(cmd)?;
             Ok(json!({ "action": "status", "backend": backend, "output": output }).to_string())
@@ -208,7 +208,7 @@ pub fn exec_firewall(args: &Value, _workspace_dir: &Path) -> ToolResult {
             let cmd = match backend {
                 "ufw" => "sudo ufw status numbered 2>&1",
                 "iptables" => "sudo iptables -L -n -v --line-numbers 2>&1 | head -60",
-                _ => return Err("No supported firewall found".to_string().into()),
+                _ => return Err("No supported firewall found".into()),
             };
             let output = sh(cmd)?;
             Ok(json!({ "action": "rules", "backend": backend, "output": output }).to_string())

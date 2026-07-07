@@ -313,9 +313,7 @@ async fn exec_task_describe(
             .map(|t| t.id)
             .ok_or("No active task found for current session")?
     } else {
-        return Err("No task ID provided and no session context"
-            .to_string()
-            .into());
+        return Err("No task ID provided and no session context".into());
     };
 
     task_mgr

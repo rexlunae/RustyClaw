@@ -38,7 +38,7 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> ToolRes
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted access to protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     debug!(path = %path.display(), "Reading file");
@@ -116,7 +116,7 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> ToolRe
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted write to protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     debug!(path = %path.display(), bytes = content.len(), "Writing file");
@@ -167,7 +167,7 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> ToolRes
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted edit to protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     debug!(path = %path.display(), "Editing file");
@@ -220,7 +220,7 @@ pub async fn exec_list_directory_async(args: &Value, workspace_dir: &Path) -> To
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted list of protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     debug!(path = %path.display(), "Listing directory");
@@ -401,7 +401,7 @@ fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     // Use safe open with TOCTOU protection
@@ -462,7 +462,7 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     if let Some(parent) = path.parent() {
@@ -506,7 +506,7 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     // Safe open for read
@@ -551,7 +551,7 @@ fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     let entries = std::fs::read_dir(&path)
@@ -708,7 +708,7 @@ fn exec_find_files_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
             .collect();
 
         if keywords.is_empty() {
-            return Err("pattern must not be empty".to_string().into());
+            return Err("pattern must not be empty".into());
         }
 
         let mut results = Vec::new();

@@ -542,7 +542,7 @@ fn exec_set_thread_caption(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let trimmed = caption.trim();
     if trimmed.is_empty() {
-        return Err("Caption cannot be empty.".to_string().into());
+        return Err("Caption cannot be empty.".into());
     }
 
     let update = json!({

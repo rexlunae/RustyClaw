@@ -80,7 +80,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolRe
 
     // Validate URL
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL must start with http:// or https://".to_string().into());
+        return Err("URL must start with http:// or https://".into());
     }
 
     // SSRF protection: block private/loopback/link-local/cloud-metadata targets.
@@ -216,7 +216,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolRe
         }
 
         if result.trim().is_empty() {
-            return Err("Page returned no extractable content".to_string().into());
+            return Err("Page returned no extractable content".into());
         }
 
         Ok(result)
@@ -407,7 +407,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let custom_headers = args.get("headers").and_then(|v| v.as_object());
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL must start with http:// or https://".to_string().into());
+        return Err("URL must start with http:// or https://".into());
     }
 
     // SSRF protection: block private/loopback/link-local/cloud-metadata targets.
@@ -527,7 +527,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
         }
 
         if result.trim().is_empty() {
-            return Err("Page returned no extractable content".to_string().into());
+            return Err("Page returned no extractable content".into());
         }
 
         Ok(result)

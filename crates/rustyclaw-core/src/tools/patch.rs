@@ -27,7 +27,7 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     if hunks.is_empty() {
         warn!("No valid hunks found in patch");
-        return Err("No valid hunks found in patch".to_string().into());
+        return Err("No valid hunks found in patch".into());
     }
 
     debug!(hunk_count = hunks.len(), "Parsed patch hunks");
@@ -140,7 +140,7 @@ pub fn parse_unified_diff(patch: &str) -> ToolResult<Vec<DiffHunk>> {
         // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
         if let Some(header) = line.strip_prefix("@@ ") {
             let Some(ref file_path) = current_file else {
-                return Err("Hunk without file header".to_string().into());
+                return Err("Hunk without file header".into());
             };
 
             let end = header.find(" @@").unwrap_or(header.len());

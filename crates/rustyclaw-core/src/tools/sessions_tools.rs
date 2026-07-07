@@ -141,7 +141,7 @@ pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> ToolResult {
             .map(|s| s.key.clone())
             .ok_or_else(|| format!("No session found with label: {}", l))?
     } else {
-        return Err("Must provide sessionKey or label".to_string().into());
+        return Err("Must provide sessionKey or label".into());
     };
 
     mgr.send_message(&key, message)?;

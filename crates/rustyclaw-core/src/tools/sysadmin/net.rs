@@ -63,7 +63,7 @@ pub async fn exec_net_info_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                 Some("dig") => sh_async(&format!("dig {} +short", host)).await?,
                 Some("nslookup") => sh_async(&format!("nslookup {} 2>/dev/null", host)).await?,
                 Some("host") => sh_async(&format!("host {}", host)).await?,
-                _ => return Err("No DNS tool found".to_string().into()),
+                _ => return Err("No DNS tool found".into()),
             };
             Ok(json!({ "action": "dns", "host": host, "tool": tool.unwrap_or_default(), "output": output }).to_string())
         }
@@ -85,7 +85,7 @@ pub async fn exec_net_info_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                 Some("mtr") => format!("mtr -r -c 3 {} 2>&1", host),
                 Some("tracepath") => format!("tracepath {} 2>&1 | head -30", host),
                 Some("traceroute") => format!("traceroute -m 20 {} 2>&1", host),
-                _ => return Err("No traceroute tool found".to_string().into()),
+                _ => return Err("No traceroute tool found".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "traceroute", "target": host, "tool": tool.unwrap_or_default(), "output": output }).to_string())
@@ -128,7 +128,7 @@ pub async fn exec_net_info_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                     let output = sh_async(&format!("{} --simple 2>&1 || {} 2>&1", t, t)).await?;
                     Ok(json!({ "action": "bandwidth", "tool": t, "output": output }).to_string())
                 }
-                None => Err("No bandwidth test tool found".to_string().into()),
+                None => Err("No bandwidth test tool found".into()),
             }
         }
 
@@ -158,7 +158,7 @@ pub async fn exec_net_scan_async(args: &Value, _workspace_dir: &Path) -> ToolRes
             let ports = args.get("ports").and_then(|v| v.as_str());
 
             if which_first_async(&["nmap"]).await.is_none() {
-                return Err("nmap is not installed".to_string().into());
+                return Err("nmap is not installed".into());
             }
 
             let cmd = match scan_type {
@@ -203,7 +203,7 @@ pub async fn exec_net_scan_async(args: &Value, _workspace_dir: &Path) -> ToolRes
             let count = args.get("count").and_then(|v| v.as_u64()).unwrap_or(20);
 
             if which_first_async(&["tcpdump"]).await.is_none() {
-                return Err("tcpdump is not installed".to_string().into());
+                return Err("tcpdump is not installed".into());
             }
 
             let cmd = if filter.is_empty() {
@@ -272,7 +272,7 @@ pub async fn exec_net_scan_async(args: &Value, _workspace_dir: &Path) -> ToolRes
                     seconds, iface
                 ),
                 Some("tshark") => format!("timeout {} tshark -i {} -c 30 -q 2>&1", seconds, iface),
-                _ => return Err("No packet capture tool found".to_string().into()),
+                _ => return Err("No packet capture tool found".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "sniff", "interface": iface, "seconds": seconds, "tool": tool.unwrap_or_default(), "output": output }).to_string())

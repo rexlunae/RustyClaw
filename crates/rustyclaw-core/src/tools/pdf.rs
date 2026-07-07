@@ -46,7 +46,7 @@ fn exec_pdf_extract(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let path = resolve_path(workspace_dir, path_str);
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
     if !path.exists() {
         return Err(format!("File not found: {}", path.display()).into());
@@ -142,7 +142,7 @@ fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let path = resolve_path(workspace_dir, path_str);
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
     if !path.exists() {
         return Err(format!("File not found: {}", path.display()).into());
@@ -182,7 +182,7 @@ fn exec_pdf_page_count(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let path = resolve_path(workspace_dir, path_str);
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
     if !path.exists() {
         return Err(format!("File not found: {}", path.display()).into());

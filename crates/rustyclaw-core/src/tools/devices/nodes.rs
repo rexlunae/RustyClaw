@@ -425,12 +425,8 @@ async fn node_run_async(node: &str, command: &[String]) -> ToolResult {
             })
             .to_string())
         }
-        ParsedNode::Vnc { .. } => Err("VNC nodes don't support command execution."
-            .to_string()
-            .into()),
-        ParsedNode::Rdp { .. } => Err("RDP nodes don't support command execution."
-            .to_string()
-            .into()),
+        ParsedNode::Vnc { .. } => Err("VNC nodes don't support command execution.".into()),
+        ParsedNode::Rdp { .. } => Err("RDP nodes don't support command execution.".into()),
     }
 }
 
@@ -468,7 +464,7 @@ async fn node_screen_snap_async(node: &str, _facing: &str) -> ToolResult {
                 ))
                 .await?;
             } else {
-                return Err("No VNC tool available.".to_string().into());
+                return Err("No VNC tool available.".into());
             }
             Ok(
                 json!({"node": node, "type": "vnc", "action": "screen_snap", "path": local})
@@ -519,14 +515,14 @@ async fn node_click_async(node: &str, x: i32, y: i32, button: &str) -> ToolResul
                 ))
                 .await?;
             } else {
-                return Err("No VNC tool available.".to_string().into());
+                return Err("No VNC tool available.".into());
             }
             Ok(
                 json!({"node": node, "action": "click", "x": x, "y": y, "button": button})
                     .to_string(),
             )
         }
-        ParsedNode::Rdp { .. } => Err("RDP click requires interactive session.".to_string().into()),
+        ParsedNode::Rdp { .. } => Err("RDP click requires interactive session.".into()),
     }
 }
 
@@ -567,13 +563,11 @@ async fn node_type_text_async(node: &str, text: &str) -> ToolResult {
                 ))
                 .await?;
             } else {
-                return Err("No VNC tool available.".to_string().into());
+                return Err("No VNC tool available.".into());
             }
             Ok(json!({"node": node, "action": "type", "length": text.len()}).to_string())
         }
-        ParsedNode::Rdp { .. } => Err("RDP typing requires interactive session."
-            .to_string()
-            .into()),
+        ParsedNode::Rdp { .. } => Err("RDP typing requires interactive session.".into()),
     }
 }
 
@@ -616,13 +610,11 @@ async fn node_send_key_async(node: &str, key: &str) -> ToolResult {
             } else if has_command_async("vncdotool").await {
                 sh_async(&format!("vncdotool -s {}::{} key {}", host, port, key)).await?;
             } else {
-                return Err("No VNC tool available.".to_string().into());
+                return Err("No VNC tool available.".into());
             }
             Ok(json!({"node": node, "action": "key", "key": key}).to_string())
         }
-        ParsedNode::Rdp { .. } => Err("RDP key press requires interactive session."
-            .to_string()
-            .into()),
+        ParsedNode::Rdp { .. } => Err("RDP key press requires interactive session.".into()),
     }
 }
 
@@ -648,14 +640,14 @@ async fn node_notify_async(node: &str, title: &str, body: &str) -> ToolResult {
             })
             .to_string())
         }
-        _ => Err("Notifications require ADB or SSH.".to_string().into()),
+        _ => Err("Notifications require ADB or SSH.".into()),
     }
 }
 
 async fn adb_camera_list_async(node: &str) -> ToolResult {
     let device = match parse_node(node) {
         ParsedNode::Adb { device } => device,
-        _ => return Err("camera_list only works with ADB nodes".to_string().into()),
+        _ => return Err("camera_list only works with ADB nodes".into()),
     };
     let out = sh_async(&format!(
         "adb -s {} shell \"dumpsys media.camera | grep -E 'Camera|Facing'\"",
@@ -668,7 +660,7 @@ async fn adb_camera_list_async(node: &str) -> ToolResult {
 async fn adb_screen_record_async(node: &str, duration_ms: u64) -> ToolResult {
     let device = match parse_node(node) {
         ParsedNode::Adb { device } => device,
-        _ => return Err("screen_record only works with ADB nodes".to_string().into()),
+        _ => return Err("screen_record only works with ADB nodes".into()),
     };
     let secs = (duration_ms / 1000).clamp(1, 180);
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
@@ -692,7 +684,7 @@ async fn adb_screen_record_async(node: &str, duration_ms: u64) -> ToolResult {
 async fn adb_location_get_async(node: &str) -> ToolResult {
     let device = match parse_node(node) {
         ParsedNode::Adb { device } => device,
-        _ => return Err("location_get only works with ADB nodes".to_string().into()),
+        _ => return Err("location_get only works with ADB nodes".into()),
     };
     let out = sh_async(&format!(
         "adb -s {} shell \"dumpsys location | grep -A2 'last location'\"",
@@ -744,7 +736,7 @@ pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> ToolResult {
             Ok("Direct connection nodes don't require pairing approval.".to_string())
         }
         _ => Err(
-            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support.".to_string().into()
+            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support.".into()
         ),
     }
 }
@@ -820,6 +812,6 @@ fn node_run_sync(node: &str, command: &[String]) -> ToolResult {
                     .to_string(),
             )
         }
-        _ => Err("Sync run only supports SSH and ADB.".to_string().into()),
+        _ => Err("Sync run only supports SSH and ADB.".into()),
     }
 }

@@ -106,7 +106,7 @@ pub async fn exec_service_manage_async(args: &Value, _workspace_dir: &Path) -> T
                     "sudo launchctl load -w /Library/LaunchDaemons/{}.plist 2>&1",
                     svc
                 ),
-                _ => return Err("enable requires systemd or launchd".to_string().into()),
+                _ => return Err("enable requires systemd or launchd".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "enable", "service": svc, "init_system": init, "output": if output.is_empty() { "Service enabled.".into() } else { output } }).to_string())
@@ -120,7 +120,7 @@ pub async fn exec_service_manage_async(args: &Value, _workspace_dir: &Path) -> T
                     "sudo launchctl unload -w /Library/LaunchDaemons/{}.plist 2>&1",
                     svc
                 ),
-                _ => return Err("disable requires systemd or launchd".to_string().into()),
+                _ => return Err("disable requires systemd or launchd".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "disable", "service": svc, "init_system": init, "output": if output.is_empty() { "Service disabled.".into() } else { output } }).to_string())
@@ -135,7 +135,7 @@ pub async fn exec_service_manage_async(args: &Value, _workspace_dir: &Path) -> T
                     "log show --predicate 'subsystem==\"{}\"' --last 5m --style compact 2>&1 | tail -{}",
                     svc, lines
                 ),
-                _ => return Err("Service logs require systemd or launchd".to_string().into()),
+                _ => return Err("Service logs require systemd or launchd".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "logs", "service": svc, "lines": lines, "init_system": init, "output": output }).to_string())

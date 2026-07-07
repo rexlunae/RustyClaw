@@ -55,11 +55,11 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
 
     if command_references_credentials(command) {
         warn!("Command references credentials directory");
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
     if is_protected_path(&cwd) {
         warn!(cwd = %cwd.display(), "Working directory is protected");
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     // If background requested immediately, spawn and return session ID
@@ -316,10 +316,10 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     validate_command_safe(command)?;
 
     if command_references_credentials(command) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
     if is_protected_path(&cwd) {
-        return Err(VAULT_ACCESS_DENIED.to_string().into());
+        return Err(VAULT_ACCESS_DENIED.into());
     }
 
     if background {

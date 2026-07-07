@@ -71,11 +71,7 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> ToolRe
                 .to_string(),
         )
     } else {
-        Err(
-            "Screenshot failed. Install screencapture (macOS) or imagemagick (Linux)."
-                .to_string()
-                .into(),
-        )
+        Err("Screenshot failed. Install screencapture (macOS) or imagemagick (Linux).".into())
     }
 }
 
@@ -204,7 +200,7 @@ pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> ToolResult {
             if status.success() {
                 Ok(json!({ "status": "ok", "length": content.len() }).to_string())
             } else {
-                Err("Clipboard write failed".to_string().into())
+                Err("Clipboard write failed".into())
             }
         }
         _ => Err(format!("Unknown action: {}", action).into()),

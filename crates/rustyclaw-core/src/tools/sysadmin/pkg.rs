@@ -32,9 +32,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> ToolR
         let (m, n) = detect_pkg_manager_async().await;
         if m.is_empty() {
             warn!("No supported package manager found");
-            return Err("No supported package manager found on this system"
-                .to_string()
-                .into());
+            return Err("No supported package manager found on this system".into());
         }
         (m, n)
     };
@@ -209,7 +207,7 @@ pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
     } else {
         let (m, n) = detect_pkg_manager();
         if m.is_empty() {
-            return Err("No supported package manager found".to_string().into());
+            return Err("No supported package manager found".into());
         }
         (m, n)
     };

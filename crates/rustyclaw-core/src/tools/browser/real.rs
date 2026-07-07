@@ -122,9 +122,7 @@ pub async fn list_tabs() -> ToolResult {
             .collect();
         Ok(json!({ "tabs": tabs }).to_string())
     } else {
-        Err("Browser not running. Use action='start' first."
-            .to_string()
-            .into())
+        Err("Browser not running. Use action='start' first.".into())
     }
 }
 

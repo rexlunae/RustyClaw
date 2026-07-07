@@ -100,7 +100,7 @@ pub(crate) fn get_command_array(args: &Value) -> ToolResult<Vec<String>> {
     } else if let Some(s) = args.get("command").and_then(|v| v.as_str()) {
         Ok(vec![s.to_string()])
     } else {
-        Err("Missing required parameter: command".to_string().into())
+        Err("Missing required parameter: command".into())
     }
 }
 

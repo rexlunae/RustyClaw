@@ -112,9 +112,7 @@ pub async fn execute_canvas_tool(
                     Err(e) => Err(format!("Invalid A2UI JSONL: {}", e).into()),
                 }
             } else {
-                Err("Either 'text' or 'jsonl' parameter required"
-                    .to_string()
-                    .into())
+                Err("Either 'text' or 'jsonl' parameter required".into())
             }
         }
 

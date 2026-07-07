@@ -46,9 +46,7 @@ pub fn exec_mcp_connect(args: &Value, _workspace_dir: &Path) -> ToolResult {
     debug!(?name, ?command, "Connecting to MCP server");
 
     if name.is_none() && command.is_none() {
-        return Err("Either 'name' (from config) or 'command' is required"
-            .to_string()
-            .into());
+        return Err("Either 'name' (from config) or 'command' is required".into());
     }
 
     // This is a stub — the gateway handles actual connections

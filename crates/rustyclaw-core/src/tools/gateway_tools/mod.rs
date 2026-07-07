@@ -250,7 +250,7 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
                     match webhook_url {
                         Some(url) => send_webhook_sync(&url, target, message),
-                        None => Err("Missing webhookUrl for webhook channel".to_string().into()),
+                        None => Err("Missing webhookUrl for webhook channel".into()),
                     }
                 }
                 _ => {
@@ -283,7 +283,7 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> ToolResult {
                 .unwrap_or_default();
 
             if targets.is_empty() {
-                return Err("No targets specified for broadcast".to_string().into());
+                return Err("No targets specified for broadcast".into());
             }
 
             let channel = args

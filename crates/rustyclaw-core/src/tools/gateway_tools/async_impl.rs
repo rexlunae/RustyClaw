@@ -200,7 +200,7 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> ToolResu
 
                     match webhook_url {
                         Some(url) => send_webhook_async(&url, target, message).await,
-                        None => Err("Missing webhookUrl for webhook channel".to_string().into()),
+                        None => Err("Missing webhookUrl for webhook channel".into()),
                     }
                 }
                 _ => {
@@ -237,7 +237,7 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> ToolResu
                 .unwrap_or_default();
 
             if targets.is_empty() {
-                return Err("No targets specified for broadcast".to_string().into());
+                return Err("No targets specified for broadcast".into());
             }
 
             let channel = args

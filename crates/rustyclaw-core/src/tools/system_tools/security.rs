@@ -292,7 +292,7 @@ pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let _ = sh(&format!("rm -rf '{}'", target.display()));
     if target.exists() {
-        Err("Delete failed".to_string().into())
+        Err("Delete failed".into())
     } else {
         Ok(json!({ "status": "deleted", "path": target.display().to_string() }).to_string())
     }
