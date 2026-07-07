@@ -126,7 +126,7 @@ impl StatsObserver {
         }
         snapshot
             .per_model
-            .sort_by(|a, b| b.requests.cmp(&a.requests));
+            .sort_by_key(|m| std::cmp::Reverse(m.requests));
         snapshot
     }
 
