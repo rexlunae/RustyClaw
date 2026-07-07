@@ -823,28 +823,33 @@ pub(crate) fn get_swarm_infos() -> Vec<SwarmData> {
 }
 
 /// Create a swarm from a built-in template.
-pub(crate) fn create_swarm_from_template(template: &str) -> Result<(), String> {
+pub(crate) fn create_swarm_from_template(template: &str) -> anyhow::Result<()> {
     use rustyclaw_core::swarm::{builtin_templates, swarm_manager};
 
     let templates = builtin_templates();
     let cfg = templates
         .into_iter()
         .find(|t| t.name == template)
-        .ok_or_else(|| format!("Unknown template: {}", template))?;
+        .ok_or_else(|| anyhow::anyhow!("Unknown template: {}", template))?;
 
     let name = cfg.name.clone();
     let mgr = swarm_manager();
-    let mut m = mgr.lock().map_err(|_| "Lock error".to_string())?;
-    m.create(cfg).map_err(|e| e.to_string())?;
-    m.start(&name).map_err(|e| e.to_string())?;
+    let mut m = mgr
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Swarm manager lock poisoned"))?;
+    m.create(cfg)?;
+    m.start(&name)?;
     Ok(())
 }
 
 /// Stop a running swarm.
-pub(crate) fn stop_swarm(name: &str) -> Result<(), String> {
+pub(crate) fn stop_swarm(name: &str) -> anyhow::Result<()> {
     use rustyclaw_core::swarm::swarm_manager;
 
     let mgr = swarm_manager();
-    let mut m = mgr.lock().map_err(|_| "Lock error".to_string())?;
-    m.stop(name).map_err(|e| e.to_string())
+    let mut m = mgr
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Swarm manager lock poisoned"))?;
+    m.stop(name)?;
+    Ok(())
 }

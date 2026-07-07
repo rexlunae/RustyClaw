@@ -55,15 +55,21 @@ plumbing that used `Result<_, String>` or flattened errors mid-propagation.
 
 ### Follow-ups (prioritized)
 
-1. **`steel_memory.rs`** — the largest remaining offender (~25
-   `Result<_, String>` signatures, ~32 flattenings). Deserves a
-   `SteelMemoryError { Embedding, Storage, Db, ... }` pass of its own; the
-   embedding/vector-storage errors are stringified several layers below where
-   they surface.
-2. **`sandbox/platform.rs`** — 15 `Result<_, String>` signatures across the
-   platform backends (`apply_landlock`, `run_with_docker`,
-   `Sandbox::run_command`, …). Proposed `SandboxError { Landlock, Spawn(io),
-   PolicyViolation }`; security-relevant for the same reason as `SsrfError`.
+1. **[fixed]** ~~`steel_memory.rs`~~ — now uses `SteelMemoryError { Storage,
+   Embedding, KnowledgeGraph, Palace, Io, ModelNotInitialized, TaskPanicked }`
+   with the underlying `anyhow::Error` chains preserved per operation, plus a
+   `run_blocking` helper that replaces the repeated triple-match on
+   `spawn_blocking` results. Flattening now happens only at the memory-tool
+   boundary and in `MemoryTreeError::Summarizer` (a foreign string variant).
+2. **[fixed]** ~~`sandbox/platform.rs`~~ — `SandboxError` in `sandbox/mod.rs`
+   covers the policy verdicts (`ReadDenied`, `NotAllowed`, `ExecDenied`,
+   `Command*`, `SymlinkRace`) separately from execution failures
+   (`Spawn(io)`, `Landlock`/`LandlockPath` with real `#[source]`s,
+   `Unsupported`). `validate_path`, `run_sandboxed`, `Sandbox::{init,
+   check_path, run_command}`, and the `tools/helpers.rs` security checks
+   (`validate_command_safe`, `resolve_path_no_race`,
+   `run_sandboxed_command`) all return it; `ServiceError::CommandRejected`
+   now carries it as a typed source.
 3. **Gateway parse helpers** — `parse_task_id` (`task_handler.rs`),
    `parse_service_name`/`parse_model_id` (`model_handler.rs`) return
    `Result<_, String>`; low priority since they feed directly into the tool
@@ -74,6 +80,15 @@ plumbing that used `Result<_, String>` or flattened errors mid-propagation.
 5. **`gateway/errors.rs`** is the reference implementation for the
    display-boundary pattern (typed kind + source, formatted only in
    `user_message`) — new error types should imitate it.
+
+Addressed in the same pass (post-#303 stragglers): `TaskError`
+(`tasks/manager.rs`), `ProcessManager::spawn{,_with_owner}` now return
+`ProcessError`, `SubtaskError` replaces the `"Cancelled"` sentinel string in
+`threads/subtask.rs`, `ReceiptError` (`protocols/receipt.rs`),
+`CustomProviderError` (`providers/custom.rs`), `MissingRequestField`
+(`gateway/providers/mod.rs` `resolve_request`), the SSH bare-frame fallback
+returns `FrameCodecError` instead of `String`, and the desktop swarm helpers
+propagate `SwarmError` through `anyhow` instead of pre-flattening.
 
 ## 2. Module size & cohesion
 

@@ -22,8 +22,8 @@ pub use events::*;
 pub use manager::*;
 pub use model::*;
 pub use subtask::{
-    SpawnOptions, SubtaskHandle, SubtaskRegistry, SubtaskResult, spawn_background, spawn_subagent,
-    spawn_task,
+    SpawnOptions, SubtaskError, SubtaskHandle, SubtaskRegistry, SubtaskResult, spawn_background,
+    spawn_subagent, spawn_task,
 };
 
 // Backwards compatibility: TaskId is now ThreadId

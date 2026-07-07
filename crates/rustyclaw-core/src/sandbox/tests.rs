@@ -138,8 +138,10 @@ fn test_path_validation_blocks_credentials() {
     let _ = std::fs::write("/tmp/test_creds/secret.txt", "test");
     // This should fail because /tmp/test_creds is protected
     let result = run_with_path_validation("cat /tmp/test_creds/secret.txt", &policy);
-    assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Access denied"));
+    assert!(matches!(
+        result.unwrap_err(),
+        SandboxError::ReadDenied { .. }
+    ));
 }
 
 #[test]
@@ -152,6 +154,9 @@ fn test_path_validation_allows_workspace() {
     // Note: This will likely fail with "command failed" but NOT "Access denied"
     // because the shell redirection happens before echo runs
     if let Err(e) = result {
-        assert!(!e.contains("Access denied"));
+        assert!(!matches!(
+            e,
+            SandboxError::ReadDenied { .. } | SandboxError::NotAllowed { .. }
+        ));
     }
 }

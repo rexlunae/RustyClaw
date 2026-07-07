@@ -490,7 +490,7 @@ impl ProcessManager {
         command: &str,
         working_dir: &str,
         timeout_secs: Option<u64>,
-    ) -> Result<SessionId, String> {
+    ) -> Result<SessionId, ProcessError> {
         self.spawn_with_owner(command, working_dir, timeout_secs, None)
     }
 
@@ -501,7 +501,7 @@ impl ProcessManager {
         working_dir: &str,
         timeout_secs: Option<u64>,
         owner_id: Option<String>,
-    ) -> Result<SessionId, String> {
+    ) -> Result<SessionId, ProcessError> {
         let timeout = timeout_secs.map(Duration::from_secs);
 
         // Use platform-appropriate shell
@@ -513,8 +513,7 @@ impl ProcessManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn process: {}", e))?;
+            .spawn()?;
 
         #[cfg(windows)]
         let child = Command::new("cmd")
@@ -524,8 +523,7 @@ impl ProcessManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn process: {}", e))?;
+            .spawn()?;
 
         #[cfg(not(any(unix, windows)))]
         let child = Command::new("sh")
@@ -535,8 +533,7 @@ impl ProcessManager {
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn process: {}", e))?;
+            .spawn()?;
 
         let session = ExecSession::with_owner(
             command.to_string(),

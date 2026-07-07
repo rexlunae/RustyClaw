@@ -30,14 +30,16 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     let rt = tokio::runtime::Handle::try_current().map_err(|_| "No tokio runtime available")?;
 
     rt.block_on(async move {
-        let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
+        let index =
+            crate::steel_memory::SteelMemoryIndex::new(&workspace).map_err(|e| e.to_string())?;
 
         // Index workspace (idempotent - will dedupe in future)
         let _ = index.index_workspace().await;
 
         let results = index
             .search(&query_owned, max_results, Some(min_score))
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
 
         if results.is_empty() {
             return Ok("No matching memories found.".to_string());
@@ -127,10 +129,12 @@ pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, Str
     let rt = tokio::runtime::Handle::try_current().map_err(|_| "No tokio runtime available")?;
 
     rt.block_on(async move {
-        let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
+        let index =
+            crate::steel_memory::SteelMemoryIndex::new(&workspace).map_err(|e| e.to_string())?;
         let id = index
             .add_memory(&content_owned, &wing_owned, &room_owned, None)
-            .await?;
+            .await
+            .map_err(|e| e.to_string())?;
         Ok(format!("Memory added with ID: {}", id))
     })
 }

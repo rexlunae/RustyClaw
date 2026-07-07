@@ -53,7 +53,7 @@ pub async fn exec_execute_command_async(
 
     // Block commands that reference the credentials directory.
     // Validate command safety (null byte rejection, length, exfiltration patterns).
-    validate_command_safe(command)?;
+    validate_command_safe(command).map_err(|e| e.to_string())?;
 
     if command_references_credentials(command) {
         warn!("Command references credentials directory");
@@ -72,7 +72,9 @@ pub async fn exec_execute_command_async(
             .lock()
             .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
-        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
+        let session_id = mgr
+            .spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))
+            .map_err(|e| e.to_string())?;
         debug!(session_id = %session_id, "Background process spawned");
 
         return Ok(json!({
@@ -90,7 +92,8 @@ pub async fn exec_execute_command_async(
         let cwd_clone = cwd.clone();
         let output = tokio::task::spawn_blocking(move || run_sandboxed_command(&cmd, &cwd_clone))
             .await
-            .map_err(|e| format!("Task join error: {}", e))??;
+            .map_err(|e| format!("Task join error: {}", e))?
+            .map_err(|e| e.to_string())?;
 
         return format_output(output, timeout_secs);
     }
@@ -208,11 +211,13 @@ async fn background_child(
         .as_secs();
 
     // Spawn a new background process (ProcessManager uses std::process internally)
-    let session_id = mgr.spawn(
-        command,
-        cwd.to_string_lossy().as_ref(),
-        Some(remaining_timeout.max(1)),
-    )?;
+    let session_id = mgr
+        .spawn(
+            command,
+            cwd.to_string_lossy().as_ref(),
+            Some(remaining_timeout.max(1)),
+        )
+        .map_err(|e| e.to_string())?;
 
     debug!(session_id = %session_id, "Process backgrounded");
 
@@ -315,7 +320,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
     };
 
     // Validate command safety (null byte rejection, length, exfiltration patterns).
-    validate_command_safe(command)?;
+    validate_command_safe(command).map_err(|e| e.to_string())?;
 
     if command_references_credentials(command) {
         return Err(VAULT_ACCESS_DENIED.to_string());
@@ -330,7 +335,9 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
             .lock()
             .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
-        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
+        let session_id = mgr
+            .spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))
+            .map_err(|e| e.to_string())?;
 
         return Ok(json!({
             "status": "running",
@@ -341,7 +348,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
     }
 
     if yield_ms == 0 {
-        let output = run_sandboxed_command(command, &cwd)?;
+        let output = run_sandboxed_command(command, &cwd).map_err(|e| e.to_string())?;
         return format_output(output, timeout_secs);
     }
 

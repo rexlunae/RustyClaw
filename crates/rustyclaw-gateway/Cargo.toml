@@ -29,6 +29,7 @@ rustyclaw-core.workspace = true
 chat-system.workspace = true
 
 anyhow.workspace = true
+thiserror.workspace = true
 clap.workspace = true
 rpassword.workspace = true
 anyhow-tracing.workspace = true

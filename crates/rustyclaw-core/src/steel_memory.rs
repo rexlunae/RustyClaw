@@ -113,8 +113,82 @@ pub struct DiaryEntry {
     pub timestamp: String,
 }
 
+/// Typed errors for the steel-memory integration.
+///
+/// The steel-memory and fastembed crates surface `anyhow::Error`; each
+/// variant carries that error (with its context chain) plus which operation
+/// failed, instead of flattening everything to strings mid-propagation.
+#[derive(Debug, thiserror::Error)]
+pub enum SteelMemoryError {
+    /// A vector-storage operation failed.
+    #[error("steel-memory storage error while {op}: {error:#}")]
+    Storage {
+        op: &'static str,
+        error: anyhow::Error,
+    },
+    /// Loading or running the embedding model failed.
+    #[error("embedding error while {op}: {error:#}")]
+    Embedding {
+        op: &'static str,
+        error: anyhow::Error,
+    },
+    /// A knowledge-graph operation failed.
+    #[error("knowledge graph error while {op}: {error:#}")]
+    KnowledgeGraph {
+        op: &'static str,
+        error: anyhow::Error,
+    },
+    /// A palace-graph operation failed.
+    #[error("palace graph error while {op}: {error:#}")]
+    Palace {
+        op: &'static str,
+        error: anyhow::Error,
+    },
+    /// Reading or preparing files on disk failed.
+    #[error("I/O error on {}: {source}", path.display())]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// The embedding model is not initialized.
+    #[error("Embedding model not initialized")]
+    ModelNotInitialized,
+    /// A blocking task panicked or was aborted.
+    #[error("steel-memory task panicked: {0}")]
+    TaskPanicked(#[from] tokio::task::JoinError),
+}
+
+impl SteelMemoryError {
+    fn storage(op: &'static str) -> impl FnOnce(anyhow::Error) -> Self {
+        move |error| Self::Storage { op, error }
+    }
+
+    fn embedding(op: &'static str) -> impl FnOnce(anyhow::Error) -> Self {
+        move |error| Self::Embedding { op, error }
+    }
+
+    fn kg(op: &'static str) -> impl FnOnce(anyhow::Error) -> Self {
+        move |error| Self::KnowledgeGraph { op, error }
+    }
+
+    fn palace(op: &'static str) -> impl FnOnce(anyhow::Error) -> Self {
+        move |error| Self::Palace { op, error }
+    }
+}
+
+/// Run a blocking closure on the blocking pool, surfacing panics as
+/// [`SteelMemoryError::TaskPanicked`].
+async fn run_blocking<T, F>(task: F) -> Result<T, SteelMemoryError>
+where
+    F: FnOnce() -> Result<T, SteelMemoryError> + Send + 'static,
+    T: Send + 'static,
+{
+    tokio::task::spawn_blocking(task).await?
+}
+
 // Helper functions for spawn_blocking with explicit return types
-fn load_embedding_model() -> Result<TextEmbedding, String> {
+fn load_embedding_model() -> Result<TextEmbedding, SteelMemoryError> {
     // Pin the model cache under RustyClaw's settings directory so it stays
     // alongside the rest of the app state instead of landing in the current
     // process working directory.
@@ -123,28 +197,25 @@ fn load_embedding_model() -> Result<TextEmbedding, String> {
         .join(".rustyclaw")
         .join("cache")
         .join("fastembed");
-    std::fs::create_dir_all(&cache_dir).map_err(|e| {
-        format!(
-            "Failed to create embedding cache dir {}: {}",
-            cache_dir.display(),
-            e
-        )
+    std::fs::create_dir_all(&cache_dir).map_err(|e| SteelMemoryError::Io {
+        path: cache_dir.clone(),
+        source: e,
     })?;
     let opts = InitOptions::new(EmbeddingModel::AllMiniLML6V2).with_cache_dir(cache_dir);
-    TextEmbedding::try_new(opts).map_err(|e| format!("Failed to load embedding model: {}", e))
+    TextEmbedding::try_new(opts).map_err(SteelMemoryError::embedding("loading model"))
 }
 
 fn do_embed(
     embedding: Arc<Mutex<Option<TextEmbedding>>>,
     text: String,
-) -> Result<Vec<f32>, String> {
+) -> Result<Vec<f32>, SteelMemoryError> {
     let mut guard = embedding.blocking_lock();
     let model = guard
         .as_mut()
-        .ok_or_else(|| "Embedding model not initialized".to_string())?;
+        .ok_or(SteelMemoryError::ModelNotInitialized)?;
     let mut embeddings = model
         .embed(vec![text.as_str()], None)
-        .map_err(|e| format!("Embedding failed: {}", e))?;
+        .map_err(SteelMemoryError::embedding("embedding text"))?;
     Ok(embeddings.remove(0))
 }
 
@@ -152,47 +223,44 @@ fn do_search(
     db_path: PathBuf,
     query_vec: Vec<f32>,
     limit: usize,
-) -> Result<Vec<SteelSearchResult>, String> {
-    let storage =
-        VectorStorage::new(&db_path).map_err(|e| format!("Failed to open storage: {}", e))?;
+) -> Result<Vec<SteelSearchResult>, SteelMemoryError> {
+    let storage = VectorStorage::new(&db_path).map_err(SteelMemoryError::storage("opening"))?;
     storage
         .search(&query_vec, limit, None, None)
-        .map_err(|e| format!("Search failed: {}", e))
+        .map_err(SteelMemoryError::storage("searching"))
 }
 
-fn do_add_drawer(db_path: PathBuf, drawer: Drawer, vec: Vec<f32>) -> Result<(), String> {
-    let storage =
-        VectorStorage::new(&db_path).map_err(|e| format!("Failed to open storage: {}", e))?;
+fn do_add_drawer(db_path: PathBuf, drawer: Drawer, vec: Vec<f32>) -> Result<(), SteelMemoryError> {
+    let storage = VectorStorage::new(&db_path).map_err(SteelMemoryError::storage("opening"))?;
     storage
         .add_drawer(&drawer, &vec)
-        .map_err(|e| format!("Failed to add drawer: {}", e))
+        .map_err(SteelMemoryError::storage("adding drawer"))
 }
 
-fn do_get_all(db_path: PathBuf) -> Result<Vec<Drawer>, String> {
-    let storage =
-        VectorStorage::new(&db_path).map_err(|e| format!("Failed to open storage: {}", e))?;
+fn do_get_all(db_path: PathBuf) -> Result<Vec<Drawer>, SteelMemoryError> {
+    let storage = VectorStorage::new(&db_path).map_err(SteelMemoryError::storage("opening"))?;
     storage
         .get_all(None, None, usize::MAX)
-        .map_err(|e| format!("Failed to get all: {}", e))
+        .map_err(SteelMemoryError::storage("listing drawers"))
 }
 
 impl SteelMemory {
     /// Create a new SteelMemory instance for the given workspace.
-    pub fn new(workspace: &Path) -> Result<Self, String> {
+    pub fn new(workspace: &Path) -> Result<Self, SteelMemoryError> {
         let steel_dir = workspace.join(".steel-memory");
-        std::fs::create_dir_all(&steel_dir)
-            .map_err(|e| format!("Failed to create .steel-memory directory: {}", e))?;
+        std::fs::create_dir_all(&steel_dir).map_err(|e| SteelMemoryError::Io {
+            path: steel_dir.clone(),
+            source: e,
+        })?;
 
         let db_path = steel_dir.join("palace.sqlite3");
         let kg_path = steel_dir.join("knowledge_graph.sqlite3");
 
         // Initialize vector storage
-        VectorStorage::new(&db_path)
-            .map_err(|e| format!("Failed to initialize vector storage: {}", e))?;
+        VectorStorage::new(&db_path).map_err(SteelMemoryError::storage("initializing"))?;
 
         // Initialize knowledge graph
-        KnowledgeGraph::new(&kg_path)
-            .map_err(|e| format!("Failed to initialize knowledge graph: {}", e))?;
+        KnowledgeGraph::new(&kg_path).map_err(SteelMemoryError::kg("initializing"))?;
 
         Ok(Self {
             db_path,
@@ -202,35 +270,24 @@ impl SteelMemory {
         })
     }
 
-    async fn ensure_embedding(&self) -> Result<(), String> {
+    async fn ensure_embedding(&self) -> Result<(), SteelMemoryError> {
         let mut guard = self.embedding.lock().await;
         if guard.is_none() {
             info!("Loading embedding model (AllMiniLML6V2)...");
-            let join_result = tokio::task::spawn_blocking(load_embedding_model).await;
-            let model = match join_result {
-                Ok(Ok(m)) => m,
-                Ok(Err(e)) => return Err(e),
-                Err(e) => return Err(format!("Embedding task panicked: {}", e)),
-            };
+            let model = run_blocking(load_embedding_model).await?;
             *guard = Some(model);
             info!("Embedding model loaded");
         }
         Ok(())
     }
 
-    async fn embed(&self, text: &str) -> Result<Vec<f32>, String> {
+    async fn embed(&self, text: &str) -> Result<Vec<f32>, SteelMemoryError> {
         self.ensure_embedding().await?;
 
         let embedding = self.embedding.clone();
         let text_owned = text.to_string();
 
-        let join_result =
-            tokio::task::spawn_blocking(move || do_embed(embedding, text_owned)).await;
-        match join_result {
-            Ok(Ok(v)) => Ok(v),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("Embedding task panicked: {}", e)),
-        }
+        run_blocking(move || do_embed(embedding, text_owned)).await
     }
 
     // =========================================================================
@@ -243,7 +300,7 @@ impl SteelMemory {
         query: &str,
         max_results: usize,
         min_score: Option<f32>,
-    ) -> Result<Vec<SearchResult>, String> {
+    ) -> Result<Vec<SearchResult>, SteelMemoryError> {
         debug!(query, max_results, "Searching steel-memory");
 
         let query_vec = self.embed(query).await?;
@@ -251,13 +308,8 @@ impl SteelMemory {
         let min_score = min_score.unwrap_or(0.3);
         let limit = max_results * 2;
 
-        let join_result =
-            tokio::task::spawn_blocking(move || do_search(db_path, query_vec, limit)).await;
-        let results: Vec<SteelSearchResult> = match join_result {
-            Ok(Ok(r)) => r,
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(format!("Search task panicked: {}", e)),
-        };
+        let results: Vec<SteelSearchResult> =
+            run_blocking(move || do_search(db_path, query_vec, limit)).await?;
 
         Ok(results
             .into_iter()
@@ -274,7 +326,7 @@ impl SteelMemory {
         wing: &str,
         room: &str,
         source_file: Option<&str>,
-    ) -> Result<String, String> {
+    ) -> Result<String, SteelMemoryError> {
         let vec = self.embed(content).await?;
         let id = uuid::Uuid::new_v4().to_string();
 
@@ -297,32 +349,21 @@ impl SteelMemory {
         };
 
         let db_path = self.db_path.clone();
-        let join_result =
-            tokio::task::spawn_blocking(move || do_add_drawer(db_path, drawer, vec)).await;
-        match join_result {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(format!("Add task panicked: {}", e)),
-        }
+        run_blocking(move || do_add_drawer(db_path, drawer, vec)).await?;
 
         debug!(id = %id, wing, room, "Added memory to steel-memory");
         Ok(id)
     }
 
     /// Count total memories in the palace.
-    pub async fn count(&self) -> Result<usize, String> {
+    pub async fn count(&self) -> Result<usize, SteelMemoryError> {
         let db_path = self.db_path.clone();
-        let join_result = tokio::task::spawn_blocking(move || do_get_all(db_path)).await;
-        let drawers: Vec<Drawer> = match join_result {
-            Ok(Ok(d)) => d,
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(format!("Count task panicked: {}", e)),
-        };
+        let drawers: Vec<Drawer> = run_blocking(move || do_get_all(db_path)).await?;
         Ok(drawers.len())
     }
 
     /// Index workspace memory files (MEMORY.md, memory/*.md).
-    pub async fn index_workspace(&self) -> Result<usize, String> {
+    pub async fn index_workspace(&self) -> Result<usize, SteelMemoryError> {
         info!(workspace = %self.palace_path.display(), "Indexing workspace memories");
 
         let mut count = 0;
@@ -336,10 +377,14 @@ impl SteelMemory {
 
         let memory_dir = self.palace_path.join("memory");
         if memory_dir.exists() && memory_dir.is_dir() {
-            for entry in std::fs::read_dir(&memory_dir)
-                .map_err(|e| format!("Failed to read memory dir: {}", e))?
-            {
-                let entry = entry.map_err(|e| format!("Failed to read entry: {}", e))?;
+            for entry in std::fs::read_dir(&memory_dir).map_err(|e| SteelMemoryError::Io {
+                path: memory_dir.clone(),
+                source: e,
+            })? {
+                let entry = entry.map_err(|e| SteelMemoryError::Io {
+                    path: memory_dir.clone(),
+                    source: e,
+                })?;
                 let path = entry.path();
                 if path.extension().is_some_and(|e| e == "md") {
                     let name = path.file_name().unwrap().to_string_lossy();
@@ -372,9 +417,11 @@ impl SteelMemory {
         relative_path: &str,
         wing: &str,
         room: &str,
-    ) -> Result<usize, String> {
-        let content = std::fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {}", relative_path, e))?;
+    ) -> Result<usize, SteelMemoryError> {
+        let content = std::fs::read_to_string(path).map_err(|e| SteelMemoryError::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
 
         let chunks = chunk_markdown(&content);
         let mut count = 0;
@@ -403,29 +450,22 @@ impl SteelMemory {
         predicate: &str,
         object: &str,
         confidence: Option<f64>,
-    ) -> Result<String, String> {
+    ) -> Result<String, SteelMemoryError> {
         let kg_path = self.kg_path.clone();
         let subject = subject.to_string();
         let predicate = predicate.to_string();
         let object = object.to_string();
         let confidence = confidence.unwrap_or(1.0);
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let kg =
-                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
+        run_blocking(move || {
+            let kg = KnowledgeGraph::new(&kg_path).map_err(SteelMemoryError::kg("opening"))?;
             let id = kg
                 .add_triple(&subject, &predicate, &object, confidence, None, None)
-                .map_err(|e| format!("Failed to add triple: {}", e))?;
+                .map_err(SteelMemoryError::kg("adding triple"))?;
             debug!(subject, predicate, object, "Added KG triple");
             Ok(id)
         })
-        .await;
-
-        match join_result {
-            Ok(Ok(id)) => Ok(id),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("KG task panicked: {}", e)),
-        }
+        .await
     }
 
     /// Invalidate (soft-delete) a knowledge graph triple.
@@ -434,25 +474,18 @@ impl SteelMemory {
         subject: &str,
         predicate: &str,
         object: &str,
-    ) -> Result<usize, String> {
+    ) -> Result<usize, SteelMemoryError> {
         let kg_path = self.kg_path.clone();
         let subject = subject.to_string();
         let predicate = predicate.to_string();
         let object = object.to_string();
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let kg =
-                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
+        run_blocking(move || {
+            let kg = KnowledgeGraph::new(&kg_path).map_err(SteelMemoryError::kg("opening"))?;
             kg.invalidate_triple(&subject, &predicate, &object)
-                .map_err(|e| format!("Failed to invalidate triple: {}", e))
+                .map_err(SteelMemoryError::kg("invalidating triple"))
         })
-        .await;
-
-        match join_result {
-            Ok(Ok(n)) => Ok(n),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("KG task panicked: {}", e)),
-        }
+        .await
     }
 
     /// Query knowledge graph by entity.
@@ -461,24 +494,18 @@ impl SteelMemory {
         &self,
         entity: &str,
         direction: Option<&str>,
-    ) -> Result<Vec<KgTriple>, String> {
+    ) -> Result<Vec<KgTriple>, SteelMemoryError> {
         let kg_path = self.kg_path.clone();
         let entity = entity.to_string();
         let direction = direction.unwrap_or("both").to_string();
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let kg =
-                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
+        let triples = run_blocking(move || {
+            let kg = KnowledgeGraph::new(&kg_path).map_err(SteelMemoryError::kg("opening"))?;
             kg.query_entity(&entity, &direction)
-                .map_err(|e| format!("Failed to query KG: {}", e))
+                .map_err(SteelMemoryError::kg("querying entity"))
         })
-        .await;
-
-        match join_result {
-            Ok(Ok(triples)) => Ok(triples.into_iter().map(KgTriple::from).collect()),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("KG task panicked: {}", e)),
-        }
+        .await?;
+        Ok(triples.into_iter().map(KgTriple::from).collect())
     }
 
     /// Get timeline of triples for an entity.
@@ -486,43 +513,29 @@ impl SteelMemory {
         &self,
         entity: &str,
         limit: Option<usize>,
-    ) -> Result<Vec<KgTriple>, String> {
+    ) -> Result<Vec<KgTriple>, SteelMemoryError> {
         let kg_path = self.kg_path.clone();
         let entity = entity.to_string();
         let limit = limit.unwrap_or(50);
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let kg =
-                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
+        let triples = run_blocking(move || {
+            let kg = KnowledgeGraph::new(&kg_path).map_err(SteelMemoryError::kg("opening"))?;
             kg.timeline(&entity, limit)
-                .map_err(|e| format!("Failed to get timeline: {}", e))
+                .map_err(SteelMemoryError::kg("getting timeline"))
         })
-        .await;
-
-        match join_result {
-            Ok(Ok(triples)) => Ok(triples.into_iter().map(KgTriple::from).collect()),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("KG task panicked: {}", e)),
-        }
+        .await?;
+        Ok(triples.into_iter().map(KgTriple::from).collect())
     }
 
     /// Get knowledge graph statistics.
-    pub async fn kg_stats(&self) -> Result<serde_json::Value, String> {
+    pub async fn kg_stats(&self) -> Result<serde_json::Value, SteelMemoryError> {
         let kg_path = self.kg_path.clone();
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let kg =
-                KnowledgeGraph::new(&kg_path).map_err(|e| format!("Failed to open KG: {}", e))?;
-            kg.stats()
-                .map_err(|e| format!("Failed to get KG stats: {}", e))
+        run_blocking(move || {
+            let kg = KnowledgeGraph::new(&kg_path).map_err(SteelMemoryError::kg("opening"))?;
+            kg.stats().map_err(SteelMemoryError::kg("getting stats"))
         })
-        .await;
-
-        match join_result {
-            Ok(Ok(stats)) => Ok(stats),
-            Ok(Err(e)) => Err(e),
-            Err(e) => Err(format!("KG task panicked: {}", e)),
-        }
+        .await
     }
 
     // =========================================================================
@@ -530,14 +543,14 @@ impl SteelMemory {
     // =========================================================================
 
     /// Build the palace graph (all rooms with drawer counts).
-    pub async fn palace_graph(&self) -> Result<Vec<PalaceRoom>, String> {
+    pub async fn palace_graph(&self) -> Result<Vec<PalaceRoom>, SteelMemoryError> {
         let pg = PalaceGraph {
             db_path: self.db_path.clone(),
         };
         let nodes = pg
             .build_graph()
             .await
-            .map_err(|e| format!("Failed to build palace graph: {}", e))?;
+            .map_err(SteelMemoryError::palace("building graph"))?;
         Ok(nodes.into_iter().map(PalaceRoom::from).collect())
     }
 
@@ -546,14 +559,14 @@ impl SteelMemory {
         &self,
         start_room: &str,
         max_hops: Option<usize>,
-    ) -> Result<Vec<PalaceRoom>, String> {
+    ) -> Result<Vec<PalaceRoom>, SteelMemoryError> {
         let pg = PalaceGraph {
             db_path: self.db_path.clone(),
         };
         let nodes = pg
             .traverse_graph(start_room, max_hops.unwrap_or(2))
             .await
-            .map_err(|e| format!("Failed to traverse palace: {}", e))?;
+            .map_err(SteelMemoryError::palace("traversing"))?;
         Ok(nodes.into_iter().map(PalaceRoom::from).collect())
     }
 
@@ -562,25 +575,25 @@ impl SteelMemory {
         &self,
         wing_a: Option<&str>,
         wing_b: Option<&str>,
-    ) -> Result<Vec<PalaceRoom>, String> {
+    ) -> Result<Vec<PalaceRoom>, SteelMemoryError> {
         let pg = PalaceGraph {
             db_path: self.db_path.clone(),
         };
         let nodes = pg
             .find_tunnels(wing_a, wing_b)
             .await
-            .map_err(|e| format!("Failed to find tunnels: {}", e))?;
+            .map_err(SteelMemoryError::palace("finding tunnels"))?;
         Ok(nodes.into_iter().map(PalaceRoom::from).collect())
     }
 
     /// Get palace graph statistics.
-    pub async fn palace_stats(&self) -> Result<serde_json::Value, String> {
+    pub async fn palace_stats(&self) -> Result<serde_json::Value, SteelMemoryError> {
         let pg = PalaceGraph {
             db_path: self.db_path.clone(),
         };
         pg.stats()
             .await
-            .map_err(|e| format!("Failed to get palace stats: {}", e))
+            .map_err(SteelMemoryError::palace("getting stats"))
     }
 
     // =========================================================================
@@ -610,24 +623,18 @@ impl SteelMemory {
     }
 
     /// Generate AAAK-compressed context for a wing (or all wings).
-    pub async fn wake_up(&self, wing: Option<&str>) -> Result<String, String> {
+    pub async fn wake_up(&self, wing: Option<&str>) -> Result<String, SteelMemoryError> {
         let db_path = self.db_path.clone();
         let wing_filter = wing.map(|s| s.to_string());
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let storage = VectorStorage::new(&db_path)
-                .map_err(|e| format!("Failed to open storage: {}", e))?;
+        let drawers: Vec<Drawer> = run_blocking(move || {
+            let storage =
+                VectorStorage::new(&db_path).map_err(SteelMemoryError::storage("opening"))?;
             storage
                 .get_all(wing_filter.as_deref(), None, 100)
-                .map_err(|e| format!("Failed to get drawers: {}", e))
+                .map_err(SteelMemoryError::storage("listing drawers"))
         })
-        .await;
-
-        let drawers: Vec<Drawer> = match join_result {
-            Ok(Ok(d)) => d,
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(format!("Wake up task panicked: {}", e)),
-        };
+        .await?;
 
         let aaak_lines: Vec<String> = drawers.iter().map(compress_to_aaak).collect();
 
@@ -639,7 +646,11 @@ impl SteelMemory {
     // =========================================================================
 
     /// Write a diary entry.
-    pub async fn diary_write(&self, agent: &str, content: &str) -> Result<String, String> {
+    pub async fn diary_write(
+        &self,
+        agent: &str,
+        content: &str,
+    ) -> Result<String, SteelMemoryError> {
         // Store diary entries as memories in the "diary" wing
         let room = chrono::Utc::now().format("%Y-%m-%d").to_string();
         let prefixed = format!("[{}] {}", agent, content);
@@ -651,25 +662,19 @@ impl SteelMemory {
         &self,
         agent: &str,
         limit: Option<usize>,
-    ) -> Result<Vec<DiaryEntry>, String> {
+    ) -> Result<Vec<DiaryEntry>, SteelMemoryError> {
         let db_path = self.db_path.clone();
         let agent_prefix = format!("[{}]", agent);
         let limit = limit.unwrap_or(50);
 
-        let join_result = tokio::task::spawn_blocking(move || {
-            let storage = VectorStorage::new(&db_path)
-                .map_err(|e| format!("Failed to open storage: {}", e))?;
+        let drawers: Vec<Drawer> = run_blocking(move || {
+            let storage =
+                VectorStorage::new(&db_path).map_err(SteelMemoryError::storage("opening"))?;
             storage
                 .get_all(Some("diary"), None, limit * 2)
-                .map_err(|e| format!("Failed to read diary: {}", e))
+                .map_err(SteelMemoryError::storage("reading diary"))
         })
-        .await;
-
-        let drawers: Vec<Drawer> = match join_result {
-            Ok(Ok(d)) => d,
-            Ok(Err(e)) => return Err(e),
-            Err(e) => return Err(format!("Diary read task panicked: {}", e)),
-        };
+        .await?;
 
         let entries: Vec<DiaryEntry> = drawers
             .into_iter()

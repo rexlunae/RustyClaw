@@ -325,12 +325,12 @@ pub(crate) async fn dispatch_text_message(
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
         Ok(r) => r,
-        Err(msg) => {
+        Err(e) => {
             let error_frame = ServerFrame {
                 frame_type: ServerFrameType::Error,
                 payload: ServerPayload::Error {
                     ok: false,
-                    message: msg,
+                    message: e.to_string(),
                 },
             };
             send_frame(writer, &error_frame)

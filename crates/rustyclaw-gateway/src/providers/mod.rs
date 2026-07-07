@@ -109,27 +109,38 @@ pub fn apply_copilot_headers(
         .header("X-Initiator", x_initiator)
 }
 
+/// A required chat-request field that could not be resolved from either the
+/// incoming request or the gateway's model context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum MissingRequestField {
+    #[error("No provider specified and gateway has no model configured")]
+    Provider,
+    #[error("No model specified and gateway has no model configured")]
+    Model,
+    #[error("No base_url specified and gateway has no model configured")]
+    BaseUrl,
+}
+
 /// Merge an incoming chat request with the gateway's model context.
 ///
 /// Fields present in the request take priority; missing fields fall back
-/// to the gateway defaults.  Returns an error message string if a required
-/// field cannot be resolved from either source.
+/// to the gateway defaults.
 pub fn resolve_request(
     req: rustyclaw_core::gateway::ChatRequest,
     ctx: Option<&ModelContext>,
-) -> std::result::Result<ProviderRequest, String> {
+) -> std::result::Result<ProviderRequest, MissingRequestField> {
     let provider = req
         .provider
         .or_else(|| ctx.map(|c| c.provider.clone()))
-        .ok_or_else(|| "No provider specified and gateway has no model configured".to_string())?;
+        .ok_or(MissingRequestField::Provider)?;
     let model = req
         .model
         .or_else(|| ctx.map(|c| c.model.clone()))
-        .ok_or_else(|| "No model specified and gateway has no model configured".to_string())?;
+        .ok_or(MissingRequestField::Model)?;
     let base_url = req
         .base_url
         .or_else(|| ctx.map(|c| c.base_url.clone()))
-        .ok_or_else(|| "No base_url specified and gateway has no model configured".to_string())?;
+        .ok_or(MissingRequestField::BaseUrl)?;
     let api_key = req.api_key.or_else(|| ctx.and_then(|c| c.api_key.clone()));
 
     Ok(ProviderRequest {

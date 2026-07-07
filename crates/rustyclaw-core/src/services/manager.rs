@@ -26,7 +26,7 @@ pub enum ServiceError {
     AlreadyExists(String),
     /// The service command was rejected by security validation.
     #[error("Service command rejected by security validation: {0}")]
-    CommandRejected(String),
+    CommandRejected(#[source] crate::sandbox::SandboxError),
     /// Spawning the service process failed.
     #[error("Failed to spawn service: {0}")]
     Spawn(#[from] std::io::Error),
@@ -521,9 +521,8 @@ impl ServiceManager {
 
     async fn spawn_process(&self, def: &ServiceDef) -> Result<Child, ServiceError> {
         let full_cmd = format!("{} {}", &def.command, &def.args.join(" "));
-        if let Err(e) = crate::tools::helpers::validate_command_safe(&full_cmd) {
-            return Err(ServiceError::CommandRejected(e));
-        }
+        crate::tools::helpers::validate_command_safe(&full_cmd)
+            .map_err(ServiceError::CommandRejected)?;
 
         let mut cmd = Command::new(&def.command);
         cmd.args(&def.args);
