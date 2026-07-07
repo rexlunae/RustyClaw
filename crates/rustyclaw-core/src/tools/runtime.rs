@@ -7,7 +7,7 @@ use super::helpers::{
     resolve_path, run_sandboxed_command, validate_command_safe,
 };
 use crate::process_manager::SessionStatus;
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -103,7 +103,7 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to execute command", e))?;
 
     #[cfg(windows)]
     let mut child = Command::new("cmd")
