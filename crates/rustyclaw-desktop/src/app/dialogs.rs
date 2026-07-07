@@ -65,14 +65,19 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 match cmd {
                     SecretsCommand::Refresh => {
                         let _ = client.send(GatewayCommand::SecretsList).await;
+                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
                     }
                     SecretsCommand::Store { key, value } => {
                         let _ = client
                             .send(GatewayCommand::SecretsStore { key, value })
                             .await;
+                        // Re-fetch so the new entry shows up immediately
+                        // (the gateway handles frames in order).
+                        let _ = client.send(GatewayCommand::SecretsList).await;
                     }
                     SecretsCommand::Delete { key } => {
                         let _ = client.send(GatewayCommand::SecretsDelete { key }).await;
+                        let _ = client.send(GatewayCommand::SecretsList).await;
                     }
                     SecretsCommand::SetPolicy { name, policy } => {
                         let _ = client
@@ -82,6 +87,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                 skills: Vec::new(),
                             })
                             .await;
+                        let _ = client.send(GatewayCommand::SecretsList).await;
                     }
                 }
             });
@@ -189,6 +195,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 visible: *show_settings.read(),
                 theme: state.read().theme,
                 gateway_url: state.read().gateway_url.clone(),
+                custom_providers: state.read().custom_providers.clone(),
                 on_theme_change: move |t: Theme| state.write().theme = t,
                 on_gateway_url_change: move |v: String| state.write().gateway_url = v,
                 on_reconnect: move |_| {
@@ -218,6 +225,79 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                             rustyclaw_core::providers::display_name_for_provider(&provider_id)
                         ),
                     );
+                },
+                on_custom_provider_add: move |cfg: rustyclaw_core::providers::CustomProviderConfig| {
+                    // Persist to the local config; `Config::save` re-registers
+                    // the runtime provider catalogue, so the model bar picks
+                    // the new provider up immediately.
+                    match rustyclaw_core::config::Config::load(None) {
+                        Ok(mut config) => {
+                            let id = cfg.id.clone();
+                            let replaced = config
+                                .custom_providers
+                                .iter()
+                                .position(|p| p.id == id);
+                            match replaced {
+                                Some(idx) => config.custom_providers[idx] = cfg,
+                                None => config.custom_providers.push(cfg),
+                            }
+                            match config.save(None) {
+                                Ok(()) => {
+                                    let mut s = state.write();
+                                    s.custom_providers = config.custom_providers.clone();
+                                    s.push_notice(
+                                        MessageRole::Success,
+                                        if replaced.is_some() {
+                                            format!("Updated custom provider '{}'.", id)
+                                        } else {
+                                            format!("Added custom provider '{}'.", id)
+                                        },
+                                    );
+                                }
+                                Err(e) => state.write().push_notice(
+                                    MessageRole::Error,
+                                    format!("Failed to save config: {}", e),
+                                ),
+                            }
+                        }
+                        Err(e) => state.write().push_notice(
+                            MessageRole::Error,
+                            format!("Failed to load config: {}", e),
+                        ),
+                    }
+                },
+                on_custom_provider_remove: move |id: String| {
+                    match rustyclaw_core::config::Config::load(None) {
+                        Ok(mut config) => {
+                            let before = config.custom_providers.len();
+                            config.custom_providers.retain(|p| p.id != id);
+                            if config.custom_providers.len() == before {
+                                state.write().push_notice(
+                                    MessageRole::Error,
+                                    format!("No custom provider named '{}'.", id),
+                                );
+                            } else {
+                                match config.save(None) {
+                                    Ok(()) => {
+                                        let mut s = state.write();
+                                        s.custom_providers = config.custom_providers.clone();
+                                        s.push_notice(
+                                            MessageRole::Success,
+                                            format!("Removed custom provider '{}'.", id),
+                                        );
+                                    }
+                                    Err(e) => state.write().push_notice(
+                                        MessageRole::Error,
+                                        format!("Failed to save config: {}", e),
+                                    ),
+                                }
+                            }
+                        }
+                        Err(e) => state.write().push_notice(
+                            MessageRole::Error,
+                            format!("Failed to load config: {}", e),
+                        ),
+                    }
                 },
                 on_close: move |_| show_settings.set(false),
             }
@@ -626,6 +706,28 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 visible: state.read().show_tools_dialog,
                 data: state.read().tools_data.clone(),
                 on_close: move |_| state.write().show_tools_dialog = false,
+            }
+
+            SkillsDialog {
+                visible: state.read().show_skills_dialog,
+                skills: state.read().skills_data.clone(),
+                on_toggle: move |name: String| {
+                    let skills = crate::app_support::toggle_skill(&name);
+                    state.write().skills_data = skills;
+                },
+                on_close: move |_| state.write().show_skills_dialog = false,
+            }
+
+            AnalyticsDialog {
+                visible: state.read().show_analytics_dialog,
+                data: state.read().analytics_data.clone(),
+                on_close: move |_| state.write().show_analytics_dialog = false,
+            }
+
+            LogsDialog {
+                visible: state.read().show_logs_dialog,
+                data: state.read().logs_data.clone(),
+                on_close: move |_| state.write().show_logs_dialog = false,
             }
 
             // TOTP authentication modal

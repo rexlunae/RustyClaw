@@ -460,6 +460,26 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         },
         // The TUI edits tool permissions through its local dialog.
         E::ToolConfigResult { .. } | E::ToolToggleResult { .. } => return None,
+        E::UsageStatsResult {
+            totals,
+            per_model,
+            per_session,
+        } => GwEvent::UsageStatsResult {
+            totals: (&totals).into(),
+            per_model: per_model.iter().map(Into::into).collect(),
+            per_session: per_session.iter().map(Into::into).collect(),
+        },
+        E::LogsResult {
+            ok,
+            source,
+            lines,
+            message,
+        } => GwEvent::LogsResult {
+            ok,
+            source,
+            lines,
+            message,
+        },
     };
 
     Some(ev)

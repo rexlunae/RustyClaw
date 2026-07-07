@@ -7,9 +7,11 @@
 //! Adapted from ZeroClaw (MIT OR Apache-2.0 licensed).
 
 pub mod log;
+pub mod stats;
 pub mod traits;
 
 pub use log::LogObserver;
+pub use stats::{SharedStatsObserver, StatsObserver, UsageSnapshot};
 pub use traits::{Observer, ObserverEvent, ObserverMetric};
 
 use std::sync::Arc;

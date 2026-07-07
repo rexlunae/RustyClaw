@@ -15,7 +15,7 @@ pub use crate::gateway::protocol::SecretEntryDto;
 pub use crate::gateway::protocol::ServiceInfoDto;
 pub use crate::gateway::protocol::frames::{
     ChannelStatusDto, CronJobDto, EngineInfoDto, EngineModelDto, HistoryEntryDto, McpServerDto,
-    MemoryEntryDto, ToolConfigDto,
+    MemoryEntryDto, ModelUsageDto, SessionUsageDto, ToolConfigDto, UsageTotalsDto,
 };
 
 // ── Events (server → client) ────────────────────────────────────────────────
@@ -329,6 +329,19 @@ pub enum GatewayEvent {
         channel: Option<ChannelStatusDto>,
         message: Option<String>,
     },
+    /// Usage/analytics stats result.
+    UsageStatsResult {
+        totals: UsageTotalsDto,
+        per_model: Vec<ModelUsageDto>,
+        per_session: Vec<SessionUsageDto>,
+    },
+    /// Logs result.
+    LogsResult {
+        ok: bool,
+        source: String,
+        lines: Vec<String>,
+        message: Option<String>,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -464,6 +477,10 @@ pub enum GatewayCommand {
     /// Delete a full credential from the gateway vault
     #[serde(rename = "secrets_delete_credential")]
     SecretsDeleteCredential { name: String },
+
+    /// Ask whether the vault has TOTP 2FA configured
+    #[serde(rename = "secrets_has_totp")]
+    SecretsHasTotp,
 
     /// Reload gateway configuration (apply provider/model changes without restart)
     #[serde(rename = "reload")]
@@ -615,6 +632,14 @@ pub enum GatewayCommand {
         channel: String,
         action: ChannelPairActionKind,
     },
+
+    /// Request usage/analytics stats.
+    #[serde(rename = "usage_stats")]
+    UsageStats { period: Option<String> },
+
+    /// Request logs from a source ("gateway" | "agent" | "cron" | service name).
+    #[serde(rename = "logs")]
+    Logs { source: String, tail: Option<usize> },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -790,6 +815,10 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::SecretsDeleteCredential,
                 payload: ClientPayload::SecretsDeleteCredential { name },
             },
+            GatewayCommand::SecretsHasTotp => ClientFrame {
+                frame_type: ClientFrameType::SecretsHasTotp,
+                payload: ClientPayload::SecretsHasTotp,
+            },
             GatewayCommand::Reload => ClientFrame {
                 frame_type: ClientFrameType::Reload,
                 payload: ClientPayload::Reload,
@@ -953,6 +982,18 @@ impl GatewayCommand {
             GatewayCommand::ChannelPair { channel, action } => ClientFrame {
                 frame_type: ClientFrameType::ChannelPairRequest,
                 payload: ClientPayload::ChannelPairRequest { channel, action },
+            },
+            GatewayCommand::UsageStats { period } => ClientFrame {
+                frame_type: ClientFrameType::UsageStatsRequest,
+                payload: ClientPayload::UsageStatsRequest { period },
+            },
+            GatewayCommand::Logs { source, tail } => ClientFrame {
+                frame_type: ClientFrameType::LogsRequest,
+                payload: ClientPayload::LogsRequest {
+                    source,
+                    tail,
+                    follow: false,
+                },
             },
         }
     }
@@ -1315,11 +1356,29 @@ impl GatewayEvent {
                 channel,
                 message,
             }),
+            ServerPayload::UsageStatsResult {
+                totals,
+                per_model,
+                per_session,
+            } => Some(GatewayEvent::UsageStatsResult {
+                totals,
+                per_model,
+                per_session,
+            }),
+            ServerPayload::LogsResult {
+                ok,
+                source,
+                lines,
+                message,
+            } => Some(GatewayEvent::LogsResult {
+                ok,
+                source,
+                lines,
+                message,
+            }),
             // Panel results without a wired backend yet, and streaming
             // frames handled at a lower layer.
-            ServerPayload::UsageStatsResult { .. }
-            | ServerPayload::LogsResult { .. }
-            | ServerPayload::LogsAppend { .. }
+            ServerPayload::LogsAppend { .. }
             | ServerPayload::PendingApprovalsResult { .. }
             | ServerPayload::ApprovalsBatchResult { .. }
             | ServerPayload::ToolOutputStart { .. }

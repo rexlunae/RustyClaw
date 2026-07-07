@@ -584,14 +584,18 @@ pub(crate) async fn dispatch_text_message(
             Err(e) => (false, Some(format!("{e:#}"))),
         };
         if let Some(obs) = observer {
+            let (input_tokens, output_tokens) = match &result {
+                Ok(Some(r)) => (r.prompt_tokens, r.completion_tokens),
+                _ => (None, None),
+            };
             obs.record_event(&ObserverEvent::LlmResponse {
                 provider: resolved.provider.clone(),
                 model: resolved.model.clone(),
                 duration: request_duration,
                 success,
                 error_message: error_msg,
-                input_tokens: None, // TODO: extract from response if available
-                output_tokens: None,
+                input_tokens,
+                output_tokens,
             });
         }
 

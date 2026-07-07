@@ -44,6 +44,7 @@ mod secrets;
 mod services;
 mod settings;
 mod sidebar;
+mod skills;
 mod swarm_panel;
 mod system_info;
 mod tool_approval;
@@ -51,7 +52,6 @@ mod tools_config;
 mod user_prompt;
 mod vault_unlock;
 
-#[allow(unused_imports)]
 pub use analytics::AnalyticsDialog;
 #[allow(unused_imports)]
 pub use approvals::ApprovalsDialog;
@@ -65,7 +65,6 @@ pub use device_flow::DeviceFlowDialog;
 pub use engines::EnginesDialog;
 pub use file_browser::FileBrowser;
 pub use hatching::HatchingDialog;
-#[allow(unused_imports)]
 pub use logs::LogsDialog;
 pub use mcp::McpDialog;
 pub use memory::MemoryDialog;
@@ -75,6 +74,7 @@ pub use secrets::{SecretsCommand, SecretsDialog};
 pub use services::ServicesDialog;
 pub use settings::SettingsDialog;
 pub use sidebar::Sidebar;
+pub use skills::SkillsDialog;
 pub use swarm_panel::SwarmPanel;
 pub use system_info::SystemInfoDialog;
 pub use tool_approval::ToolApprovalDialog;

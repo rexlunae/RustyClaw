@@ -139,4 +139,8 @@ pub(super) struct Ui {
     pub mcp_data: State<Option<rustyclaw_view::McpPanelData>>,
     pub show_channels_dialog: State<bool>,
     pub channels_data: State<Option<rustyclaw_view::ChannelsPanelData>>,
+    pub show_analytics_dialog: State<bool>,
+    pub analytics_data: State<Option<rustyclaw_view::AnalyticsPanelData>>,
+    pub show_logs_dialog: State<bool>,
+    pub logs_data: State<Option<rustyclaw_view::LogsPanelData>>,
 }

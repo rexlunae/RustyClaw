@@ -145,6 +145,10 @@ pub(super) fn apply_gw_event(
         mut mcp_data,
         mut show_channels_dialog,
         mut channels_data,
+        mut show_analytics_dialog,
+        mut analytics_data,
+        mut show_logs_dialog,
+        mut logs_data,
     } = ui;
     match ev {
         GwEvent::AuthChallenge => {
@@ -1089,6 +1093,49 @@ pub(super) fn apply_gw_event(
             data.channels = channels;
             data.status = None;
             channels_data.set(Some(data));
+        }
+        GwEvent::ShowAnalytics => {
+            let mut data = analytics_data.read().clone().unwrap_or_default();
+            data.status = Some("Loading…".into());
+            analytics_data.set(Some(data));
+            show_analytics_dialog.set(true);
+        }
+        GwEvent::UsageStatsResult {
+            totals,
+            per_model,
+            per_session,
+        } => {
+            let mut data = analytics_data.read().clone().unwrap_or_default();
+            data.period = totals.period.clone();
+            data.totals = totals;
+            data.per_model = per_model;
+            data.per_session = per_session;
+            data.status = None;
+            analytics_data.set(Some(data));
+        }
+        GwEvent::ShowLogs { source } => {
+            let mut data = logs_data.read().clone().unwrap_or_default();
+            data.source = rustyclaw_view::LogSource::from_wire(&source);
+            data.status = Some("Loading…".into());
+            logs_data.set(Some(data));
+            show_logs_dialog.set(true);
+        }
+        GwEvent::LogsResult {
+            ok,
+            source,
+            lines,
+            message,
+        } => {
+            let mut data = logs_data.read().clone().unwrap_or_default();
+            data.source = rustyclaw_view::LogSource::from_wire(&source);
+            data.lines = lines;
+            data.status = match (ok, message) {
+                (false, Some(msg)) => Some(msg),
+                _ => None,
+            };
+            data.scroll_offset = data.lines.len().saturating_sub(1);
+            logs_data.set(Some(data));
+            show_logs_dialog.set(true);
         }
         GwEvent::PanelActionResult { panel, ok, message } => {
             // Surface the outcome in the panel's status line (and the

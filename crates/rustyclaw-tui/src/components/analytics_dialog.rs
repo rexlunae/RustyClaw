@@ -7,7 +7,6 @@ use crate::theme;
 use iocraft::prelude::*;
 use rustyclaw_view::analytics::UsageTotalsData;
 
-#[allow(dead_code)]
 #[derive(Default, Props)]
 pub struct AnalyticsDialogProps {
     pub data: Option<rustyclaw_view::AnalyticsPanelData>,

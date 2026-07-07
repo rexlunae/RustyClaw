@@ -200,6 +200,25 @@ pub struct AppState {
     pub tools_data: Option<rustyclaw_view::ToolConfigPanelData>,
     /// Set when a tool toggle completed and the list should be re-fetched.
     pub tools_stale: bool,
+
+    /// User-defined custom providers from the local config (shown and
+    /// edited in Settings).
+    pub custom_providers: Vec<rustyclaw_core::providers::CustomProviderConfig>,
+
+    /// Whether the skills manager dialog is visible.
+    pub show_skills_dialog: bool,
+    /// Skills for the skills manager dialog.
+    pub skills_data: Vec<rustyclaw_view::SkillInfoData>,
+
+    /// Whether the usage analytics dialog is visible.
+    pub show_analytics_dialog: bool,
+    /// Usage analytics data.
+    pub analytics_data: Option<rustyclaw_view::AnalyticsPanelData>,
+
+    /// Whether the logs dialog is visible.
+    pub show_logs_dialog: bool,
+    /// Log lines for the logs dialog.
+    pub logs_data: Option<rustyclaw_view::LogsPanelData>,
 }
 
 impl Default for AppState {
@@ -287,6 +306,15 @@ impl Default for AppState {
             show_tools_dialog: false,
             tools_data: None,
             tools_stale: false,
+            custom_providers: rustyclaw_core::config::Config::load(None)
+                .map(|cfg| cfg.custom_providers)
+                .unwrap_or_default(),
+            show_skills_dialog: false,
+            skills_data: Vec::new(),
+            show_analytics_dialog: false,
+            analytics_data: None,
+            show_logs_dialog: false,
+            logs_data: None,
         }
     }
 }

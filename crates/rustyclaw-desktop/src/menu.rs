@@ -24,6 +24,8 @@ pub struct AppMenuIds {
     pub mcp: muda::MenuId,
     pub channels: muda::MenuId,
     pub tool_perms: muda::MenuId,
+    pub analytics: muda::MenuId,
+    pub logs: muda::MenuId,
 }
 
 static APP_MENU_IDS: OnceLock<AppMenuIds> = OnceLock::new();
@@ -67,6 +69,8 @@ pub fn build_app_menu() -> muda::Menu {
     let mcp = muda::MenuItem::new("MCP Servers…", true, None);
     let channels = muda::MenuItem::new("Channels…", true, None);
     let tool_perms = muda::MenuItem::new("Tool Permissions…", true, None);
+    let analytics = muda::MenuItem::new("Usage Analytics…", true, None);
+    let logs = muda::MenuItem::new("Logs…", true, None);
 
     // Register all IDs before the items are moved into the menu.
     let ids = AppMenuIds {
@@ -88,6 +92,8 @@ pub fn build_app_menu() -> muda::Menu {
         mcp: mcp.id().clone(),
         channels: channels.id().clone(),
         tool_perms: tool_perms.id().clone(),
+        analytics: analytics.id().clone(),
+        logs: logs.id().clone(),
     };
     let _ = APP_MENU_IDS.set(ids);
 
@@ -120,7 +126,14 @@ pub fn build_app_menu() -> muda::Menu {
     let view_menu = muda::Submenu::with_items(
         "View",
         true,
-        &[&toggle_left, &toggle_right, &system_info, &services],
+        &[
+            &toggle_left,
+            &toggle_right,
+            &system_info,
+            &services,
+            &analytics,
+            &logs,
+        ],
     )
     .expect("failed to build View menu");
 

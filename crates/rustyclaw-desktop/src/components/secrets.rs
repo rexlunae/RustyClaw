@@ -20,9 +20,7 @@ use super::{RcModal, tone_color};
 pub enum SecretsCommand {
     /// Request secrets list refresh from gateway.
     Refresh,
-    /// Store a new secret. Reserved for the add-secret flow, which is not yet
-    /// wired up in the desktop client.
-    #[allow(dead_code)]
+    /// Store a new secret.
     Store { key: String, value: String },
     /// Delete a secret.
     Delete { key: String },
@@ -57,6 +55,12 @@ struct SecretRow {
 
 #[component]
 pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
+    // Add-secret form state (desktop-local; the shared view model's
+    // step-based add flow is the TUI's keyboard wizard).
+    let mut adding = use_signal(|| false);
+    let mut add_name = use_signal(String::new);
+    let mut add_value = use_signal(String::new);
+
     if !props.visible {
         return rsx! {};
     }
@@ -64,28 +68,22 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
     let d = &props.data;
     let sel_idx = d.selected.unwrap_or(0);
 
-    // Pre-compute add-section display values (avoids `let` inside RSX branches).
-    let add_step_data: Option<(String, String, String, &'static str)> = if d.is_adding() {
-        let step_label = if d.add_step == 1 { "Name" } else { "Value" };
-        let input_val = if d.add_step == 1 {
-            d.add_name.clone()
-        } else {
-            d.add_value.clone()
-        };
-        let hint = if d.add_step == 1 {
-            "Enter a name (e.g. openai_api_key), then press Enter for the value"
-        } else {
-            "Paste or type the value, then press Enter to save"
-        };
-        let input_type = if d.add_step == 2 { "password" } else { "text" };
-        Some((
-            step_label.to_string(),
-            input_val,
-            hint.to_string(),
-            input_type,
-        ))
-    } else {
-        None
+    let mut reset_add_form = move || {
+        adding.set(false);
+        add_name.set(String::new());
+        add_value.set(String::new());
+    };
+
+    let mut on_add_save = {
+        let on_command = props.on_command;
+        move || {
+            let key = add_name.read().trim().to_string();
+            let value = add_value.read().clone();
+            if !key.is_empty() && !value.is_empty() {
+                on_command.call(SecretsCommand::Store { key, value });
+                reset_add_form();
+            }
+        }
     };
 
     // Pre-compute visible secret rows (avoids `let` inside RSX for loop).
@@ -182,7 +180,8 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
         "Disabled"
     };
     let totp_label = if d.has_totp { "On" } else { "Off" };
-    let is_adding = add_step_data.is_some();
+    let is_adding = adding();
+    let can_save = !add_name.read().trim().is_empty() && !add_value.read().is_empty();
 
     rsx! {
         RcModal {
@@ -200,19 +199,21 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
                     }
                     if is_adding {
                         Button {
+                            color: BulmaColor::Primary,
+                            disabled: !can_save,
+                            onclick: move |_| on_add_save(),
+                            "Save Secret"
+                        }
+                        Button {
                             color: BulmaColor::Ghost,
-                            onclick: move |_| {
-                                // Cancel add — parent resets add state
-                            },
+                            onclick: move |_| reset_add_form(),
                             "Cancel"
                         }
                     } else {
                         Button {
                             color: BulmaColor::Primary,
                             outlined: true,
-                            onclick: move |_| {
-                                // Start add — parent sets add step
-                            },
+                            onclick: move |_| adding.set(true),
                             "+ Add Secret"
                         }
                     }
@@ -284,17 +285,32 @@ pub fn SecretsDialog(props: SecretsDialogProps) -> Element {
             }
 
             // ── Add-secret section ──────────────────────────
-            if let Some((ref step_label, ref input_val, ref hint, input_type)) = add_step_data {
+            if is_adding {
                 div { class: "secrets-add-section",
-                    div { class: "secrets-add-title", "Add Secret — {step_label}" }
+                    div { class: "secrets-add-title", "Add Secret" }
                     input {
                         class: "input",
-                        r#type: "{input_type}",
-                        placeholder: if d.add_step == 1 { "e.g. openai_api_key" } else { "Paste secret value…" },
-                        value: "{input_val}",
+                        r#type: "text",
+                        placeholder: "Name (e.g. openai_api_key)",
+                        value: "{add_name}",
                         autofocus: true,
+                        oninput: move |evt| add_name.set(evt.value()),
                     }
-                    p { class: "help", "{hint}" }
+                    input {
+                        class: "input mt-2",
+                        r#type: "password",
+                        placeholder: "Secret value…",
+                        value: "{add_value}",
+                        oninput: move |evt| add_value.set(evt.value()),
+                        onkeydown: move |evt: KeyboardEvent| {
+                            if evt.key() == Key::Enter {
+                                on_add_save();
+                            }
+                        },
+                    }
+                    p { class: "help",
+                        "Stored in the gateway's encrypted vault. Use env-var style names so skills and providers can reference them."
+                    }
                 }
             }
 

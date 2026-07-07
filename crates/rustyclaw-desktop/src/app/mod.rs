@@ -739,6 +739,7 @@ pub fn App() -> Element {
                 if let Some(client) = gw {
                     spawn(async move {
                         let _ = client.send(GatewayCommand::SecretsList).await;
+                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
                     });
                 }
             } else if event.id == ids.pair {
@@ -746,15 +747,39 @@ pub fn App() -> Element {
             } else if event.id == ids.swarm {
                 show_swarm.set(true);
             } else if event.id == ids.skills {
-                state
-                    .write()
-                    .push_notice(MessageRole::Info, "Skills manager coming soon on desktop");
+                let skills = crate::app_support::load_skills_list();
+                let mut s = state.write();
+                s.skills_data = skills;
+                s.show_skills_dialog = !s.show_skills_dialog;
             } else if event.id == ids.system_info {
                 let v = state.read().show_system_info;
                 state.write().show_system_info = !v;
+                if !v {
+                    // Opening: fetch host capabilities (once) and a fresh
+                    // load sample so the panel has data to show.
+                    let need_host = state.read().host_info.is_none();
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            if need_host {
+                                let _ = client.send(GatewayCommand::HostInfoRequest).await;
+                            }
+                            let _ = client.send(GatewayCommand::LoadStatusRequest).await;
+                        });
+                    }
+                }
             } else if event.id == ids.services {
                 let v = state.read().show_services_dialog;
                 state.write().show_services_dialog = !v;
+                if !v {
+                    // Opening: fetch the service list.
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::ServiceList).await;
+                        });
+                    }
+                }
             } else if event.id == ids.local_models {
                 let v = state.read().show_engines_dialog;
                 state.write().show_engines_dialog = !v;
@@ -829,6 +854,35 @@ pub fn App() -> Element {
                     if let Some(client) = gw {
                         spawn(async move {
                             let _ = client.send(GatewayCommand::ToolConfigList).await;
+                        });
+                    }
+                }
+            } else if event.id == ids.analytics {
+                let v = state.read().show_analytics_dialog;
+                state.write().show_analytics_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::UsageStats { period: None })
+                                .await;
+                        });
+                    }
+                }
+            } else if event.id == ids.logs {
+                let v = state.read().show_logs_dialog;
+                state.write().show_logs_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::Logs {
+                                    source: "gateway".into(),
+                                    tail: None,
+                                })
+                                .await;
                         });
                     }
                 }
@@ -911,6 +965,7 @@ pub fn App() -> Element {
                             if let Some(client) = gw {
                                 spawn(async move {
                                     let _ = client.send(GatewayCommand::SecretsList).await;
+                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
                                 });
                             }
                         },
@@ -977,6 +1032,7 @@ pub fn App() -> Element {
                             if let Some(client) = gw {
                                 spawn(async move {
                                     let _ = client.send(GatewayCommand::SecretsList).await;
+                        let _ = client.send(GatewayCommand::SecretsHasTotp).await;
                                 });
                             }
                         },

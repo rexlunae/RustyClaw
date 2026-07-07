@@ -5,6 +5,7 @@
 
 use iocraft::prelude::*;
 
+use crate::components::analytics_dialog::AnalyticsDialog;
 use crate::components::api_key_dialog::ApiKeyDialog;
 use crate::components::auth_dialog::AuthDialog;
 use crate::components::channels_dialog::ChannelsDialog;
@@ -16,6 +17,7 @@ use crate::components::device_flow_dialog::DeviceFlowDialog;
 use crate::components::engines_dialog::EnginesDialog;
 use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
+use crate::components::logs_dialog::LogsDialog;
 use crate::components::mcp_dialog::McpDialog;
 use crate::components::memory_dialog::MemoryDialog;
 use crate::components::messages::Messages;
@@ -184,6 +186,10 @@ pub struct RootProps {
     pub mcp_data: Option<rustyclaw_view::McpPanelData>,
     pub show_channels_dialog: bool,
     pub channels_data: Option<rustyclaw_view::ChannelsPanelData>,
+    pub show_analytics_dialog: bool,
+    pub analytics_data: Option<rustyclaw_view::AnalyticsPanelData>,
+    pub show_logs_dialog: bool,
+    pub logs_data: Option<rustyclaw_view::LogsPanelData>,
 }
 
 #[component]
@@ -265,6 +271,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let mcp = props.mcp_data.clone();
     let show_channels = props.show_channels_dialog;
     let channels = props.channels_data.clone();
+    let show_analytics = props.show_analytics_dialog;
+    let analytics = props.analytics_data.clone();
+    let show_logs = props.show_logs_dialog;
+    let logs = props.logs_data.clone();
 
     element! {
         View(
@@ -768,6 +778,44 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         ChannelsDialog(
                             data: channels,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Analytics dialog overlay (/analytics) ───────────────────
+            #(if show_analytics {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        AnalyticsDialog(
+                            data: analytics,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Logs dialog overlay (/logs) ─────────────────────────────
+            #(if show_logs {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        LogsDialog(
+                            data: logs,
                         )
                     }
                 }.into_any()
