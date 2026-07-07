@@ -25,7 +25,7 @@ pub(crate) fn sh(script: &str) -> ToolResult {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -47,7 +47,7 @@ pub(crate) async fn sh_async(script: &str) -> ToolResult {
         .arg(script)
         .output()
         .await
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

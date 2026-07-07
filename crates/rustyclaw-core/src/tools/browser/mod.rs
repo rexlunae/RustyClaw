@@ -206,8 +206,7 @@ mod lite {
             .user_agent("Mozilla/5.0 (compatible; RustyClaw/0.1; +https://github.com/RustyClaw)")
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
-            .map_err(|e| format!("HTTP client error: {}", e))
-            .map_err(ToolError::from)
+            .map_err(|e| ToolError::context("HTTP client error", e))
     }
 
     /// Fetch a URL and build a LiteTab from the response.
@@ -216,7 +215,7 @@ mod lite {
         let resp = client
             .get(url)
             .send()
-            .map_err(|e| format!("Request failed: {}", e))?;
+            .map_err(|e| ToolError::context("Request failed", e))?;
 
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()).into());
@@ -224,7 +223,7 @@ mod lite {
 
         let body = resp
             .text()
-            .map_err(|e| format!("Failed to read body: {}", e))?;
+            .map_err(|e| ToolError::context("Failed to read body", e))?;
 
         let title = extract_tag(&body, "title").unwrap_or_default();
         let links = extract_links(&body);

@@ -19,7 +19,8 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let custom_config = args.get("config");
 
     let config: SwarmConfig = if let Some(cfg_val) = custom_config {
-        serde_json::from_value(cfg_val.clone()).map_err(|e| format!("Invalid swarm config: {e}"))?
+        serde_json::from_value(cfg_val.clone())
+            .map_err(|e| format!("Invalid swarm config: {}", e))?
     } else {
         let tpl_name = template_name.unwrap_or("swarm");
         let templates = builtin_templates();

@@ -180,12 +180,13 @@ that produces them (`CronError` in `cron.rs`, `SsrfError` in
 catch-all. AI-tool implementations return `ToolResult`
 (`Result<String, ToolError>`, see `rustyclaw-core/src/tools/error.rs`):
 `ToolError`'s `Display` output is the payload sent back to the model,
-per-module typed errors propagate into it via `#[from]`/`?`, and bespoke
-messages route through `ToolError::Msg` (so
-`.map_err(|e| format!("context: {e}"))?` remains the idiom for adding
-context at the failure site). The dispatch layer that packages tool output
-for the model is the single place a `ToolError` is flattened to a string —
-nowhere earlier.
+per-module typed errors propagate into it via `#[from]`/`?`, and context
+is added with `ToolError::context("what failed", e)` — which renders as
+`"what failed: {e}"` but keeps the typed error reachable via `source()`.
+Reserve `.map_err(|e| format!("context: {e}"))?` for third-party leaf
+errors that have no `Into<ToolError>` conversion. The dispatch layer that
+packages tool output for the model is the single place a `ToolError` is
+flattened to a string — nowhere earlier.
 
 ### No naked `unwrap()` in library code
 

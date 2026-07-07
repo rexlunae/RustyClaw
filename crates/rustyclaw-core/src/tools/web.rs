@@ -37,13 +37,11 @@ fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
 
 /// Validate a URL against the SSRF validator (blocking DNS resolution).
 ///
-/// Returns a user-facing error string prefixed so callers/tests can recognise
-/// a security rejection.
+/// Propagates the typed [`SsrfError`] so callers can distinguish a security
+/// `Blocked` verdict from a transient resolution failure; the rendered
+/// message is unchanged.
 fn ssrf_check_blocking(url: &str) -> ToolResult<()> {
-    SsrfValidator::default()
-        .validate_url(url)
-        .map_err(|e| e.to_string())
-        .map_err(ToolError::from)
+    Ok(SsrfValidator::default().validate_url(url)?)
 }
 
 // ── Async implementations ───────────────────────────────────────────────────
@@ -91,7 +89,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolRe
         let url_owned = url.to_string();
         tokio::task::spawn_blocking(move || ssrf_check_blocking(&url_owned))
             .await
-            .map_err(|e| format!("SSRF validation task failed: {e}"))??;
+            .map_err(|e| format!("SSRF validation task failed: {}", e))??;
     }
 
     // Parse URL for domain extraction
@@ -108,7 +106,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolRe
         .user_agent("RustyClaw/0.1 (web_fetch tool)")
         .redirect(ssrf_redirect_policy(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create HTTP client", e))?;
 
     // Build request with optional cookies
     let mut request = client.get(url);
@@ -177,7 +175,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolRe
     let body = response
         .text()
         .await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to read response body", e))?;
 
     // If it's not HTML, return as-is
     if !content_type.contains("html") {
@@ -283,7 +281,7 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> ToolR
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create HTTP client", e))?;
 
     let response = client
         .get(&url)
@@ -292,7 +290,7 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> ToolR
         .header("X-Subscription-Token", &api_key)
         .send()
         .await
-        .map_err(|e| format!("Brave Search request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Brave Search request failed", e))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -304,7 +302,7 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> ToolR
     let data: Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Brave Search response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse Brave Search response", e))?;
 
     let web_results = data
         .get("web")
@@ -426,7 +424,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .user_agent("RustyClaw/0.1 (web_fetch tool)")
         .redirect(ssrf_redirect_policy(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create HTTP client", e))?;
 
     let mut request = client.get(url);
 
@@ -454,7 +452,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let response = request
         .send()
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
+        .map_err(|e| ToolError::context("HTTP request failed", e))?;
 
     let status = response.status();
 
@@ -490,7 +488,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let body = response
         .text()
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to read response body", e))?;
 
     if !content_type.contains("html") {
         let mut result = body;
@@ -587,7 +585,7 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create HTTP client", e))?;
 
     let response = client
         .get(&url)
@@ -595,7 +593,7 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .header("Accept-Encoding", "gzip")
         .header("X-Subscription-Token", &api_key)
         .send()
-        .map_err(|e| format!("Brave Search request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Brave Search request failed", e))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -605,7 +603,7 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let data: Value = response
         .json()
-        .map_err(|e| format!("Failed to parse Brave Search response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse Brave Search response", e))?;
 
     let web_results = data
         .get("web")

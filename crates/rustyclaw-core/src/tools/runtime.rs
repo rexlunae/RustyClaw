@@ -114,7 +114,7 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to execute command", e))?;
 
     #[cfg(not(any(unix, windows)))]
     let mut child = Command::new("sh")
@@ -125,7 +125,7 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to execute command", e))?;
 
     let yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
     let timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
