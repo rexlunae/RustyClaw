@@ -62,8 +62,8 @@ pub(crate) fn run(sub: SwarmCommands) -> Result<()> {
             let agent_count = cfg.agents.len();
             let mgr = swarm_manager();
             let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            m.create(cfg).map_err(|e| anyhow::anyhow!(e))?;
-            m.start(&name).map_err(|e| anyhow::anyhow!(e))?;
+            m.create(cfg)?;
+            m.start(&name)?;
             println!(
                 "{}",
                 t::icon_ok(&format!(
@@ -184,9 +184,7 @@ pub(crate) fn run(sub: SwarmCommands) -> Result<()> {
                 .map_err(|_| anyhow::anyhow!("Session manager lock error"))?;
 
             let session_key = if let Some(existing) = existing_session {
-                sess_mgr
-                    .send_message(&existing, &msg)
-                    .map_err(|e| anyhow::anyhow!(e))?;
+                sess_mgr.send_message(&existing, &msg)?;
                 existing
             } else {
                 let label = format!("swarm:{}:{}", swarm, target);
@@ -217,7 +215,7 @@ pub(crate) fn run(sub: SwarmCommands) -> Result<()> {
         SwarmCommands::Stop { name } => {
             let mgr = swarm_manager();
             let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            m.stop(&name).map_err(|e| anyhow::anyhow!(e))?;
+            m.stop(&name)?;
             println!("{}", t::icon_ok(&format!("Swarm '{}' stopped", name)));
         }
         SwarmCommands::Templates => {

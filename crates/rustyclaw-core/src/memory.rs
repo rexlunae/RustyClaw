@@ -31,6 +31,25 @@ pub struct SearchResult {
     pub score: f64,
 }
 
+/// Errors produced while building a [`MemoryIndex`].
+#[derive(Debug, thiserror::Error)]
+pub enum MemoryIndexError {
+    /// Reading a memory file failed.
+    #[error("Failed to read {path}: {source}")]
+    ReadFile {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+    /// Listing a memory directory failed.
+    #[error("Failed to read directory {path}: {source}")]
+    ReadDir {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
 /// Memory search index.
 pub struct MemoryIndex {
     /// All indexed chunks.
@@ -55,7 +74,7 @@ impl MemoryIndex {
     }
 
     /// Index all memory files in a workspace.
-    pub fn index_workspace(workspace: &Path) -> Result<Self, String> {
+    pub fn index_workspace(workspace: &Path) -> Result<Self, MemoryIndexError> {
         let mut index = Self::new();
 
         // Index MEMORY.md if it exists
@@ -77,9 +96,11 @@ impl MemoryIndex {
     }
 
     /// Index a single file.
-    fn index_file(&mut self, path: &Path, relative_path: &str) -> Result<(), String> {
-        let content = fs::read_to_string(path)
-            .map_err(|e| format!("Failed to read {}: {}", relative_path, e))?;
+    fn index_file(&mut self, path: &Path, relative_path: &str) -> Result<(), MemoryIndexError> {
+        let content = fs::read_to_string(path).map_err(|e| MemoryIndexError::ReadFile {
+            path: relative_path.to_string(),
+            source: e,
+        })?;
 
         // Split into chunks (~400 tokens target, roughly 300-400 words)
         // For simplicity, we chunk by paragraphs or heading sections
@@ -90,9 +111,15 @@ impl MemoryIndex {
     }
 
     /// Index a directory recursively.
-    fn index_directory(&mut self, dir: &Path, relative_prefix: &str) -> Result<(), String> {
-        let entries = fs::read_dir(dir)
-            .map_err(|e| format!("Failed to read directory {}: {}", relative_prefix, e))?;
+    fn index_directory(
+        &mut self,
+        dir: &Path,
+        relative_prefix: &str,
+    ) -> Result<(), MemoryIndexError> {
+        let entries = fs::read_dir(dir).map_err(|e| MemoryIndexError::ReadDir {
+            path: relative_prefix.to_string(),
+            source: e,
+        })?;
 
         for entry in entries.flatten() {
             let path = entry.path();

@@ -310,6 +310,14 @@ impl ModelEntry {
     }
 }
 
+/// Errors produced by [`ModelRegistry`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum RegistryError {
+    /// No model with this ID is registered.
+    #[error("Model not found: {0}")]
+    ModelNotFound(String),
+}
+
 /// Model registry — manages all available models.
 pub struct ModelRegistry {
     /// All registered models by ID
@@ -505,22 +513,22 @@ impl ModelRegistry {
     }
 
     /// Enable a model.
-    pub fn enable(&mut self, id: &str) -> Result<(), String> {
+    pub fn enable(&mut self, id: &str) -> Result<(), RegistryError> {
         let model = self
             .models
             .get_mut(id)
-            .ok_or_else(|| format!("Model not found: {}", id))?;
+            .ok_or_else(|| RegistryError::ModelNotFound(id.to_string()))?;
         model.enabled = true;
         info!(model_id = %id, "Model enabled");
         Ok(())
     }
 
     /// Disable a model.
-    pub fn disable(&mut self, id: &str) -> Result<(), String> {
+    pub fn disable(&mut self, id: &str) -> Result<(), RegistryError> {
         let model = self
             .models
             .get_mut(id)
-            .ok_or_else(|| format!("Model not found: {}", id))?;
+            .ok_or_else(|| RegistryError::ModelNotFound(id.to_string()))?;
         model.enabled = false;
         info!(model_id = %id, "Model disabled");
         Ok(())
@@ -534,9 +542,9 @@ impl ModelRegistry {
     }
 
     /// Set the active model.
-    pub fn set_active(&mut self, id: &str) -> Result<(), String> {
+    pub fn set_active(&mut self, id: &str) -> Result<(), RegistryError> {
         if !self.models.contains_key(id) {
-            return Err(format!("Model not found: {}", id));
+            return Err(RegistryError::ModelNotFound(id.to_string()));
         }
         self.active_model = Some(id.to_string());
         info!(model_id = %id, "Active model set");

@@ -12,9 +12,8 @@ pub struct ChannelStatusData {
     pub last_message: Option<String>,
 }
 
-impl ChannelStatusData {
-    /// Convert from the protocol DTO.
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::ChannelStatusDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::ChannelStatusDto> for ChannelStatusData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::ChannelStatusDto) -> Self {
         Self {
             name: dto.name.clone(),
             channel_type: dto.channel_type.clone(),
@@ -23,7 +22,9 @@ impl ChannelStatusData {
             last_message: dto.last_message.clone(),
         }
     }
+}
 
+impl ChannelStatusData {
     /// Status tone for the channel.
     pub fn status_tone(&self) -> Tone {
         if !self.paired {

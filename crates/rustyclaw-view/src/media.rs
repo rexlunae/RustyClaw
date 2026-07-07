@@ -22,9 +22,8 @@ pub struct MediaData {
     pub has_data: bool,
 }
 
-impl MediaData {
-    /// Convert from the protocol DTO.
-    pub fn from_payload(p: &rustyclaw_core::gateway::protocol::frames::MediaPayload) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::MediaPayload> for MediaData {
+    fn from(p: &rustyclaw_core::gateway::protocol::frames::MediaPayload) -> Self {
         use rustyclaw_core::gateway::protocol::frames::MediaKind as PK;
         let kind = match p.kind {
             PK::Image => MediaKind::Image,
@@ -40,7 +39,9 @@ impl MediaData {
             has_data: p.data.is_some(),
         }
     }
+}
 
+impl MediaData {
     /// Icon for this media type.
     pub fn icon(&self) -> &'static str {
         match self.kind {

@@ -14,8 +14,8 @@ use crate::app_support::{
 };
 use crate::components::*;
 use crate::state::{AppState, Theme};
-use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
+use rustyclaw_core::gateway::{EngineActionKind, GatewayClient, ModelActionKind};
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
@@ -486,7 +486,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 visible: state.read().show_engines_dialog,
                 data: state.read().engines_data.clone(),
                 on_close: move |_| state.write().show_engines_dialog = false,
-                on_engine_action: move |(engine, action): (String, String)| {
+                on_engine_action: move |(engine, action): (String, EngineActionKind)| {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -499,7 +499,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         });
                     }
                 },
-                on_model_action: move |(engine, model, action): (String, String, String)| {
+                on_model_action: move |(engine, model, action): (String, String, ModelActionKind)| {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {

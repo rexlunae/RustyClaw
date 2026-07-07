@@ -17,7 +17,7 @@ use std::sync::mpsc as sync_mpsc;
 
 use rustyclaw_core::commands::{CommandContext, CommandResponse, handle_command};
 use rustyclaw_core::config::Config;
-use rustyclaw_core::gateway::{GatewayClient, GatewayCommand};
+use rustyclaw_core::gateway::{EngineActionKind, GatewayClient, GatewayCommand};
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
 use rustyclaw_core::soul::SoulManager;
@@ -116,7 +116,7 @@ pub(crate) enum UserInput {
     /// Engines panel: lifecycle action (install/start/stop)
     EngineAction {
         engine: String,
-        action: String,
+        action: EngineActionKind,
     },
     /// Engines panel: refresh the engine list
     EngineRefresh,
@@ -486,13 +486,17 @@ impl App {
                     name,
                     current_policy,
                 }) => {
-                    // Cycle OPEN → ASK → AUTH → SKILL → OPEN
-                    let next_policy = match current_policy.as_str() {
-                        "OPEN" => "ask",
-                        "ASK" => "auth",
-                        "AUTH" => "skill_only",
-                        "SKILL" => "always",
-                        _ => "ask",
+                    // Cycle OPEN → ASK → AUTH → SKILL → OPEN, then translate
+                    // to the wire vocabulary of SecretsSetPolicy.
+                    use rustyclaw_core::secrets::AccessPolicy;
+                    let next_policy = match AccessPolicy::from_badge(&current_policy)
+                        .map(|p| p.cycled())
+                        .unwrap_or_default()
+                    {
+                        AccessPolicy::Always => "always",
+                        AccessPolicy::WithApproval => "ask",
+                        AccessPolicy::WithAuth => "auth",
+                        AccessPolicy::SkillOnly(_) => "skill_only",
                     };
                     let _ = client
                         .send(GatewayCommand::SecretsSetPolicy {

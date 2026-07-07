@@ -217,6 +217,30 @@ impl AccessPolicy {
             Self::SkillOnly(_) => "SKILL",
         }
     }
+
+    /// Parse a badge-style label (the inverse of [`Self::badge`]).
+    ///
+    /// `"SKILL"` parses to an empty skill list (locked until skills are
+    /// assigned).
+    pub fn from_badge(badge: &str) -> Option<Self> {
+        match badge {
+            "OPEN" => Some(Self::Always),
+            "ASK" => Some(Self::WithApproval),
+            "AUTH" => Some(Self::WithAuth),
+            "SKILL" => Some(Self::SkillOnly(Vec::new())),
+            _ => None,
+        }
+    }
+
+    /// The next policy in the UI rotation (OPEN → ASK → AUTH → SKILL → OPEN).
+    pub fn cycled(&self) -> Self {
+        match self {
+            Self::Always => Self::WithApproval,
+            Self::WithApproval => Self::WithAuth,
+            Self::WithAuth => Self::SkillOnly(Vec::new()),
+            Self::SkillOnly(_) => Self::Always,
+        }
+    }
 }
 
 /// Metadata envelope stored alongside the secret value(s) in the vault.

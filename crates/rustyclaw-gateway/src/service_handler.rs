@@ -44,7 +44,7 @@ pub async fn handle_service_start(writer: &mut dyn TransportWriter, name: &str) 
                 Err(e) => ServerPayload::ServiceActionResult {
                     ok: false,
                     service: None,
-                    message: Some(e),
+                    message: Some(e.to_string()),
                 },
             }
         }
@@ -79,7 +79,7 @@ pub async fn handle_service_stop(writer: &mut dyn TransportWriter, name: &str) -
                 Err(e) => ServerPayload::ServiceActionResult {
                     ok: false,
                     service: None,
-                    message: Some(e),
+                    message: Some(e.to_string()),
                 },
             }
         }
@@ -114,7 +114,7 @@ pub async fn handle_service_restart(writer: &mut dyn TransportWriter, name: &str
                 Err(e) => ServerPayload::ServiceActionResult {
                     ok: false,
                     service: None,
-                    message: Some(e),
+                    message: Some(e.to_string()),
                 },
             }
         }

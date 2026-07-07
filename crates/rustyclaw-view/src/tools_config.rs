@@ -12,9 +12,8 @@ pub struct ToolConfigData {
     pub description: String,
 }
 
-impl ToolConfigData {
-    /// Convert from the protocol DTO.
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::ToolConfigDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::ToolConfigDto> for ToolConfigData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::ToolConfigDto) -> Self {
         Self {
             name: dto.name.clone(),
             category: dto.category.clone(),
@@ -23,7 +22,9 @@ impl ToolConfigData {
             description: dto.description.clone(),
         }
     }
+}
 
+impl ToolConfigData {
     /// Tone for the enabled/disabled badge.
     pub fn enabled_tone(&self) -> Tone {
         if self.enabled {

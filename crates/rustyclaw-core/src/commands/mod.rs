@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::gateway::{EngineActionKind, ModelActionKind};
 use crate::providers;
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
@@ -54,14 +55,14 @@ pub enum CommandAction {
     ThreadForeground(u64),
     /// Show the local engines panel (fetches the engine list)
     ShowEngines,
-    /// Engine lifecycle action: (engine, action) with action ∈ install|start|stop
-    EngineAction(String, String),
+    /// Engine lifecycle action: (engine, action)
+    EngineAction(String, EngineActionKind),
     /// List models for an engine
     EngineModelList(String),
     /// Pull/download a model for an engine: (engine, model)
     EngineModelPull(String, String),
-    /// Model-level engine action: (engine, model, action) with action ∈ load|unload|remove
-    EngineModelAction(String, String, String),
+    /// Model-level engine action: (engine, model, action)
+    EngineModelAction(String, String, ModelActionKind),
 }
 
 #[derive(Debug, Clone)]
@@ -806,13 +807,6 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
             messages: Vec::new(),
             action: CommandAction::ShowEngines,
         },
-        Some(&action) if matches!(action, "start" | "stop" | "install") => match args.get(1) {
-            Some(engine) => CommandResponse {
-                messages: vec![format!("Requesting {} {}…", engine, action)],
-                action: CommandAction::EngineAction(engine.to_string(), action.to_string()),
-            },
-            None => usage(),
-        },
         Some(&"models") => match args.get(1) {
             Some(engine) => CommandResponse {
                 messages: Vec::new(),
@@ -827,20 +821,31 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
             },
             _ => usage(),
         },
-        Some(&action) if matches!(action, "load" | "unload" | "remove") => {
-            match (args.get(1), args.get(2)) {
-                (Some(engine), Some(model)) => CommandResponse {
-                    messages: vec![format!("Requesting {} {} for {}…", engine, action, model)],
-                    action: CommandAction::EngineModelAction(
-                        engine.to_string(),
-                        model.to_string(),
-                        action.to_string(),
-                    ),
-                },
-                _ => usage(),
+        Some(&action) => {
+            if let Ok(kind) = action.parse::<EngineActionKind>() {
+                match args.get(1) {
+                    Some(engine) => CommandResponse {
+                        messages: vec![format!("Requesting {} {}…", engine, kind)],
+                        action: CommandAction::EngineAction(engine.to_string(), kind),
+                    },
+                    None => usage(),
+                }
+            } else if let Ok(kind) = action.parse::<ModelActionKind>() {
+                match (args.get(1), args.get(2)) {
+                    (Some(engine), Some(model)) => CommandResponse {
+                        messages: vec![format!("Requesting {} {} for {}…", engine, kind, model)],
+                        action: CommandAction::EngineModelAction(
+                            engine.to_string(),
+                            model.to_string(),
+                            kind,
+                        ),
+                    },
+                    _ => usage(),
+                }
+            } else {
+                usage()
             }
         }
-        Some(_) => usage(),
     }
 }
 

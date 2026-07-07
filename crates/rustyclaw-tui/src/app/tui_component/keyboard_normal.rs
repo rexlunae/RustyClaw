@@ -8,6 +8,8 @@ use std::time::Instant;
 
 use rustyclaw_view::{chrono, dirs};
 
+use rustyclaw_core::gateway::EngineActionKind;
+
 use super::state;
 use crate::app::UserInput;
 use crate::types::DisplayMessage;
@@ -199,21 +201,25 @@ pub(super) fn handle_normal_key(
             }
             KeyCode::Char('s') => {
                 if let Some(engine) = selected_engine {
-                    let action = if engine.running { "stop" } else { "start" };
-                    if engine.can(action) {
+                    let action = if engine.running {
+                        EngineActionKind::Stop
+                    } else {
+                        EngineActionKind::Start
+                    };
+                    if engine.can(action.as_ref()) {
                         send_input(UserInput::EngineAction {
                             engine: engine.id,
-                            action: action.to_string(),
+                            action,
                         });
                     }
                 }
             }
             KeyCode::Char('i') => {
                 if let Some(engine) = selected_engine {
-                    if !engine.installed && engine.can("install") {
+                    if !engine.installed && engine.can(EngineActionKind::Install.as_ref()) {
                         send_input(UserInput::EngineAction {
                             engine: engine.id,
-                            action: "install".to_string(),
+                            action: EngineActionKind::Install,
                         });
                     }
                 }

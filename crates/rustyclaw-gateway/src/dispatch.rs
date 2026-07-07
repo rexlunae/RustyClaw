@@ -570,30 +570,12 @@ pub(crate) async fn dispatch_text_message(
         }
 
         let model_timeout = std::time::Duration::from_secs(180);
-        let result = if resolved.provider == "anthropic" {
-            // Anthropic: use streaming mode with writer for real-time chunks.
-            // Still enforce timeout/cancel around the provider future.
-            await_model_with_cancel(
-                providers::call_anthropic_with_tools(http, &resolved, Some(writer)),
-                tool_cancel,
-                model_timeout,
-            )
-            .await
-        } else if resolved.provider == "google" {
-            await_model_with_cancel(
-                providers::call_google_with_tools(http, &resolved),
-                tool_cancel,
-                model_timeout,
-            )
-            .await
-        } else {
-            await_model_with_cancel(
-                providers::call_openai_with_tools(http, &resolved, Some(writer)),
-                tool_cancel,
-                model_timeout,
-            )
-            .await
-        };
+        let result = await_model_with_cancel(
+            providers::call_with_tools(http, &resolved, Some(writer)),
+            tool_cancel,
+            model_timeout,
+        )
+        .await;
 
         // Record LLM response event
         let request_duration = request_start.elapsed();

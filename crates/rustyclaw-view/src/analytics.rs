@@ -10,8 +10,8 @@ pub struct UsageTotalsData {
     pub period: String,
 }
 
-impl UsageTotalsData {
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::UsageTotalsDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::UsageTotalsDto> for UsageTotalsData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::UsageTotalsDto) -> Self {
         Self {
             total_requests: dto.total_requests,
             total_input_tokens: dto.total_input_tokens,
@@ -20,7 +20,9 @@ impl UsageTotalsData {
             period: dto.period.clone(),
         }
     }
+}
 
+impl UsageTotalsData {
     /// Total tokens (input + output).
     pub fn total_tokens(&self) -> u64 {
         self.total_input_tokens + self.total_output_tokens
@@ -56,8 +58,8 @@ pub struct ModelUsageData {
     pub avg_latency_ms: u64,
 }
 
-impl ModelUsageData {
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::ModelUsageDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::ModelUsageDto> for ModelUsageData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::ModelUsageDto) -> Self {
         Self {
             provider: dto.provider.clone(),
             model: dto.model.clone(),
@@ -67,7 +69,9 @@ impl ModelUsageData {
             avg_latency_ms: dto.avg_latency_ms,
         }
     }
+}
 
+impl ModelUsageData {
     pub fn total_tokens(&self) -> u64 {
         self.input_tokens + self.output_tokens
     }
@@ -83,8 +87,8 @@ pub struct SessionUsageData {
     pub output_tokens: u64,
 }
 
-impl SessionUsageData {
-    pub fn from_dto(dto: &rustyclaw_core::gateway::protocol::frames::SessionUsageDto) -> Self {
+impl From<&rustyclaw_core::gateway::protocol::frames::SessionUsageDto> for SessionUsageData {
+    fn from(dto: &rustyclaw_core::gateway::protocol::frames::SessionUsageDto) -> Self {
         Self {
             session_id: dto.session_id.clone(),
             thread_label: dto.thread_label.clone(),
@@ -93,7 +97,9 @@ impl SessionUsageData {
             output_tokens: dto.output_tokens,
         }
     }
+}
 
+impl SessionUsageData {
     pub fn display_label(&self) -> &str {
         self.thread_label.as_deref().unwrap_or(&self.session_id)
     }

@@ -5,13 +5,10 @@ use crate::tone::Tone;
 /// The policy cycle order used by the "cycle policy" action:
 /// OPEN → ASK → AUTH → SKILL → OPEN.
 pub fn next_policy(current: &str) -> &'static str {
-    match current {
-        "OPEN" => "ASK",
-        "ASK" => "AUTH",
-        "AUTH" => "SKILL",
-        "SKILL" => "OPEN",
-        _ => "OPEN",
-    }
+    use rustyclaw_core::secrets::AccessPolicy;
+    AccessPolicy::from_badge(current)
+        .map(|p| p.cycled().badge())
+        .unwrap_or("OPEN")
 }
 
 /// Legend entries for the policy badges: `(policy, tone, meaning)`.
@@ -44,9 +41,8 @@ pub struct SecretInfoData {
     pub disabled: bool,
 }
 
-impl SecretInfoData {
-    /// Convert from the gateway protocol DTO.
-    pub fn from_entry_info(e: &rustyclaw_core::gateway::client_types::SecretEntryInfo) -> Self {
+impl From<&rustyclaw_core::gateway::client_types::SecretEntryInfo> for SecretInfoData {
+    fn from(e: &rustyclaw_core::gateway::client_types::SecretEntryInfo) -> Self {
         Self {
             key: e.name.clone(),
             label: e.label.clone(),
@@ -55,18 +51,15 @@ impl SecretInfoData {
             disabled: e.disabled,
         }
     }
+}
 
-    /// Convert directly from a SecretEntryDto (gateway frame).
-    pub fn from_dto(dto: rustyclaw_core::gateway::client_types::SecretEntryDto) -> Self {
-        Self {
-            key: dto.name,
-            label: dto.label,
-            kind: dto.kind,
-            policy: dto.policy,
-            disabled: dto.disabled,
-        }
+impl From<rustyclaw_core::gateway::client_types::SecretEntryDto> for SecretInfoData {
+    fn from(dto: rustyclaw_core::gateway::client_types::SecretEntryDto) -> Self {
+        Self::from(&rustyclaw_core::gateway::client_types::SecretEntryInfo::from(dto))
     }
+}
 
+impl SecretInfoData {
     /// Icon/indicator for the secret type.
     pub fn type_icon(&self) -> &'static str {
         match self.kind.as_str() {
@@ -243,13 +236,7 @@ impl SecretsDialogData {
         if secret.disabled {
             return None;
         }
-        let new_policy = match secret.policy.as_str() {
-            "OPEN" => "ASK",
-            "ASK" => "AUTH",
-            "AUTH" => "SKILL",
-            "SKILL" => "OPEN",
-            _ => "OPEN",
-        };
+        let new_policy = next_policy(&secret.policy);
         secret.policy = new_policy.to_string();
         Some(new_policy.to_string())
     }

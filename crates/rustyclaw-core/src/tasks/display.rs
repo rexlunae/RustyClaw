@@ -23,9 +23,8 @@ pub enum TaskIcon {
     Background,
 }
 
-impl TaskIcon {
-    /// Get from task status.
-    pub fn from_status(status: &TaskStatus) -> Self {
+impl From<&TaskStatus> for TaskIcon {
+    fn from(status: &TaskStatus) -> Self {
         match status {
             TaskStatus::Pending => Self::Pending,
             TaskStatus::Running { .. } => Self::Running,
@@ -37,7 +36,9 @@ impl TaskIcon {
             TaskStatus::WaitingForInput { .. } => Self::WaitingInput,
         }
     }
+}
 
+impl TaskIcon {
     /// Get emoji representation.
     pub fn emoji(&self) -> &'static str {
         match self {
@@ -103,10 +104,9 @@ pub struct TaskIndicator {
     pub foreground: bool,
 }
 
-impl TaskIndicator {
-    /// Create from a task.
-    pub fn from_task(task: &Task) -> Self {
-        let icon = TaskIcon::from_status(&task.status);
+impl From<&Task> for TaskIndicator {
+    fn from(task: &Task) -> Self {
+        let icon = TaskIcon::from(&task.status);
         let label = task.display_label();
 
         let progress_bar = task.status.progress().map(|p| format_progress_bar(p, 10));
@@ -125,7 +125,9 @@ impl TaskIndicator {
             foreground: task.status.is_foreground(),
         }
     }
+}
 
+impl TaskIndicator {
     /// Format as a compact inline indicator for chat.
     pub fn inline(&self) -> String {
         let mut s = format!("{} {}", self.icon, self.label);
@@ -179,7 +181,7 @@ pub fn format_duration(d: std::time::Duration) -> String {
 
 /// Format a task status for display.
 pub fn format_task_status(task: &Task) -> String {
-    let icon = TaskIcon::from_status(&task.status);
+    let icon = TaskIcon::from(&task.status);
     let label = task.display_label();
 
     let status_msg = match &task.status {
@@ -244,7 +246,7 @@ pub fn format_task_icons(tasks: &[Task]) -> String {
 
     tasks
         .iter()
-        .map(|t| TaskIcon::from_status(&t.status).emoji())
+        .map(|t| TaskIcon::from(&t.status).emoji())
         .collect::<Vec<_>>()
         .join("")
 }
@@ -267,7 +269,7 @@ pub fn format_task_indicators(tasks: &[Task], max_display: usize) -> String {
 
     let indicators: Vec<_> = active
         .iter()
-        .map(|t| TaskIndicator::from_task(t).badge())
+        .map(|t| TaskIndicator::from(*t).badge())
         .collect();
 
     let remaining = tasks

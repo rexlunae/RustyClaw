@@ -13,6 +13,32 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::Path;
 
+/// Errors produced by [`MemoryConsolidation`] file operations.
+#[derive(Debug, thiserror::Error)]
+pub enum ConsolidationError {
+    /// Creating a parent directory for a memory file failed.
+    #[error("Failed to create directory: {0}")]
+    CreateDir(#[source] std::io::Error),
+    /// Opening HISTORY.md for appending failed.
+    #[error("Failed to open HISTORY.md: {0}")]
+    OpenHistory(#[source] std::io::Error),
+    /// Appending an entry to HISTORY.md failed.
+    #[error("Failed to write to HISTORY.md: {0}")]
+    WriteHistory(#[source] std::io::Error),
+    /// Reading HISTORY.md failed.
+    #[error("Failed to read HISTORY.md: {0}")]
+    ReadHistory(#[source] std::io::Error),
+    /// Reading HISTORY.md metadata failed.
+    #[error("Failed to read HISTORY.md metadata: {0}")]
+    HistoryMetadata(#[source] std::io::Error),
+    /// Writing MEMORY.md failed.
+    #[error("Failed to write MEMORY.md: {0}")]
+    WriteMemory(#[source] std::io::Error),
+    /// Reading MEMORY.md failed.
+    #[error("Failed to read MEMORY.md: {0}")]
+    ReadMemory(#[source] std::io::Error),
+}
+
 /// Result of a memory consolidation operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsolidationResult {
@@ -127,12 +153,16 @@ impl MemoryConsolidation {
     /// Save a history entry (append to HISTORY.md).
     ///
     /// This is called by the `save_memory` tool to log timestamped entries.
-    pub fn append_history(&self, workspace: &Path, entry: &str) -> Result<usize, String> {
+    pub fn append_history(
+        &self,
+        workspace: &Path,
+        entry: &str,
+    ) -> Result<usize, ConsolidationError> {
         let history_path = workspace.join(&self.config.history_path);
 
         // Create parent directories if needed
         if let Some(parent) = history_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
+            fs::create_dir_all(parent).map_err(ConsolidationError::CreateDir)?;
         }
 
         let timestamp = Utc::now().format("%Y-%m-%d %H:%M UTC").to_string();
@@ -142,13 +172,12 @@ impl MemoryConsolidation {
             .create(true)
             .append(true)
             .open(&history_path)
-            .map_err(|e| format!("Failed to open HISTORY.md: {}", e))?;
+            .map_err(ConsolidationError::OpenHistory)?;
 
         file.write_all(formatted.as_bytes())
-            .map_err(|e| format!("Failed to write to HISTORY.md: {}", e))?;
+            .map_err(ConsolidationError::WriteHistory)?;
 
-        let metadata = fs::metadata(&history_path)
-            .map_err(|e| format!("Failed to read HISTORY.md metadata: {}", e))?;
+        let metadata = fs::metadata(&history_path).map_err(ConsolidationError::HistoryMetadata)?;
 
         Ok(metadata.len() as usize)
     }
@@ -156,23 +185,27 @@ impl MemoryConsolidation {
     /// Update MEMORY.md (full replacement).
     ///
     /// This is called by the `save_memory` tool with the LLM's curated content.
-    pub fn update_memory(&self, workspace: &Path, content: &str) -> Result<usize, String> {
+    pub fn update_memory(
+        &self,
+        workspace: &Path,
+        content: &str,
+    ) -> Result<usize, ConsolidationError> {
         let memory_path = workspace.join(&self.config.memory_path);
 
         // Create parent directories if needed
         if let Some(parent) = memory_path.parent() {
-            fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
+            fs::create_dir_all(parent).map_err(ConsolidationError::CreateDir)?;
         }
 
-        fs::write(&memory_path, content)
-            .map_err(|e| format!("Failed to write MEMORY.md: {}", e))?;
+        fs::write(&memory_path, content).map_err(ConsolidationError::WriteMemory)?;
 
         let size = content.len();
 
         if size > self.config.memory_max_size {
-            eprintln!(
-                "Warning: MEMORY.md is {} bytes, exceeds recommended max of {} bytes",
-                size, self.config.memory_max_size
+            tracing::warn!(
+                size,
+                max_size = self.config.memory_max_size,
+                "MEMORY.md exceeds recommended maximum size"
             );
         }
 
@@ -180,25 +213,25 @@ impl MemoryConsolidation {
     }
 
     /// Read current MEMORY.md content.
-    pub fn read_memory(&self, workspace: &Path) -> Result<String, String> {
+    pub fn read_memory(&self, workspace: &Path) -> Result<String, ConsolidationError> {
         let memory_path = workspace.join(&self.config.memory_path);
 
         if !memory_path.exists() {
             return Ok(String::new());
         }
 
-        fs::read_to_string(&memory_path).map_err(|e| format!("Failed to read MEMORY.md: {}", e))
+        fs::read_to_string(&memory_path).map_err(ConsolidationError::ReadMemory)
     }
 
     /// Read current HISTORY.md content.
-    pub fn read_history(&self, workspace: &Path) -> Result<String, String> {
+    pub fn read_history(&self, workspace: &Path) -> Result<String, ConsolidationError> {
         let history_path = workspace.join(&self.config.history_path);
 
         if !history_path.exists() {
             return Ok(String::new());
         }
 
-        fs::read_to_string(&history_path).map_err(|e| format!("Failed to read HISTORY.md: {}", e))
+        fs::read_to_string(&history_path).map_err(ConsolidationError::ReadHistory)
     }
 
     /// Search HISTORY.md using grep-style pattern matching.
@@ -207,7 +240,7 @@ impl MemoryConsolidation {
         workspace: &Path,
         pattern: &str,
         max_results: usize,
-    ) -> Result<Vec<HistoryEntry>, String> {
+    ) -> Result<Vec<HistoryEntry>, ConsolidationError> {
         let history = self.read_history(workspace)?;
         let pattern_lower = pattern.to_lowercase();
 

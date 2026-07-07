@@ -16,8 +16,9 @@ pub mod server;
 pub mod types;
 
 pub use frames::{
-    CONTROL_STREAM_ID, ClientFrame, ClientFrameType, ClientPayload, ProjectInfoDto, SecretEntryDto,
-    ServerFrame, ServerFrameType, ServerPayload, ServiceInfoDto, StatusType, TaskInfoDto,
-    ThreadInfoDto, WIRE_PROTOCOL_VERSION, WireFrame, deserialize_frame, deserialize_wire_frame,
-    serialize_frame, serialize_wire_frame,
+    CONTROL_STREAM_ID, ChannelPairActionKind, ClientFrame, ClientFrameType, ClientPayload,
+    CronActionKind, EngineActionKind, FrameCodecError, ModelActionKind, ProjectInfoDto,
+    SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload, ServiceInfoDto, StatusType,
+    TaskInfoDto, ThreadInfoDto, WIRE_PROTOCOL_VERSION, WireFrame, deserialize_frame,
+    deserialize_wire_frame, serialize_frame, serialize_wire_frame,
 };

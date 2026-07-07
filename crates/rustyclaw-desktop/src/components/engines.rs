@@ -2,6 +2,7 @@
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::BulmaColor;
+use rustyclaw_core::gateway::{EngineActionKind, ModelActionKind};
 
 use super::RcModal;
 
@@ -10,8 +11,8 @@ pub struct EnginesDialogProps {
     pub visible: bool,
     pub data: Option<rustyclaw_view::EnginesPanelData>,
     pub on_close: EventHandler<()>,
-    pub on_engine_action: EventHandler<(String, String)>,
-    pub on_model_action: EventHandler<(String, String, String)>,
+    pub on_engine_action: EventHandler<(String, EngineActionKind)>,
+    pub on_model_action: EventHandler<(String, String, ModelActionKind)>,
     pub on_pull: EventHandler<(String, String)>,
     /// Select an engine to browse its models (sends a model-list request).
     pub on_select_engine: EventHandler<String>,
@@ -92,7 +93,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                             rsx! {
                                                 dioxus_bulma::prelude::Button {
                                                     color: BulmaColor::Info,
-                                                    onclick: move |_| props.on_engine_action.call((eid.clone(), "install".into())),
+                                                    onclick: move |_| props.on_engine_action.call((eid.clone(), EngineActionKind::Install)),
                                                     "Install"
                                                 }
                                             }
@@ -106,7 +107,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                             rsx! {
                                                 dioxus_bulma::prelude::Button {
                                                     color: BulmaColor::Success,
-                                                    onclick: move |_| props.on_engine_action.call((eid.clone(), "start".into())),
+                                                    onclick: move |_| props.on_engine_action.call((eid.clone(), EngineActionKind::Start)),
                                                     "Start"
                                                 }
                                             }
@@ -120,7 +121,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                             rsx! {
                                                 dioxus_bulma::prelude::Button {
                                                     color: BulmaColor::Warning,
-                                                    onclick: move |_| props.on_engine_action.call((eid.clone(), "stop".into())),
+                                                    onclick: move |_| props.on_engine_action.call((eid.clone(), EngineActionKind::Stop)),
                                                     "Stop"
                                                 }
                                             }
@@ -218,7 +219,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                                 rsx! {
                                                                     dioxus_bulma::prelude::Button {
                                                                         color: BulmaColor::Info,
-                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), "load".into())),
+                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), ModelActionKind::Load)),
                                                                         "Load"
                                                                     }
                                                                 }
@@ -231,7 +232,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                                 rsx! {
                                                                     dioxus_bulma::prelude::Button {
                                                                         color: BulmaColor::Warning,
-                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), "unload".into())),
+                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), ModelActionKind::Unload)),
                                                                         "Unload"
                                                                     }
                                                                 }
@@ -245,7 +246,7 @@ pub fn EnginesDialog(props: EnginesDialogProps) -> Element {
                                                                     dioxus_bulma::prelude::Button {
                                                                         color: BulmaColor::Danger,
                                                                         outlined: true,
-                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), "remove".into())),
+                                                                        onclick: move |_| props.on_model_action.call((eid2.clone(), mname2.clone(), ModelActionKind::Remove)),
                                                                         "Remove"
                                                                     }
                                                                 }

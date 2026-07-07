@@ -32,7 +32,7 @@
 mod manager;
 mod types;
 
-pub use manager::ServiceManager;
+pub use manager::{ServiceError, ServiceManager};
 pub use types::*;
 
 use std::sync::Arc;

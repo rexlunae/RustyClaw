@@ -1,39 +1,23 @@
-//! Error handling utilities for RustyClaw.
+//! Error-handling strategy for RustyClaw.
 //!
-//! ## Error handling patterns
+//! RustyClaw uses three error-handling patterns, chosen by layer:
 //!
-//! RustyClaw uses two error handling strategies:
+//! 1. **Internal logic** (typed `thiserror` enums): Library modules define
+//!    small per-module error enums deriving [`thiserror::Error`] (e.g.
+//!    `CronError` in [`crate::cron`], `VaultError` in [`crate::memory_vault`],
+//!    `SsrfError` in `crate::security::ssrf`). Use `#[from]` for `std::io` and
+//!    `serde_json` sources so callers can match on variants and inspect the
+//!    error chain.
 //!
-//! 1. **Tools** (`Result<String, String>`): Tools return simple string errors
-//!    because these are sent back to the AI model. The error message is displayed
-//!    to the model which can then try to recover or report the issue to the user.
+//! 2. **Tool/model boundary** (`Result<String, String>`): AI-callable tool
+//!    functions return simple string errors because the message is sent back
+//!    to the model, which can then try to recover or report the issue to the
+//!    user. Flattening a typed error with `.map_err(|e| e.to_string())` at
+//!    this boundary is correct — but only at the boundary.
 //!
-//! 2. **Application logic** (`anyhow::Result`): Internal application code uses
-//!    `anyhow` for its rich error context and easy propagation.
+//! 3. **Binaries and application glue** (`anyhow::Result`): Top-level
+//!    binaries use `anyhow` for its rich context and easy propagation.
+//!    Library code in this crate should prefer typed errors instead.
 //!
-//! ## Converting between error types
-//!
-//! Use the `anyhow_to_tool_err` and `tool_err_to_anyhow` functions to convert
-//! between the two error types when needed.
-
-use anyhow::Result as AnyhowResult;
-
-/// Convert an anyhow error to a tool error (string message).
-pub fn anyhow_to_tool_err(err: anyhow::Error) -> String {
-    err.to_string()
-}
-
-/// Convert an anyhow result to a tool result.
-pub fn anyhow_to_tool_result<T>(result: AnyhowResult<T>) -> Result<T, String> {
-    result.map_err(anyhow_to_tool_err)
-}
-
-/// Convert a tool error to an anyhow error.
-pub fn tool_err_to_anyhow(err: String) -> anyhow::Error {
-    anyhow::anyhow!(err)
-}
-
-/// Convert a tool result to an anyhow result.
-pub fn tool_to_anyhow_result<T>(result: Result<T, String>) -> AnyhowResult<T> {
-    result.map_err(tool_err_to_anyhow)
-}
+//! This module currently holds no code; it documents the strategy and is the
+//! natural home for any future shared error utilities.

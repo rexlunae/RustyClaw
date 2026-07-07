@@ -115,7 +115,7 @@ impl ProjectManager {
     }
 
     pub fn list_info(&self) -> Vec<ProjectInfo> {
-        self.list().into_iter().map(Project::to_info).collect()
+        self.list().into_iter().map(Into::into).collect()
     }
 
     pub fn len(&self) -> usize {

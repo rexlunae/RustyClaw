@@ -517,23 +517,25 @@ impl AgentThread {
 
         ctx
     }
+}
 
-    /// Get info for sidebar display.
-    pub fn to_info(&self) -> ThreadInfo {
-        ThreadInfo {
-            id: self.id,
-            project_id: self.project_id,
-            kind: self.kind.display_name().to_string(),
-            icon: self.kind.icon().to_string(),
-            label: self.label.clone(),
-            description: self.description.clone(),
-            status: self.status.display(),
-            status_icon: self.status.icon().to_string(),
-            is_foreground: self.is_foreground,
-            is_interactive: self.kind.is_interactive(),
-            message_count: self.messages.len(),
-            has_summary: self.compact_summary.is_some(),
-            has_result: self.result.is_some(),
+/// Info for sidebar display.
+impl From<&AgentThread> for ThreadInfo {
+    fn from(t: &AgentThread) -> Self {
+        Self {
+            id: t.id,
+            project_id: t.project_id,
+            kind: t.kind.display_name().to_string(),
+            icon: t.kind.icon().to_string(),
+            label: t.label.clone(),
+            description: t.description.clone(),
+            status: t.status.display(),
+            status_icon: t.status.icon().to_string(),
+            is_foreground: t.is_foreground,
+            is_interactive: t.kind.is_interactive(),
+            message_count: t.messages.len(),
+            has_summary: t.compact_summary.is_some(),
+            has_result: t.result.is_some(),
         }
     }
 }

@@ -174,7 +174,10 @@ pub async fn run_gateway(
     tools::set_vault(vault.clone());
 
     // Initialize sandbox for command execution
-    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
+    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_else(|e| {
+        tracing::warn!(mode = %config.sandbox.mode, error = %e, "Invalid sandbox mode in config; falling back to auto-detection");
+        Default::default()
+    });
     tools::init_sandbox(
         sandbox_mode,
         config.workspace_dir(),
@@ -295,7 +298,7 @@ pub async fn run_gateway(
         .clone()
         .or_else(|| {
             config.ssh.as_ref().and_then(|ssh_cfg| {
-                if ssh_cfg.enabled && ssh_cfg.mode == "standalone" {
+                if ssh_cfg.enabled && ssh_cfg.mode == rustyclaw_core::config::SshMode::Standalone {
                     Some(ssh_cfg.bind.clone())
                 } else {
                     None

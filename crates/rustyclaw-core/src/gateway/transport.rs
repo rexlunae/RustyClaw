@@ -167,8 +167,8 @@ impl<'a> TransportWriter for ScopedTransportWriter<'a> {
 
 /// A listener that accepts incoming transport connections.
 ///
-/// This trait is implemented by both WebSocket and SSH servers,
-/// allowing the gateway to accept connections from multiple sources.
+/// Implemented by the SSH server today; the abstraction allows the gateway
+/// to accept connections from additional transports (e.g. WebSocket) later.
 #[async_trait]
 pub trait TransportAcceptor: Send + Sync {
     /// Accept the next incoming connection.

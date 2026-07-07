@@ -54,7 +54,7 @@ impl CompiledRule {
     }
 }
 
-fn compile_counter(c: &RuleCounter) -> Result<CompiledCounter, String> {
+fn compile_counter(c: &RuleCounter) -> Result<CompiledCounter, PatternError> {
     let regex = build_regex(&c.pattern, c.flags.as_deref())?;
     Ok(CompiledCounter {
         name: c.name.clone(),
@@ -62,7 +62,7 @@ fn compile_counter(c: &RuleCounter) -> Result<CompiledCounter, String> {
     })
 }
 
-fn build_regex(pattern: &str, flags: Option<&str>) -> Result<Regex, String> {
+fn build_regex(pattern: &str, flags: Option<&str>) -> Result<Regex, PatternError> {
     let mut builder = RegexBuilder::new(pattern);
     if let Some(flags) = flags {
         for ch in flags.chars() {
@@ -85,26 +85,44 @@ fn build_regex(pattern: &str, flags: Option<&str>) -> Result<Regex, String> {
                 // JS `g` flag is meaningless for the `regex` crate (every
                 // search is global) — silently accept it for compatibility.
                 'g' => {}
-                _ => return Err(format!("unsupported regex flag '{}'", ch)),
+                _ => return Err(PatternError::UnsupportedFlag(ch)),
             }
         }
     }
-    builder
-        .build()
-        .map_err(|e| format!("invalid regex /{}/: {}", pattern, e))
+    builder.build().map_err(|e| PatternError::Regex {
+        pattern: pattern.to_string(),
+        source: e,
+    })
+}
+
+/// Error compiling a single pattern, before rule context is attached.
+#[derive(Debug, thiserror::Error)]
+pub enum PatternError {
+    #[error("unsupported regex flag '{0}'")]
+    UnsupportedFlag(char),
+    #[error("invalid regex /{pattern}/: {source}")]
+    Regex {
+        pattern: String,
+        #[source]
+        source: regex::Error,
+    },
 }
 
 #[derive(Debug, thiserror::Error)]
 pub enum CompileError {
-    #[error("rule {id}: {msg}")]
-    Rule { id: String, msg: String },
+    #[error("rule {id}: {source}")]
+    Rule {
+        id: String,
+        #[source]
+        source: PatternError,
+    },
 }
 
 impl CompileError {
-    fn with_rule(id: &str, msg: String) -> Self {
+    fn with_rule(id: &str, source: PatternError) -> Self {
         Self::Rule {
             id: id.to_string(),
-            msg,
+            source,
         }
     }
 }

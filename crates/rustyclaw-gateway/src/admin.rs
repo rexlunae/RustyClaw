@@ -196,7 +196,10 @@ pub(crate) fn handle_set_working_directory(config: &mut Config, path: String) {
     config.workspace_dir = Some(new_dir.clone());
     // Re-register sandbox with the new workspace dir so tool
     // access controls apply to the new location.
-    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_default();
+    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_else(|e| {
+        tracing::warn!(mode = %config.sandbox.mode, error = %e, "Invalid sandbox mode in config; falling back to auto-detection");
+        Default::default()
+    });
     tools::init_sandbox(
         sandbox_mode,
         new_dir,

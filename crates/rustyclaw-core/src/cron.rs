@@ -182,6 +182,20 @@ pub enum RunStatus {
     Skipped,
 }
 
+/// Errors produced by [`CronStore`] operations.
+#[derive(Debug, thiserror::Error)]
+pub enum CronError {
+    /// Filesystem operation on the jobs/runs store failed.
+    #[error("Cron store I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// Serializing or parsing job/run JSON failed.
+    #[error("Cron store serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    /// The referenced job does not exist.
+    #[error("Job not found: {0}")]
+    JobNotFound(String),
+}
+
 /// Cron job store that persists jobs to disk.
 pub struct CronStore {
     /// Path to the jobs file.
@@ -194,22 +208,18 @@ pub struct CronStore {
 
 impl CronStore {
     /// Create or load a cron store from the given directory.
-    pub fn new(cron_dir: &Path) -> Result<Self, String> {
+    pub fn new(cron_dir: &Path) -> Result<Self, CronError> {
         let jobs_path = cron_dir.join("jobs.json");
         let runs_dir = cron_dir.join("runs");
 
         // Ensure directories exist
-        fs::create_dir_all(cron_dir)
-            .map_err(|e| format!("Failed to create cron directory: {}", e))?;
-        fs::create_dir_all(&runs_dir)
-            .map_err(|e| format!("Failed to create runs directory: {}", e))?;
+        fs::create_dir_all(cron_dir)?;
+        fs::create_dir_all(&runs_dir)?;
 
         // Load existing jobs
         let jobs = if jobs_path.exists() {
-            let content = fs::read_to_string(&jobs_path)
-                .map_err(|e| format!("Failed to read jobs file: {}", e))?;
-            serde_json::from_str(&content)
-                .map_err(|e| format!("Failed to parse jobs file: {}", e))?
+            let content = fs::read_to_string(&jobs_path)?;
+            serde_json::from_str(&content)?
         } else {
             HashMap::new()
         };
@@ -222,16 +232,14 @@ impl CronStore {
     }
 
     /// Save jobs to disk.
-    fn save(&self) -> Result<(), String> {
-        let content = serde_json::to_string_pretty(&self.jobs)
-            .map_err(|e| format!("Failed to serialize jobs: {}", e))?;
-        fs::write(&self.jobs_path, content)
-            .map_err(|e| format!("Failed to write jobs file: {}", e))?;
+    fn save(&self) -> Result<(), CronError> {
+        let content = serde_json::to_string_pretty(&self.jobs)?;
+        fs::write(&self.jobs_path, content)?;
         Ok(())
     }
 
     /// Add a new job.
-    pub fn add(&mut self, job: CronJob) -> Result<JobId, String> {
+    pub fn add(&mut self, job: CronJob) -> Result<JobId, CronError> {
         let id = job.job_id.clone();
         self.jobs.insert(id.clone(), job);
         self.save()?;
@@ -252,11 +260,11 @@ impl CronStore {
     }
 
     /// Update a job with a patch.
-    pub fn update(&mut self, job_id: &str, patch: CronJobPatch) -> Result<(), String> {
+    pub fn update(&mut self, job_id: &str, patch: CronJobPatch) -> Result<(), CronError> {
         let job = self
             .jobs
             .get_mut(job_id)
-            .ok_or_else(|| format!("Job not found: {}", job_id))?;
+            .ok_or_else(|| CronError::JobNotFound(job_id.to_string()))?;
 
         if let Some(name) = patch.name {
             job.name = Some(name);
@@ -278,28 +286,34 @@ impl CronStore {
     }
 
     /// Remove a job.
-    pub fn remove(&mut self, job_id: &str) -> Result<CronJob, String> {
+    pub fn remove(&mut self, job_id: &str) -> Result<CronJob, CronError> {
         let job = self
             .jobs
             .remove(job_id)
-            .ok_or_else(|| format!("Job not found: {}", job_id))?;
+            .ok_or_else(|| CronError::JobNotFound(job_id.to_string()))?;
         self.save()?;
         Ok(job)
     }
 
     /// Get run history for a job.
-    pub fn get_runs(&self, job_id: &str, limit: usize) -> Result<Vec<RunEntry>, String> {
+    pub fn get_runs(&self, job_id: &str, limit: usize) -> Result<Vec<RunEntry>, CronError> {
         let runs_file = self.runs_dir.join(format!("{}.jsonl", job_id));
         if !runs_file.exists() {
             return Ok(Vec::new());
         }
 
-        let content = fs::read_to_string(&runs_file)
-            .map_err(|e| format!("Failed to read runs file: {}", e))?;
+        let content = fs::read_to_string(&runs_file)?;
 
         let runs: Vec<RunEntry> = content
             .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
+            .filter(|line| !line.trim().is_empty())
+            .filter_map(|line| match serde_json::from_str(line) {
+                Ok(entry) => Some(entry),
+                Err(e) => {
+                    tracing::warn!(job_id, error = %e, "Skipping corrupt run-history line");
+                    None
+                }
+            })
             .collect();
 
         // Return last N runs
@@ -307,19 +321,17 @@ impl CronStore {
     }
 
     /// Record a run.
-    pub fn record_run(&self, entry: &RunEntry) -> Result<(), String> {
+    pub fn record_run(&self, entry: &RunEntry) -> Result<(), CronError> {
         let runs_file = self.runs_dir.join(format!("{}.jsonl", entry.job_id));
-        let line = serde_json::to_string(entry)
-            .map_err(|e| format!("Failed to serialize run entry: {}", e))?;
+        let line = serde_json::to_string(entry)?;
 
         use std::io::Write;
         let mut file = fs::OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&runs_file)
-            .map_err(|e| format!("Failed to open runs file: {}", e))?;
+            .open(&runs_file)?;
 
-        writeln!(file, "{}", line).map_err(|e| format!("Failed to write run entry: {}", e))?;
+        writeln!(file, "{}", line)?;
 
         Ok(())
     }

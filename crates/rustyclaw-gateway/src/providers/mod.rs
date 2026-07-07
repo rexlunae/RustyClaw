@@ -497,15 +497,10 @@ pub async fn compact_conversation(
         api_key: resolved.api_key.clone(),
     };
 
-    let summary_result = tokio::time::timeout(std::time::Duration::from_secs(60), async {
-        if resolved.provider == "anthropic" {
-            call_anthropic_with_tools(http, &summary_req, None).await
-        } else if resolved.provider == "google" {
-            call_google_with_tools(http, &summary_req).await
-        } else {
-            call_openai_with_tools(http, &summary_req, None).await
-        }
-    })
+    let summary_result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        call_with_tools(http, &summary_req, None),
+    )
     .await
     .map_err(|_| anyhow::anyhow!("compaction summary request timed out after 60s"))
     .and_then(|r| r);
@@ -785,8 +780,6 @@ fn format_probe_error(err: &anyhow_tracing::Error) -> String {
 }
 
 // The genai-backed provider dispatch lives in `rustyclaw-core` so the gateway
-// and client crates share one genai instance. Re-export the call surface here
-// so existing `providers::call_*` call sites resolve unchanged.
-pub use rustyclaw_core::providers::{
-    call_anthropic_with_tools, call_google_with_tools, call_openai_with_tools,
-};
+// and client crates share one genai instance. Re-export the single dispatch
+// entry point so call sites use `providers::call_with_tools`.
+pub use rustyclaw_core::providers::call_with_tools;

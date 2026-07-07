@@ -36,7 +36,7 @@ mod reduce;
 mod rule;
 
 pub use classify::Classification;
-pub use compile::{CompileError, CompiledCounter, CompiledRule};
+pub use compile::{CompileError, CompiledCounter, CompiledRule, PatternError};
 pub use overlay::LoadError;
 pub use reduce::NamedCount;
 pub use rule::{
