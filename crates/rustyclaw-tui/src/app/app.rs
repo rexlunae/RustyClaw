@@ -83,6 +83,8 @@ pub(crate) enum UserInput {
     },
     /// Re-request secrets list from gateway (after a mutation)
     RefreshSecrets,
+    /// Re-request a gateway panel's data (after a mutation)
+    RefreshPanel(crate::app::PanelKind),
     /// Request current task list from gateway
     RefreshTasks,
     /// Request current thread list from gateway
@@ -518,6 +520,18 @@ impl App {
                 }
                 Ok(UserInput::RefreshSecrets) => {
                     let _ = client.send(GatewayCommand::SecretsList).await;
+                }
+                Ok(UserInput::RefreshPanel(panel)) => {
+                    let cmd = match panel {
+                        crate::app::PanelKind::Cron => GatewayCommand::CronList,
+                        crate::app::PanelKind::Memory => GatewayCommand::MemoryList {
+                            query: None,
+                            limit: None,
+                        },
+                        crate::app::PanelKind::Mcp => GatewayCommand::McpList,
+                        crate::app::PanelKind::Channels => GatewayCommand::ChannelStatus,
+                    };
+                    let _ = client.send(cmd).await;
                 }
                 Ok(UserInput::RefreshTasks) => {
                     let _ = client

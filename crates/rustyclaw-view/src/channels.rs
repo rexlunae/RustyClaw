@@ -86,4 +86,16 @@ impl ChannelsPanelData {
     pub fn selected_channel(&self) -> Option<&ChannelStatusData> {
         self.selected.and_then(|i| self.channels.get(i))
     }
+
+    pub fn select_next(&mut self) {
+        let max = self.channels.len().saturating_sub(1);
+        let cur = self.selected.unwrap_or(0);
+        self.selected = Some(if cur >= max { 0 } else { cur + 1 });
+    }
+
+    pub fn select_prev(&mut self) {
+        let max = self.channels.len().saturating_sub(1);
+        let cur = self.selected.unwrap_or(0);
+        self.selected = Some(if cur == 0 { max } else { cur - 1 });
+    }
 }

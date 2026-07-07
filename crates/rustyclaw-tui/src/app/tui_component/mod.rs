@@ -115,6 +115,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>> =
         hooks.use_state(|| None);
     let user_prompt_selected = hooks.use_state(|| 0usize);
+    let user_prompt_checked: State<Vec<bool>> = hooks.use_state(Vec::new);
 
     // ── Credential request dialog state ───────────────────────────────
     let show_credential_request = hooks.use_state(|| false);
@@ -216,6 +217,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let show_engines_dialog = hooks.use_state(|| false);
     let engines_data: State<Option<rustyclaw_view::EnginesPanelData>> = hooks.use_state(|| None);
     let engines_cursor = hooks.use_state(|| 0usize);
+    let show_cron_dialog = hooks.use_state(|| false);
+    let cron_data: State<Option<rustyclaw_view::CronPanelData>> = hooks.use_state(|| None);
+    let show_memory_dialog = hooks.use_state(|| false);
+    let memory_data: State<Option<rustyclaw_view::MemoryPanelData>> = hooks.use_state(|| None);
+    let show_mcp_dialog = hooks.use_state(|| false);
+    let mcp_data: State<Option<rustyclaw_view::McpPanelData>> = hooks.use_state(|| None);
+    let show_channels_dialog = hooks.use_state(|| false);
+    let channels_data: State<Option<rustyclaw_view::ChannelsPanelData>> = hooks.use_state(|| None);
 
     // ── Channel access ──────────────────────────────────────────────
     let gw_rx: Arc<StdMutex<Option<sync_mpsc::Receiver<GwEvent>>>> =
@@ -269,6 +278,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         user_prompt_input,
         user_prompt_type,
         user_prompt_selected,
+        user_prompt_checked,
         show_credential_request,
         credential_request_id,
         credential_request_provider,
@@ -340,6 +350,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         show_engines_dialog,
         engines_data,
         engines_cursor,
+        show_cron_dialog,
+        cron_data,
+        show_memory_dialog,
+        memory_data,
+        show_mcp_dialog,
+        mcp_data,
+        show_channels_dialog,
+        channels_data,
     };
 
     // ── Poll gateway channel on a timer ─────────────────────────────
@@ -466,6 +484,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_system_info.get()
                 && !show_services_dialog.get()
                 && !show_engines_dialog.get()
+                && !show_cron_dialog.get()
+                && !show_memory_dialog.get()
+                && !show_mcp_dialog.get()
+                && !show_channels_dialog.get()
                 && !tab_focused.get(),
             on_change: move |_new_val: String| {},
             on_submit: move |_val: String| {
@@ -509,6 +531,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             user_prompt_input: user_prompt_input.read().clone(),
             user_prompt_type: user_prompt_type.read().clone(),
             user_prompt_selected: user_prompt_selected.get(),
+            user_prompt_checked: user_prompt_checked.read().clone(),
             show_credential_request: show_credential_request.get(),
             credential_request: rustyclaw_view::CredentialRequestData {
                 provider: credential_request_provider.read().clone(),
@@ -588,6 +611,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             services_data: services_data.read().clone(),
             show_engines_dialog: show_engines_dialog.get(),
             engines_data: engines_data.read().clone(),
+            show_cron_dialog: show_cron_dialog.get(),
+            cron_data: cron_data.read().clone(),
+            show_memory_dialog: show_memory_dialog.get(),
+            memory_data: memory_data.read().clone(),
+            show_mcp_dialog: show_mcp_dialog.get(),
+            mcp_data: mcp_data.read().clone(),
+            show_channels_dialog: show_channels_dialog.get(),
+            channels_data: channels_data.read().clone(),
             show_pairing: show_pairing.get(),
             pairing: rustyclaw_view::PairingDialogData {
                 step: *pairing_step.read(),

@@ -9,6 +9,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The cron, memory, MCP, channels, and tool-config panels are real.**
+  The gateway's panel handler previously returned stub/empty responses
+  for every panel request even though the backing subsystems existed.
+  Panels now operate on the same backends the AI tools use: cron
+  list/add/pause/resume/remove against the persistent `.cron` store,
+  memory list/add/edit/delete against `MEMORY.md` (bullets as entries,
+  `##` headings as categories) plus `HISTORY.md` search, MCP server
+  list/connect/disconnect via a shared `McpManager` (the documented
+  `[mcp.servers.*]` config section is now actually loaded, and ad-hoc
+  connects persist to it), tool enable/disable via
+  `config.tool_permissions`, and messenger channel status/pair/unpair
+  via the `[[messengers]]` config.
+- **TUI:** `/cron`, `/memory`, `/mcp`, and `/channels` now open live
+  panels (they used to tab-complete and then report "Unknown command"),
+  with subcommands for mutations (`/cron add <name> | <schedule> |
+  <message>`, `/memory add [category ::] <content>`, `/mcp connect
+  <name> [command…]`, `/channels pair|unpair <name>`, …) and
+  auto-refresh after every change.
+- **Desktop:** the Tools menu gains Scheduled Jobs, Memory, MCP
+  Servers, Channels, and Tool Permissions dialogs — the last is the
+  desktop's first tool-management surface.
+
 - **User-configured custom model providers.** New `[[custom_providers]]`
   config section (id, display name, base URL, API format, optional API-key
   secret, optional static model list). Entries are registered into the
@@ -39,6 +61,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **TUI commands that printed success and did nothing.** `/clear` now
+  actually clears the display (and says thread history is unaffected
+  rather than claiming memory was cleared); `/gateway` reports the real
+  connection status; `/gateway start|stop|restart` and `/download`
+  no longer pretend — they explain what to use instead. Multi-select
+  agent prompts only ever recorded one selection: Space now toggles
+  per-option checkboxes (seeded from prompt defaults) and Enter submits
+  all checked options. `/help` documents the previously hidden keyboard
+  shortcuts, `/quit`, and the full `/engines` subcommand list; the
+  unimplemented `/analytics`, `/logs`, and `/approvals` commands no
+  longer tab-complete.
 - Switching providers no longer carries a stale `base_url` override from the
   previous provider into the new selection (it is kept only when the new
   provider has no catalogue URL, e.g. `custom` / `copilot-proxy`).

@@ -598,6 +598,36 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 },
             }
 
+            CronDialog {
+                visible: state.read().show_cron_dialog,
+                data: state.read().cron_data.clone(),
+                on_close: move |_| state.write().show_cron_dialog = false,
+            }
+
+            MemoryDialog {
+                visible: state.read().show_memory_dialog,
+                data: state.read().memory_data.clone(),
+                on_close: move |_| state.write().show_memory_dialog = false,
+            }
+
+            McpDialog {
+                visible: state.read().show_mcp_dialog,
+                data: state.read().mcp_data.clone(),
+                on_close: move |_| state.write().show_mcp_dialog = false,
+            }
+
+            ChannelsDialog {
+                visible: state.read().show_channels_dialog,
+                data: state.read().channels_data.clone(),
+                on_close: move |_| state.write().show_channels_dialog = false,
+            }
+
+            ToolsConfigDialog {
+                visible: state.read().show_tools_dialog,
+                data: state.read().tools_data.clone(),
+                on_close: move |_| state.write().show_tools_dialog = false,
+            }
+
             // TOTP authentication modal
             if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
                 RcModal {

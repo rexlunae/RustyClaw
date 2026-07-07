@@ -195,6 +195,46 @@ pub(crate) enum GwEvent {
         ok: bool,
         message: String,
     },
+    /// Clear the message display (/clear).
+    ClearMessages,
+    /// Show gateway connection status (/gateway).
+    ShowGatewayStatus,
+    /// Open the cron panel (data arrives via CronListResult).
+    ShowCron,
+    /// Cron job list received.
+    CronListResult {
+        jobs: Vec<rustyclaw_view::CronJobData>,
+    },
+    /// Open the memory panel with an optional filter query.
+    ShowMemory {
+        query: Option<String>,
+    },
+    /// Memory entry list received.
+    MemoryListResult {
+        entries: Vec<rustyclaw_view::MemoryEntryData>,
+    },
+    /// History search results received (shown in the memory panel).
+    HistorySearchResult {
+        entries: Vec<rustyclaw_view::HistoryEntryData>,
+    },
+    /// Open the MCP servers panel (data arrives via McpListResult).
+    ShowMcp,
+    /// MCP server list received.
+    McpListResult {
+        servers: Vec<rustyclaw_view::McpServerData>,
+    },
+    /// Open the messenger channels panel.
+    ShowChannels,
+    /// Channel status list received.
+    ChannelStatusResult {
+        channels: Vec<rustyclaw_view::ChannelStatusData>,
+    },
+    /// A panel mutation finished — show the outcome and re-fetch the list.
+    PanelActionResult {
+        panel: PanelKind,
+        ok: bool,
+        message: Option<String>,
+    },
     /// Host hardware capabilities received.
     HostInfo(rustyclaw_view::HostInfoData),
     /// Current system load status received.
@@ -205,6 +245,27 @@ pub(crate) enum GwEvent {
     ServiceActionResult {
         service: Option<rustyclaw_view::ServiceInfoData>,
     },
+}
+
+/// Which gateway panel a [`GwEvent::PanelActionResult`] belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanelKind {
+    Cron,
+    Memory,
+    Mcp,
+    Channels,
+}
+
+impl PanelKind {
+    /// Panel display name for status messages.
+    pub fn label(self) -> &'static str {
+        match self {
+            PanelKind::Cron => "Cron",
+            PanelKind::Memory => "Memory",
+            PanelKind::Mcp => "MCP",
+            PanelKind::Channels => "Channels",
+        }
+    }
 }
 
 impl GwEvent {

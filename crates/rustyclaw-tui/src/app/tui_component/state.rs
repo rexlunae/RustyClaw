@@ -58,6 +58,8 @@ pub(super) struct Ui {
     pub user_prompt_input: State<String>,
     pub user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>>,
     pub user_prompt_selected: State<usize>,
+    /// Per-option checked flags for MultiSelect prompts.
+    pub user_prompt_checked: State<Vec<bool>>,
     pub show_credential_request: State<bool>,
     pub credential_request_id: State<String>,
     pub credential_request_provider: State<String>,
@@ -129,4 +131,12 @@ pub(super) struct Ui {
     pub show_engines_dialog: State<bool>,
     pub engines_data: State<Option<rustyclaw_view::EnginesPanelData>>,
     pub engines_cursor: State<usize>,
+    pub show_cron_dialog: State<bool>,
+    pub cron_data: State<Option<rustyclaw_view::CronPanelData>>,
+    pub show_memory_dialog: State<bool>,
+    pub memory_data: State<Option<rustyclaw_view::MemoryPanelData>>,
+    pub show_mcp_dialog: State<bool>,
+    pub mcp_data: State<Option<rustyclaw_view::McpPanelData>>,
+    pub show_channels_dialog: State<bool>,
+    pub channels_data: State<Option<rustyclaw_view::ChannelsPanelData>>,
 }

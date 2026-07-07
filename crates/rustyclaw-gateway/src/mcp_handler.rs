@@ -44,14 +44,16 @@ pub async fn execute_mcp_tool(
             if result.success {
                 Ok(result.to_llm_string())
             } else {
-                Err(result
-                    .error
-                    .unwrap_or_else(|| "Unknown MCP error".to_string()))
+                Err(rustyclaw_core::tools::error::ToolError::msg(
+                    result
+                        .error
+                        .unwrap_or_else(|| "Unknown MCP error".to_string()),
+                ))
             }
         }
         Err(e) => {
             warn!(tool = name, error = %e, "MCP tool call failed");
-            Err(e.to_string())
+            Err(rustyclaw_core::tools::error::ToolError::msg(e.to_string()))
         }
     }
 }

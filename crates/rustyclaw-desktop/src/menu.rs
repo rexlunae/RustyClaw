@@ -19,6 +19,11 @@ pub struct AppMenuIds {
     pub system_info: muda::MenuId,
     pub local_models: muda::MenuId,
     pub services: muda::MenuId,
+    pub cron: muda::MenuId,
+    pub memory: muda::MenuId,
+    pub mcp: muda::MenuId,
+    pub channels: muda::MenuId,
+    pub tool_perms: muda::MenuId,
 }
 
 static APP_MENU_IDS: OnceLock<AppMenuIds> = OnceLock::new();
@@ -57,6 +62,11 @@ pub fn build_app_menu() -> muda::Menu {
     let skills = muda::MenuItem::new("Skills…", true, None);
     let services = muda::MenuItem::new("Services…", true, "CmdOrCtrl+J".parse().ok());
     let local_models = muda::MenuItem::new("Local Models…", true, "CmdOrCtrl+Shift+L".parse().ok());
+    let cron = muda::MenuItem::new("Scheduled Jobs…", true, None);
+    let memory = muda::MenuItem::new("Memory…", true, None);
+    let mcp = muda::MenuItem::new("MCP Servers…", true, None);
+    let channels = muda::MenuItem::new("Channels…", true, None);
+    let tool_perms = muda::MenuItem::new("Tool Permissions…", true, None);
 
     // Register all IDs before the items are moved into the menu.
     let ids = AppMenuIds {
@@ -73,6 +83,11 @@ pub fn build_app_menu() -> muda::Menu {
         system_info: system_info.id().clone(),
         local_models: local_models.id().clone(),
         services: services.id().clone(),
+        cron: cron.id().clone(),
+        memory: memory.id().clone(),
+        mcp: mcp.id().clone(),
+        channels: channels.id().clone(),
+        tool_perms: tool_perms.id().clone(),
     };
     let _ = APP_MENU_IDS.set(ids);
 
@@ -109,6 +124,7 @@ pub fn build_app_menu() -> muda::Menu {
     )
     .expect("failed to build View menu");
 
+    let tools_sep2 = muda::PredefinedMenuItem::separator();
     let tools_menu = muda::Submenu::with_items(
         "Tools",
         true,
@@ -120,6 +136,12 @@ pub fn build_app_menu() -> muda::Menu {
             &swarm,
             &skills,
             &local_models,
+            &tools_sep2,
+            &cron,
+            &memory,
+            &mcp,
+            &channels,
+            &tool_perms,
         ],
     )
     .expect("failed to build Tools menu");

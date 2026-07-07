@@ -8,7 +8,7 @@ use rustyclaw_view::tracing;
 
 use super::display_message_from_gateway;
 use super::state;
-use crate::app::{GwEvent, UserInput};
+use crate::app::{GwEvent, PanelKind, UserInput};
 use crate::types::DisplayMessage;
 
 type UserTx = Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>>;
@@ -65,6 +65,7 @@ pub(super) fn apply_gw_event(
         mut user_prompt_input,
         mut user_prompt_type,
         mut user_prompt_selected,
+        mut user_prompt_checked,
         mut show_credential_request,
         mut credential_request_id,
         mut credential_request_provider,
@@ -136,6 +137,14 @@ pub(super) fn apply_gw_event(
         mut show_engines_dialog,
         mut engines_data,
         mut engines_cursor,
+        mut show_cron_dialog,
+        mut cron_data,
+        mut show_memory_dialog,
+        mut memory_data,
+        mut show_mcp_dialog,
+        mut mcp_data,
+        mut show_channels_dialog,
+        mut channels_data,
     } = ui;
     match ev {
         GwEvent::AuthChallenge => {
@@ -437,6 +446,23 @@ pub(super) fn apply_gw_event(
                 _ => 0,
             };
             user_prompt_selected.set(default_sel);
+            // Seed MultiSelect checkboxes from the prompt's defaults.
+            let checked = match &prompt.prompt_type {
+                rustyclaw_core::user_prompt_types::PromptType::MultiSelect {
+                    options,
+                    defaults,
+                } => {
+                    let mut checked = vec![false; options.len()];
+                    for &i in defaults {
+                        if let Some(slot) = checked.get_mut(i) {
+                            *slot = true;
+                        }
+                    }
+                    checked
+                }
+                _ => Vec::new(),
+            };
+            user_prompt_checked.set(checked);
             show_user_prompt.set(true);
 
             // Build informative message based on prompt type
@@ -447,6 +473,10 @@ pub(super) fn apply_gw_event(
                 }
                 rustyclaw_core::user_prompt_types::PromptType::Confirm { .. } => {
                     "Yes/No".to_string()
+                }
+                rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. } => {
+                    let opt_list: Vec<_> = options.iter().map(|o| o.label.as_str()).collect();
+                    format!("Select any of: {} (Space toggles)", opt_list.join(", "))
                 }
                 _ => "Type your answer".to_string(),
             };
@@ -964,6 +994,146 @@ pub(super) fn apply_gw_event(
                 )));
             }
             messages.set(m);
+        }
+        GwEvent::ClearMessages => {
+            streaming_buf.set(String::new());
+            selected_message_idx.set(None);
+            scroll_offset.set(0);
+            messages.set(vec![DisplayMessage::info(
+                "Messages cleared. (Thread history on the gateway is unaffected — switch threads to reload it.)",
+            )]);
+        }
+        GwEvent::ShowGatewayStatus => {
+            let status = gw_status.get();
+            let model_label = dynamic_model_label
+                .read()
+                .clone()
+                .unwrap_or_else(|| "(no model)".to_string());
+            let mut m = messages.read().clone();
+            m.push(DisplayMessage::info(format!(
+                "Gateway: {} · {}",
+                status.label(),
+                model_label
+            )));
+            messages.set(m);
+        }
+        // ── Gateway panels (cron / memory / MCP / channels) ──────────────
+        GwEvent::ShowCron => {
+            let mut data = cron_data.read().clone().unwrap_or_default();
+            data.status = Some("Loading…".into());
+            cron_data.set(Some(data));
+            show_cron_dialog.set(true);
+        }
+        GwEvent::CronListResult { jobs } => {
+            let mut data = cron_data.read().clone().unwrap_or_default();
+            data.selected = match jobs.is_empty() {
+                true => None,
+                false => Some(data.selected.unwrap_or(0).min(jobs.len() - 1)),
+            };
+            data.jobs = jobs;
+            data.status = None;
+            cron_data.set(Some(data));
+        }
+        GwEvent::ShowMemory { query } => {
+            let mut data = memory_data.read().clone().unwrap_or_default();
+            data.search_query = query.unwrap_or_default();
+            data.status = Some("Loading…".into());
+            memory_data.set(Some(data));
+            show_memory_dialog.set(true);
+        }
+        GwEvent::MemoryListResult { entries } => {
+            let mut data = memory_data.read().clone().unwrap_or_default();
+            data.selected = match entries.is_empty() {
+                true => None,
+                false => Some(data.selected.unwrap_or(0).min(entries.len() - 1)),
+            };
+            data.entries = entries;
+            data.status = None;
+            memory_data.set(Some(data));
+        }
+        GwEvent::HistorySearchResult { entries } => {
+            let mut data = memory_data.read().clone().unwrap_or_default();
+            data.history = entries;
+            data.status = None;
+            memory_data.set(Some(data));
+            show_memory_dialog.set(true);
+        }
+        GwEvent::ShowMcp => {
+            let mut data = mcp_data.read().clone().unwrap_or_default();
+            data.status = Some("Loading…".into());
+            mcp_data.set(Some(data));
+            show_mcp_dialog.set(true);
+        }
+        GwEvent::McpListResult { servers } => {
+            let mut data = mcp_data.read().clone().unwrap_or_default();
+            data.selected = match servers.is_empty() {
+                true => None,
+                false => Some(data.selected.unwrap_or(0).min(servers.len() - 1)),
+            };
+            data.servers = servers;
+            data.status = None;
+            mcp_data.set(Some(data));
+        }
+        GwEvent::ShowChannels => {
+            let mut data = channels_data.read().clone().unwrap_or_default();
+            data.status = Some("Loading…".into());
+            channels_data.set(Some(data));
+            show_channels_dialog.set(true);
+        }
+        GwEvent::ChannelStatusResult { channels } => {
+            let mut data = channels_data.read().clone().unwrap_or_default();
+            data.selected = match channels.is_empty() {
+                true => None,
+                false => Some(data.selected.unwrap_or(0).min(channels.len() - 1)),
+            };
+            data.channels = channels;
+            data.status = None;
+            channels_data.set(Some(data));
+        }
+        GwEvent::PanelActionResult { panel, ok, message } => {
+            // Surface the outcome in the panel's status line (and the
+            // message log on failure), then re-fetch the list.
+            let status = match (&message, ok) {
+                (Some(msg), _) => Some(msg.clone()),
+                (None, true) => Some("Done".into()),
+                (None, false) => Some("Failed".into()),
+            };
+            match panel {
+                PanelKind::Cron => {
+                    let mut data = cron_data.read().clone().unwrap_or_default();
+                    data.status = status;
+                    cron_data.set(Some(data));
+                }
+                PanelKind::Memory => {
+                    let mut data = memory_data.read().clone().unwrap_or_default();
+                    data.status = status;
+                    memory_data.set(Some(data));
+                }
+                PanelKind::Mcp => {
+                    let mut data = mcp_data.read().clone().unwrap_or_default();
+                    data.status = status;
+                    mcp_data.set(Some(data));
+                }
+                PanelKind::Channels => {
+                    let mut data = channels_data.read().clone().unwrap_or_default();
+                    data.status = status;
+                    channels_data.set(Some(data));
+                }
+            }
+            if !ok {
+                let mut m = messages.read().clone();
+                m.push(DisplayMessage::warning(format!(
+                    "{}: {}",
+                    panel.label(),
+                    message.unwrap_or_else(|| "operation failed".into())
+                )));
+                messages.set(m);
+            }
+            if let Ok(guard) = tx_for_history.lock() {
+                if let Some(ref tx) = *guard {
+                    let _ = tx.send(UserInput::RefreshPanel(panel));
+                }
+            }
         }
     }
 }

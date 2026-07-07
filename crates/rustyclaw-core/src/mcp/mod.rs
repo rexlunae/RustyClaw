@@ -37,7 +37,9 @@
 
 #[cfg(feature = "mcp")]
 mod client;
-#[cfg(feature = "mcp")]
+// The config types are plain serde structs with no MCP-runtime dependency;
+// they stay ungated so `[mcp.servers.*]` in rustyclaw.toml round-trips even
+// in builds without the `mcp` feature.
 mod config;
 #[cfg(feature = "mcp")]
 mod manager;
@@ -46,12 +48,16 @@ mod tools;
 
 #[cfg(feature = "mcp")]
 pub use client::McpClient;
-#[cfg(feature = "mcp")]
 pub use config::{McpConfig, McpServerConfig};
 #[cfg(feature = "mcp")]
-pub use manager::McpManager;
+pub use manager::{McpManager, McpServerStatus, McpStatus};
 #[cfg(feature = "mcp")]
 pub use tools::{McpTool, McpToolCall, McpToolResult};
+
+/// Shared handle to the MCP manager (registered in
+/// [`crate::runtime_ctx`] by the gateway at startup).
+#[cfg(feature = "mcp")]
+pub type SharedMcpManager = std::sync::Arc<tokio::sync::Mutex<McpManager>>;
 
 // Re-export for convenience when feature is disabled
 #[cfg(not(feature = "mcp"))]

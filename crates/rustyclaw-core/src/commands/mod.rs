@@ -1,5 +1,5 @@
 use crate::config::Config;
-use crate::gateway::{EngineActionKind, ModelActionKind};
+use crate::gateway::{ChannelPairActionKind, CronActionKind, EngineActionKind, ModelActionKind};
 use crate::providers;
 use crate::secrets::SecretsManager;
 use crate::skills::SkillManager;
@@ -9,12 +9,6 @@ pub enum CommandAction {
     None,
     ClearMessages,
     Quit,
-    /// Start (connect) the gateway
-    GatewayStart,
-    /// Stop (disconnect) the gateway
-    GatewayStop,
-    /// Restart the gateway connection
-    GatewayRestart,
     /// Show gateway status info (no subcommand given)
     GatewayInfo,
     /// Change the active provider
@@ -33,8 +27,6 @@ pub enum CommandAction {
     GatewayReload,
     /// Fetch the live model list from the provider API
     FetchModels,
-    /// Download media by ID (id, optional destination path)
-    Download(String, Option<String>),
     /// Create a new thread
     ThreadNew(String),
     /// Attach a file to the next prompt
@@ -63,6 +55,30 @@ pub enum CommandAction {
     EngineModelPull(String, String),
     /// Model-level engine action: (engine, model, action)
     EngineModelAction(String, String, ModelActionKind),
+    /// Show the cron panel (fetches the job list)
+    ShowCron,
+    /// Cron job action: (job id, action)
+    CronAction(String, CronActionKind),
+    /// Create a cron job: (name, expr, payload)
+    CronAdd(String, String, String),
+    /// Show the memory panel, optionally filtered by a query
+    ShowMemory(Option<String>),
+    /// Add a memory entry: (category, content)
+    MemoryAdd(Option<String>, String),
+    /// Delete a memory entry by id
+    MemoryDelete(String),
+    /// Search conversation history (shows in the memory panel)
+    HistorySearch(String),
+    /// Show the MCP servers panel (fetches the server list)
+    ShowMcp,
+    /// Connect an MCP server: (name, optional stdio command line)
+    McpConnect(String, Option<String>),
+    /// Disconnect an MCP server
+    McpDisconnect(String),
+    /// Show the messenger channels panel
+    ShowChannels,
+    /// Pair/unpair a messenger channel
+    ChannelPair(String, ChannelPairActionKind),
 }
 
 #[derive(Debug, Clone)]
@@ -83,7 +99,6 @@ fn base_command_names() -> Vec<String> {
     let mut names: Vec<String> = vec![
         "help".into(),
         "clear".into(),
-        "download".into(),
         "attach".into(),
         "attach file".into(),
         "attach dir".into(),
@@ -93,9 +108,6 @@ fn base_command_names() -> Vec<String> {
         "onboard".into(),
         "reload-skills".into(),
         "gateway".into(),
-        "gateway start".into(),
-        "gateway stop".into(),
-        "gateway restart".into(),
         "reload".into(),
         "provider".into(),
         "model".into(),
@@ -141,12 +153,20 @@ fn base_command_names() -> Vec<String> {
         "npm".into(),
         "quit".into(),
         "cron".into(),
+        "cron add".into(),
+        "cron pause".into(),
+        "cron resume".into(),
+        "cron rm".into(),
         "memory".into(),
-        "analytics".into(),
-        "logs".into(),
+        "memory add".into(),
+        "memory rm".into(),
+        "memory history".into(),
         "mcp".into(),
+        "mcp connect".into(),
+        "mcp disconnect".into(),
         "channels".into(),
-        "approvals".into(),
+        "channels pair".into(),
+        "channels unpair".into(),
         "engines".into(),
         "engines start".into(),
         "engines stop".into(),
@@ -330,8 +350,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             messages: vec![
                 "Available commands:".to_string(),
                 "  /help                    - Show this help".to_string(),
-                "  /clear                   - Clear messages and conversation memory".to_string(),
-                "  /download <id> [path]    - Download media attachment to file".to_string(),
+                "  /clear                   - Clear the message display".to_string(),
                 "  /attach file <path>      - Attach a file to the next prompt".to_string(),
                 "  /attach dir <path>       - Attach a directory to the next prompt".to_string(),
                 "  /attach clear            - Clear prompt attachments".to_string(),
@@ -341,9 +360,6 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     .to_string(),
                 "  /reload-skills           - Reload skills".to_string(),
                 "  /gateway                 - Show gateway connection status".to_string(),
-                "  /gateway start           - Connect to the gateway".to_string(),
-                "  /gateway stop            - Disconnect from the gateway".to_string(),
-                "  /gateway restart         - Restart the gateway connection".to_string(),
                 "  /reload                  - Reload gateway config (no restart)".to_string(),
                 "  /provider <name>         - Change the AI provider".to_string(),
                 "  /provider add <id> <url> - Add a custom provider (local/self-hosted)"
@@ -356,12 +372,19 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /engines start <engine>  - Start a local engine (also: stop/install)"
                     .to_string(),
                 "  /engines pull <e> <m>    - Download a model for an engine".to_string(),
+                "  /engines models <engine> - List an engine's models (also: load/unload/remove)"
+                    .to_string(),
                 "  /skills                  - Show loaded skills".to_string(),
                 "  /skill                   - Skill management (info/install/publish/link)"
                     .to_string(),
                 "  /tools                   - Edit tool permissions (allow/deny/ask/skill)"
                     .to_string(),
                 "  /secrets                 - Open the secrets vault".to_string(),
+                "  /cron                    - Scheduled jobs panel (add/pause/resume/rm)"
+                    .to_string(),
+                "  /memory [query]          - Browse MEMORY.md (add/rm/history)".to_string(),
+                "  /mcp                     - MCP servers panel (connect/disconnect)".to_string(),
+                "  /channels                - Messenger channels panel (pair/unpair)".to_string(),
                 "  /clawhub                 - ClawHub skill registry commands".to_string(),
                 "  /agent setup             - Set up local model tools (uv, exo, ollama)"
                     .to_string(),
@@ -379,32 +402,29 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /thread rename <id> <l>  - Rename a thread".to_string(),
                 "  /thread bg               - Background the current thread".to_string(),
                 "  /thread fg <id>          - Foreground a thread by ID".to_string(),
+                "  /quit (/q, /exit)        - Exit the TUI".to_string(),
+                "".to_string(),
+                "Keyboard shortcuts:".to_string(),
+                "  Ctrl+C quit · Esc cancel run/close dialog · Tab focus threads".to_string(),
+                "  Ctrl+P pair gateway · Ctrl+H system info · Ctrl+J services".to_string(),
+                "  Ctrl+D message details · Ctrl+E collapse message".to_string(),
+                "  Ctrl+Y copy message · Ctrl+S save message to ~/.rustyclaw/messages".to_string(),
+                "  ↑/↓ scroll messages · Enter send · Shift+Enter newline".to_string(),
             ],
             action: CommandAction::None,
         },
         "clear" => CommandResponse {
-            messages: vec!["Messages and conversation memory cleared.".to_string()],
+            messages: Vec::new(),
             action: CommandAction::ClearMessages,
         },
-        "download" => {
-            if parts.len() < 2 {
-                CommandResponse {
-                    messages: vec![
-                        "Usage: /download <media_id> [destination_path]".to_string(),
-                        "Example: /download media_0001".to_string(),
-                        "Example: /download media_0001 ~/Downloads/image.jpg".to_string(),
-                    ],
-                    action: CommandAction::None,
-                }
-            } else {
-                let media_id = parts[1].to_string();
-                let dest_path = parts.get(2).map(|s| s.to_string());
-                CommandResponse {
-                    messages: vec![format!("Downloading {}...", media_id)],
-                    action: CommandAction::Download(media_id, dest_path),
-                }
-            }
-        }
+        "download" => CommandResponse {
+            // No client-side media registry exists yet to download from.
+            messages: vec![
+                "Media downloads aren't implemented in this client yet.".to_string(),
+                "Tool results that produce files save them on the gateway host.".to_string(),
+            ],
+            action: CommandAction::None,
+        },
         "attach" => match parts.get(1).copied() {
             Some("file") => {
                 let path = trimmed
@@ -499,22 +519,21 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             action: CommandAction::None,
         },
         "gateway" => match parts.get(1).copied() {
-            Some("start") => CommandResponse {
-                messages: vec!["Starting gateway connection…".to_string()],
-                action: CommandAction::GatewayStart,
-            },
-            Some("stop") => CommandResponse {
-                messages: vec!["Stopping gateway connection…".to_string()],
-                action: CommandAction::GatewayStop,
-            },
-            Some("restart") => CommandResponse {
-                messages: vec!["Restarting gateway connection…".to_string()],
-                action: CommandAction::GatewayRestart,
+            Some("start" | "stop" | "restart") => CommandResponse {
+                // The TUI's connection is established by the startup
+                // connection dialog; the daemon itself is controlled from
+                // the CLI.
+                messages: vec![
+                    "The TUI cannot control the gateway daemon.".to_string(),
+                    "Control it from a terminal:  rustyclaw gateway start|stop|restart".to_string(),
+                    "To reconnect this client, restart the TUI.".to_string(),
+                ],
+                action: CommandAction::None,
             },
             Some(sub) => CommandResponse {
                 messages: vec![
                     format!("Unknown gateway subcommand: {}", sub),
-                    "Usage: /gateway start|stop|restart".to_string(),
+                    "Usage: /gateway — show connection status".to_string(),
                 ],
                 action: CommandAction::None,
             },
@@ -559,6 +578,10 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             },
         },
         "engines" | "engine" => handle_engines_subcommand(&parts[1..]),
+        "cron" => handle_cron_subcommand(&parts[1..]),
+        "memory" | "mem" => handle_memory_subcommand(&parts[1..]),
+        "mcp" => handle_mcp_subcommand(&parts[1..]),
+        "channels" | "channel" => handle_channels_subcommand(&parts[1..]),
         "model" => match parts.get(1) {
             Some(name) => {
                 let name = name.to_string();
@@ -846,6 +869,193 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
                 usage()
             }
         }
+    }
+}
+
+fn handle_cron_subcommand(args: &[&str]) -> CommandResponse {
+    let usage = || CommandResponse {
+        messages: vec![
+            "Usage: /cron — open the scheduled-jobs panel".to_string(),
+            "       /cron add <name> | <schedule> | <message>".to_string(),
+            "         schedule: 'at <ISO-8601>', 'every <N>[ms|s|m|h]', or a 5-field cron expr"
+                .to_string(),
+            "       /cron pause|resume|rm <job-id>".to_string(),
+        ],
+        action: CommandAction::None,
+    };
+
+    match args.first() {
+        None | Some(&"list") => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowCron,
+        },
+        Some(&"add") => {
+            // Fields are pipe-separated so name/schedule/message can
+            // contain spaces: /cron add Standup | every 1h | Time for standup
+            let rest = args[1..].join(" ");
+            let fields: Vec<&str> = rest.split('|').map(str::trim).collect();
+            match fields.as_slice() {
+                [name, expr, payload]
+                    if !name.is_empty() && !expr.is_empty() && !payload.is_empty() =>
+                {
+                    CommandResponse {
+                        messages: vec![format!("Creating job '{}'…", name)],
+                        action: CommandAction::CronAdd(
+                            name.to_string(),
+                            expr.to_string(),
+                            payload.to_string(),
+                        ),
+                    }
+                }
+                _ => usage(),
+            }
+        }
+        Some(&action @ ("pause" | "resume" | "rm" | "remove")) => match args.get(1) {
+            Some(id) => {
+                let kind = match action {
+                    "pause" => CronActionKind::Pause,
+                    "resume" => CronActionKind::Resume,
+                    _ => CronActionKind::Remove,
+                };
+                CommandResponse {
+                    messages: Vec::new(),
+                    action: CommandAction::CronAction(id.to_string(), kind),
+                }
+            }
+            None => usage(),
+        },
+        Some(_) => usage(),
+    }
+}
+
+fn handle_memory_subcommand(args: &[&str]) -> CommandResponse {
+    let usage = || CommandResponse {
+        messages: vec![
+            "Usage: /memory [query] — browse MEMORY.md entries".to_string(),
+            "       /memory add [category ::] <content>".to_string(),
+            "       /memory rm <entry-id>".to_string(),
+            "       /memory history <query> — search HISTORY.md".to_string(),
+        ],
+        action: CommandAction::None,
+    };
+
+    match args.first() {
+        None => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowMemory(None),
+        },
+        Some(&"add") => {
+            let rest = args[1..].join(" ");
+            if rest.trim().is_empty() {
+                return usage();
+            }
+            let (category, content) = match rest.split_once("::") {
+                Some((cat, content)) if !cat.trim().is_empty() && !content.trim().is_empty() => {
+                    (Some(cat.trim().to_string()), content.trim().to_string())
+                }
+                _ => (None, rest.trim().to_string()),
+            };
+            CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::MemoryAdd(category, content),
+            }
+        }
+        Some(&"rm" | &"remove") => match args.get(1) {
+            Some(id) => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::MemoryDelete(id.to_string()),
+            },
+            None => usage(),
+        },
+        Some(&"history") => {
+            let query = args[1..].join(" ");
+            if query.trim().is_empty() {
+                usage()
+            } else {
+                CommandResponse {
+                    messages: Vec::new(),
+                    action: CommandAction::HistorySearch(query),
+                }
+            }
+        }
+        Some(_) => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowMemory(Some(args.join(" "))),
+        },
+    }
+}
+
+fn handle_mcp_subcommand(args: &[&str]) -> CommandResponse {
+    let usage = || CommandResponse {
+        messages: vec![
+            "Usage: /mcp — open the MCP servers panel".to_string(),
+            "       /mcp connect <name> [command…] — connect (and persist) a stdio server"
+                .to_string(),
+            "       /mcp disconnect <name>".to_string(),
+        ],
+        action: CommandAction::None,
+    };
+
+    match args.first() {
+        None | Some(&"list") | Some(&"status") => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowMcp,
+        },
+        Some(&"connect") => match args.get(1) {
+            Some(name) => {
+                let command = if args.len() > 2 {
+                    Some(args[2..].join(" "))
+                } else {
+                    None
+                };
+                CommandResponse {
+                    messages: vec![format!("Connecting MCP server '{}'…", name)],
+                    action: CommandAction::McpConnect(name.to_string(), command),
+                }
+            }
+            None => usage(),
+        },
+        Some(&"disconnect") => match args.get(1) {
+            Some(name) => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::McpDisconnect(name.to_string()),
+            },
+            None => usage(),
+        },
+        Some(_) => usage(),
+    }
+}
+
+fn handle_channels_subcommand(args: &[&str]) -> CommandResponse {
+    let usage = || CommandResponse {
+        messages: vec![
+            "Usage: /channels — open the messenger channels panel".to_string(),
+            "       /channels pair|unpair <name> — enable/disable a configured messenger"
+                .to_string(),
+        ],
+        action: CommandAction::None,
+    };
+
+    match args.first() {
+        None | Some(&"list") | Some(&"status") => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowChannels,
+        },
+        Some(&action @ ("pair" | "unpair")) => match args.get(1) {
+            Some(name) => {
+                let kind = if action == "pair" {
+                    ChannelPairActionKind::Pair
+                } else {
+                    ChannelPairActionKind::Unpair
+                };
+                CommandResponse {
+                    messages: Vec::new(),
+                    action: CommandAction::ChannelPair(name.to_string(), kind),
+                }
+            }
+            None => usage(),
+        },
+        Some(_) => usage(),
     }
 }
 

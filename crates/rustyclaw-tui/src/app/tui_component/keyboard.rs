@@ -67,6 +67,7 @@ pub(super) fn apply_key_event(
         mut user_prompt_input,
         mut user_prompt_type,
         mut user_prompt_selected,
+        mut user_prompt_checked,
         mut show_credential_request,
         mut credential_request_id,
         mut credential_request_provider,
@@ -138,6 +139,14 @@ pub(super) fn apply_key_event(
         show_engines_dialog: _,
         engines_data: _,
         engines_cursor: _,
+        show_cron_dialog: _,
+        cron_data: _,
+        show_memory_dialog: _,
+        memory_data: _,
+        show_mcp_dialog: _,
+        mcp_data: _,
+        show_channels_dialog: _,
+        channels_data: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {
@@ -730,6 +739,20 @@ pub(super) fn apply_key_event(
                             user_prompt_input.set(input);
                         }
                     }
+                    KeyCode::Char(' ')
+                        if matches!(
+                            prompt_type,
+                            Some(rustyclaw_core::user_prompt_types::PromptType::MultiSelect { .. })
+                        ) =>
+                    {
+                        // Toggle the highlighted option's checkbox.
+                        let selected = user_prompt_selected.get();
+                        let mut checked = user_prompt_checked.read().clone();
+                        if let Some(slot) = checked.get_mut(selected) {
+                            *slot = !*slot;
+                            user_prompt_checked.set(checked);
+                        }
+                    }
                     KeyCode::Char(c) => {
                         // Only for TextInput types
                         if matches!(
@@ -783,12 +806,27 @@ pub(super) fn apply_key_event(
                                 options,
                                 ..
                             }) => {
-                                // TODO: track multiple selections properly
-                                let label = options
-                                    .get(selected)
-                                    .map(|o| o.label.clone())
-                                    .unwrap_or_default();
-                                (rustyclaw_core::user_prompt_types::PromptResponseValue::Selected(vec![label.clone()]), format!("→ {}", label))
+                                // All checked options; falls back to the
+                                // highlighted one when none were toggled.
+                                let checked = user_prompt_checked.read().clone();
+                                let mut labels: Vec<String> = options
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(i, _)| checked.get(*i).copied().unwrap_or(false))
+                                    .map(|(_, o)| o.label.clone())
+                                    .collect();
+                                if labels.is_empty() {
+                                    if let Some(opt) = options.get(selected) {
+                                        labels.push(opt.label.clone());
+                                    }
+                                }
+                                let display = format!("→ {}", labels.join(", "));
+                                (
+                                    rustyclaw_core::user_prompt_types::PromptResponseValue::Selected(
+                                        labels,
+                                    ),
+                                    display,
+                                )
                             }
                             _ => (
                                 rustyclaw_core::user_prompt_types::PromptResponseValue::Text(

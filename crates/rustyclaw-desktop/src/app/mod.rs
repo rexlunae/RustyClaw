@@ -234,6 +234,64 @@ pub fn App() -> Element {
         }
     });
 
+    // Re-fetch panel lists after a mutation result marks them stale, so the
+    // cron/memory/MCP/channels/tool dialogs reflect the change.
+    use_effect(move || {
+        let (cron, memory, mcp, channels, tools) = {
+            let s = state.read();
+            (
+                s.cron_stale && s.show_cron_dialog,
+                s.memory_stale && s.show_memory_dialog,
+                s.mcp_stale && s.show_mcp_dialog,
+                s.channels_stale && s.show_channels_dialog,
+                s.tools_stale && s.show_tools_dialog,
+            )
+        };
+        let any_stale = {
+            let s = state.read();
+            s.cron_stale || s.memory_stale || s.mcp_stale || s.channels_stale || s.tools_stale
+        };
+        if !any_stale {
+            return;
+        }
+        {
+            let mut s = state.write();
+            s.cron_stale = false;
+            s.memory_stale = false;
+            s.mcp_stale = false;
+            s.channels_stale = false;
+            s.tools_stale = false;
+        }
+        if !(cron || memory || mcp || channels || tools) {
+            return;
+        }
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                if cron {
+                    let _ = client.send(GatewayCommand::CronList).await;
+                }
+                if memory {
+                    let _ = client
+                        .send(GatewayCommand::MemoryList {
+                            query: None,
+                            limit: None,
+                        })
+                        .await;
+                }
+                if mcp {
+                    let _ = client.send(GatewayCommand::McpList).await;
+                }
+                if channels {
+                    let _ = client.send(GatewayCommand::ChannelStatus).await;
+                }
+                if tools {
+                    let _ = client.send(GatewayCommand::ToolConfigList).await;
+                }
+            });
+        }
+    });
+
     // Handle gateway events
     use_effect(move || {
         let gw = gateway.read().clone();
@@ -711,6 +769,66 @@ pub fn App() -> Element {
                             if need_host {
                                 let _ = client.send(GatewayCommand::HostInfoRequest).await;
                             }
+                        });
+                    }
+                }
+            } else if event.id == ids.cron {
+                let v = state.read().show_cron_dialog;
+                state.write().show_cron_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::CronList).await;
+                        });
+                    }
+                }
+            } else if event.id == ids.memory {
+                let v = state.read().show_memory_dialog;
+                state.write().show_memory_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::MemoryList {
+                                    query: None,
+                                    limit: None,
+                                })
+                                .await;
+                        });
+                    }
+                }
+            } else if event.id == ids.mcp {
+                let v = state.read().show_mcp_dialog;
+                state.write().show_mcp_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::McpList).await;
+                        });
+                    }
+                }
+            } else if event.id == ids.channels {
+                let v = state.read().show_channels_dialog;
+                state.write().show_channels_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::ChannelStatus).await;
+                        });
+                    }
+                }
+            } else if event.id == ids.tool_perms {
+                let v = state.read().show_tools_dialog;
+                state.write().show_tools_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client.send(GatewayCommand::ToolConfigList).await;
                         });
                     }
                 }

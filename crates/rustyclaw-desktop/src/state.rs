@@ -165,6 +165,41 @@ pub struct AppState {
     /// Set when an engine action completed and the engine/model lists
     /// should be re-fetched from the gateway.
     pub engines_stale: bool,
+
+    /// Whether the scheduled-jobs dialog is visible.
+    pub show_cron_dialog: bool,
+    /// Cron job data for the scheduled-jobs dialog.
+    pub cron_data: Option<rustyclaw_view::CronPanelData>,
+    /// Set when a cron mutation completed and the list should be re-fetched.
+    pub cron_stale: bool,
+
+    /// Whether the memory browser dialog is visible.
+    pub show_memory_dialog: bool,
+    /// Memory entry data for the memory browser dialog.
+    pub memory_data: Option<rustyclaw_view::MemoryPanelData>,
+    /// Set when a memory mutation completed and the list should be re-fetched.
+    pub memory_stale: bool,
+
+    /// Whether the MCP servers dialog is visible.
+    pub show_mcp_dialog: bool,
+    /// MCP server data for the MCP dialog.
+    pub mcp_data: Option<rustyclaw_view::McpPanelData>,
+    /// Set when an MCP mutation completed and the list should be re-fetched.
+    pub mcp_stale: bool,
+
+    /// Whether the messenger channels dialog is visible.
+    pub show_channels_dialog: bool,
+    /// Channel status data for the channels dialog.
+    pub channels_data: Option<rustyclaw_view::ChannelsPanelData>,
+    /// Set when a channel mutation completed and the list should be re-fetched.
+    pub channels_stale: bool,
+
+    /// Whether the tool permissions dialog is visible.
+    pub show_tools_dialog: bool,
+    /// Tool configuration data for the tool permissions dialog.
+    pub tools_data: Option<rustyclaw_view::ToolConfigPanelData>,
+    /// Set when a tool toggle completed and the list should be re-fetched.
+    pub tools_stale: bool,
 }
 
 impl Default for AppState {
@@ -237,6 +272,21 @@ impl Default for AppState {
             show_engines_dialog: false,
             engines_data: None,
             engines_stale: false,
+            show_cron_dialog: false,
+            cron_data: None,
+            cron_stale: false,
+            show_memory_dialog: false,
+            memory_data: None,
+            memory_stale: false,
+            show_mcp_dialog: false,
+            mcp_data: None,
+            mcp_stale: false,
+            show_channels_dialog: false,
+            channels_data: None,
+            channels_stale: false,
+            show_tools_dialog: false,
+            tools_data: None,
+            tools_stale: false,
         }
     }
 }
