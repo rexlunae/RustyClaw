@@ -1,6 +1,6 @@
 //! Cron tool: scheduled job management.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -72,7 +72,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
             let job_obj = args.get("job").ok_or("Missing required parameter: job")?;
 
             let job: CronJob = serde_json::from_value(job_obj.clone())
-                .map_err(|e| format!("Invalid job definition: {}", e))?;
+                .map_err(|e| ToolError::context("Invalid job definition", e))?;
 
             let id = store.add(job)?;
             debug!(job_id = %id, "Created cron job");
@@ -88,7 +88,7 @@ pub fn exec_cron(args: &Value, workspace_dir: &Path) -> ToolResult {
             let patch_obj = args.get("patch").ok_or("Missing patch for update")?;
 
             let patch: CronJobPatch = serde_json::from_value(patch_obj.clone())
-                .map_err(|e| format!("Invalid patch: {}", e))?;
+                .map_err(|e| ToolError::context("Invalid patch", e))?;
 
             store.update(job_id, patch)?;
             debug!(job_id, "Updated cron job");

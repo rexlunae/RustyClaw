@@ -6,7 +6,7 @@
 //! 2. A scheduled curator that grades existing skills, merges duplicates,
 //!    and prunes low-value ones (modeled on Hermes' ~7-day cycle).
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -261,9 +261,9 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> ToolResult {
     } else {
         // Read both files and append source content to target
         let source_content = std::fs::read_to_string(&source_file)
-            .map_err(|e| format!("Failed to read source: {}", e))?;
+            .map_err(|e| ToolError::context("Failed to read source", e))?;
         let target_content = std::fs::read_to_string(&target_file)
-            .map_err(|e| format!("Failed to read target: {}", e))?;
+            .map_err(|e| ToolError::context("Failed to read target", e))?;
 
         let merged = format!(
             "{}\n\n---\n\n## Merged from: {}\n\n{}\n",
@@ -271,7 +271,7 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> ToolResult {
         );
 
         std::fs::write(&target_file, &merged)
-            .map_err(|e| format!("Failed to write merged skill: {}", e))?;
+            .map_err(|e| ToolError::context("Failed to write merged skill", e))?;
 
         // Remove source directory
         let source_dir = skills_dir.join(source);
@@ -324,7 +324,7 @@ fn exec_prune(args: &Value, workspace_dir: &Path) -> ToolResult {
         .to_string())
     } else {
         std::fs::remove_dir_all(&skill_dir)
-            .map_err(|e| format!("Failed to remove skill directory: {}", e))?;
+            .map_err(|e| ToolError::context("Failed to remove skill directory", e))?;
 
         debug!(name, reason, "Skill pruned");
         Ok(json!({

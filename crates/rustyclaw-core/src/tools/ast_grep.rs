@@ -308,14 +308,12 @@ fn parse_lang(s: &str) -> ToolResult<SupportLang> {
     let normalized = s.trim_start_matches('.').to_lowercase();
 
     // SupportLang has a FromStr impl — use it
-    normalized
-        .parse::<SupportLang>()
-        .map_err(|_| {
-            format!(
-                "Unsupported language: '{}'. Try: rs, py, ts, js, go, java, rb, c, cpp, cs, sh, yaml, json, html, css, php",
-                s
-            )
-        }).map_err(ToolError::from)
+    normalized.parse::<SupportLang>().map_err(|_| {
+        ToolError::msg(format!(
+            "Unsupported language: '{}'. Try: rs, py, ts, js, go, java, rb, c, cpp, cs, sh, yaml, json, html, css, php",
+            s
+        ))
+    })
 }
 
 /// Resolve a glob/file path string into absolute paths.

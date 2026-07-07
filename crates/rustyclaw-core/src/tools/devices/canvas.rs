@@ -1,6 +1,6 @@
 //! Canvas tool: UI presentation and page capture.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -163,7 +163,7 @@ async fn open_in_browser_async(url: &str) -> ToolResult<()> {
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
-        .map_err(|e| format!("Failed to open browser: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to open browser", e))?;
     Ok(())
 }
 
@@ -350,7 +350,7 @@ fn open_in_browser(url: &str) -> ToolResult<()> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|e| format!("Failed to open browser: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to open browser", e))?;
     Ok(())
 }
 

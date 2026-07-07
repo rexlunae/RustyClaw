@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rustyclaw_core::tools::error::ToolResult;
+use rustyclaw_core::tools::error::{ToolError, ToolResult};
 use tracing::{debug, instrument, warn};
 
 use rustyclaw_core::gateway::protocol::server::{
@@ -114,7 +114,7 @@ pub async fn exec_secrets_get(args: &serde_json::Value, vault: &SharedVault) -> 
         }
         Err(e) => {
             warn!(credential = cred_name, error = %e, "Credential access denied");
-            Err(e.to_string().into())
+            Err(ToolError::msg(e.to_string()))
         }
     }
 }

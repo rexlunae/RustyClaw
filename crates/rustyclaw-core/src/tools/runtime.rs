@@ -143,7 +143,7 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
                     Ok(Some(_status)) => {
                         // Process finished - collect output
                         let output = child.wait_with_output().await
-                            .map_err(|e| format!("Failed to get command output: {}", e))?;
+                            .map_err(|e| ToolError::context("Failed to get command output", e))?;
                         return format_output_async(output, timeout_secs);
                     }
                     Ok(None) => {
@@ -351,7 +351,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|e| format!("Failed to execute command: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to execute command", e))?;
 
     let yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
     let timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -404,7 +404,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let output = child
         .wait_with_output()
-        .map_err(|e| format!("Failed to get command output: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to get command output", e))?;
 
     format_output(output, timeout_secs)
 }

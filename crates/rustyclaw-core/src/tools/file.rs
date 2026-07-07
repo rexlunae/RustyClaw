@@ -6,7 +6,7 @@ use super::helpers::{
     VAULT_ACCESS_DENIED, display_path, expand_tilde, is_protected_path, open_file_read_safe,
     open_file_write_safe, resolve_path, should_visit,
 };
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Stdio;
@@ -233,13 +233,13 @@ pub async fn exec_list_directory_async(args: &Value, workspace_dir: &Path) -> To
     while let Some(entry) = entries
         .next_entry()
         .await
-        .map_err(|e| format!("Error reading entry: {}", e))?
+        .map_err(|e| ToolError::context("Error reading entry", e))?
     {
         let name = entry.file_name().to_string_lossy().to_string();
         let ft = entry
             .file_type()
             .await
-            .map_err(|e| format!("Error reading file type: {}", e))?;
+            .map_err(|e| ToolError::context("Error reading file type", e))?;
         if ft.is_dir() {
             items.push(format!("{}/", name));
         } else if ft.is_symlink() {
@@ -559,11 +559,11 @@ fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let mut items: Vec<String> = Vec::new();
     for entry in entries {
-        let entry = entry.map_err(|e| format!("Error reading entry: {}", e))?;
+        let entry = entry.map_err(|e| ToolError::context("Error reading entry", e))?;
         let name = entry.file_name().to_string_lossy().to_string();
         let ft = entry
             .file_type()
-            .map_err(|e| format!("Error reading file type: {}", e))?;
+            .map_err(|e| ToolError::context("Error reading file type", e))?;
         if ft.is_dir() {
             items.push(format!("{}/", name));
         } else if ft.is_symlink() {

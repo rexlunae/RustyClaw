@@ -45,6 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Structured-error follow-up: restored ~100 context sites lost to the
+  revert probe, dropped redundant conversions.** The pass that introduced
+  `ToolError::Context` had collaterally reverted convertible call sites
+  back to `format!` flattening (an earlier `cargo fix` had stripped
+  then-unused `ToolError` imports in 21 files, so re-conversion attempts
+  failed to resolve the type and were misclassified as non-convertible).
+  Those imports are repaired and the sites re-converted — the tool layer
+  now preserves typed sources at 140 context sites, with `format!` left
+  only on genuine third-party leaf errors (chromiumoxide, zip, image, …).
+  Also removed the extraneous conversions the same pass left behind:
+  tail `.map_err(ToolError::from)` no-ops replaced by constructing
+  `ToolError::msg` / `missing_param` directly, and gateway handler
+  imports trimmed to what they use.
+
 - **Structured-error preservation pass over the tool layer.**
   `ToolError` gains a `Context` variant plus `ToolError::context(ctx, e)`:
   it renders identically to the previous `format!("ctx: {e}")` flattening

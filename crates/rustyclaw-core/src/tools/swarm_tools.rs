@@ -3,7 +3,7 @@
 //! Provides agent-callable tools for creating, listing, inspecting, messaging,
 //! and stopping swarms.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -20,7 +20,7 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
     let config: SwarmConfig = if let Some(cfg_val) = custom_config {
         serde_json::from_value(cfg_val.clone())
-            .map_err(|e| format!("Invalid swarm config: {}", e))?
+            .map_err(|e| ToolError::context("Invalid swarm config", e))?
     } else {
         let tpl_name = template_name.unwrap_or("swarm");
         let templates = builtin_templates();

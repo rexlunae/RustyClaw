@@ -1,7 +1,7 @@
 //! File summarization: quick summaries of files based on type.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -43,7 +43,7 @@ pub async fn exec_summarize_file_async(args: &Value, workspace_dir: &Path) -> To
 
     let meta = tokio::fs::metadata(&target)
         .await
-        .map_err(|e| format!("Cannot read: {}", e))?;
+        .map_err(|e| ToolError::context("Cannot read", e))?;
     if meta.is_dir() {
         return Err(format!("Path is a directory: {}", target.display()).into());
     }
@@ -221,7 +221,7 @@ pub fn exec_summarize_file(args: &Value, workspace_dir: &Path) -> ToolResult {
         return Err(format!("File not found: {}", target.display()).into());
     }
 
-    let meta = std::fs::metadata(&target).map_err(|e| format!("Cannot read: {}", e))?;
+    let meta = std::fs::metadata(&target).map_err(|e| ToolError::context("Cannot read", e))?;
     if meta.is_dir() {
         return Err(format!("Path is a directory: {}", target.display()).into());
     }

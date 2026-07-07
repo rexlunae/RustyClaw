@@ -2,7 +2,7 @@
 //
 // Provides both sync and async implementations.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -360,7 +360,7 @@ async fn sh_async(script: &str) -> ToolResult {
         .arg(script)
         .output()
         .await
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -395,7 +395,7 @@ async fn sh_in_async(dir: &Path, script: &str) -> ToolResult {
         .current_dir(dir)
         .output()
         .await
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -437,7 +437,7 @@ fn sh(script: &str) -> ToolResult {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !output.status.success() && stdout.is_empty() {
@@ -468,7 +468,7 @@ fn sh_in(dir: &Path, script: &str) -> ToolResult {
         .arg(&full)
         .current_dir(dir)
         .output()
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !output.status.success() && stdout.is_empty() {

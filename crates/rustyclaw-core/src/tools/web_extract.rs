@@ -5,7 +5,7 @@
 //! `extract_mode` parameter, this tool is optimized specifically for content
 //! extraction with additional options like selector targeting and metadata.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
@@ -58,13 +58,13 @@ pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Tool
         .user_agent("RustyClaw/0.1 (web_extract tool)")
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()
-        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create HTTP client", e))?;
 
     let response = client
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
+        .map_err(|e| ToolError::context("HTTP request failed", e))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -81,7 +81,7 @@ pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Tool
     let html = response
         .text()
         .await
-        .map_err(|e| format!("Failed to read response body: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to read response body", e))?;
 
     // Extract metadata if requested
     let metadata = if include_metadata {
