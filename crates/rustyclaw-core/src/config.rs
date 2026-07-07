@@ -190,6 +190,10 @@ pub struct Config {
     /// appear alongside built-in providers in every selector.
     #[serde(default)]
     pub custom_providers: Vec<crate::providers::CustomProviderConfig>,
+    /// MCP server connections (`[mcp.servers.<name>]`). Connected by the
+    /// gateway at startup when built with the `mcp` feature.
+    #[serde(default)]
+    pub mcp: crate::mcp::McpConfig,
 }
 
 /// Configuration for a messenger backend.
@@ -345,6 +349,7 @@ impl Default for Config {
             services: HashMap::new(),
             engines: HashMap::new(),
             custom_providers: Vec::new(),
+            mcp: crate::mcp::McpConfig::default(),
         }
     }
 }

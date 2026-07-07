@@ -752,7 +752,7 @@ pub(crate) async fn handle_connection(
                             | ClientPayload::VoiceAudioChunk { .. }
                             | ClientPayload::PreviewRequest { .. }
                             | ClientPayload::PreviewFollowToggle { .. }) => {
-                                crate::panel_handler::handle_panel_request(&mut *writer, payload).await?;
+                                crate::panel_handler::handle_panel_request(&mut *writer, payload, &mut config).await?;
                             }
                             payload @ (ClientPayload::EngineList
                             | ClientPayload::EngineAction { .. }

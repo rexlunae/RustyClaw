@@ -22,6 +22,9 @@ pub struct RuntimeInfo {
     pub load_tracker: Option<SharedLoadTracker>,
     /// Managed backend services.
     pub service_manager: Option<SharedServiceManager>,
+    /// Connected MCP servers.
+    #[cfg(feature = "mcp")]
+    pub mcp_manager: Option<crate::mcp::SharedMcpManager>,
 }
 
 /// Shared runtime context.
@@ -95,6 +98,23 @@ pub fn get_service_manager() -> Option<SharedServiceManager> {
         .lock()
         .ok()
         .and_then(|ctx| ctx.service_manager.clone())
+}
+
+/// Store the MCP manager in the runtime context.
+#[cfg(feature = "mcp")]
+pub fn set_mcp_manager(mgr: crate::mcp::SharedMcpManager) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.mcp_manager = Some(mgr);
+    }
+}
+
+/// Get the MCP manager.
+#[cfg(feature = "mcp")]
+pub fn get_mcp_manager() -> Option<crate::mcp::SharedMcpManager> {
+    runtime_ctx()
+        .lock()
+        .ok()
+        .and_then(|ctx| ctx.mcp_manager.clone())
 }
 
 #[cfg(test)]

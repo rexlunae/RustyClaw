@@ -166,6 +166,31 @@ pub async fn run_gateway(
         }
     }
 
+    // ── MCP servers ─────────────────────────────────────────────────
+    //
+    // Register the shared MCP manager (used by the /mcp panel and tool
+    // dispatch) and connect any [mcp.servers.*] entries in the background
+    // so a slow server doesn't hold up gateway startup.
+    #[cfg(feature = "mcp")]
+    {
+        let mcp_mgr: rustyclaw_core::mcp::SharedMcpManager =
+            std::sync::Arc::new(tokio::sync::Mutex::new(
+                rustyclaw_core::mcp::McpManager::new(config.mcp.clone()),
+            ));
+        rustyclaw_core::runtime_ctx::set_mcp_manager(mcp_mgr.clone());
+        if config.mcp.has_servers() {
+            let server_count = config.mcp.servers.len();
+            tokio::spawn(async move {
+                let mgr = mcp_mgr.lock().await;
+                if let Err(e) = mgr.connect_all().await {
+                    warn!(error = %e, "Failed to connect MCP servers");
+                } else {
+                    info!(count = server_count, "MCP servers connected");
+                }
+            });
+        }
+    }
+
     // Register the credentials directory so file-access tools can enforce
     // the vault boundary (blocks read_file, execute_command, etc.).
     tools::set_credentials_dir(config.credentials_dir());
