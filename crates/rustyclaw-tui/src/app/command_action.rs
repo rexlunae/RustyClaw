@@ -286,7 +286,7 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::EngineAction(engine, action) => {
             let Ok(kind) = action.parse::<EngineActionKind>() else {
-                tracing::warn!("unknown engine action: {action}");
+                tracing::warn!("unknown engine action: {action:?} (valid: install, start, stop)");
                 return Ok(false);
             };
             let _ = client
@@ -314,7 +314,7 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::EngineModelAction(engine, model, action) => {
             let Ok(kind) = action.parse::<ModelActionKind>() else {
-                tracing::warn!("unknown engine model action: {action}");
+                tracing::warn!("unknown engine model action: {action:?} (valid: load, unload, remove)");
                 return Ok(false);
             };
             let _ = client
