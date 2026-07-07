@@ -2,6 +2,7 @@
 //
 // Provides both sync and async implementations.
 
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
@@ -10,7 +11,7 @@ use tracing::{debug, instrument};
 
 /// `uv_manage` — unified Python dependency management via uv (async).
 #[instrument(skip(args, workspace_dir), fields(action))]
-pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -164,13 +165,13 @@ pub async fn exec_uv_manage_async(args: &Value, workspace_dir: &Path) -> Result<
         _ => Err(format!(
             "Unknown uv action: '{}'. Valid: setup, version, venv, pip-install, pip-uninstall, pip-list, pip-freeze, sync, run, python, init.",
             action
-        )),
+        ).into()),
     }
 }
 
 // ── Async helpers ───────────────────────────────────────────────────────────
 
-async fn sh_async(script: &str) -> Result<String, String> {
+async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -183,9 +184,9 @@ async fn sh_async(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -197,7 +198,7 @@ async fn sh_async(script: &str) -> Result<String, String> {
     }
 }
 
-async fn sh_in_async(dir: &Path, script: &str) -> Result<String, String> {
+async fn sh_in_async(dir: &Path, script: &str) -> ToolResult {
     let full_script = if let Some(venv) = find_venv(dir) {
         format!(
             "source '{}' && {}",
@@ -221,9 +222,9 @@ async fn sh_in_async(dir: &Path, script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -264,7 +265,7 @@ fn find_venv(workspace_dir: &Path) -> Option<PathBuf> {
 
 // ── Sync implementations ────────────────────────────────────────────────────
 
-fn sh(script: &str) -> Result<String, String> {
+fn sh(script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -276,9 +277,9 @@ fn sh(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -290,7 +291,7 @@ fn sh(script: &str) -> Result<String, String> {
     }
 }
 
-fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
+fn sh_in(dir: &Path, script: &str) -> ToolResult {
     let full_script = if let Some(venv) = find_venv(dir) {
         format!(
             "source '{}' && {}",
@@ -313,9 +314,9 @@ fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -336,7 +337,7 @@ fn is_uv_installed() -> bool {
 }
 
 /// `uv_manage` — unified Python dependency management via uv (sync).
-pub fn exec_uv_manage(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_uv_manage(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -483,6 +484,6 @@ pub fn exec_uv_manage(args: &Value, workspace_dir: &Path) -> Result<String, Stri
         _ => Err(format!(
             "Unknown uv action: '{}'. Valid: setup, version, venv, pip-install, pip-uninstall, pip-list, pip-freeze, sync, run, python, init.",
             action
-        )),
+        ).into()),
     }
 }

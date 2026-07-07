@@ -2,6 +2,7 @@
 //
 // Provides both sync and async implementations.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -10,7 +11,7 @@ use tracing::{debug, instrument};
 
 /// `npm_manage` — unified Node.js / npm administration tool (async).
 #[instrument(skip(args, workspace_dir), fields(action))]
-pub async fn exec_npm_manage_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_npm_manage_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -48,7 +49,7 @@ pub async fn exec_npm_manage_async(args: &Value, workspace_dir: &Path) -> Result
                     sh_async("curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash 2>&1 && \
                         export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm install --lts 2>&1").await
                 }
-                _ => Err(format!("Unsupported OS: {}", os)),
+                _ => Err(format!("Unsupported OS: {}", os).into()),
             }
         }
 
@@ -347,13 +348,13 @@ pub async fn exec_npm_manage_async(args: &Value, workspace_dir: &Path) -> Result
         _ => Err(format!(
             "Unknown npm action: '{}'. Valid: setup, version, init, npm-install, uninstall, list, outdated, update, run, start, build, test, npx, audit, cache-clean, info, search, status.",
             action
-        )),
+        ).into()),
     }
 }
 
 // ── Async helpers ───────────────────────────────────────────────────────────
 
-async fn sh_async(script: &str) -> Result<String, String> {
+async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -366,9 +367,9 @@ async fn sh_async(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -380,7 +381,7 @@ async fn sh_async(script: &str) -> Result<String, String> {
     }
 }
 
-async fn sh_in_async(dir: &Path, script: &str) -> Result<String, String> {
+async fn sh_in_async(dir: &Path, script: &str) -> ToolResult {
     let preamble = r#"
         export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
         [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" 2>/dev/null
@@ -401,9 +402,9 @@ async fn sh_in_async(dir: &Path, script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -431,7 +432,7 @@ async fn is_npm_installed_async(workspace_dir: &Path) -> bool {
 
 // ── Sync implementations ────────────────────────────────────────────────────
 
-fn sh(script: &str) -> Result<String, String> {
+fn sh(script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -441,9 +442,9 @@ fn sh(script: &str) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -455,7 +456,7 @@ fn sh(script: &str) -> Result<String, String> {
     }
 }
 
-fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
+fn sh_in(dir: &Path, script: &str) -> ToolResult {
     let preamble = r#"
         export NVM_DIR="${NVM_DIR:-$HOME/.nvm}"
         [ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh" 2>/dev/null
@@ -472,9 +473,9 @@ fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -499,7 +500,7 @@ fn is_npm_installed(workspace_dir: &Path) -> bool {
 }
 
 /// `npm_manage` — unified Node.js / npm administration tool (sync).
-pub fn exec_npm_manage(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_npm_manage(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -534,7 +535,7 @@ pub fn exec_npm_manage(args: &Value, workspace_dir: &Path) -> Result<String, Str
                     "curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash 2>&1 && \
                     export NVM_DIR=\"$HOME/.nvm\" && . \"$NVM_DIR/nvm.sh\" && nvm install --lts 2>&1",
                 ),
-                _ => Err(format!("Unsupported OS: {}", os)),
+                _ => Err(format!("Unsupported OS: {}", os).into()),
             }
         }
         "version" | "versions" => {
@@ -562,6 +563,7 @@ pub fn exec_npm_manage(args: &Value, workspace_dir: &Path) -> Result<String, Str
         _ => Err(format!(
             "Sync execution not fully supported for '{}'. Use async dispatch.",
             action
-        )),
+        )
+        .into()),
     }
 }

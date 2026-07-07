@@ -1,12 +1,13 @@
 //! Session tools: sessions_list, sessions_spawn, sessions_send, sessions_history, session_status, agents_list.
 
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
 
 /// List sessions.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_sessions_list(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_sessions_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
     use crate::sessions::*;
 
     let manager = session_manager();
@@ -60,7 +61,7 @@ pub fn exec_sessions_list(args: &Value, _workspace_dir: &Path) -> Result<String,
 
 /// Spawn a sub-agent.
 #[instrument(skip(args, _workspace_dir), fields(task, agent_id))]
-pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
     use crate::sessions::*;
 
     let task = args
@@ -102,12 +103,14 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> Result<String
         ),
     };
 
-    serde_json::to_string_pretty(&result).map_err(|e| format!("Failed to serialize result: {}", e))
+    serde_json::to_string_pretty(&result)
+        .map_err(|e| format!("Failed to serialize result: {}", e))
+        .map_err(ToolError::from)
 }
 
 /// Send a message to a session.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> ToolResult {
     use crate::sessions::*;
 
     let message = args
@@ -138,17 +141,17 @@ pub fn exec_sessions_send(args: &Value, _workspace_dir: &Path) -> Result<String,
             .map(|s| s.key.clone())
             .ok_or_else(|| format!("No session found with label: {}", l))?
     } else {
-        return Err("Must provide sessionKey or label".to_string());
+        return Err("Must provide sessionKey or label".to_string().into());
     };
 
-    mgr.send_message(&key, message).map_err(|e| e.to_string())?;
+    mgr.send_message(&key, message)?;
 
     Ok(format!("Message sent to session: {}", key))
 }
 
 /// Get session history.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_sessions_history(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_sessions_history(args: &Value, _workspace_dir: &Path) -> ToolResult {
     use crate::sessions::*;
 
     let session_key = args
@@ -191,7 +194,7 @@ pub fn exec_sessions_history(args: &Value, _workspace_dir: &Path) -> Result<Stri
 
 /// Get session status.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
     use crate::sessions::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -227,7 +230,7 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> Result<String
             output.push_str(&format!("Runtime: {}s\n", session.runtime_secs()));
             output.push_str(&format!("Messages: {}\n", session.messages.len()));
         } else {
-            return Err(format!("Session not found: {}", key));
+            return Err(format!("Session not found: {}", key).into());
         }
     } else {
         // Show general status
@@ -248,7 +251,7 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> Result<String
 
 /// List available agent IDs.
 #[instrument(skip(_args, workspace_dir))]
-pub fn exec_agents_list(_args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_agents_list(_args: &Value, workspace_dir: &Path) -> ToolResult {
     debug!("Listing available agents");
     let mut agents = vec!["main".to_string()];
 

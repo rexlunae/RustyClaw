@@ -5,6 +5,7 @@
 //! `extract_mode` parameter, this tool is optimized specifically for content
 //! extraction with additional options like selector targeting and metadata.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::Duration;
@@ -16,7 +17,7 @@ use super::ToolParam;
 
 /// Extract clean, readable content from a URL (async).
 #[instrument(skip(args, _workspace_dir), fields(url))]
-pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let url = args
         .get("url")
         .and_then(|v| v.as_str())
@@ -48,7 +49,7 @@ pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Resu
 
     // Validate URL
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL must start with http:// or https://".to_string());
+        return Err("URL must start with http:// or https://".to_string().into());
     }
 
     // Fetch the page
@@ -67,7 +68,7 @@ pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Resu
 
     let status = response.status();
     if !status.is_success() {
-        return Err(format!("HTTP {} for URL: {}", status, url));
+        return Err(format!("HTTP {} for URL: {}", status, url).into());
     }
 
     let content_type = response
@@ -121,7 +122,7 @@ pub async fn exec_web_extract_async(args: &Value, _workspace_dir: &Path) -> Resu
 }
 
 /// Sync stub for the static ToolDef.
-pub fn exec_web_extract_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_web_extract_stub(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     Err("web_extract requires async execution".into())
 }
 
@@ -129,7 +130,7 @@ pub fn exec_web_extract_stub(_args: &Value, _workspace_dir: &Path) -> Result<Str
 
 /// Extract readable content from HTML using readability heuristics.
 #[cfg(feature = "web-tools")]
-fn extract_readable(html: &str, format: &str) -> Result<String, String> {
+fn extract_readable(html: &str, format: &str) -> ToolResult {
     // Use scraper to parse and clean the HTML
     let document = scraper::Html::parse_document(html);
 
@@ -155,13 +156,13 @@ fn extract_readable(html: &str, format: &str) -> Result<String, String> {
 
 /// Extract readable content without web-tools feature (plain text fallback).
 #[cfg(not(feature = "web-tools"))]
-fn extract_readable(html: &str, _format: &str) -> Result<String, String> {
+fn extract_readable(html: &str, _format: &str) -> ToolResult {
     Ok(strip_html_tags(html))
 }
 
 /// Extract content matching a CSS selector.
 #[cfg(feature = "web-tools")]
-fn extract_with_selector(html: &str, selector: &str, format: &str) -> Result<String, String> {
+fn extract_with_selector(html: &str, selector: &str, format: &str) -> ToolResult {
     let document = scraper::Html::parse_document(html);
     let sel = scraper::Selector::parse(selector)
         .map_err(|e| format!("Invalid CSS selector '{}': {:?}", selector, e))?;
@@ -175,17 +176,14 @@ fn extract_with_selector(html: &str, selector: &str, format: &str) -> Result<Str
         .collect();
 
     if elements.is_empty() {
-        Err(format!(
-            "No elements found matching selector: '{}'",
-            selector
-        ))
+        Err(format!("No elements found matching selector: '{}'", selector).into())
     } else {
         Ok(elements.join("\n\n---\n\n"))
     }
 }
 
 #[cfg(not(feature = "web-tools"))]
-fn extract_with_selector(_html: &str, _selector: &str, _format: &str) -> Result<String, String> {
+fn extract_with_selector(_html: &str, _selector: &str, _format: &str) -> ToolResult {
     Err("CSS selector extraction requires the 'web-tools' feature".to_string())
 }
 

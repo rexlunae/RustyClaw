@@ -1,10 +1,13 @@
-pub mod agent_setup;
 // Agent tool system for RustyClaw.
 //
 // Provides a registry of tools that the language model can invoke, and
 // formatters that serialise the tool definitions into each provider's
 // native schema (OpenAI function-calling, Anthropic tool-use, Google
 // function declarations).
+
+pub mod agent_setup;
+pub mod error;
+pub use error::{ToolError, ToolResult};
 
 use tracing::{debug, instrument, warn};
 
@@ -174,14 +177,14 @@ use ollama::exec_ollama_manage;
 /// Stub executor for the `ask_user` tool — never called directly.
 /// Execution is intercepted by the gateway, which forwards the prompt
 /// to the TUI and returns the user's response as the tool result.
-fn exec_ask_user_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_ask_user_stub(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     Err("ask_user must be executed via the gateway".into())
 }
 
 /// Stub executor for the `client_dom_query` tool — never called directly.
 /// Execution is intercepted by the gateway, which forwards the query to
 /// the desktop client's webview and returns the evaluated result.
-fn exec_client_dom_query_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_client_dom_query_stub(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     Err("client_dom_query must be executed via the gateway".into())
 }
 
@@ -381,7 +384,7 @@ pub struct ToolParam {
 }
 
 /// Sync tool execution function type (legacy, for static definitions).
-pub type SyncExecuteFn = fn(args: &Value, workspace_dir: &Path) -> Result<String, String>;
+pub type SyncExecuteFn = fn(args: &Value, workspace_dir: &Path) -> ToolResult;
 
 /// A tool that the agent can invoke.
 #[derive(Clone)]
@@ -611,11 +614,7 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
 /// Tools with async implementations are called directly.
 /// Other tools run on a blocking thread pool to avoid blocking the async runtime.
 #[instrument(skip(args, workspace_dir), fields(tool = name))]
-pub async fn execute_tool(
-    name: &str,
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> ToolResult {
     debug!("Executing tool");
 
     // Handle async-native tools directly
@@ -677,7 +676,7 @@ pub async fn execute_tool(
 
     let Some(tool) = tool else {
         warn!(tool = name, "Unknown tool requested");
-        return Err(format!("Unknown tool: {}", name));
+        return Err(format!("Unknown tool: {}", name).into());
     };
 
     // Clone what we need for the blocking task
@@ -696,26 +695,6 @@ pub async fn execute_tool(
     }
 
     result.map(|s| crate::tool_pipeline::apply_global(name, &args_for_pipeline, s))
-}
-
-// ── Wire types for WebSocket protocol ───────────────────────────────────────
-
-/// A tool call requested by the model (sent gateway → client for display).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCall {
-    pub id: String,
-    pub name: String,
-    pub arguments: Value,
-}
-
-/// The result of executing a tool (sent gateway → client for display,
-/// and also injected back into the conversation for the model).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolResult {
-    pub id: String,
-    pub name: String,
-    pub result: String,
-    pub is_error: bool,
 }
 
 #[cfg(test)]

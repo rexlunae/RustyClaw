@@ -2,6 +2,7 @@
 //! `browser` feature.
 
 use super::*;
+use crate::tools::error::{ToolError, ToolResult};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures_util::StreamExt;
@@ -24,7 +25,7 @@ fn browser_state() -> &'static Mutex<Option<BrowserState>> {
 }
 
 /// Start the browser if not already running.
-pub async fn ensure_browser() -> Result<(), String> {
+pub async fn ensure_browser() -> ToolResult<()> {
     let mut state = browser_state().lock().await;
     if state.is_some() {
         debug!("Browser already running");
@@ -62,7 +63,7 @@ pub async fn ensure_browser() -> Result<(), String> {
 }
 
 /// Get browser status.
-pub async fn status() -> Result<String, String> {
+pub async fn status() -> ToolResult {
     let state = browser_state().lock().await;
     if let Some(ref s) = *state {
         let tab_count = s.pages.len();
@@ -85,13 +86,13 @@ pub async fn status() -> Result<String, String> {
 }
 
 /// Start the browser.
-pub async fn start() -> Result<String, String> {
+pub async fn start() -> ToolResult {
     ensure_browser().await?;
     Ok("Browser started successfully.".to_string())
 }
 
 /// Stop the browser.
-pub async fn stop() -> Result<String, String> {
+pub async fn stop() -> ToolResult {
     let mut state = browser_state().lock().await;
     if let Some(s) = state.take() {
         // Close all pages
@@ -106,7 +107,7 @@ pub async fn stop() -> Result<String, String> {
 }
 
 /// List open tabs.
-pub async fn list_tabs() -> Result<String, String> {
+pub async fn list_tabs() -> ToolResult {
     let state = browser_state().lock().await;
     if let Some(ref s) = *state {
         let tabs: Vec<Value> = s
@@ -126,7 +127,7 @@ pub async fn list_tabs() -> Result<String, String> {
 }
 
 /// Open a new tab with URL.
-pub async fn open_tab(url: &str) -> Result<String, String> {
+pub async fn open_tab(url: &str) -> ToolResult {
     ensure_browser().await?;
 
     let mut state = browser_state().lock().await;
@@ -151,7 +152,7 @@ pub async fn open_tab(url: &str) -> Result<String, String> {
 }
 
 /// Navigate current page to URL.
-pub async fn navigate(tab_id: Option<&str>, url: &str) -> Result<String, String> {
+pub async fn navigate(tab_id: Option<&str>, url: &str) -> ToolResult {
     let mut state = browser_state().lock().await;
     let s = state.as_mut().ok_or("Browser not running")?;
 
@@ -176,7 +177,7 @@ pub async fn navigate(tab_id: Option<&str>, url: &str) -> Result<String, String>
 }
 
 /// Take a screenshot.
-pub async fn screenshot(tab_id: Option<&str>, full_page: bool) -> Result<String, String> {
+pub async fn screenshot(tab_id: Option<&str>, full_page: bool) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 
@@ -221,7 +222,7 @@ pub async fn screenshot(tab_id: Option<&str>, full_page: bool) -> Result<String,
 
 /// Get page content.
 #[allow(dead_code)]
-pub async fn get_content(tab_id: Option<&str>) -> Result<String, String> {
+pub async fn get_content(tab_id: Option<&str>) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 
@@ -242,7 +243,7 @@ pub async fn get_content(tab_id: Option<&str>) -> Result<String, String> {
 }
 
 /// Click an element by selector.
-pub async fn click(tab_id: Option<&str>, selector: &str) -> Result<String, String> {
+pub async fn click(tab_id: Option<&str>, selector: &str) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 
@@ -273,7 +274,7 @@ pub async fn click(tab_id: Option<&str>, selector: &str) -> Result<String, Strin
 }
 
 /// Type text into an element.
-pub async fn type_text(tab_id: Option<&str>, selector: &str, text: &str) -> Result<String, String> {
+pub async fn type_text(tab_id: Option<&str>, selector: &str, text: &str) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 
@@ -310,7 +311,7 @@ pub async fn type_text(tab_id: Option<&str>, selector: &str, text: &str) -> Resu
 }
 
 /// Press a key.
-pub async fn press_key(tab_id: Option<&str>, key: &str) -> Result<String, String> {
+pub async fn press_key(tab_id: Option<&str>, key: &str) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 
@@ -358,7 +359,7 @@ pub async fn press_key(tab_id: Option<&str>, key: &str) -> Result<String, String
 }
 
 /// Evaluate JavaScript.
-pub async fn evaluate(tab_id: Option<&str>, script: &str) -> Result<String, String> {
+pub async fn evaluate(tab_id: Option<&str>, script: &str) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 
@@ -381,7 +382,7 @@ pub async fn evaluate(tab_id: Option<&str>, script: &str) -> Result<String, Stri
 }
 
 /// Close a tab.
-pub async fn close_tab(tab_id: &str) -> Result<String, String> {
+pub async fn close_tab(tab_id: &str) -> ToolResult {
     let mut state = browser_state().lock().await;
     let s = state.as_mut().ok_or("Browser not running")?;
 
@@ -400,7 +401,7 @@ pub async fn close_tab(tab_id: &str) -> Result<String, String> {
 }
 
 /// Get accessibility snapshot (simplified).
-pub async fn snapshot(tab_id: Option<&str>) -> Result<String, String> {
+pub async fn snapshot(tab_id: Option<&str>) -> ToolResult {
     let state = browser_state().lock().await;
     let s = state.as_ref().ok_or("Browser not running")?;
 

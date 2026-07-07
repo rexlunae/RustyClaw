@@ -1,12 +1,13 @@
 //! Task management tools for the agent.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
 /// List active tasks.
 #[instrument(skip(args, _workspace_dir), fields(action = "list"))]
-pub fn exec_task_list(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let session = args.get("session").and_then(|v| v.as_str());
     let include_completed = args
         .get("includeCompleted")
@@ -27,7 +28,7 @@ pub fn exec_task_list(args: &Value, _workspace_dir: &Path) -> Result<String, Str
 
 /// Get task status.
 #[instrument(skip(args, _workspace_dir), fields(action = "status"))]
-pub fn exec_task_status(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -46,7 +47,7 @@ pub fn exec_task_status(args: &Value, _workspace_dir: &Path) -> Result<String, S
 
 /// Foreground a task (bring to attention, stream output).
 #[instrument(skip(args, _workspace_dir), fields(action = "foreground"))]
-pub fn exec_task_foreground(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_foreground(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -66,7 +67,7 @@ pub fn exec_task_foreground(args: &Value, _workspace_dir: &Path) -> Result<Strin
 
 /// Background a task (continue running but don't stream output).
 #[instrument(skip(args, _workspace_dir), fields(action = "background"))]
-pub fn exec_task_background(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_background(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -86,7 +87,7 @@ pub fn exec_task_background(args: &Value, _workspace_dir: &Path) -> Result<Strin
 
 /// Cancel a task.
 #[instrument(skip(args, _workspace_dir), fields(action = "cancel"))]
-pub fn exec_task_cancel(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_cancel(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -106,7 +107,7 @@ pub fn exec_task_cancel(args: &Value, _workspace_dir: &Path) -> Result<String, S
 
 /// Pause a task.
 #[instrument(skip(args, _workspace_dir), fields(action = "pause"))]
-pub fn exec_task_pause(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_pause(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -126,7 +127,7 @@ pub fn exec_task_pause(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 /// Resume a paused task.
 #[instrument(skip(args, _workspace_dir), fields(action = "resume"))]
-pub fn exec_task_resume(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_resume(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -146,7 +147,7 @@ pub fn exec_task_resume(args: &Value, _workspace_dir: &Path) -> Result<String, S
 
 /// Send input to a task waiting for input.
 #[instrument(skip(args, _workspace_dir), fields(action = "input"))]
-pub fn exec_task_input(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_input(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())
@@ -218,7 +219,7 @@ pub fn task_input_params() -> Vec<ToolParam> {
 
 /// Set task description (what the task is currently doing).
 #[instrument(skip(args, _workspace_dir), fields(action = "describe"))]
-pub fn exec_task_describe(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_task_describe(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let task_id = args
         .get("id")
         .and_then(|v| v.as_u64())

@@ -4,6 +4,7 @@
 
 use super::helpers::vault;
 use crate::security::SsrfValidator;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
@@ -38,17 +39,18 @@ fn ssrf_redirect_policy(max: usize) -> reqwest::redirect::Policy {
 ///
 /// Returns a user-facing error string prefixed so callers/tests can recognise
 /// a security rejection.
-fn ssrf_check_blocking(url: &str) -> Result<(), String> {
+fn ssrf_check_blocking(url: &str) -> ToolResult<()> {
     SsrfValidator::default()
         .validate_url(url)
         .map_err(|e| e.to_string())
+        .map_err(ToolError::from)
 }
 
 // ── Async implementations ───────────────────────────────────────────────────
 
 /// Fetch a URL and extract readable content as markdown or plain text (async).
 #[instrument(skip(args, _workspace_dir), fields(url))]
-pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let url = args
         .get("url")
         .and_then(|v| v.as_str())
@@ -78,7 +80,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
 
     // Validate URL
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL must start with http:// or https://".to_string());
+        return Err("URL must start with http:// or https://".to_string().into());
     }
 
     // SSRF protection: block private/loopback/link-local/cloud-metadata targets.
@@ -161,7 +163,8 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
             "HTTP {} — {}",
             status.as_u16(),
             status.canonical_reason().unwrap_or("Unknown")
-        ));
+        )
+        .into());
     }
 
     let content_type = response
@@ -213,7 +216,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
         }
 
         if result.trim().is_empty() {
-            return Err("Page returned no extractable content".to_string());
+            return Err("Page returned no extractable content".to_string().into());
         }
 
         Ok(result)
@@ -233,7 +236,7 @@ pub async fn exec_web_fetch_async(args: &Value, _workspace_dir: &Path) -> Result
 
 /// Search the web using Brave Search API (async).
 #[instrument(skip(args, _workspace_dir), fields(query))]
-pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -295,11 +298,7 @@ pub async fn exec_web_search_async(args: &Value, _workspace_dir: &Path) -> Resul
     if !status.is_success() {
         let body = response.text().await.unwrap_or_default();
         warn!(status = status.as_u16(), "Brave Search API error");
-        return Err(format!(
-            "Brave Search API error {}: {}",
-            status.as_u16(),
-            body
-        ));
+        return Err(format!("Brave Search API error {}: {}", status.as_u16(), body).into());
     }
 
     let data: Value = response
@@ -371,19 +370,19 @@ async fn store_response_cookies_async(domain: &str, headers: &[String]) {
 
 /// Sync wrapper for web_fetch.
 #[instrument(skip(args, _workspace_dir), fields(url))]
-pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_web_fetch(args: &Value, _workspace_dir: &Path) -> ToolResult {
     exec_web_fetch_sync(args, _workspace_dir)
 }
 
 /// Sync wrapper for web_search.
 #[instrument(skip(args, _workspace_dir), fields(query))]
-pub fn exec_web_search(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_web_search(args: &Value, _workspace_dir: &Path) -> ToolResult {
     exec_web_search_sync(args, _workspace_dir)
 }
 
 // ── Sync implementations (fallback) ─────────────────────────────────────────
 
-fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let url = args
         .get("url")
         .and_then(|v| v.as_str())
@@ -408,7 +407,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
     let custom_headers = args.get("headers").and_then(|v| v.as_object());
 
     if !url.starts_with("http://") && !url.starts_with("https://") {
-        return Err("URL must start with http:// or https://".to_string());
+        return Err("URL must start with http:// or https://".to_string().into());
     }
 
     // SSRF protection: block private/loopback/link-local/cloud-metadata targets.
@@ -478,7 +477,8 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
             "HTTP {} — {}",
             status.as_u16(),
             status.canonical_reason().unwrap_or("Unknown")
-        ));
+        )
+        .into());
     }
 
     let content_type = response
@@ -527,7 +527,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
         }
 
         if result.trim().is_empty() {
-            return Err("Page returned no extractable content".to_string());
+            return Err("Page returned no extractable content".to_string().into());
         }
 
         Ok(result)
@@ -545,7 +545,7 @@ fn exec_web_fetch_sync(args: &Value, _workspace_dir: &Path) -> Result<String, St
     }
 }
 
-fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -600,11 +600,7 @@ fn exec_web_search_sync(args: &Value, _workspace_dir: &Path) -> Result<String, S
     let status = response.status();
     if !status.is_success() {
         let body = response.text().unwrap_or_default();
-        return Err(format!(
-            "Brave Search API error {}: {}",
-            status.as_u16(),
-            body
-        ));
+        return Err(format!("Brave Search API error {}: {}", status.as_u16(), body).into());
     }
 
     let data: Value = response

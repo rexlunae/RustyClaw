@@ -2,6 +2,7 @@
 
 #![allow(unused_imports)]
 use super::*;
+use crate::tools::error::{ToolError, ToolResult};
 
 // ── Built-in tools ──────────────────────────────────────────────────────────
 
@@ -509,7 +510,7 @@ pub static THREAD_DESCRIBE: ToolDef = ToolDef {
     execute: exec_thread_describe,
 };
 
-fn exec_thread_describe(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_thread_describe(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let description = args
         .get("description")
         .and_then(|v| v.as_str())
@@ -533,7 +534,7 @@ pub static SET_THREAD_CAPTION: ToolDef = ToolDef {
     execute: exec_set_thread_caption,
 };
 
-fn exec_set_thread_caption(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_set_thread_caption(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let caption = args
         .get("caption")
         .and_then(|v| v.as_str())
@@ -541,7 +542,7 @@ fn exec_set_thread_caption(args: &Value, _workspace_dir: &Path) -> Result<String
 
     let trimmed = caption.trim();
     if trimmed.is_empty() {
-        return Err("Caption cannot be empty.".to_string());
+        return Err("Caption cannot be empty.".to_string().into());
     }
 
     let update = json!({

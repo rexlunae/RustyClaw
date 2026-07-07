@@ -2,6 +2,7 @@
 
 #![allow(unused_imports)]
 use super::*;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 use tracing::{debug, instrument};
@@ -10,7 +11,7 @@ use tracing::{debug, instrument};
 
 /// Execute an exo management action (async).
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -30,7 +31,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             if !is_uv_installed_async().await {
                 match sh_async("curl -LsSf https://astral.sh/uv/install.sh | sh 2>&1").await {
                     Ok(msg) => steps.push(format!("✓ uv installed: {}", msg)),
-                    Err(e) => return Err(format!("Failed to install uv: {}", e)),
+                    Err(e) => return Err(format!("Failed to install uv: {}", e).into()),
                 }
             } else {
                 steps.push("✓ uv already installed".into());
@@ -73,7 +74,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 .await
                 {
                     Ok(msg) => steps.push(format!("✓ Cloned exo repo: {}", msg)),
-                    Err(e) => return Err(format!("Failed to clone exo: {}", e)),
+                    Err(e) => return Err(format!("Failed to clone exo: {}", e).into()),
                 }
                 target
             };
@@ -144,7 +145,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 };
                 match sh_async(&pip_cmd).await {
                     Ok(_) => steps.push("✓ exo installed".into()),
-                    Err(e) => return Err(format!("Failed to install exo: {}", e)),
+                    Err(e) => return Err(format!("Failed to install exo: {}", e).into()),
                 }
             }
 
@@ -312,7 +313,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 } else {
                     last_lines
                 }
-            ))
+            ).into())
         }
 
         "stop" => {
@@ -415,7 +416,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                         Ok(resp)
                     }
                 }
-                Err(e) => Err(format!("Failed to list models: {}", e)),
+                Err(e) => Err(format!("Failed to list models: {}", e).into()),
             }
         }
 
@@ -494,7 +495,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                         Ok(resp)
                     }
                 }
-                Err(e) => Err(format!("Failed to get state: {}", e)),
+                Err(e) => Err(format!("Failed to get state: {}", e).into()),
             }
         }
 
@@ -520,7 +521,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                         Ok(resp)
                     }
                 }
-                Err(e) => Err(format!("Failed to query state: {}", e)),
+                Err(e) => Err(format!("Failed to query state: {}", e).into()),
             }
         }
 
@@ -542,7 +543,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                         Ok(resp)
                     }
                 }
-                Err(e) => Err(format!("Failed to preview placements: {}", e)),
+                Err(e) => Err(format!("Failed to preview placements: {}", e).into()),
             }
         }
 
@@ -576,7 +577,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
             let body = json!({ "instance": instance }).to_string();
             match exo_api_async("POST", "/instance", port, Some(&body)).await {
                 Ok(resp) => Ok(format!("Model '{}' instance created:\n{}", model, resp)),
-                Err(e) => Err(format!("Failed to create instance: {}", e)),
+                Err(e) => Err(format!("Failed to create instance: {}", e).into()),
             }
         }
 
@@ -589,7 +590,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 let path = format!("/instance/{}", instance_id);
                 match exo_api_async("DELETE", &path, port, None).await {
                     Ok(resp) => Ok(format!("Instance '{}' deleted: {}", instance_id, resp)),
-                    Err(e) => Err(format!("Failed to delete instance: {}", e)),
+                    Err(e) => Err(format!("Failed to delete instance: {}", e).into()),
                 }
             } else if let Some(model) = args.get("model").and_then(|v| v.as_str()) {
                 let state_resp = exo_api_async("GET", "/state", port, None)
@@ -650,13 +651,13 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
         _ => Err(format!(
             "Unknown exo action: '{}'. Valid: setup, start, stop, status, models, state, downloads, preview, load, unload, update, log.",
             action
-        )),
+        ).into()),
     }
 }
 
 // ── Async helpers ───────────────────────────────────────────────────────────
 
-async fn sh_async(script: &str) -> Result<String, String> {
+async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -675,7 +676,7 @@ async fn sh_async(script: &str) -> Result<String, String> {
         } else {
             format!("Command exited with {}", output.status)
         };
-        return Err(detail);
+        return Err(detail.into());
     }
     if !stderr.is_empty() && !stdout.is_empty() {
         Ok(format!("{}\n[stderr] {}", stdout, stderr))
@@ -686,12 +687,7 @@ async fn sh_async(script: &str) -> Result<String, String> {
     }
 }
 
-async fn exo_api_async(
-    method: &str,
-    path: &str,
-    port: u64,
-    body: Option<&str>,
-) -> Result<String, String> {
+async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) -> ToolResult {
     let url = format!("http://localhost:{}{}", port, path);
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
@@ -710,7 +706,7 @@ async fn exo_api_async(
             req
         }
         "DELETE" => client.delete(&url),
-        _ => return Err(format!("Unsupported method: {}", method)),
+        _ => return Err(format!("Unsupported method: {}", method).into()),
     };
 
     let response = request
@@ -721,13 +717,14 @@ async fn exo_api_async(
     if !response.status().is_success() {
         let status = response.status();
         let error = response.text().await.unwrap_or_default();
-        return Err(format!("API error ({}): {}", status, error));
+        return Err(format!("API error ({}): {}", status, error).into());
     }
 
     response
         .text()
         .await
         .map_err(|e| format!("Failed to read response: {}", e))
+        .map_err(ToolError::from)
 }
 
 async fn is_uv_installed_async() -> bool {

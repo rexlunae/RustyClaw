@@ -1,6 +1,7 @@
 //! Security tools: audit sensitive data and secure file deletion.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -78,10 +79,7 @@ fn walkdir_limited(root: &Path, max: usize) -> Vec<std::path::PathBuf> {
 // ── Async implementations ───────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_audit_sensitive_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_audit_sensitive_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let max_files = args
         .get("max_files")
@@ -152,10 +150,7 @@ pub async fn exec_audit_sensitive_async(
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_secure_delete_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_secure_delete_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -176,7 +171,7 @@ pub async fn exec_secure_delete_async(
 
     let exists = tokio::fs::try_exists(&target).await.unwrap_or(false);
     if !exists {
-        return Err(format!("Path does not exist: {}", target.display()));
+        return Err(format!("Path does not exist: {}", target.display()).into());
     }
 
     let critical = [
@@ -185,7 +180,7 @@ pub async fn exec_secure_delete_async(
     let target_str = target.display().to_string();
     for c in &critical {
         if target_str == *c {
-            return Err(format!("Refusing to delete: {}", target_str));
+            return Err(format!("Refusing to delete: {}", target_str).into());
         }
     }
 
@@ -216,10 +211,7 @@ pub async fn exec_secure_delete_async(
 
     let still_exists = tokio::fs::try_exists(&target).await.unwrap_or(true);
     if still_exists {
-        Err(format!(
-            "Secure delete failed. Path may still exist: {}",
-            target_str
-        ))
+        Err(format!("Secure delete failed. Path may still exist: {}", target_str).into())
     } else {
         Ok(json!({ "status": "deleted", "path": target_str, "passes": passes }).to_string())
     }
@@ -228,7 +220,7 @@ pub async fn exec_secure_delete_async(
 // ── Sync implementations ────────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_audit_sensitive(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_audit_sensitive(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
     let max_files = args
         .get("max_files")
@@ -273,7 +265,7 @@ pub fn exec_audit_sensitive(args: &Value, workspace_dir: &Path) -> Result<String
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -290,7 +282,7 @@ pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> Result<String, 
     };
 
     if !target.exists() {
-        return Err(format!("Path does not exist: {}", target.display()));
+        return Err(format!("Path does not exist: {}", target.display()).into());
     }
 
     if !confirm {
@@ -300,7 +292,7 @@ pub fn exec_secure_delete(args: &Value, workspace_dir: &Path) -> Result<String, 
 
     let _ = sh(&format!("rm -rf '{}'", target.display()));
     if target.exists() {
-        Err("Delete failed".to_string())
+        Err("Delete failed".to_string().into())
     } else {
         Ok(json!({ "status": "deleted", "path": target.display().to_string() }).to_string())
     }

@@ -22,7 +22,7 @@ fn test_secrets_stub_rejects() {
     let args = json!({});
     let result = exec_secrets_stub(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("gateway"));
+    assert!(result.unwrap_err().to_string().contains("gateway"));
 }
 
 #[test]
@@ -84,7 +84,12 @@ fn test_gateway_missing_action() {
     let args = json!({});
     let result = exec_gateway(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -109,7 +114,12 @@ fn test_message_missing_action() {
     let args = json!({});
     let result = exec_message(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 // ── tts ─────────────────────────────────────────────────────────
@@ -126,7 +136,12 @@ fn test_tts_missing_text() {
     let args = json!({});
     let result = exec_tts(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -152,7 +167,12 @@ fn test_image_missing_image() {
     let args = json!({});
     let result = exec_image(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -178,7 +198,12 @@ fn test_nodes_missing_action() {
     let args = json!({});
     let result = exec_nodes(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -205,7 +230,12 @@ fn test_browser_missing_action() {
     let args = json!({});
     let result = exec_browser(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -231,7 +261,12 @@ fn test_canvas_missing_action() {
     let args = json!({});
     let result = exec_canvas(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -303,21 +338,36 @@ fn test_skill_list_standalone_stub() {
 fn test_skill_search_missing_query() {
     let result = exec_skill_search(&json!({}), ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
 fn test_skill_install_missing_name() {
     let result = exec_skill_install(&json!({}), ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
 fn test_skill_info_missing_name() {
     let result = exec_skill_info(&json!({}), ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -331,7 +381,7 @@ fn test_skill_link_secret_bad_action() {
     let args = json!({ "action": "nope", "skill": "x", "secret": "y" });
     let result = exec_skill_link_secret(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unknown action"));
+    assert!(result.unwrap_err().to_string().contains("Unknown action"));
 }
 
 #[test]
@@ -393,7 +443,12 @@ fn test_classify_files_missing_path() {
     let args = json!({});
     let result = exec_classify_files(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 // ── system_monitor ──────────────────────────────────────────────
@@ -515,7 +570,12 @@ fn test_clipboard_missing_action() {
     let args = json!({});
     let result = exec_clipboard(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -561,7 +621,12 @@ fn test_secure_delete_missing_path() {
     let args = json!({});
     let result = exec_secure_delete(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -616,7 +681,12 @@ fn test_summarize_file_missing_path() {
     let args = json!({});
     let result = exec_summarize_file(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]

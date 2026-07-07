@@ -2,6 +2,7 @@
 //!
 //! Handles task_* tool calls by interacting with the shared TaskManager.
 
+use rustyclaw_core::tools::error::ToolResult;
 use serde_json::{Value, json};
 use tracing::instrument;
 
@@ -33,7 +34,7 @@ pub async fn execute_task_tool(
     args: &Value,
     task_mgr: &SharedTaskManager,
     session_key: Option<&str>,
-) -> Result<String, String> {
+) -> ToolResult {
     match name {
         "task_list" => exec_task_list(args, task_mgr, session_key).await,
         "task_status" => exec_task_status(args, task_mgr).await,
@@ -44,7 +45,7 @@ pub async fn execute_task_tool(
         "task_resume" => exec_task_resume(args, task_mgr).await,
         "task_input" => exec_task_input(args, task_mgr).await,
         "task_describe" => exec_task_describe(args, task_mgr, session_key).await,
-        _ => Err(format!("Unknown task tool: {}", name)),
+        _ => Err(format!("Unknown task tool: {}", name).into()),
     }
 }
 
@@ -53,7 +54,7 @@ async fn exec_task_list(
     args: &Value,
     task_mgr: &SharedTaskManager,
     current_session: Option<&str>,
-) -> Result<String, String> {
+) -> ToolResult {
     let session_filter = args.get("session").and_then(|v| v.as_str());
     let include_completed = args
         .get("includeCompleted")
@@ -109,7 +110,7 @@ async fn exec_task_list(
 }
 
 /// Get detailed task status.
-async fn exec_task_status(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_status(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
     let task = task_mgr
@@ -139,10 +140,7 @@ async fn exec_task_status(args: &Value, task_mgr: &SharedTaskManager) -> Result<
 }
 
 /// Bring task to foreground.
-async fn exec_task_foreground(
-    args: &Value,
-    task_mgr: &SharedTaskManager,
-) -> Result<String, String> {
+async fn exec_task_foreground(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
     task_mgr
@@ -165,10 +163,7 @@ async fn exec_task_foreground(
 }
 
 /// Move task to background.
-async fn exec_task_background(
-    args: &Value,
-    task_mgr: &SharedTaskManager,
-) -> Result<String, String> {
+async fn exec_task_background(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
     task_mgr
@@ -191,7 +186,7 @@ async fn exec_task_background(
 }
 
 /// Cancel a task.
-async fn exec_task_cancel(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_cancel(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
     task_mgr.cancel(task_id).await.map_err(|e| e.to_string())?;
@@ -205,7 +200,7 @@ async fn exec_task_cancel(args: &Value, task_mgr: &SharedTaskManager) -> Result<
 }
 
 /// Pause a task.
-async fn exec_task_pause(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_pause(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
     // Update status to paused
@@ -223,7 +218,7 @@ async fn exec_task_pause(args: &Value, task_mgr: &SharedTaskManager) -> Result<S
 }
 
 /// Resume a paused task.
-async fn exec_task_resume(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_resume(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
     // Check if task exists and is paused
@@ -237,7 +232,8 @@ async fn exec_task_resume(args: &Value, task_mgr: &SharedTaskManager) -> Result<
             "Task {} is not paused (status: {})",
             task_id,
             format_status_short(&task.status)
-        ));
+        )
+        .into());
     }
 
     // Update status back to running
@@ -260,7 +256,7 @@ async fn exec_task_resume(args: &Value, task_mgr: &SharedTaskManager) -> Result<
 }
 
 /// Send input to a task.
-async fn exec_task_input(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
+async fn exec_task_input(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
     let input = args
         .get("input")
@@ -277,7 +273,8 @@ async fn exec_task_input(args: &Value, task_mgr: &SharedTaskManager) -> Result<S
             "Task {} is not waiting for input (status: {})",
             task_id,
             format_status_short(&task.status)
-        ));
+        )
+        .into());
     }
 
     // TODO: Actually send input via TaskHandle
@@ -298,7 +295,7 @@ async fn exec_task_describe(
     args: &Value,
     task_mgr: &SharedTaskManager,
     session_key: Option<&str>,
-) -> Result<String, String> {
+) -> ToolResult {
     let description = args
         .get("description")
         .and_then(|v| v.as_str())
@@ -316,7 +313,9 @@ async fn exec_task_describe(
             .map(|t| t.id)
             .ok_or("No active task found for current session")?
     } else {
-        return Err("No task ID provided and no session context".to_string());
+        return Err("No task ID provided and no session context"
+            .to_string()
+            .into());
     };
 
     task_mgr
@@ -335,7 +334,7 @@ async fn exec_task_describe(
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn parse_task_id(args: &Value) -> Result<TaskId, String> {
+fn parse_task_id(args: &Value) -> ToolResult<TaskId> {
     let id = args
         .get("id")
         .or_else(|| args.get("taskId"))

@@ -1,12 +1,13 @@
 //! Skill tools: skill_list, skill_search, skill_install, skill_info, skill_enable, skill_link_secret.
 
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
 
 /// List all loaded skills with their status.
 #[instrument(skip(_args, _workspace_dir))]
-pub fn exec_skill_list(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_list(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     debug!("Listing skills (standalone mode)");
     // Stub — the gateway intercepts this and uses its SkillManager.
     Ok("No skills loaded (standalone mode). Connect to the gateway for full skill support.".into())
@@ -14,7 +15,7 @@ pub fn exec_skill_list(_args: &Value, _workspace_dir: &Path) -> Result<String, S
 
 /// Search the ClawHub registry for installable skills.
 #[instrument(skip(args, _workspace_dir), fields(query))]
-pub fn exec_skill_search(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_search(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -36,7 +37,7 @@ pub fn exec_skill_search(args: &Value, _workspace_dir: &Path) -> Result<String, 
 
 /// Install a skill from the ClawHub registry.
 #[instrument(skip(args, _workspace_dir), fields(skill))]
-pub fn exec_skill_install(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_install(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -56,7 +57,7 @@ pub fn exec_skill_install(args: &Value, _workspace_dir: &Path) -> Result<String,
 
 /// Show detailed information about a loaded skill.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_skill_info(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_info(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let _name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -68,7 +69,7 @@ pub fn exec_skill_info(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 /// Enable or disable a loaded skill.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_skill_enable(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_enable(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let _name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -84,7 +85,7 @@ pub fn exec_skill_enable(args: &Value, _workspace_dir: &Path) -> Result<String, 
 
 /// Link or unlink a vault credential to a skill.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_skill_link_secret(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_link_secret(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -100,10 +101,7 @@ pub fn exec_skill_link_secret(args: &Value, _workspace_dir: &Path) -> Result<Str
 
     if !matches!(action, "link" | "unlink") {
         warn!(action, "Unknown skill link action");
-        return Err(format!(
-            "Unknown action '{}'. Use 'link' or 'unlink'.",
-            action
-        ));
+        return Err(format!("Unknown action '{}'. Use 'link' or 'unlink'.", action).into());
     }
 
     warn!("Skill secret linking requires gateway connection");
@@ -116,7 +114,7 @@ pub fn exec_skill_link_secret(args: &Value, _workspace_dir: &Path) -> Result<Str
 /// gateway is running the request is intercepted there instead, but the
 /// same logic applies.
 #[instrument(skip(args, workspace_dir), fields(skill))]
-pub fn exec_skill_create(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_create(args: &Value, workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -150,7 +148,7 @@ pub fn exec_skill_create(args: &Value, workspace_dir: &Path) -> Result<String, S
         }
         Err(e) => {
             warn!(error = %e, "Failed to create skill");
-            Err(format!("Failed to create skill: {e}"))
+            Err(format!("Failed to create skill: {e}").into())
         }
     }
 }

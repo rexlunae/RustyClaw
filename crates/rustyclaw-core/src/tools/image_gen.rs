@@ -3,6 +3,7 @@
 //! Provider-agnostic image generation routed through the provider abstraction.
 //! Gated behind the `image-gen` Cargo feature flag.
 
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -13,10 +14,7 @@ use super::ToolParam;
 
 /// Execute the `image_generate` tool (async).
 #[instrument(skip(args, workspace_dir), fields(prompt))]
-pub async fn exec_image_generate_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_image_generate_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let prompt = args
         .get("prompt")
         .and_then(|v| v.as_str())
@@ -76,7 +74,7 @@ pub async fn exec_image_generate_async(
 }
 
 /// Sync stub for the static ToolDef (actual execution is async).
-pub fn exec_image_generate_stub(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_image_generate_stub(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     Err("image_generate requires async execution via the gateway".into())
 }
 
@@ -91,7 +89,7 @@ async fn generate_openai(
     api_key: &str,
     output_path: Option<&str>,
     workspace_dir: &Path,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::Client::new();
 
     let body = json!({
@@ -157,7 +155,7 @@ async fn generate_gemini(
     api_key: &str,
     output_path: Option<&str>,
     workspace_dir: &Path,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::Client::new();
 
     let url = format!(
@@ -229,7 +227,7 @@ async fn generate_gemini(
 // ── Helper functions ────────────────────────────────────────────────────────
 
 /// Resolve the API key for a given provider from environment variables.
-fn resolve_api_key(provider: &str) -> Result<String, String> {
+fn resolve_api_key(provider: &str) -> ToolResult {
     let key_names = match provider {
         "openai" => &["OPENAI_API_KEY", "OPENAI_KEY"][..],
         "gemini" => &["GEMINI_API_KEY", "GOOGLE_API_KEY"][..],
@@ -259,7 +257,7 @@ async fn download_image(
     output_path: Option<&str>,
     workspace_dir: &Path,
     provider: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::Client::new();
     let response = client
         .get(url)
@@ -302,7 +300,7 @@ fn save_base64_image(
     output_path: Option<&str>,
     workspace_dir: &Path,
     provider: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     use base64::Engine;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(data)

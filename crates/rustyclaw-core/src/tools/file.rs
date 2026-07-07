@@ -6,6 +6,7 @@ use super::helpers::{
     VAULT_ACCESS_DENIED, display_path, expand_tilde, is_protected_path, open_file_read_safe,
     open_file_write_safe, resolve_path, should_visit,
 };
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use std::process::Stdio;
@@ -27,7 +28,7 @@ const TEXTUTIL_EXTENSIONS: &[&str] = &[
 
 /// Read file contents (async).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -37,7 +38,7 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted access to protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     debug!(path = %path.display(), "Reading file");
@@ -69,7 +70,8 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<
                     return Err(format!(
                         "Failed to extract text from '{}': textutil conversion failed",
                         path.display(),
-                    ));
+                    )
+                    .into());
                 }
             }
         } else if ext == "pdf" {
@@ -87,7 +89,8 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<
                             "'{}' is a PDF. Install poppler for pdftotext, \
                              or use execute_command to process it.",
                             path.display(),
-                        ));
+                        )
+                        .into());
                     }
                 }
             }
@@ -99,7 +102,7 @@ pub async fn exec_read_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
 /// Write file contents (async).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -113,7 +116,7 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> Result
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted write to protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     debug!(path = %path.display(), bytes = content.len(), "Writing file");
@@ -146,7 +149,7 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> Result
 
 /// Edit file (async).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -164,7 +167,7 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted edit to protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     debug!(path = %path.display(), "Editing file");
@@ -181,10 +184,7 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
     let count = content.matches(old_string).count();
     if count == 0 {
         debug!(path = %canonical_path.display(), "old_string not found");
-        return Err(format!(
-            "old_string not found in {}",
-            canonical_path.display()
-        ));
+        return Err(format!("old_string not found in {}", canonical_path.display()).into());
     }
     if count > 1 {
         debug!(path = %canonical_path.display(), count, "old_string found multiple times");
@@ -192,7 +192,8 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
             "old_string found {} times in {} — must match exactly once.",
             count,
             canonical_path.display()
-        ));
+        )
+        .into());
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
@@ -209,10 +210,7 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> Result<
 
 /// List directory (async).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_list_directory_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_list_directory_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -222,7 +220,7 @@ pub async fn exec_list_directory_async(
 
     if is_protected_path(&path) {
         warn!(path = %path.display(), "Attempted list of protected path");
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     debug!(path = %path.display(), "Listing directory");
@@ -261,7 +259,7 @@ pub async fn exec_list_directory_async(
 
 /// Search files for pattern (async wrapper).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_search_files_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_search_files_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
     tokio::task::spawn_blocking(move || exec_search_files_sync(&args, &workspace_dir))
@@ -271,7 +269,7 @@ pub async fn exec_search_files_async(args: &Value, workspace_dir: &Path) -> Resu
 
 /// Find files by name (async wrapper).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_find_files_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_find_files_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let args = args.clone();
     let workspace_dir = workspace_dir.to_path_buf();
     tokio::task::spawn_blocking(move || exec_find_files_sync(&args, &workspace_dir))
@@ -282,7 +280,7 @@ pub async fn exec_find_files_async(args: &Value, workspace_dir: &Path) -> Result
 // ── Helper functions ────────────────────────────────────────────────────────
 
 /// Format file content with line numbers and optional range.
-fn format_file_content(content: &str, args: &Value, path: &Path) -> Result<String, String> {
+fn format_file_content(content: &str, args: &Value, path: &Path) -> ToolResult {
     let lines: Vec<&str> = content.lines().collect();
     let total = lines.len();
 
@@ -303,7 +301,8 @@ fn format_file_content(content: &str, args: &Value, path: &Path) -> Result<Strin
             "start_line {} is past end of file ({} lines)",
             start + 1,
             total,
-        ));
+        )
+        .into());
     }
 
     let slice = &lines[start..end.min(total)];
@@ -362,38 +361,38 @@ fn pdftotext(path: &Path) -> Option<String> {
 // ── Sync implementations (for ToolDef compatibility) ────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_read_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_read_file(args: &Value, workspace_dir: &Path) -> ToolResult {
     exec_read_file_sync(args, workspace_dir)
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_write_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_write_file(args: &Value, workspace_dir: &Path) -> ToolResult {
     exec_write_file_sync(args, workspace_dir)
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_edit_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_edit_file(args: &Value, workspace_dir: &Path) -> ToolResult {
     exec_edit_file_sync(args, workspace_dir)
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_list_directory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_list_directory(args: &Value, workspace_dir: &Path) -> ToolResult {
     exec_list_directory_sync(args, workspace_dir)
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_search_files(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_search_files(args: &Value, workspace_dir: &Path) -> ToolResult {
     exec_search_files_sync(args, workspace_dir)
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_find_files(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_find_files(args: &Value, workspace_dir: &Path) -> ToolResult {
     exec_find_files_sync(args, workspace_dir)
 }
 
 // ── Sync implementations ────────────────────────────────────────────────────
 
-fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -402,7 +401,7 @@ fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     // Use safe open with TOCTOU protection
@@ -428,7 +427,8 @@ fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
                     return Err(format!(
                         "Failed to extract text from '{}': textutil conversion failed",
                         path.display(),
-                    ));
+                    )
+                    .into());
                 }
             }
         } else if ext == "pdf" {
@@ -440,7 +440,8 @@ fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
                 return Err(format!(
                     "'{}' is a PDF. Install poppler for pdftotext.",
                     path.display(),
-                ));
+                )
+                .into());
             }
         }
     }
@@ -448,7 +449,7 @@ fn exec_read_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
     format_file_content(&content, args, &canonical_path)
 }
 
-fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -461,7 +462,7 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     if let Some(parent) = path.parent() {
@@ -488,7 +489,7 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
     ))
 }
 
-fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -505,7 +506,7 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     // Safe open for read
@@ -519,17 +520,15 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
     let count = content.matches(old_string).count();
     if count == 0 {
-        return Err(format!(
-            "old_string not found in {}",
-            canonical_path.display()
-        ));
+        return Err(format!("old_string not found in {}", canonical_path.display()).into());
     }
     if count > 1 {
         return Err(format!(
             "old_string found {} times in {} — must match exactly once.",
             count,
             canonical_path.display()
-        ));
+        )
+        .into());
     }
 
     let new_content = content.replacen(old_string, new_string, 1);
@@ -543,7 +542,7 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> Result<String, Str
     Ok(format!("Successfully edited {}", canonical_path.display()))
 }
 
-fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -552,7 +551,7 @@ fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> Result<String
     let path = resolve_path(workspace_dir, path_str);
 
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     let entries = std::fs::read_dir(&path)
@@ -578,7 +577,7 @@ fn exec_list_directory_sync(args: &Value, workspace_dir: &Path) -> Result<String
     Ok(items.join("\n"))
 }
 
-fn exec_search_files_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_search_files_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -666,7 +665,7 @@ fn is_glob_pattern(s: &str) -> bool {
     s.contains('*') || s.contains('?') || s.contains('[')
 }
 
-fn exec_find_files_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_find_files_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -709,7 +708,7 @@ fn exec_find_files_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
             .collect();
 
         if keywords.is_empty() {
-            return Err("pattern must not be empty".to_string());
+            return Err("pattern must not be empty".to_string().into());
         }
 
         let mut results = Vec::new();
@@ -741,7 +740,7 @@ fn exec_find_files_sync(args: &Value, workspace_dir: &Path) -> Result<String, St
     }
 }
 
-fn format_find_results(results: Vec<String>, max_results: usize) -> Result<String, String> {
+fn format_find_results(results: Vec<String>, max_results: usize) -> ToolResult {
     if results.is_empty() {
         Ok("No files found.".to_string())
     } else {

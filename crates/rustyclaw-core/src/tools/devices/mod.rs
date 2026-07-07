@@ -15,11 +15,12 @@ pub use nodes::exec_nodes_async;
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::process::Command;
 
 /// Run a shell pipeline via `sh -c` (sync).
-pub(crate) fn sh(script: &str) -> Result<String, String> {
+pub(crate) fn sh(script: &str) -> ToolResult {
     let output = Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -31,16 +32,16 @@ pub(crate) fn sh(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     Ok(stdout)
 }
 
 /// Run a shell pipeline via `sh -c` (async).
-pub(crate) async fn sh_async(script: &str) -> Result<String, String> {
+pub(crate) async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -53,9 +54,9 @@ pub(crate) async fn sh_async(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     Ok(stdout)
@@ -81,15 +82,16 @@ pub(crate) async fn has_command_async(cmd: &str) -> bool {
 }
 
 /// Extract node identifier from args.
-pub(crate) fn get_node(args: &Value) -> Result<String, String> {
+pub(crate) fn get_node(args: &Value) -> ToolResult {
     args.get("node")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "Missing required parameter: node".to_string())
+        .map_err(ToolError::from)
 }
 
 /// Extract command array from args.
-pub(crate) fn get_command_array(args: &Value) -> Result<Vec<String>, String> {
+pub(crate) fn get_command_array(args: &Value) -> ToolResult<Vec<String>> {
     if let Some(arr) = args.get("command").and_then(|v| v.as_array()) {
         Ok(arr
             .iter()
@@ -98,7 +100,7 @@ pub(crate) fn get_command_array(args: &Value) -> Result<Vec<String>, String> {
     } else if let Some(s) = args.get("command").and_then(|v| v.as_str()) {
         Ok(vec![s.to_string()])
     } else {
-        Err("Missing required parameter: command".to_string())
+        Err("Missing required parameter: command".to_string().into())
     }
 }
 

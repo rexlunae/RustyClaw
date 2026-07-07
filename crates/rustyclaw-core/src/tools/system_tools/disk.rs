@@ -1,6 +1,7 @@
 //! Disk usage analysis and file classification.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -111,7 +112,7 @@ fn classify_entry(name: &str, path: &Path) -> &'static str {
 // ── Async implementations ───────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_disk_usage_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_disk_usage_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("~");
     let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
     let top_n = args.get("top").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
@@ -126,7 +127,7 @@ pub async fn exec_disk_usage_async(args: &Value, workspace_dir: &Path) -> Result
 
     let exists = tokio::fs::try_exists(&target).await.unwrap_or(false);
     if !exists {
-        return Err(format!("Path does not exist: {}", target.display()));
+        return Err(format!("Path does not exist: {}", target.display()).into());
     }
 
     let script = format!(
@@ -156,10 +157,7 @@ pub async fn exec_disk_usage_async(args: &Value, workspace_dir: &Path) -> Result
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_classify_files_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_classify_files_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -175,7 +173,7 @@ pub async fn exec_classify_files_async(
         .await
         .map_err(|e| format!("Cannot read: {}", e))?;
     if !metadata.is_dir() {
-        return Err(format!("Not a directory: {}", target.display()));
+        return Err(format!("Not a directory: {}", target.display()).into());
     }
 
     // Use spawn_blocking for sync directory walk
@@ -206,7 +204,7 @@ pub async fn exec_classify_files_async(
 // ── Sync implementations ────────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_disk_usage(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_disk_usage(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args.get("path").and_then(|v| v.as_str()).unwrap_or("~");
     let depth = args.get("depth").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
     let top_n = args.get("top").and_then(|v| v.as_u64()).unwrap_or(20) as usize;
@@ -218,7 +216,7 @@ pub fn exec_disk_usage(args: &Value, workspace_dir: &Path) -> Result<String, Str
     };
 
     if !target.exists() {
-        return Err(format!("Path does not exist: {}", target.display()));
+        return Err(format!("Path does not exist: {}", target.display()).into());
     }
 
     let script = format!(
@@ -248,7 +246,7 @@ pub fn exec_disk_usage(args: &Value, workspace_dir: &Path) -> Result<String, Str
 }
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_classify_files(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_classify_files(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -261,7 +259,7 @@ pub fn exec_classify_files(args: &Value, workspace_dir: &Path) -> Result<String,
     };
 
     if !target.is_dir() {
-        return Err(format!("Not a directory: {}", target.display()));
+        return Err(format!("Not a directory: {}", target.display()).into());
     }
 
     let mut categories: std::collections::HashMap<&str, Vec<String>> =

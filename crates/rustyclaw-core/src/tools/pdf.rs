@@ -6,6 +6,7 @@
 //! - Per-page extraction with page ranges
 //! - Configurable output limits
 
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -18,7 +19,7 @@ const MAX_OUTPUT_CHARS: usize = 100_000;
 
 /// Execute the `pdf` tool.
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_pdf(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_pdf(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -31,12 +32,13 @@ pub fn exec_pdf(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         other => Err(format!(
             "Unknown pdf action '{}'. Available: extract, info, page_count",
             other
-        )),
+        )
+        .into()),
     }
 }
 
 /// Extract text from a PDF file.
-fn exec_pdf_extract(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_pdf_extract(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -44,10 +46,10 @@ fn exec_pdf_extract(args: &Value, workspace_dir: &Path) -> Result<String, String
 
     let path = resolve_path(workspace_dir, path_str);
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
     if !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+        return Err(format!("File not found: {}", path.display()).into());
     }
 
     let start_page = args
@@ -127,11 +129,12 @@ fn exec_pdf_extract(args: &Value, workspace_dir: &Path) -> Result<String, String
         "Failed to extract text from '{}'. Install poppler-utils (pdftotext) \
          or python3 pdfminer.six for PDF support.",
         path.display()
-    ))
+    )
+    .into())
 }
 
 /// Get PDF metadata/info.
-fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -139,10 +142,10 @@ fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 
     let path = resolve_path(workspace_dir, path_str);
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
     if !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+        return Err(format!("File not found: {}", path.display()).into());
     }
 
     // Try pdfinfo (from poppler-utils)
@@ -171,7 +174,7 @@ fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 }
 
 /// Get PDF page count.
-fn exec_pdf_page_count(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_pdf_page_count(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -179,10 +182,10 @@ fn exec_pdf_page_count(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
     let path = resolve_path(workspace_dir, path_str);
     if is_protected_path(&path) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
     if !path.exists() {
-        return Err(format!("File not found: {}", path.display()));
+        return Err(format!("File not found: {}", path.display()).into());
     }
 
     // Try pdfinfo and parse "Pages:" line
@@ -206,7 +209,8 @@ fn exec_pdf_page_count(args: &Value, workspace_dir: &Path) -> Result<String, Str
     Err(format!(
         "Could not determine page count for '{}'. Install poppler-utils for pdfinfo.",
         path.display()
-    ))
+    )
+    .into())
 }
 
 /// Truncate output to max characters, adding a notice if truncated.
@@ -232,7 +236,12 @@ mod tests {
         let args = json!({"action": "extract"});
         let result = exec_pdf(&args, Path::new("/tmp"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Missing required parameter"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Missing required parameter")
+        );
     }
 
     #[test]
@@ -240,7 +249,7 @@ mod tests {
         let args = json!({"action": "extract", "path": "/tmp/nonexistent.pdf"});
         let result = exec_pdf(&args, Path::new("/tmp"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("not found"));
+        assert!(result.unwrap_err().to_string().contains("not found"));
     }
 
     #[test]
@@ -248,7 +257,12 @@ mod tests {
         let args = json!({"action": "foobar", "path": "/tmp/test.pdf"});
         let result = exec_pdf(&args, Path::new("/tmp"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("Unknown pdf action"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown pdf action")
+        );
     }
 
     #[test]

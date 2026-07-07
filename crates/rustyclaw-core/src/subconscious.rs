@@ -114,18 +114,30 @@ pub enum EscalationOutcome {
     AwaitingApproval { proposal: String },
 }
 
+/// Why a subconscious brain/actor step failed.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct SubconsciousError(pub String);
+pub enum SubconsciousError {
+    /// Failure described by the brain/actor implementation.
+    #[error("{0}")]
+    Message(String),
+    /// Underlying error with its context chain preserved.
+    #[error("{0:#}")]
+    Source(anyhow::Error),
+}
 
 impl From<String> for SubconsciousError {
     fn from(s: String) -> Self {
-        Self(s)
+        Self::Message(s)
     }
 }
 impl From<&str> for SubconsciousError {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self::Message(s.to_string())
+    }
+}
+impl From<anyhow::Error> for SubconsciousError {
+    fn from(e: anyhow::Error) -> Self {
+        Self::Source(e)
     }
 }
 
@@ -298,7 +310,9 @@ impl SubconsciousEngine {
                 },
                 Err(e) => TickResult {
                     task_id: task.id.clone(),
-                    state: TickState::Failed { error: e.0 },
+                    state: TickState::Failed {
+                        error: e.to_string(),
+                    },
                 },
             },
             Ok(Decision::Escalate) => match self.actor.escalate(task, situation).await {
@@ -316,14 +330,18 @@ impl SubconsciousEngine {
                 },
                 Err(e) => TickResult {
                     task_id: task.id.clone(),
-                    state: TickState::Failed { error: e.0 },
+                    state: TickState::Failed {
+                        error: e.to_string(),
+                    },
                 },
             },
             Err(e) => {
-                warn!(task = %task.id, error = %e.0, "decider failed");
+                warn!(task = %task.id, error = %e, "decider failed");
                 TickResult {
                     task_id: task.id.clone(),
-                    state: TickState::Failed { error: e.0 },
+                    state: TickState::Failed {
+                        error: e.to_string(),
+                    },
                 }
             }
         }

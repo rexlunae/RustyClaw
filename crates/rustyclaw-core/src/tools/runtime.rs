@@ -7,6 +7,7 @@ use super::helpers::{
     resolve_path, run_sandboxed_command, validate_command_safe,
 };
 use crate::process_manager::SessionStatus;
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -17,10 +18,7 @@ use tracing::{debug, instrument, warn};
 ///
 /// This is an async function that uses tokio for process management.
 #[instrument(skip(args, workspace_dir), fields(command))]
-pub async fn exec_execute_command_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -53,15 +51,15 @@ pub async fn exec_execute_command_async(
 
     // Block commands that reference the credentials directory.
     // Validate command safety (null byte rejection, length, exfiltration patterns).
-    validate_command_safe(command).map_err(|e| e.to_string())?;
+    validate_command_safe(command)?;
 
     if command_references_credentials(command) {
         warn!("Command references credentials directory");
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
     if is_protected_path(&cwd) {
         warn!(cwd = %cwd.display(), "Working directory is protected");
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     // If background requested immediately, spawn and return session ID
@@ -72,9 +70,7 @@ pub async fn exec_execute_command_async(
             .lock()
             .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
-        let session_id = mgr
-            .spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))
-            .map_err(|e| e.to_string())?;
+        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
         debug!(session_id = %session_id, "Background process spawned");
 
         return Ok(json!({
@@ -92,8 +88,7 @@ pub async fn exec_execute_command_async(
         let cwd_clone = cwd.clone();
         let output = tokio::task::spawn_blocking(move || run_sandboxed_command(&cmd, &cwd_clone))
             .await
-            .map_err(|e| format!("Task join error: {}", e))?
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| format!("Task join error: {}", e))??;
 
         return format_output(output, timeout_secs);
     }
@@ -165,12 +160,12 @@ pub async fn exec_execute_command_async(
                         if now >= timeout_deadline {
                             warn!(timeout_secs, "Command timed out");
                             let _ = child.kill().await;
-                            return Err(format!("Command timed out after {} seconds", timeout_secs));
+                            return Err(format!("Command timed out after {} seconds", timeout_secs).into());
                         }
 
                         // Continue loop
                     }
-                    Err(e) => return Err(format!("Error waiting for command: {}", e)),
+                    Err(e) => return Err(format!("Error waiting for command: {}", e).into()),
                 }
             }
         }
@@ -183,7 +178,7 @@ async fn background_child(
     command: &str,
     cwd: &Path,
     timeout_deadline: Instant,
-) -> Result<String, String> {
+) -> ToolResult {
     // Convert tokio child to std child by extracting the inner handle
     // This is a bit tricky - we need to spawn a std::process::Command instead
     // and transfer the session concept.
@@ -211,13 +206,11 @@ async fn background_child(
         .as_secs();
 
     // Spawn a new background process (ProcessManager uses std::process internally)
-    let session_id = mgr
-        .spawn(
-            command,
-            cwd.to_string_lossy().as_ref(),
-            Some(remaining_timeout.max(1)),
-        )
-        .map_err(|e| e.to_string())?;
+    let session_id = mgr.spawn(
+        command,
+        cwd.to_string_lossy().as_ref(),
+        Some(remaining_timeout.max(1)),
+    )?;
 
     debug!(session_id = %session_id, "Process backgrounded");
 
@@ -237,7 +230,7 @@ async fn background_child(
 }
 
 /// Format command output into a result string (for std::process::Output).
-fn format_output(output: std::process::Output, _timeout_secs: u64) -> Result<String, String> {
+fn format_output(output: std::process::Output, _timeout_secs: u64) -> ToolResult {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
@@ -272,7 +265,7 @@ fn format_output(output: std::process::Output, _timeout_secs: u64) -> Result<Str
 }
 
 /// Format command output into a result string (for tokio Output).
-fn format_output_async(output: std::process::Output, timeout_secs: u64) -> Result<String, String> {
+fn format_output_async(output: std::process::Output, timeout_secs: u64) -> ToolResult {
     // Same format as sync version
     format_output(output, timeout_secs)
 }
@@ -280,7 +273,7 @@ fn format_output_async(output: std::process::Output, timeout_secs: u64) -> Resul
 /// Sync wrapper for backwards compatibility with ToolDef.
 /// This calls block_on internally - prefer using exec_execute_command_async directly.
 #[instrument(skip(args, workspace_dir), fields(command))]
-pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> ToolResult {
     // We're already in a tokio runtime, so we can use Handle::current()
     // But this is called from spawn_blocking, so we need to be careful.
     // Actually, since execute_tool now uses spawn_blocking, this sync function
@@ -293,7 +286,7 @@ pub fn exec_execute_command(args: &Value, workspace_dir: &Path) -> Result<String
 }
 
 /// Original sync implementation (for fallback).
-fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -320,13 +313,13 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
     };
 
     // Validate command safety (null byte rejection, length, exfiltration patterns).
-    validate_command_safe(command).map_err(|e| e.to_string())?;
+    validate_command_safe(command)?;
 
     if command_references_credentials(command) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
     if is_protected_path(&cwd) {
-        return Err(VAULT_ACCESS_DENIED.to_string());
+        return Err(VAULT_ACCESS_DENIED.to_string().into());
     }
 
     if background {
@@ -335,9 +328,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
             .lock()
             .map_err(|_| "Failed to acquire process manager lock".to_string())?;
 
-        let session_id = mgr
-            .spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))
-            .map_err(|e| e.to_string())?;
+        let session_id = mgr.spawn(command, cwd.to_string_lossy().as_ref(), Some(timeout_secs))?;
 
         return Ok(json!({
             "status": "running",
@@ -348,7 +339,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
     }
 
     if yield_ms == 0 {
-        let output = run_sandboxed_command(command, &cwd).map_err(|e| e.to_string())?;
+        let output = run_sandboxed_command(command, &cwd)?;
         return format_output(output, timeout_secs);
     }
 
@@ -402,12 +393,12 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
 
                 if now >= timeout_deadline {
                     let _ = child.kill();
-                    return Err(format!("Command timed out after {} seconds", timeout_secs));
+                    return Err(format!("Command timed out after {} seconds", timeout_secs).into());
                 }
 
                 std::thread::sleep(Duration::from_millis(100));
             }
-            Err(e) => return Err(format!("Error waiting for command: {}", e)),
+            Err(e) => return Err(format!("Error waiting for command: {}", e).into()),
         }
     }
 
@@ -420,7 +411,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> Result<Strin
 
 /// Manage background exec sessions (async version).
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -538,7 +529,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
 
-            session.write_stdin(data).map_err(|e| e.to_string())?;
+            session.write_stdin(data)?;
             Ok(format!("Wrote {} bytes to session {}", data.len(), id))
         }
 
@@ -553,7 +544,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
 
-            let bytes_sent = session.send_keys(keys).map_err(|e| e.to_string())?;
+            let bytes_sent = session.send_keys(keys)?;
             Ok(format!(
                 "Sent keys [{}] ({} bytes) to session {}",
                 keys, bytes_sent, id
@@ -567,7 +558,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
 
-            session.kill().map_err(|e| e.to_string())?;
+            session.kill()?;
             debug!(session_id = id, "Session killed");
             Ok(format!("Killed session {}", id))
         }
@@ -588,7 +579,7 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 debug!(session_id = id, "Session removed");
                 Ok(format!("Removed session {}", id))
             } else {
-                Err(format!("No session found: {}", id))
+                Err(format!("No session found: {}", id).into())
             }
         }
 
@@ -597,19 +588,20 @@ pub async fn exec_process_async(args: &Value, _workspace_dir: &Path) -> Result<S
             Err(format!(
                 "Unknown action: {}. Valid: list, poll, log, write, send_keys, kill, clear, remove",
                 action
-            ))
+            )
+            .into())
         }
     }
 }
 
 /// Sync wrapper for process tool.
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_process(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_process(args: &Value, _workspace_dir: &Path) -> ToolResult {
     // Same as async version but sync - ProcessManager operations are quick
     exec_process_sync(args, _workspace_dir)
 }
 
-fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -705,7 +697,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
-            session.write_stdin(data).map_err(|e| e.to_string())?;
+            session.write_stdin(data)?;
             Ok(format!("Wrote {} bytes to session {}", data.len(), id))
         }
         "send_keys" | "sendkeys" | "send-keys" => {
@@ -717,7 +709,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
-            let bytes_sent = session.send_keys(keys).map_err(|e| e.to_string())?;
+            let bytes_sent = session.send_keys(keys)?;
             Ok(format!(
                 "Sent keys [{}] ({} bytes) to session {}",
                 keys, bytes_sent, id
@@ -728,7 +720,7 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
             let session = mgr
                 .get_mut(id)
                 .ok_or_else(|| format!("No session found: {}", id))?;
-            session.kill().map_err(|e| e.to_string())?;
+            session.kill()?;
             Ok(format!("Killed session {}", id))
         }
         "clear" => {
@@ -743,12 +735,13 @@ fn exec_process_sync(args: &Value, _workspace_dir: &Path) -> Result<String, Stri
                 }
                 Ok(format!("Removed session {}", id))
             } else {
-                Err(format!("No session found: {}", id))
+                Err(format!("No session found: {}", id).into())
             }
         }
         _ => Err(format!(
             "Unknown action: {}. Valid: list, poll, log, write, send_keys, kill, clear, remove",
             action
-        )),
+        )
+        .into()),
     }
 }

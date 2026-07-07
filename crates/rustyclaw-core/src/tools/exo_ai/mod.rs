@@ -2,6 +2,7 @@
 //!
 //! Async implementations live in `async_impl`.
 
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -273,7 +274,7 @@ fn find_exo_bin() -> Option<PathBuf> {
 
 // ── Sync implementation ─────────────────────────────────────────────────────
 
-fn sh(script: &str) -> Result<String, String> {
+fn sh(script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -291,7 +292,7 @@ fn sh(script: &str) -> Result<String, String> {
         } else {
             format!("Command exited with {}", output.status)
         };
-        return Err(detail);
+        return Err(detail.into());
     }
     if !stderr.is_empty() && !stdout.is_empty() {
         Ok(format!("{}\n[stderr] {}", stdout, stderr))
@@ -302,11 +303,11 @@ fn sh(script: &str) -> Result<String, String> {
     }
 }
 
-fn exo_api(method: &str, path: &str) -> Result<String, String> {
+fn exo_api(method: &str, path: &str) -> ToolResult {
     exo_api_port(method, path, 52415, None)
 }
 
-fn exo_api_port(method: &str, path: &str, port: u64, body: Option<&str>) -> Result<String, String> {
+fn exo_api_port(method: &str, path: &str, port: u64, body: Option<&str>) -> ToolResult {
     let url = format!("http://localhost:{}{}", port, path);
     let mut script = match method.to_uppercase().as_str() {
         "GET" => format!("curl -sf --max-time 5 '{}'", url),
@@ -342,7 +343,7 @@ fn is_exo_running() -> bool {
 }
 
 /// Execute an exo management action (sync wrapper).
-pub fn exec_exo_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_exo_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
     // For sync, we just call a simplified version or error out
     // In practice, the async version will be used via execute_tool
     let action = args
@@ -364,6 +365,7 @@ pub fn exec_exo_manage(args: &Value, _workspace_dir: &Path) -> Result<String, St
         _ => Err(format!(
             "Sync execution not supported for action '{}'. Use async dispatch.",
             action
-        )),
+        )
+        .into()),
     }
 }

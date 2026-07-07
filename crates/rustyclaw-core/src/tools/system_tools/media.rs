@@ -1,6 +1,7 @@
 //! Media tools: screenshot capture and clipboard access.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -20,7 +21,7 @@ fn human_size(bytes: u64) -> String {
 // ── Async implementations ───────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let output_path = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -70,12 +71,16 @@ pub async fn exec_screenshot_async(args: &Value, workspace_dir: &Path) -> Result
                 .to_string(),
         )
     } else {
-        Err("Screenshot failed. Install screencapture (macOS) or imagemagick (Linux).".to_string())
+        Err(
+            "Screenshot failed. Install screencapture (macOS) or imagemagick (Linux)."
+                .to_string()
+                .into(),
+        )
     }
 }
 
 #[instrument(skip(args, _workspace_dir))]
-pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -98,14 +103,14 @@ pub async fn exec_clipboard_async(args: &Value, _workspace_dir: &Path) -> Result
             sh_async(&cmd).await?;
             Ok(json!({ "status": "ok", "length": content.len() }).to_string())
         }
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }
 
 // ── Sync implementations ────────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> ToolResult {
     let output_path = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -159,12 +164,13 @@ pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> Result<String, Str
         Err(format!(
             "Screenshot failed: {}",
             String::from_utf8_lossy(&output.stderr)
-        ))
+        )
+        .into())
     }
 }
 
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -198,9 +204,9 @@ pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> Result<String, Str
             if status.success() {
                 Ok(json!({ "status": "ok", "length": content.len() }).to_string())
             } else {
-                Err("Clipboard write failed".to_string())
+                Err("Clipboard write failed".to_string().into())
             }
         }
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }

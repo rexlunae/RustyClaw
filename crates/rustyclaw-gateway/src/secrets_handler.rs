@@ -1,4 +1,5 @@
 use anyhow::Result;
+use rustyclaw_core::tools::error::ToolResult;
 use tracing::{debug, instrument, warn};
 
 use rustyclaw_core::gateway::protocol::server::{
@@ -36,7 +37,7 @@ pub async fn execute_secrets_tool(
     name: &str,
     args: &serde_json::Value,
     vault: &SharedVault,
-) -> Result<String, String> {
+) -> ToolResult {
     debug!("Executing secrets tool");
     match name {
         "secrets_list" => exec_secrets_list(vault).await,
@@ -45,14 +46,14 @@ pub async fn execute_secrets_tool(
         "secrets_set_policy" => exec_secrets_set_policy(args, vault).await,
         _ => {
             warn!("Unknown secrets tool requested");
-            Err(format!("Unknown secrets tool: {}", name))
+            Err(format!("Unknown secrets tool: {}", name).into())
         }
     }
 }
 
 /// List all credentials in the vault (names, kinds, policies — no values).
 #[instrument(skip(vault))]
-pub async fn exec_secrets_list(vault: &SharedVault) -> Result<String, String> {
+pub async fn exec_secrets_list(vault: &SharedVault) -> ToolResult {
     let mut mgr = vault.lock().await;
     let entries = mgr.list_all_entries();
 
@@ -83,10 +84,7 @@ pub async fn exec_secrets_list(vault: &SharedVault) -> Result<String, String> {
 
 /// Retrieve a single credential value from the vault.
 #[instrument(skip(args, vault))]
-pub async fn exec_secrets_get(
-    args: &serde_json::Value,
-    vault: &SharedVault,
-) -> Result<String, String> {
+pub async fn exec_secrets_get(args: &serde_json::Value, vault: &SharedVault) -> ToolResult {
     let cred_name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -111,11 +109,12 @@ pub async fn exec_secrets_get(
             Err(format!(
                 "Credential '{}' not found. Use secrets_list to see available credentials.",
                 cred_name,
-            ))
+            )
+            .into())
         }
         Err(e) => {
             warn!(credential = cred_name, error = %e, "Credential access denied");
-            Err(e.to_string())
+            Err(e.to_string().into())
         }
     }
 }
@@ -172,10 +171,7 @@ pub fn format_credential_value(name: &str, entry: &SecretEntry, value: &Credenti
 
 /// Store a new credential in the vault.
 #[instrument(skip(args, vault))]
-pub async fn exec_secrets_store(
-    args: &serde_json::Value,
-    vault: &SharedVault,
-) -> Result<String, String> {
+pub async fn exec_secrets_store(args: &serde_json::Value, vault: &SharedVault) -> ToolResult {
     let cred_name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -223,7 +219,8 @@ pub async fn exec_secrets_store(
                  username_password, ssh_key, secure_note, http_passkey, \
                  form_autofill, payment_method, other.",
                 kind_str,
-            ));
+            )
+            .into());
         }
     };
 
@@ -240,7 +237,8 @@ pub async fn exec_secrets_store(
             return Err(format!(
                 "Unknown policy: '{}'. Use: always, approval, auth, or skill:<name>.",
                 s,
-            ));
+            )
+            .into());
         }
     };
 
@@ -272,10 +270,7 @@ pub async fn exec_secrets_store(
 
 /// Change the access policy of an existing credential.
 #[instrument(skip(args, vault))]
-pub async fn exec_secrets_set_policy(
-    args: &serde_json::Value,
-    vault: &SharedVault,
-) -> Result<String, String> {
+pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVault) -> ToolResult {
     let cred_name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -305,7 +300,8 @@ pub async fn exec_secrets_set_policy(
             return Err(format!(
                 "Unknown policy: '{}'. Use: always, approval, auth, or skill:<name>.",
                 policy_str,
-            ));
+            )
+            .into());
         }
     };
 

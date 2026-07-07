@@ -519,6 +519,7 @@ async fn process_incoming_message(
                         (output, false)
                     }
                     Err(err) => {
+                        let err = err.to_string();
                         crate::command_wrapper::fail_command_task(task_mgr, task_id, &err).await;
                         (err, true)
                     }
@@ -538,7 +539,7 @@ async fn process_incoming_message(
             } else {
                 match tools::execute_tool(&tc.name, &tc.arguments, &workspace_dir).await {
                     Ok(text) => (text, false),
-                    Err(err) => (err, true),
+                    Err(err) => (err.to_string(), true),
                 }
             };
 

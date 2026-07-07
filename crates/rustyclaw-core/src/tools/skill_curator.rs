@@ -6,6 +6,7 @@
 //! 2. A scheduled curator that grades existing skills, merges duplicates,
 //!    and prunes low-value ones (modeled on Hermes' ~7-day cycle).
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -22,7 +23,7 @@ const DEFAULT_CURATOR_CYCLE_DAYS: u32 = 7;
 
 /// Execute the `skill_curator` tool.
 #[instrument(skip(args, workspace_dir), fields(action))]
-pub fn exec_skill_curator(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_skill_curator(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -41,12 +42,13 @@ pub fn exec_skill_curator(args: &Value, workspace_dir: &Path) -> Result<String, 
         _ => Err(format!(
             "Unknown action: '{}'. Valid: propose, curate, grade, merge, prune, status",
             action
-        )),
+        )
+        .into()),
     }
 }
 
 /// Propose a new skill based on a completed multi-step task.
-fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_propose(args: &Value, workspace_dir: &Path) -> ToolResult {
     let task_summary = args
         .get("task_summary")
         .and_then(|v| v.as_str())
@@ -107,7 +109,7 @@ fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 
     // Create the skill directory structure
     if let Err(e) = std::fs::create_dir_all(&skill_dir) {
-        return Err(format!("Failed to create skill directory: {}", e));
+        return Err(format!("Failed to create skill directory: {}", e).into());
     }
 
     let content = format!(
@@ -120,7 +122,7 @@ fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     );
 
     if let Err(e) = std::fs::write(&skill_file, &content) {
-        return Err(format!("Failed to write skill file: {}", e));
+        return Err(format!("Failed to write skill file: {}", e).into());
     }
 
     debug!(name = %name, path = ?skill_file, "Skill proposed");
@@ -136,7 +138,7 @@ fn exec_propose(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 }
 
 /// Run the full curation cycle: grade → merge duplicates → prune low-value.
-fn exec_curate(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_curate(args: &Value, workspace_dir: &Path) -> ToolResult {
     let cycle_days = args
         .get("cycle_days")
         .and_then(|v| v.as_u64())
@@ -203,7 +205,7 @@ fn exec_curate(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 }
 
 /// Grade a specific skill by name.
-fn exec_grade(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_grade(args: &Value, workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -220,7 +222,7 @@ fn exec_grade(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 }
 
 /// Merge two skills into one.
-fn exec_merge(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_merge(args: &Value, workspace_dir: &Path) -> ToolResult {
     let source = args
         .get("source")
         .and_then(|v| v.as_str())
@@ -241,10 +243,10 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let target_file = skills_dir.join(target).join("SKILL.md");
 
     if !source_file.exists() {
-        return Err(format!("Source skill not found: {}", source));
+        return Err(format!("Source skill not found: {}", source).into());
     }
     if !target_file.exists() {
-        return Err(format!("Target skill not found: {}", target));
+        return Err(format!("Target skill not found: {}", target).into());
     }
 
     if dry_run {
@@ -288,7 +290,7 @@ fn exec_merge(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 }
 
 /// Prune a skill (remove it from the library).
-fn exec_prune(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_prune(args: &Value, workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -308,7 +310,7 @@ fn exec_prune(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     let skill_dir = skills_dir.join(name);
 
     if !skill_dir.exists() {
-        return Err(format!("Skill not found: {}", name));
+        return Err(format!("Skill not found: {}", name).into());
     }
 
     if dry_run {
@@ -337,7 +339,7 @@ fn exec_prune(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 }
 
 /// Show curator status: last run, next scheduled, skill count.
-fn exec_status(_args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn exec_status(_args: &Value, workspace_dir: &Path) -> ToolResult {
     let skills_dir = workspace_dir.join("skills");
     let skills = scan_skills(&skills_dir);
 

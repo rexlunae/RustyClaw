@@ -1,5 +1,6 @@
 //! Async implementations of the gateway tools.
 
+use crate::tools::error::ToolResult;
 use crate::tools::helpers::resolve_path;
 use serde_json::Value;
 use std::path::Path;
@@ -11,7 +12,7 @@ use super::{check_protected_config, merge_json};
 
 /// Gateway management (async).
 #[instrument(skip(args, workspace_dir), fields(action))]
-pub async fn exec_gateway_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_gateway_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -154,14 +155,14 @@ pub async fn exec_gateway_async(args: &Value, workspace_dir: &Path) -> Result<St
             Err(format!(
                 "Unknown action: {}. Valid: restart, config.get, config.schema, config.apply, config.patch, update.run",
                 action
-            ))
+            ).into())
         }
     }
 }
 
 /// Send messages via channel plugins (async).
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -199,7 +200,7 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
 
                     match webhook_url {
                         Some(url) => send_webhook_async(&url, target, message).await,
-                        None => Err("Missing webhookUrl for webhook channel".to_string()),
+                        None => Err("Missing webhookUrl for webhook channel".to_string().into()),
                     }
                 }
                 _ => {
@@ -236,7 +237,7 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
                 .unwrap_or_default();
 
             if targets.is_empty() {
-                return Err("No targets specified for broadcast".to_string());
+                return Err("No targets specified for broadcast".to_string().into());
             }
 
             let channel = args
@@ -251,22 +252,23 @@ pub async fn exec_message_async(args: &Value, _workspace_dir: &Path) -> Result<S
                     "telegram" => send_telegram_async(target, message).await,
                     _ => Ok(format!("Would send to {}", target)),
                 };
-                results.push(format!("{}: {}", target, result.unwrap_or_else(|e| e)));
+                results.push(format!(
+                    "{}: {}",
+                    target,
+                    result.unwrap_or_else(|e| e.to_string())
+                ));
             }
 
             Ok(format!("Broadcast results:\n{}", results.join("\n")))
         }
 
-        _ => Err(format!(
-            "Unknown action: {}. Valid: send, broadcast",
-            action
-        )),
+        _ => Err(format!("Unknown action: {}. Valid: send, broadcast", action).into()),
     }
 }
 
 /// Text-to-speech using OpenAI API (async).
 #[instrument(skip(args, workspace_dir), fields(text_len))]
-pub async fn exec_tts_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_tts_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let text = args
         .get("text")
         .and_then(|v| v.as_str())
@@ -331,7 +333,7 @@ pub async fn exec_tts_async(args: &Value, workspace_dir: &Path) -> Result<String
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("TTS API error ({}): {}", status, error_body));
+        return Err(format!("TTS API error ({}): {}", status, error_body).into());
     }
 
     let audio_bytes = response
@@ -355,7 +357,7 @@ pub async fn exec_tts_async(args: &Value, workspace_dir: &Path) -> Result<String
 
 /// Analyze an image using a vision model (async).
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_image_async(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_image_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let image_path = args
         .get("image")
         .and_then(|v| v.as_str())
@@ -376,7 +378,7 @@ pub async fn exec_image_async(args: &Value, workspace_dir: &Path) -> Result<Stri
         let full_path = resolve_path(workspace_dir, image_path);
         let exists = tokio::fs::try_exists(&full_path).await.unwrap_or(false);
         if !exists {
-            return Err(format!("Image file not found: {}", image_path));
+            return Err(format!("Image file not found: {}", image_path).into());
         }
 
         let ext = full_path
@@ -394,7 +396,8 @@ pub async fn exec_image_async(args: &Value, workspace_dir: &Path) -> Result<Stri
                 return Err(format!(
                     "Unsupported image format: {}. Supported: jpg, jpeg, png, gif, webp",
                     ext
-                ));
+                )
+                .into());
             }
         };
 
@@ -432,7 +435,7 @@ pub async fn exec_image_async(args: &Value, workspace_dir: &Path) -> Result<Stri
 
 // ── Async helper functions ──────────────────────────────────────────────────
 
-async fn send_discord_async(channel_id: &str, content: &str) -> Result<String, String> {
+async fn send_discord_async(channel_id: &str, content: &str) -> ToolResult {
     let token = std::env::var("DISCORD_BOT_TOKEN").map_err(|_| "DISCORD_BOT_TOKEN not set")?;
 
     let client = reqwest::Client::new();
@@ -460,11 +463,11 @@ async fn send_discord_async(channel_id: &str, content: &str) -> Result<String, S
     } else {
         let status = response.status();
         let error = response.text().await.unwrap_or_default();
-        Err(format!("Discord API error ({}): {}", status, error))
+        Err(format!("Discord API error ({}): {}", status, error).into())
     }
 }
 
-async fn send_telegram_async(chat_id: &str, content: &str) -> Result<String, String> {
+async fn send_telegram_async(chat_id: &str, content: &str) -> ToolResult {
     let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
 
     let client = reqwest::Client::new();
@@ -494,16 +497,17 @@ async fn send_telegram_async(chat_id: &str, content: &str) -> Result<String, Str
             Err(format!(
                 "Telegram API error: {}",
                 data["description"].as_str().unwrap_or("unknown")
-            ))
+            )
+            .into())
         }
     } else {
         let status = response.status();
         let error = response.text().await.unwrap_or_default();
-        Err(format!("Telegram API error ({}): {}", status, error))
+        Err(format!("Telegram API error ({}): {}", status, error).into())
     }
 }
 
-async fn send_webhook_async(url: &str, target: &str, content: &str) -> Result<String, String> {
+async fn send_webhook_async(url: &str, target: &str, content: &str) -> ToolResult {
     let client = reqwest::Client::new();
 
     let response = client
@@ -522,7 +526,7 @@ async fn send_webhook_async(url: &str, target: &str, content: &str) -> Result<St
         Ok(format!("Message sent via webhook to {}", target))
     } else {
         let status = response.status();
-        Err(format!("Webhook error ({})", status))
+        Err(format!("Webhook error ({})", status).into())
     }
 }
 
@@ -531,7 +535,7 @@ async fn call_openai_vision_async(
     image_data: &str,
     _is_url: bool,
     prompt: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::Client::new();
 
     let image_content = serde_json::json!({
@@ -561,7 +565,7 @@ async fn call_openai_vision_async(
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("Vision API error ({}): {}", status, error_body));
+        return Err(format!("Vision API error ({}): {}", status, error_body).into());
     }
 
     let data: Value = response
@@ -582,7 +586,7 @@ async fn call_anthropic_vision_async(
     is_url: bool,
     media_type: &str,
     prompt: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::Client::new();
 
     let image_content = if is_url {
@@ -628,7 +632,7 @@ async fn call_anthropic_vision_async(
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("Vision API error ({}): {}", status, error_body));
+        return Err(format!("Vision API error ({}): {}", status, error_body).into());
     }
 
     let data: Value = response
@@ -648,7 +652,7 @@ async fn call_google_vision_async(
     image_data: &str,
     is_url: bool,
     prompt: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::Client::new();
 
     let image_part = if is_url {
@@ -698,7 +702,7 @@ async fn call_google_vision_async(
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("Vision API error ({}): {}", status, error_body));
+        return Err(format!("Vision API error ({}): {}", status, error_body).into());
     }
 
     let data: Value = response
