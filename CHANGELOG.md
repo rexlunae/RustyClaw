@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Usage analytics and logs panels backed by real telemetry.** The
+  gateway now installs a stats-collecting observer at startup (it
+  previously passed `None`, so the observability layer recorded
+  nothing): every LLM call is recorded with provider, model, token
+  counts (the genai backend's captured usage now actually reaches the
+  telemetry — it was a `TODO`), latency, and outcome, alongside a
+  human-readable ring of LLM/tool/channel/error events. `/analytics
+  [day|week|month|all]` and `/logs [source] [n]` in the TUI and the
+  View-menu Usage Analytics / Logs dialogs on desktop query it; the
+  logs panel also serves managed-service logs by service name.
+- **Desktop custom-provider management.** Settings gains a Custom
+  Providers section — list/remove existing `[[custom_providers]]`
+  entries and add new ones (id, name, base URL, API format, key secret,
+  static models) with validation; saving updates the provider catalogue
+  so the model bar picks the change up immediately. Also: the Skills
+  menu opens a real skills manager (was "coming soon"), the secrets
+  dialog's Add Secret flow works (with auto-refresh after every vault
+  mutation and a real 2FA indicator via the new `SecretsHasTotp`
+  client command), the Services dialog populates on open, and System
+  Info fetches host/load data on open.
 - **The cron, memory, MCP, channels, and tool-config panels are real.**
   The gateway's panel handler previously returned stub/empty responses
   for every panel request even though the backing subsystems existed.
