@@ -29,6 +29,18 @@ impl LogSource {
             Self::Service(name) => name.clone(),
         }
     }
+
+    /// Parse a wire value back into a source (inverse of [`wire_value`]).
+    ///
+    /// [`wire_value`]: LogSource::wire_value
+    pub fn from_wire(source: &str) -> Self {
+        match source {
+            "gateway" => Self::Gateway,
+            "agent" => Self::Agent,
+            "cron" => Self::Cron,
+            name => Self::Service(name.to_string()),
+        }
+    }
 }
 
 /// Full state for the logs viewer panel.

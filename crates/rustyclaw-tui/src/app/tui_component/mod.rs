@@ -225,6 +225,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mcp_data: State<Option<rustyclaw_view::McpPanelData>> = hooks.use_state(|| None);
     let show_channels_dialog = hooks.use_state(|| false);
     let channels_data: State<Option<rustyclaw_view::ChannelsPanelData>> = hooks.use_state(|| None);
+    let show_analytics_dialog = hooks.use_state(|| false);
+    let analytics_data: State<Option<rustyclaw_view::AnalyticsPanelData>> =
+        hooks.use_state(|| None);
+    let show_logs_dialog = hooks.use_state(|| false);
+    let logs_data: State<Option<rustyclaw_view::LogsPanelData>> = hooks.use_state(|| None);
 
     // ── Channel access ──────────────────────────────────────────────
     let gw_rx: Arc<StdMutex<Option<sync_mpsc::Receiver<GwEvent>>>> =
@@ -358,6 +363,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         mcp_data,
         show_channels_dialog,
         channels_data,
+        show_analytics_dialog,
+        analytics_data,
+        show_logs_dialog,
+        logs_data,
     };
 
     // ── Poll gateway channel on a timer ─────────────────────────────
@@ -488,6 +497,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_memory_dialog.get()
                 && !show_mcp_dialog.get()
                 && !show_channels_dialog.get()
+                && !show_analytics_dialog.get()
+                && !show_logs_dialog.get()
                 && !tab_focused.get(),
             on_change: move |_new_val: String| {},
             on_submit: move |_val: String| {
@@ -619,6 +630,10 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             mcp_data: mcp_data.read().clone(),
             show_channels_dialog: show_channels_dialog.get(),
             channels_data: channels_data.read().clone(),
+            show_analytics_dialog: show_analytics_dialog.get(),
+            analytics_data: analytics_data.read().clone(),
+            show_logs_dialog: show_logs_dialog.get(),
+            logs_data: logs_data.read().clone(),
             show_pairing: show_pairing.get(),
             pairing: rustyclaw_view::PairingDialogData {
                 step: *pairing_step.read(),

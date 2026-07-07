@@ -52,7 +52,6 @@ mod tools_config;
 mod user_prompt;
 mod vault_unlock;
 
-#[allow(unused_imports)]
 pub use analytics::AnalyticsDialog;
 #[allow(unused_imports)]
 pub use approvals::ApprovalsDialog;
@@ -66,7 +65,6 @@ pub use device_flow::DeviceFlowDialog;
 pub use engines::EnginesDialog;
 pub use file_browser::FileBrowser;
 pub use hatching::HatchingDialog;
-#[allow(unused_imports)]
 pub use logs::LogsDialog;
 pub use mcp::McpDialog;
 pub use memory::MemoryDialog;

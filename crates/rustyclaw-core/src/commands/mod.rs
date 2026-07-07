@@ -79,6 +79,10 @@ pub enum CommandAction {
     ShowChannels,
     /// Pair/unpair a messenger channel
     ChannelPair(String, ChannelPairActionKind),
+    /// Show the usage analytics panel with an optional period filter
+    ShowAnalytics(Option<String>),
+    /// Show the logs panel: (source, optional tail)
+    ShowLogs(String, Option<usize>),
 }
 
 #[derive(Debug, Clone)]
@@ -167,6 +171,13 @@ fn base_command_names() -> Vec<String> {
         "channels".into(),
         "channels pair".into(),
         "channels unpair".into(),
+        "analytics".into(),
+        "analytics day".into(),
+        "analytics week".into(),
+        "analytics month".into(),
+        "logs".into(),
+        "logs gateway".into(),
+        "logs agent".into(),
         "engines".into(),
         "engines start".into(),
         "engines stop".into(),
@@ -385,6 +396,8 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /memory [query]          - Browse MEMORY.md (add/rm/history)".to_string(),
                 "  /mcp                     - MCP servers panel (connect/disconnect)".to_string(),
                 "  /channels                - Messenger channels panel (pair/unpair)".to_string(),
+                "  /analytics [period]      - Usage stats (day/week/month/all)".to_string(),
+                "  /logs [source] [n]       - Recent logs (gateway/agent/service name)".to_string(),
                 "  /clawhub                 - ClawHub skill registry commands".to_string(),
                 "  /agent setup             - Set up local model tools (uv, exo, ollama)"
                     .to_string(),
@@ -582,6 +595,31 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
         "memory" | "mem" => handle_memory_subcommand(&parts[1..]),
         "mcp" => handle_mcp_subcommand(&parts[1..]),
         "channels" | "channel" => handle_channels_subcommand(&parts[1..]),
+        "analytics" | "usage" => match parts.get(1).copied() {
+            None => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::ShowAnalytics(None),
+            },
+            Some(period @ ("day" | "week" | "month" | "all")) => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::ShowAnalytics(Some(period.to_string())),
+            },
+            Some(other) => CommandResponse {
+                messages: vec![
+                    format!("Unknown period: '{}'", other),
+                    "Usage: /analytics [day|week|month|all]".to_string(),
+                ],
+                action: CommandAction::None,
+            },
+        },
+        "logs" | "log" => {
+            let source = parts.get(1).unwrap_or(&"gateway").to_string();
+            let tail = parts.get(2).and_then(|s| s.parse::<usize>().ok());
+            CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::ShowLogs(source, tail),
+            }
+        }
         "model" => match parts.get(1) {
             Some(name) => {
                 let name = name.to_string();

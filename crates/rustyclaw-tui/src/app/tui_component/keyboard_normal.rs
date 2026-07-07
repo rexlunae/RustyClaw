@@ -153,6 +153,10 @@ pub(super) fn handle_normal_key(
         mut mcp_data,
         mut show_channels_dialog,
         mut channels_data,
+        mut show_analytics_dialog,
+        mut analytics_data,
+        mut show_logs_dialog,
+        mut logs_data,
     } = ui;
     // ── Normal mode keyboard ────────────────────────
     // System info dialog: Esc to close
@@ -232,6 +236,29 @@ pub(super) fn handle_normal_key(
                     data.select_next();
                 }
                 channels_data.set(Some(data));
+            }
+            _ => {}
+        }
+        return;
+    }
+    if show_analytics_dialog.get() {
+        if code == KeyCode::Esc {
+            show_analytics_dialog.set(false);
+        }
+        return;
+    }
+    if show_logs_dialog.get() {
+        match code {
+            KeyCode::Esc => show_logs_dialog.set(false),
+            KeyCode::Up | KeyCode::Down => {
+                let mut data = logs_data.read().clone().unwrap_or_default();
+                if code == KeyCode::Up {
+                    data.scroll_offset = data.scroll_offset.saturating_sub(1);
+                } else {
+                    data.scroll_offset =
+                        (data.scroll_offset + 1).min(data.lines.len().saturating_sub(1));
+                }
+                logs_data.set(Some(data));
             }
             _ => {}
         }

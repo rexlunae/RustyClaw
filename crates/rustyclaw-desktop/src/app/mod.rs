@@ -857,6 +857,35 @@ pub fn App() -> Element {
                         });
                     }
                 }
+            } else if event.id == ids.analytics {
+                let v = state.read().show_analytics_dialog;
+                state.write().show_analytics_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::UsageStats { period: None })
+                                .await;
+                        });
+                    }
+                }
+            } else if event.id == ids.logs {
+                let v = state.read().show_logs_dialog;
+                state.write().show_logs_dialog = !v;
+                if !v {
+                    let gw = gateway.read().clone();
+                    if let Some(client) = gw {
+                        spawn(async move {
+                            let _ = client
+                                .send(GatewayCommand::Logs {
+                                    source: "gateway".into(),
+                                    tail: None,
+                                })
+                                .await;
+                        });
+                    }
+                }
             } else if event.id == ids.quit {
                 dioxus::desktop::window().close();
             }

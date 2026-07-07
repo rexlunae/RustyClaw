@@ -6,7 +6,6 @@
 use crate::theme;
 use iocraft::prelude::*;
 
-#[allow(dead_code)]
 #[derive(Default, Props)]
 pub struct LogsDialogProps {
     pub data: Option<rustyclaw_view::LogsPanelData>,

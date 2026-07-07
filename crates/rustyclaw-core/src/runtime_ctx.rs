@@ -25,6 +25,8 @@ pub struct RuntimeInfo {
     /// Connected MCP servers.
     #[cfg(feature = "mcp")]
     pub mcp_manager: Option<crate::mcp::SharedMcpManager>,
+    /// Usage stats / log-ring observer.
+    pub stats_observer: Option<crate::observability::SharedStatsObserver>,
 }
 
 /// Shared runtime context.
@@ -115,6 +117,21 @@ pub fn get_mcp_manager() -> Option<crate::mcp::SharedMcpManager> {
         .lock()
         .ok()
         .and_then(|ctx| ctx.mcp_manager.clone())
+}
+
+/// Store the stats observer in the runtime context.
+pub fn set_stats_observer(observer: crate::observability::SharedStatsObserver) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.stats_observer = Some(observer);
+    }
+}
+
+/// Get the stats observer.
+pub fn get_stats_observer() -> Option<crate::observability::SharedStatsObserver> {
+    runtime_ctx()
+        .lock()
+        .ok()
+        .and_then(|ctx| ctx.stats_observer.clone())
 }
 
 #[cfg(test)]

@@ -410,6 +410,16 @@ pub(super) async fn handle_command_action(
                 .send(GatewayCommand::ChannelPair { channel, action })
                 .await;
         }
+        CommandAction::ShowAnalytics(period) => {
+            let _ = gw_tx.send(GwEvent::ShowAnalytics);
+            let _ = client.send(GatewayCommand::UsageStats { period }).await;
+        }
+        CommandAction::ShowLogs(source, tail) => {
+            let _ = gw_tx.send(GwEvent::ShowLogs {
+                source: source.clone(),
+            });
+            let _ = client.send(GatewayCommand::Logs { source, tail }).await;
+        }
         _ => {}
     }
     Ok(false)

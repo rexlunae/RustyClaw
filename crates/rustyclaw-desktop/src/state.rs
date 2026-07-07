@@ -209,6 +209,16 @@ pub struct AppState {
     pub show_skills_dialog: bool,
     /// Skills for the skills manager dialog.
     pub skills_data: Vec<rustyclaw_view::SkillInfoData>,
+
+    /// Whether the usage analytics dialog is visible.
+    pub show_analytics_dialog: bool,
+    /// Usage analytics data.
+    pub analytics_data: Option<rustyclaw_view::AnalyticsPanelData>,
+
+    /// Whether the logs dialog is visible.
+    pub show_logs_dialog: bool,
+    /// Log lines for the logs dialog.
+    pub logs_data: Option<rustyclaw_view::LogsPanelData>,
 }
 
 impl Default for AppState {
@@ -301,6 +311,10 @@ impl Default for AppState {
                 .unwrap_or_default(),
             show_skills_dialog: false,
             skills_data: Vec::new(),
+            show_analytics_dialog: false,
+            analytics_data: None,
+            show_logs_dialog: false,
+            logs_data: None,
         }
     }
 }

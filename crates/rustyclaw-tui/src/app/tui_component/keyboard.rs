@@ -147,6 +147,10 @@ pub(super) fn apply_key_event(
         mcp_data: _,
         show_channels_dialog: _,
         channels_data: _,
+        show_analytics_dialog: _,
+        analytics_data: _,
+        show_logs_dialog: _,
+        logs_data: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {

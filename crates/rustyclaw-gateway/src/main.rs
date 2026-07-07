@@ -337,6 +337,18 @@ async fn main() -> Result<()> {
         let shared_skills: crate::SharedSkillManager =
             std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
+        // Telemetry: aggregate usage stats and keep a log ring for the
+        // analytics/logs panels, plus tracing output for operators. The
+        // stats handle is registered globally so the panel handler can
+        // query it.
+        let stats = std::sync::Arc::new(rustyclaw_core::observability::StatsObserver::new());
+        rustyclaw_core::runtime_ctx::set_stats_observer(stats.clone());
+        let observer: crate::SharedObserver =
+            std::sync::Arc::new(rustyclaw_core::observability::CompositeObserver::new(vec![
+                std::sync::Arc::new(rustyclaw_core::observability::LogObserver::new()),
+                stats,
+            ]));
+
         run_gateway(
             config,
             GatewayOptions {
@@ -353,7 +365,7 @@ async fn main() -> Result<()> {
             shared_skills,
             None,
             None,
-            None, // observer
+            Some(observer),
             cancel,
         )
         .await

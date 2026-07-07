@@ -718,6 +718,18 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 on_close: move |_| state.write().show_skills_dialog = false,
             }
 
+            AnalyticsDialog {
+                visible: state.read().show_analytics_dialog,
+                data: state.read().analytics_data.clone(),
+                on_close: move |_| state.write().show_analytics_dialog = false,
+            }
+
+            LogsDialog {
+                visible: state.read().show_logs_dialog,
+                data: state.read().logs_data.clone(),
+                on_close: move |_| state.write().show_logs_dialog = false,
+            }
+
             // TOTP authentication modal
             if matches!(state.read().connection.clone(), ConnectionStatus::Authenticating) {
                 RcModal {

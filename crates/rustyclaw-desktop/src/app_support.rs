@@ -689,6 +689,38 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 s.push_notice(MessageRole::Error, format!("Tools: {}", msg));
             }
         }
+        GatewayEvent::UsageStatsResult {
+            totals,
+            per_model,
+            per_session,
+        } => {
+            let mut s = state.write();
+            let panel = s
+                .analytics_data
+                .get_or_insert_with(rustyclaw_view::AnalyticsPanelData::default);
+            panel.period = totals.period.clone();
+            panel.totals = (&totals).into();
+            panel.per_model = per_model.iter().map(Into::into).collect();
+            panel.per_session = per_session.iter().map(Into::into).collect();
+            panel.status = None;
+        }
+        GatewayEvent::LogsResult {
+            ok,
+            source,
+            lines,
+            message,
+        } => {
+            let mut s = state.write();
+            let panel = s
+                .logs_data
+                .get_or_insert_with(rustyclaw_view::LogsPanelData::default);
+            panel.source = rustyclaw_view::LogSource::from_wire(&source);
+            panel.lines = lines;
+            panel.status = match (ok, message) {
+                (false, Some(msg)) => Some(msg),
+                _ => None,
+            };
+        }
     }
 }
 

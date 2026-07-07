@@ -73,32 +73,13 @@ pub async fn handle_panel_request(
             channel_pair(config, channel, action)
         }
 
+        // ── Analytics / logs (from the stats observer) ───────────────────
+        ClientPayload::UsageStatsRequest { period } => usage_stats(period),
+        ClientPayload::LogsRequest { source, tail, .. } => logs(source, tail).await,
+
         // ── Still stubbed: no backing subsystem yet ──────────────────────
-        // Usage/logs land with the observability query path; approvals
-        // need a queue (the Ask flow is a blocking per-request channel).
-        ClientPayload::UsageStatsRequest { period } => ServerFrame {
-            frame_type: ServerFrameType::UsageStatsResult,
-            payload: ServerPayload::UsageStatsResult {
-                totals: UsageTotalsDto {
-                    total_requests: 0,
-                    total_input_tokens: 0,
-                    total_output_tokens: 0,
-                    total_latency_ms: 0,
-                    period: period.unwrap_or_else(|| "all".into()),
-                },
-                per_model: vec![],
-                per_session: vec![],
-            },
-        },
-        ClientPayload::LogsRequest { source, .. } => ServerFrame {
-            frame_type: ServerFrameType::LogsResult,
-            payload: ServerPayload::LogsResult {
-                ok: true,
-                source,
-                lines: vec!["(no log entries)".into()],
-                message: None,
-            },
-        },
+        // Approvals need a queue (the Ask flow is a blocking per-request
+        // channel); voice and preview are unbuilt end to end.
         ClientPayload::PendingApprovalsRequest => ServerFrame {
             frame_type: ServerFrameType::PendingApprovalsResult,
             payload: ServerPayload::PendingApprovalsResult { approvals: vec![] },
@@ -140,6 +121,113 @@ pub async fn handle_panel_request(
     };
 
     send_frame(writer, &response).await
+}
+
+// ═════════════════════════════════════════════════════════════════════════
+// Analytics / logs
+// ═════════════════════════════════════════════════════════════════════════
+
+/// Convert the panel's period string into a "records since" timestamp.
+fn period_start_ms(period: &str) -> Option<u64> {
+    let day_ms: u64 = 24 * 60 * 60 * 1000;
+    let window = match period {
+        "day" => day_ms,
+        "week" => 7 * day_ms,
+        "month" => 30 * day_ms,
+        _ => return None, // "all" and anything unrecognised
+    };
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
+    Some(now.saturating_sub(window))
+}
+
+fn usage_stats(period: Option<String>) -> ServerFrame {
+    let period = period.unwrap_or_else(|| "all".into());
+    let usage = rustyclaw_core::runtime_ctx::get_stats_observer()
+        .map(|stats| stats.usage(period_start_ms(&period)))
+        .unwrap_or_default();
+
+    ServerFrame {
+        frame_type: ServerFrameType::UsageStatsResult,
+        payload: ServerPayload::UsageStatsResult {
+            totals: UsageTotalsDto {
+                total_requests: usage.total_requests,
+                total_input_tokens: usage.total_input_tokens,
+                total_output_tokens: usage.total_output_tokens,
+                total_latency_ms: usage.total_latency_ms,
+                period,
+            },
+            per_model: usage
+                .per_model
+                .into_iter()
+                .map(|m| ModelUsageDto {
+                    provider: m.provider,
+                    model: m.model,
+                    requests: m.requests,
+                    input_tokens: m.input_tokens,
+                    output_tokens: m.output_tokens,
+                    avg_latency_ms: m.avg_latency_ms,
+                })
+                .collect(),
+            // Observer events don't carry session ids yet.
+            per_session: vec![],
+        },
+    }
+}
+
+async fn logs(source: String, tail: Option<usize>) -> ServerFrame {
+    let tail = tail.unwrap_or(200);
+    let (ok, lines, message) = match source.as_str() {
+        // The gateway/agent share one telemetry ring (LLM calls, tool
+        // calls, channel traffic, errors).
+        "gateway" | "agent" => match rustyclaw_core::runtime_ctx::get_stats_observer() {
+            Some(stats) => {
+                let lines = stats.recent_logs(tail);
+                if lines.is_empty() {
+                    (true, vec!["(no log entries yet)".into()], None)
+                } else {
+                    (true, lines, None)
+                }
+            }
+            None => (
+                false,
+                Vec::new(),
+                Some("Telemetry observer not initialised".to_string()),
+            ),
+        },
+        "cron" => (
+            false,
+            Vec::new(),
+            Some("Cron has no runtime yet, so there are no run logs".to_string()),
+        ),
+        // Anything else is a managed-service name.
+        service => match rustyclaw_core::runtime_ctx::get_service_manager() {
+            Some(mgr) => {
+                let mgr = mgr.read().await;
+                match mgr.logs(service, Some(tail)) {
+                    Ok(lines) => (true, lines, None),
+                    Err(e) => (false, Vec::new(), Some(e)),
+                }
+            }
+            None => (
+                false,
+                Vec::new(),
+                Some("Service manager not initialised".to_string()),
+            ),
+        },
+    };
+
+    ServerFrame {
+        frame_type: ServerFrameType::LogsResult,
+        payload: ServerPayload::LogsResult {
+            ok,
+            source,
+            lines,
+            message,
+        },
+    }
 }
 
 // ═════════════════════════════════════════════════════════════════════════

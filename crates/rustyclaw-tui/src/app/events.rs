@@ -235,6 +235,25 @@ pub(crate) enum GwEvent {
         ok: bool,
         message: Option<String>,
     },
+    /// Open the analytics panel (data arrives via UsageStatsResult).
+    ShowAnalytics,
+    /// Usage stats received.
+    UsageStatsResult {
+        totals: rustyclaw_view::UsageTotalsData,
+        per_model: Vec<rustyclaw_view::ModelUsageData>,
+        per_session: Vec<rustyclaw_view::SessionUsageData>,
+    },
+    /// Open the logs panel (data arrives via LogsResult).
+    ShowLogs {
+        source: String,
+    },
+    /// Log lines received.
+    LogsResult {
+        ok: bool,
+        source: String,
+        lines: Vec<String>,
+        message: Option<String>,
+    },
     /// Host hardware capabilities received.
     HostInfo(rustyclaw_view::HostInfoData),
     /// Current system load status received.
