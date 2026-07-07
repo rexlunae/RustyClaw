@@ -169,10 +169,15 @@ pub(super) async fn handle_command_action(
         CommandAction::SetProvider(provider_name) => {
             // Update config with new provider, keep existing model
             let existing_model = config.model.as_ref().and_then(|m| m.model.clone());
+            let base_url = rustyclaw_core::providers::base_url_override_for_switch(
+                &provider_name,
+                config.model.as_ref().map(|m| m.provider.as_str()),
+                config.model.as_ref().and_then(|m| m.base_url.clone()),
+            );
             config.model = Some(rustyclaw_core::config::ModelProvider {
                 provider: provider_name.clone(),
                 model: existing_model,
-                base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                base_url,
             });
 
             // Save config and tell the gateway to reload
@@ -245,16 +250,20 @@ pub(super) async fn handle_command_action(
             });
         }
         CommandAction::ShowProviderSelector => {
-            // Build the provider list and send it to the UI
-            let providers: Vec<String> = rustyclaw_core::providers::PROVIDERS
+            // Build the provider list (built-in + custom) and send it to the UI
+            let all = rustyclaw_core::providers::all_providers();
+            let providers: Vec<String> = all
                 .iter()
-                .map(|p| p.display.to_string())
+                .map(|p| {
+                    if rustyclaw_core::providers::is_custom_provider(p.id) {
+                        format!("{} (custom)", p.display)
+                    } else {
+                        p.display.to_string()
+                    }
+                })
                 .collect();
-            let ids: Vec<String> = rustyclaw_core::providers::PROVIDERS
-                .iter()
-                .map(|p| p.id.to_string())
-                .collect();
-            let hints: Vec<String> = rustyclaw_core::providers::PROVIDERS
+            let ids: Vec<String> = all.iter().map(|p| p.id.to_string()).collect();
+            let hints: Vec<String> = all
                 .iter()
                 .map(|p| match p.auth_method {
                     rustyclaw_core::providers::AuthMethod::ApiKey => "apikey".to_string(),
@@ -268,6 +277,46 @@ pub(super) async fn handle_command_action(
                 provider_ids: ids,
                 auth_hints: hints,
             });
+        }
+        CommandAction::ShowEngines => {
+            // Open the panel immediately (loading state) and request data.
+            let _ = gw_tx.send(GwEvent::ShowEngines);
+            let _ = client.send(GatewayCommand::EngineList).await;
+        }
+        CommandAction::EngineAction(engine, action) => {
+            let _ = client
+                .send(GatewayCommand::EngineAction { engine, action })
+                .await;
+        }
+        CommandAction::EngineModelList(engine) => {
+            // Open the panel so the model list has somewhere to land.
+            let _ = gw_tx.send(GwEvent::ShowEngines);
+            let _ = client.send(GatewayCommand::EngineList).await;
+            let _ = client
+                .send(GatewayCommand::EngineModelList { engine })
+                .await;
+        }
+        CommandAction::EngineModelPull(engine, model) => {
+            let _ = gw_tx.send(GwEvent::ShowEngines);
+            let _ = client.send(GatewayCommand::EngineList).await;
+            let _ = client
+                .send(GatewayCommand::EngineModelPull {
+                    engine,
+                    model,
+                    expected_size_bytes: None,
+                })
+                .await;
+        }
+        CommandAction::EngineModelAction(engine, model, action) => {
+            let _ = client
+                .send(GatewayCommand::EngineModelAction {
+                    engine,
+                    model,
+                    action,
+                    context_length: None,
+                    extra_args: Vec::new(),
+                })
+                .await;
         }
         _ => {}
     }

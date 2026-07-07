@@ -8,6 +8,8 @@ use std::time::Instant;
 
 use rustyclaw_view::{chrono, dirs};
 
+use rustyclaw_core::gateway::EngineActionKind;
+
 use super::state;
 use crate::app::UserInput;
 use crate::types::DisplayMessage;
@@ -139,6 +141,9 @@ pub(super) fn handle_normal_key(
         mut show_system_info,
         mut show_services_dialog,
         services_data: _,
+        mut show_engines_dialog,
+        mut engines_data,
+        mut engines_cursor,
     } = ui;
     // ── Normal mode keyboard ────────────────────────
     // System info dialog: Esc to close
@@ -153,6 +158,76 @@ pub(super) fn handle_normal_key(
     if show_services_dialog.get() {
         if code == KeyCode::Esc {
             show_services_dialog.set(false);
+        }
+        return;
+    }
+
+    // Engines dialog: navigate engines, act on the selected one.
+    if show_engines_dialog.get() {
+        let send_input = |input: UserInput| {
+            if let Ok(guard) = tx_for_keys.lock() {
+                if let Some(ref tx) = *guard {
+                    let _ = tx.send(input);
+                }
+            }
+        };
+        let selected_engine = engines_data
+            .read()
+            .as_ref()
+            .and_then(|d| d.engines.get(engines_cursor.get()).cloned());
+        match code {
+            KeyCode::Esc => {
+                show_engines_dialog.set(false);
+            }
+            KeyCode::Up | KeyCode::Down => {
+                let mut data = engines_data.read().clone().unwrap_or_default();
+                let len = data.engines.len();
+                if len > 0 {
+                    let cur = engines_cursor.get();
+                    let next = if code == KeyCode::Up {
+                        cur.saturating_sub(1)
+                    } else {
+                        (cur + 1).min(len - 1)
+                    };
+                    engines_cursor.set(next);
+                    data.selected_engine = data.engines.get(next).map(|e| e.id.clone());
+                    engines_data.set(Some(data));
+                }
+            }
+            KeyCode::Enter => {
+                if let Some(engine) = selected_engine {
+                    send_input(UserInput::EngineSelect(engine.id));
+                }
+            }
+            KeyCode::Char('s') => {
+                if let Some(engine) = selected_engine {
+                    let action = if engine.running {
+                        EngineActionKind::Stop
+                    } else {
+                        EngineActionKind::Start
+                    };
+                    if engine.can(action.as_ref()) {
+                        send_input(UserInput::EngineAction {
+                            engine: engine.id,
+                            action,
+                        });
+                    }
+                }
+            }
+            KeyCode::Char('i') => {
+                if let Some(engine) = selected_engine {
+                    if !engine.installed && engine.can(EngineActionKind::Install.as_ref()) {
+                        send_input(UserInput::EngineAction {
+                            engine: engine.id,
+                            action: EngineActionKind::Install,
+                        });
+                    }
+                }
+            }
+            KeyCode::Char('r') => {
+                send_input(UserInput::EngineRefresh);
+            }
+            _ => {}
         }
         return;
     }

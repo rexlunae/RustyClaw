@@ -11,6 +11,7 @@ use crate::components::command_menu::CommandMenu;
 use crate::components::credential_request_dialog::CredentialRequestDialog;
 use crate::components::details_dialog::DetailsDialog;
 use crate::components::device_flow_dialog::DeviceFlowDialog;
+use crate::components::engines_dialog::EnginesDialog;
 use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
 use crate::components::messages::Messages;
@@ -164,6 +165,10 @@ pub struct RootProps {
     // services dialog overlay (Ctrl-J)
     pub show_services_dialog: bool,
     pub services_data: Option<rustyclaw_view::ServiceListData>,
+
+    // engines dialog overlay (/engines)
+    pub show_engines_dialog: bool,
+    pub engines_data: Option<rustyclaw_view::EnginesPanelData>,
 }
 
 #[component]
@@ -231,6 +236,10 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     // Services dialog state
     let show_services = props.show_services_dialog;
     let services = props.services_data.clone();
+
+    // Engines dialog state
+    let show_engines = props.show_engines_dialog;
+    let engines = props.engines_data.clone();
 
     element! {
         View(
@@ -638,6 +647,25 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         ServicesDialog(
                             services: services,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Engines dialog overlay (/engines) ───────────────────────
+            #(if show_engines {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        EnginesDialog(
+                            data: engines,
                         )
                     }
                 }.into_any()

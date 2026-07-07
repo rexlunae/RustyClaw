@@ -135,6 +135,9 @@ pub(super) fn apply_key_event(
         mut show_system_info,
         mut show_services_dialog,
         services_data: _,
+        show_engines_dialog: _,
+        engines_data: _,
+        engines_cursor: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {

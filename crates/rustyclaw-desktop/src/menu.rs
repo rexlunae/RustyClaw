@@ -17,6 +17,7 @@ pub struct AppMenuIds {
     pub swarm: muda::MenuId,
     pub skills: muda::MenuId,
     pub system_info: muda::MenuId,
+    pub local_models: muda::MenuId,
     pub services: muda::MenuId,
 }
 
@@ -55,6 +56,7 @@ pub fn build_app_menu() -> muda::Menu {
     let swarm = muda::MenuItem::new("Swarm Manager…", true, None);
     let skills = muda::MenuItem::new("Skills…", true, None);
     let services = muda::MenuItem::new("Services…", true, "CmdOrCtrl+J".parse().ok());
+    let local_models = muda::MenuItem::new("Local Models…", true, "CmdOrCtrl+Shift+L".parse().ok());
 
     // Register all IDs before the items are moved into the menu.
     let ids = AppMenuIds {
@@ -69,6 +71,7 @@ pub fn build_app_menu() -> muda::Menu {
         swarm: swarm.id().clone(),
         skills: skills.id().clone(),
         system_info: system_info.id().clone(),
+        local_models: local_models.id().clone(),
         services: services.id().clone(),
     };
     let _ = APP_MENU_IDS.set(ids);
@@ -109,7 +112,15 @@ pub fn build_app_menu() -> muda::Menu {
     let tools_menu = muda::Submenu::with_items(
         "Tools",
         true,
-        &[&settings, &secrets, &pair, &tools_sep, &swarm, &skills],
+        &[
+            &settings,
+            &secrets,
+            &pair,
+            &tools_sep,
+            &swarm,
+            &skills,
+            &local_models,
+        ],
     )
     .expect("failed to build Tools menu");
 
