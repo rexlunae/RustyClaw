@@ -125,7 +125,7 @@ async fn exec_browser_async(args: &Value, action: &str) -> ToolResult {
                         .ok_or("Missing 'fn' for evaluate")?;
                     real::evaluate(tab_id, script).await
                 }
-                _ => Err(format!("Unknown act kind: {}", kind)),
+                _ => Err(format!("Unknown act kind: {}", kind).into()),
             }
         }
 
@@ -154,7 +154,7 @@ async fn exec_browser_async(args: &Value, action: &str) -> ToolResult {
         _ => Err(format!(
             "Unknown action: {}. Valid: status, start, stop, tabs, open, navigate, screenshot, snapshot, close, act, profiles",
             action
-        )),
+        ).into()),
     }
 }
 

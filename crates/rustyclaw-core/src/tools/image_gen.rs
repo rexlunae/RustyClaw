@@ -3,7 +3,7 @@
 //! Provider-agnostic image generation routed through the provider abstraction.
 //! Gated behind the `image-gen` Cargo feature flag.
 
-use crate::tools::error::{ToolError, ToolResult};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -69,7 +69,8 @@ pub async fn exec_image_generate_async(args: &Value, workspace_dir: &Path) -> To
         _ => Err(format!(
             "Unsupported image generation provider: '{}'. Supported: openai, gemini",
             provider
-        )),
+        )
+        .into()),
     }
 }
 
@@ -116,7 +117,7 @@ async fn generate_openai(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("OpenAI API error ({}): {}", status, error_body));
+        return Err(format!("OpenAI API error ({}): {}", status, error_body).into());
     }
 
     let result: Value = response
@@ -189,7 +190,7 @@ async fn generate_gemini(
             .text()
             .await
             .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!("Gemini API error ({}): {}", status, error_body));
+        return Err(format!("Gemini API error ({}): {}", status, error_body).into());
     }
 
     let result: Value = response
@@ -231,7 +232,7 @@ fn resolve_api_key(provider: &str) -> ToolResult {
     let key_names = match provider {
         "openai" => &["OPENAI_API_KEY", "OPENAI_KEY"][..],
         "gemini" => &["GEMINI_API_KEY", "GOOGLE_API_KEY"][..],
-        _ => return Err(format!("No API key mapping for provider: {}", provider)),
+        _ => return Err(format!("No API key mapping for provider: {}", provider).into()),
     };
 
     // Try environment variables
@@ -248,7 +249,8 @@ fn resolve_api_key(provider: &str) -> ToolResult {
          (via environment variable or secrets vault)",
         provider,
         key_names.join(", ")
-    ))
+    )
+    .into())
 }
 
 /// Download an image from a URL and save it locally.

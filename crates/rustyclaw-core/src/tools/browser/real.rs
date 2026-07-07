@@ -2,7 +2,7 @@
 //! `browser` feature.
 
 use super::*;
-use crate::tools::error::{ToolError, ToolResult};
+use crate::tools::error::ToolResult;
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures_util::StreamExt;
@@ -122,7 +122,9 @@ pub async fn list_tabs() -> ToolResult {
             .collect();
         Ok(json!({ "tabs": tabs }).to_string())
     } else {
-        Err("Browser not running. Use action='start' first.".to_string())
+        Err("Browser not running. Use action='start' first."
+            .to_string()
+            .into())
     }
 }
 
@@ -396,7 +398,7 @@ pub async fn close_tab(tab_id: &str) -> ToolResult {
         })
         .to_string())
     } else {
-        Err(format!("Tab not found: {}", tab_id))
+        Err(format!("Tab not found: {}", tab_id).into())
     }
 }
 
