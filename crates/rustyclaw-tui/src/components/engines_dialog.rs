@@ -43,7 +43,12 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
                 } else {
                     "\u{2014}".into()
                 };
-                rows.push((format!("{} [{}]", engine.display_name, badge), models_info));
+                let selected = data.selected_engine.as_deref() == Some(engine.id.as_str());
+                let marker = if selected { "\u{25b6} " } else { "  " };
+                rows.push((
+                    format!("{}{} [{}]", marker, engine.display_name, badge),
+                    models_info,
+                ));
                 if let Some(ref ver) = engine.version {
                     rows.push(("  version".into(), ver.clone()));
                 }
@@ -157,12 +162,17 @@ pub fn EnginesDialog(props: &EnginesDialogProps) -> impl Into<AnyElement<'static
                 View(flex_direction: FlexDirection::Row) {
                     Text(content: "Esc ", color: theme::ACCENT_BRIGHT)
                     Text(content: "close  ", color: theme::MUTED)
-                    Text(content: "Enter ", color: theme::ACCENT_BRIGHT)
+                    Text(content: "\u{2191}/\u{2193} ", color: theme::ACCENT_BRIGHT)
                     Text(content: "select  ", color: theme::MUTED)
+                    Text(content: "Enter ", color: theme::ACCENT_BRIGHT)
+                    Text(content: "models  ", color: theme::MUTED)
                     Text(content: "s ", color: theme::ACCENT_BRIGHT)
                     Text(content: "start/stop  ", color: theme::MUTED)
-                    Text(content: "p ", color: theme::ACCENT_BRIGHT)
-                    Text(content: "pull", color: theme::MUTED)
+                    Text(content: "i ", color: theme::ACCENT_BRIGHT)
+                    Text(content: "install  ", color: theme::MUTED)
+                    Text(content: "r ", color: theme::ACCENT_BRIGHT)
+                    Text(content: "refresh  ", color: theme::MUTED)
+                    Text(content: "/engines pull <e> <m>", color: theme::MUTED)
                 }
             }
         }

@@ -388,9 +388,11 @@ pub fn run_onboard_wizard(
             PROVIDERS.iter().find(|p| p.id == "xai").unwrap()
         } else {
             // No API key provided, show interactive selection
-            let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
+            // (built-in providers plus any user-defined custom providers)
+            let all_providers = rustyclaw_core::providers::all_providers();
+            let provider_names: Vec<&str> = all_providers.iter().map(|p| p.display).collect();
             match arrow_select(&provider_names, "Select a model provider:")? {
-                Some(idx) => &PROVIDERS[idx],
+                Some(idx) => all_providers[idx],
                 None => {
                     println!("  {}", t::warn("Cancelled."));
                     // Save any config changes made during vault setup before returning.
@@ -405,9 +407,11 @@ pub fn run_onboard_wizard(
         }
     } else {
         // No args provided, show interactive selection
-        let provider_names: Vec<&str> = PROVIDERS.iter().map(|p| p.display).collect();
+        // (built-in providers plus any user-defined custom providers)
+        let all_providers = rustyclaw_core::providers::all_providers();
+        let provider_names: Vec<&str> = all_providers.iter().map(|p| p.display).collect();
         match arrow_select(&provider_names, "Select a model provider:")? {
-            Some(idx) => &PROVIDERS[idx],
+            Some(idx) => all_providers[idx],
             None => {
                 println!("  {}", t::warn("Cancelled."));
                 // Save any config changes made during vault setup before returning.

@@ -133,6 +133,9 @@ pub(super) fn apply_gw_event(
         mut show_system_info,
         show_services_dialog: _,
         mut services_data,
+        mut show_engines_dialog,
+        mut engines_data,
+        mut engines_cursor,
     } = ui;
     match ev {
         GwEvent::AuthChallenge => {
@@ -884,11 +887,71 @@ pub(super) fn apply_gw_event(
             }
         }
         // ── Engines ──────────────────────────────────────────────────────
-        // Currently stored in messages; full panel state tracked in P5+.
-        GwEvent::EngineListResult { .. }
-        | GwEvent::EngineModelListResult { .. }
-        | GwEvent::EnginePullProgress { .. } => {
-            // Will be rendered in the engines dialog panel in P5.
+        GwEvent::ShowEngines => {
+            show_engines_dialog.set(true);
+        }
+        GwEvent::EngineListResult { engines } => {
+            let mut data = engines_data.read().clone().unwrap_or_default();
+            // Fill in host resources from the last HostInfo snapshot.
+            if let Some(host) = host_info.read().as_ref() {
+                data.host_ram_bytes = (host.total_memory_gib * 1e9) as u64;
+                data.host_vram_bytes = host.gpus.iter().map(|g| (g.vram_gib * 1e9) as u64).sum();
+                data.host_gpu_name = host.gpus.first().map(|g| g.name.clone());
+            }
+            data.engines = engines;
+            // Keep the cursor in range and the selection marker in sync.
+            let cursor = engines_cursor
+                .get()
+                .min(data.engines.len().saturating_sub(1));
+            engines_cursor.set(cursor);
+            data.selected_engine = data.engines.get(cursor).map(|e| e.id.clone());
+            engines_data.set(Some(data));
+        }
+        GwEvent::EngineModelListResult { engine, models } => {
+            let mut data = engines_data.read().clone().unwrap_or_default();
+            data.selected_engine = Some(engine.clone());
+            data.models = models;
+            if let Some(idx) = data.engines.iter().position(|e| e.id == engine) {
+                engines_cursor.set(idx);
+            }
+            engines_data.set(Some(data));
+        }
+        GwEvent::EnginePullProgress {
+            engine,
+            model,
+            percent,
+            downloaded_bytes,
+            total_bytes,
+            status,
+        } => {
+            let mut data = engines_data.read().clone().unwrap_or_default();
+            let finished = status == "complete" || status == "failed";
+            if finished {
+                data.pull_progress = None;
+                let mut m = messages.read().clone();
+                if status == "complete" {
+                    m.push(DisplayMessage::success(format!(
+                        "Pull complete: {} ({})",
+                        model, engine
+                    )));
+                } else {
+                    m.push(DisplayMessage::warning(format!(
+                        "Pull failed: {} ({})",
+                        model, engine
+                    )));
+                }
+                messages.set(m);
+            } else {
+                data.pull_progress = Some(rustyclaw_view::PullProgressData {
+                    engine,
+                    model,
+                    percent,
+                    downloaded_bytes,
+                    total_bytes,
+                    status,
+                });
+            }
+            engines_data.set(Some(data));
         }
         GwEvent::EngineActionResult { ok, message, .. } => {
             let mut m = messages.read().clone();

@@ -126,4 +126,7 @@ pub(super) struct Ui {
     pub show_system_info: State<bool>,
     pub show_services_dialog: State<bool>,
     pub services_data: State<Option<rustyclaw_view::ServiceListData>>,
+    pub show_engines_dialog: State<bool>,
+    pub engines_data: State<Option<rustyclaw_view::EnginesPanelData>>,
+    pub engines_cursor: State<usize>,
 }

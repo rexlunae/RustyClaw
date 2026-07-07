@@ -267,6 +267,20 @@ pub const PROVIDERS: &[ProviderDef] = &[
         ),
     },
     ProviderDef {
+        id: "joshua",
+        display: "Joshua (local)",
+        auth_method: AuthMethod::None,
+        secret_key: None,
+        device_flow: None,
+        base_url: Some("http://localhost:8331/v1"),
+        models: &[],
+        help_url: Some("https://github.com/rexlunae/joshua"),
+        help_text: Some(
+            "No key needed — pure-Rust local inference. Default port 8331. Serves GGUF models; \
+             manage it via /engines.",
+        ),
+    },
+    ProviderDef {
         id: "opencode",
         display: "OpenCode Zen",
         auth_method: AuthMethod::ApiKey,
@@ -330,10 +344,23 @@ pub const PROVIDERS: &[ProviderDef] = &[
 ];
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
+//
+// All lookups cover both the built-in catalogue and any user-registered
+// custom providers (see [`custom::set_custom_providers`]).
+
+/// Return every known provider: built-ins followed by custom providers.
+pub fn all_providers() -> Vec<&'static ProviderDef> {
+    let mut all: Vec<&'static ProviderDef> = PROVIDERS.iter().collect();
+    all.extend(custom::custom_provider_defs());
+    all
+}
 
 /// Look up a provider by ID.
 pub fn provider_by_id(id: &str) -> Option<&'static ProviderDef> {
-    PROVIDERS.iter().find(|p| p.id == id)
+    PROVIDERS
+        .iter()
+        .find(|p| p.id == id)
+        .or_else(|| custom::custom_provider_by_id(id))
 }
 
 /// Return the secret-key name for the given provider ID, or `None` if the
@@ -349,13 +376,13 @@ pub fn display_name_for_provider(id: &str) -> &str {
 
 /// Return all provider IDs.
 pub fn provider_ids() -> Vec<&'static str> {
-    PROVIDERS.iter().map(|p| p.id).collect()
+    all_providers().into_iter().map(|p| p.id).collect()
 }
 
 /// Return all model names across all providers (for tab-completion).
 pub fn all_model_names() -> Vec<&'static str> {
-    PROVIDERS
-        .iter()
+    all_providers()
+        .into_iter()
         .flat_map(|p| p.models.iter().copied())
         .collect()
 }
@@ -368,6 +395,28 @@ pub fn models_for_provider(id: &str) -> &'static [&'static str] {
 /// Return the base URL for the given provider ID.
 pub fn base_url_for_provider(id: &str) -> Option<&'static str> {
     provider_by_id(id).and_then(|p| p.base_url)
+}
+
+/// Decide which config `base_url` override to keep when switching providers.
+///
+/// A stored override only makes sense for the provider it was entered for
+/// (e.g. the `custom` or `copilot-proxy` prompt).  When switching to a
+/// different provider that has a catalogue base URL, drop the override so
+/// the catalogue URL wins instead of a stale value from the previous
+/// provider.
+pub fn base_url_override_for_switch(
+    new_provider: &str,
+    prev_provider: Option<&str>,
+    prev_base_url: Option<String>,
+) -> Option<String> {
+    if prev_provider == Some(new_provider) {
+        return prev_base_url;
+    }
+    if base_url_for_provider(new_provider).is_none() {
+        // Provider needs a manually-entered URL — keep whatever we had.
+        return prev_base_url;
+    }
+    None
 }
 
 // ── Dynamic model fetching ──────────────────────────────────────────────────
@@ -413,9 +462,11 @@ impl ModelInfo {
 ///
 /// Returns `Err` with a human-readable message on any failure — no silent
 /// fallbacks.  Callers should display the error to the user.
+mod custom;
 mod device_flow;
 mod genai_backend;
 mod models;
+pub use custom::*;
 pub use device_flow::*;
 pub use genai_backend::{
     call_anthropic_with_tools, call_google_with_tools, call_openai_with_tools,
