@@ -11,10 +11,15 @@
 //! * Typed sources (`Io`, `Json`, `Http`, `Sandbox`, `Process`, …) with
 //!   `#[from]` conversions so `?` propagates the per-module error enums
 //!   without stringifying.
+//! * [`ToolError::Context`] for wrapping a convertible error with a human
+//!   prefix while keeping it reachable via `source()`:
+//!   `.map_err(|e| ToolError::context("Failed to read config", e))?`.
+//!   Prefer it over `format!` whenever the source implements
+//!   `Into<ToolError>` — the rendered text is identical.
 //! * [`ToolError::Msg`] for bespoke, hand-written messages. `From<String>`
 //!   and `From<&str>` route existing `format!`-style message construction
-//!   here, so adding context at the failure site stays a one-liner:
-//!   `.map_err(|e| format!("Failed to read {}: {}", path, e))?`.
+//!   here, so third-party leaf errors with no `ToolError` conversion keep
+//!   the one-liner: `.map_err(|e| format!("Failed to parse {}: {}", path, e))?`.
 
 use serde_json::Value;
 
@@ -33,6 +38,9 @@ pub enum ToolError {
     /// Sandbox policy verdict or sandboxed-execution failure.
     #[error(transparent)]
     Sandbox(#[from] crate::sandbox::SandboxError),
+    /// SSRF verdict (blocked URL) or resolution failure.
+    #[error(transparent)]
+    Ssrf(#[from] crate::security::ssrf::SsrfError),
     /// Background-process manager failure.
     #[error(transparent)]
     Process(#[from] crate::process_manager::ProcessError),
@@ -64,6 +72,17 @@ pub enum ToolError {
     #[cfg(feature = "semantic-memory")]
     #[error(transparent)]
     SteelMemory(#[from] crate::steel_memory::SteelMemoryError),
+    /// A typed error wrapped with human context.
+    ///
+    /// Renders as `"{context}: {source}"` — the same text as the old
+    /// `format!("context: {e}")` flattening — while keeping the typed
+    /// error reachable via [`std::error::Error::source`].
+    #[error("{context}: {source}")]
+    Context {
+        context: String,
+        #[source]
+        source: Box<ToolError>,
+    },
     /// Bespoke tool error message.
     #[error("{0}")]
     Msg(String),
@@ -73,6 +92,18 @@ impl ToolError {
     /// Construct a bespoke message error.
     pub fn msg(message: impl Into<String>) -> Self {
         Self::Msg(message.into())
+    }
+
+    /// Wrap an error with a context prefix, preserving it as `source()`.
+    ///
+    /// Prefer this over `format!("context: {e}")` when the underlying
+    /// error converts into [`ToolError`] — the rendered message is
+    /// identical, but the typed source survives.
+    pub fn context(context: impl Into<String>, source: impl Into<ToolError>) -> Self {
+        Self::Context {
+            context: context.into(),
+            source: Box::new(source.into()),
+        }
     }
 }
 
@@ -104,4 +135,36 @@ pub fn require_str<'a>(args: &'a Value, name: &str) -> ToolResult<&'a str> {
     args.get(name)
         .and_then(|v| v.as_str())
         .ok_or_else(|| missing_param(name))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn context_preserves_typed_source() {
+        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let err = ToolError::context("Failed to read config", io);
+
+        // Message is identical to the old format!("{context}: {e}") text.
+        assert_eq!(err.to_string(), "Failed to read config: gone");
+
+        // The typed source survives the wrapping and is matchable.
+        let source = err.source().expect("context keeps its source");
+        assert_eq!(source.to_string(), "gone");
+        match &err {
+            ToolError::Context { source, .. } => assert!(matches!(**source, ToolError::Io(_))),
+            other => panic!("expected Context variant, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn from_str_and_string_produce_msg() {
+        assert!(matches!(ToolError::from("boom"), ToolError::Msg(_)));
+        assert!(matches!(
+            ToolError::from(String::from("boom")),
+            ToolError::Msg(_)
+        ));
+    }
 }

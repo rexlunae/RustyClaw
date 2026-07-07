@@ -134,7 +134,7 @@ async fn exec_model_enable(args: &Value, model_registry: &SharedModelRegistry) -
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
-    registry.enable(&model_id).map_err(|e| e.to_string())?;
+    registry.enable(&model_id)?;
 
     Ok(json!({
         "success": true,
@@ -149,7 +149,7 @@ async fn exec_model_disable(args: &Value, model_registry: &SharedModelRegistry) 
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
-    registry.disable(&model_id).map_err(|e| e.to_string())?;
+    registry.disable(&model_id)?;
 
     Ok(json!({
         "success": true,
@@ -179,7 +179,7 @@ async fn exec_model_set(args: &Value, model_registry: &SharedModelRegistry) -> T
         }
     }
 
-    registry.set_active(&model_id).map_err(|e| e.to_string())?;
+    registry.set_active(&model_id)?;
 
     Ok(json!({
         "success": true,
@@ -351,7 +351,7 @@ async fn exec_service_start(args: &Value) -> ToolResult {
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
     let mut mgr = mgr.write().await;
-    let info = mgr.start(&name).await.map_err(|e| e.to_string())?;
+    let info = mgr.start(&name).await?;
     Ok(json!({
         "ok": true,
         "service": info.name,
@@ -366,7 +366,7 @@ async fn exec_service_stop(args: &Value) -> ToolResult {
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
     let mut mgr = mgr.write().await;
-    let info = mgr.stop(&name).await.map_err(|e| e.to_string())?;
+    let info = mgr.stop(&name).await?;
     Ok(json!({
         "ok": true,
         "service": info.name,
@@ -380,7 +380,7 @@ async fn exec_service_restart(args: &Value) -> ToolResult {
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
     let mut mgr = mgr.write().await;
-    let info = mgr.restart(&name).await.map_err(|e| e.to_string())?;
+    let info = mgr.restart(&name).await?;
     Ok(json!({
         "ok": true,
         "service": info.name,
@@ -399,7 +399,7 @@ async fn exec_service_logs(args: &Value) -> ToolResult {
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
     let mgr = mgr.read().await;
-    let lines = mgr.logs(&name, tail).map_err(|e| e.to_string())?;
+    let lines = mgr.logs(&name, tail)?;
     Ok(json!({
         "service": name,
         "lines": lines,

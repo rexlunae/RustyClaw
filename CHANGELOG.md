@@ -45,6 +45,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Structured-error preservation pass over the tool layer.**
+  `ToolError` gains a `Context` variant plus `ToolError::context(ctx, e)`:
+  it renders identically to the previous `format!("ctx: {e}")` flattening
+  but keeps the typed error reachable via `source()`. 37 convertible
+  context sites now preserve their sources; `format!` remains only for
+  third-party leaf errors with no `ToolError` conversion. A new `Ssrf`
+  variant propagates `SsrfError` verdicts through `web_fetch` untouched,
+  and the gateway model/task handlers use plain `?` instead of
+  `.map_err(|e| e.to_string())` for registry/service/task errors.
+  Unit tests assert the source chain survives `Context` wrapping.
+
 - **AI-tool layer moved to typed errors (`ToolError` / `ToolResult`).**
   All `exec_*` tool implementations (~45 files in `core/src/tools/**` and
   the gateway tool handlers) now return `ToolResult` instead of

@@ -347,7 +347,7 @@ async fn sh_async(script: &str) -> ToolResult {
         .arg(script)
         .output()
         .await
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -390,7 +390,7 @@ async fn ollama_api_async(method: &str, path: &str, body: Option<&Value>) -> Too
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Ollama API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Ollama API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -401,8 +401,7 @@ async fn ollama_api_async(method: &str, path: &str, body: Option<&Value>) -> Too
     response
         .text()
         .await
-        .map_err(|e| format!("Failed to read response: {}", e))
-        .map_err(ToolError::from)
+        .map_err(|e| ToolError::context("Failed to read response", e))
 }
 
 async fn is_ollama_installed_async() -> bool {
@@ -426,7 +425,7 @@ fn sh(script: &str) -> ToolResult {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -460,7 +459,9 @@ fn ollama_api(method: &str, path: &str, body: Option<&Value>) -> ToolResult {
     }
     cmd.arg(&url);
 
-    let output = cmd.output().map_err(|e| format!("curl error: {}", e))?;
+    let output = cmd
+        .output()
+        .map_err(|e| ToolError::context("curl error", e))?;
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
 

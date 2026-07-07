@@ -143,10 +143,7 @@ async fn exec_task_status(args: &Value, task_mgr: &SharedTaskManager) -> ToolRes
 async fn exec_task_foreground(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
-    task_mgr
-        .set_foreground(task_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    task_mgr.set_foreground(task_id).await?;
 
     let task = task_mgr
         .get(task_id)
@@ -166,10 +163,7 @@ async fn exec_task_foreground(args: &Value, task_mgr: &SharedTaskManager) -> Too
 async fn exec_task_background(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
-    task_mgr
-        .set_background(task_id)
-        .await
-        .map_err(|e| e.to_string())?;
+    task_mgr.set_background(task_id).await?;
 
     let task = task_mgr
         .get(task_id)
@@ -189,7 +183,7 @@ async fn exec_task_background(args: &Value, task_mgr: &SharedTaskManager) -> Too
 async fn exec_task_cancel(args: &Value, task_mgr: &SharedTaskManager) -> ToolResult {
     let task_id = parse_task_id(args)?;
 
-    task_mgr.cancel(task_id).await.map_err(|e| e.to_string())?;
+    task_mgr.cancel(task_id).await?;
 
     Ok(json!({
         "success": true,
@@ -316,10 +310,7 @@ async fn exec_task_describe(
         return Err("No task ID provided and no session context".into());
     };
 
-    task_mgr
-        .set_description(task_id, description)
-        .await
-        .map_err(|e| e.to_string())?;
+    task_mgr.set_description(task_id, description).await?;
 
     Ok(json!({
         "success": true,

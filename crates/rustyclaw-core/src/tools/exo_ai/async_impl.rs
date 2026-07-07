@@ -256,10 +256,10 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> ToolR
             }
 
             let log_file = std::fs::File::create(&log_path)
-                .map_err(|e| format!("Cannot create log file: {}", e))?;
+                .map_err(|e| ToolError::context("Cannot create log file", e))?;
             let log_err = log_file
                 .try_clone()
-                .map_err(|e| format!("Cannot clone log handle: {}", e))?;
+                .map_err(|e| ToolError::context("Cannot clone log handle", e))?;
 
             let mut cmd = std::process::Command::new(&cmd_parts[0]);
             cmd.args(&cmd_parts[1..])
@@ -280,7 +280,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> ToolR
             }
 
             cmd.spawn()
-                .map_err(|e| format!("Failed to spawn exo: {}", e))?;
+                .map_err(|e| ToolError::context("Failed to spawn exo", e))?;
 
             for i in 0..15 {
                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
@@ -559,10 +559,10 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> ToolR
             let preview_path = format!("/instance/previews?model_id={}", model);
             let previews_resp = exo_api_async("GET", &preview_path, port, None)
                 .await
-                .map_err(|e| format!("Failed to get placements: {}", e))?;
+                .map_err(|e| ToolError::context("Failed to get placements", e))?;
 
             let previews: Value = serde_json::from_str(&previews_resp)
-                .map_err(|e| format!("Invalid preview response: {}", e))?;
+                .map_err(|e| ToolError::context("Invalid preview response", e))?;
 
             let instance = previews
                 .get("previews")
@@ -595,7 +595,7 @@ pub async fn exec_exo_manage_async(args: &Value, _workspace_dir: &Path) -> ToolR
             } else if let Some(model) = args.get("model").and_then(|v| v.as_str()) {
                 let state_resp = exo_api_async("GET", "/state", port, None)
                     .await
-                    .map_err(|e| format!("Failed to query state: {}", e))?;
+                    .map_err(|e| ToolError::context("Failed to query state", e))?;
                 Ok(format!(
                     "To unload '{}', provide instance_id. State:\n{}",
                     model, state_resp
@@ -663,7 +663,7 @@ async fn sh_async(script: &str) -> ToolResult {
         .arg(script)
         .output()
         .await
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -692,7 +692,7 @@ async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
-        .map_err(|e| format!("Failed to create client: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create client", e))?;
 
     let request = match method.to_uppercase().as_str() {
         "GET" => client.get(&url),
@@ -712,7 +712,7 @@ async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) 
     let response = request
         .send()
         .await
-        .map_err(|e| format!("Request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -723,8 +723,7 @@ async fn exo_api_async(method: &str, path: &str, port: u64, body: Option<&str>) 
     response
         .text()
         .await
-        .map_err(|e| format!("Failed to read response: {}", e))
-        .map_err(ToolError::from)
+        .map_err(|e| ToolError::context("Failed to read response", e))
 }
 
 async fn is_uv_installed_async() -> bool {

@@ -104,8 +104,7 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
     };
 
     serde_json::to_string_pretty(&result)
-        .map_err(|e| format!("Failed to serialize result: {}", e))
-        .map_err(ToolError::from)
+        .map_err(|e| ToolError::context("Failed to serialize result", e))
 }
 
 /// Send a message to a session.
