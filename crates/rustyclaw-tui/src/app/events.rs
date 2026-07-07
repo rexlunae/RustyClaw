@@ -195,6 +195,10 @@ pub(crate) enum GwEvent {
         ok: bool,
         message: String,
     },
+    /// Clear the message display (/clear).
+    ClearMessages,
+    /// Show gateway connection status (/gateway).
+    ShowGatewayStatus,
     /// Open the cron panel (data arrives via CronListResult).
     ShowCron,
     /// Cron job list received.

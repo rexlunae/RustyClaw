@@ -73,6 +73,7 @@ pub(super) fn handle_normal_key(
         mut user_prompt_input,
         mut user_prompt_type,
         mut user_prompt_selected,
+        user_prompt_checked: _,
         mut show_credential_request,
         mut credential_request_id,
         mut credential_request_provider,

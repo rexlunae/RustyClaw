@@ -58,6 +58,8 @@ pub(super) struct Ui {
     pub user_prompt_input: State<String>,
     pub user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>>,
     pub user_prompt_selected: State<usize>,
+    /// Per-option checked flags for MultiSelect prompts.
+    pub user_prompt_checked: State<Vec<bool>>,
     pub show_credential_request: State<bool>,
     pub credential_request_id: State<String>,
     pub credential_request_provider: State<String>,

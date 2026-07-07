@@ -318,6 +318,12 @@ pub(super) async fn handle_command_action(
                 })
                 .await;
         }
+        CommandAction::ClearMessages => {
+            let _ = gw_tx.send(GwEvent::ClearMessages);
+        }
+        CommandAction::GatewayInfo => {
+            let _ = gw_tx.send(GwEvent::ShowGatewayStatus);
+        }
         CommandAction::ShowCron => {
             let _ = gw_tx.send(GwEvent::ShowCron);
             let _ = client.send(GatewayCommand::CronList).await;

@@ -115,6 +115,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let user_prompt_type: State<Option<rustyclaw_core::user_prompt_types::PromptType>> =
         hooks.use_state(|| None);
     let user_prompt_selected = hooks.use_state(|| 0usize);
+    let user_prompt_checked: State<Vec<bool>> = hooks.use_state(Vec::new);
 
     // ── Credential request dialog state ───────────────────────────────
     let show_credential_request = hooks.use_state(|| false);
@@ -277,6 +278,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         user_prompt_input,
         user_prompt_type,
         user_prompt_selected,
+        user_prompt_checked,
         show_credential_request,
         credential_request_id,
         credential_request_provider,
@@ -529,6 +531,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             user_prompt_input: user_prompt_input.read().clone(),
             user_prompt_type: user_prompt_type.read().clone(),
             user_prompt_selected: user_prompt_selected.get(),
+            user_prompt_checked: user_prompt_checked.read().clone(),
             show_credential_request: show_credential_request.get(),
             credential_request: rustyclaw_view::CredentialRequestData {
                 provider: credential_request_provider.read().clone(),

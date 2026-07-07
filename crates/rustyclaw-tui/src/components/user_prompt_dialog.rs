@@ -14,6 +14,8 @@ pub struct UserPromptDialogProps {
     pub input: String,
     /// Selected option index (for Select/MultiSelect).
     pub selected: usize,
+    /// Per-option checked flags (for MultiSelect).
+    pub checked: Vec<bool>,
     /// The prompt type (serialized for prop passing).
     pub prompt_type: Option<PromptType>,
 }
@@ -181,20 +183,27 @@ pub fn UserPromptDialog(props: &UserPromptDialogProps) -> impl Into<AnyElement<'
                         }.into_any()
                     }
                     PromptType::MultiSelect { options, .. } => {
-                        // For multi-select, we'd need a Vec<bool> for checked state
-                        // For now, render as single-select
+                        let checked = props.checked.clone();
                         element! {
                             View(flex_direction: FlexDirection::Column) {
                                 Text(content: "Select options (Space to toggle, Enter to confirm):", color: theme::MUTED)
                                 View(height: 1)
                                 #(options.iter().enumerate().map(|(i, opt)| {
                                     let is_selected = i == props.selected;
-                                    let prefix = if is_selected { "▶ [ ] " } else { "  [ ] " };
-                                    let fg = if is_selected { theme::ACCENT_BRIGHT } else { theme::TEXT };
+                                    let is_checked = checked.get(i).copied().unwrap_or(false);
+                                    let cursor = if is_selected { "▶" } else { " " };
+                                    let boxmark = if is_checked { "[x]" } else { "[ ]" };
+                                    let fg = if is_selected {
+                                        theme::ACCENT_BRIGHT
+                                    } else if is_checked {
+                                        theme::SUCCESS
+                                    } else {
+                                        theme::TEXT
+                                    };
                                     element! {
                                         View(key: i as u64) {
                                             Text(
-                                                content: format!("{}{}", prefix, opt.label),
+                                                content: format!("{} {} {}", cursor, boxmark, opt.label),
                                                 color: fg,
                                             )
                                         }

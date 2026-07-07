@@ -9,12 +9,6 @@ pub enum CommandAction {
     None,
     ClearMessages,
     Quit,
-    /// Start (connect) the gateway
-    GatewayStart,
-    /// Stop (disconnect) the gateway
-    GatewayStop,
-    /// Restart the gateway connection
-    GatewayRestart,
     /// Show gateway status info (no subcommand given)
     GatewayInfo,
     /// Change the active provider
@@ -33,8 +27,6 @@ pub enum CommandAction {
     GatewayReload,
     /// Fetch the live model list from the provider API
     FetchModels,
-    /// Download media by ID (id, optional destination path)
-    Download(String, Option<String>),
     /// Create a new thread
     ThreadNew(String),
     /// Attach a file to the next prompt
@@ -107,7 +99,6 @@ fn base_command_names() -> Vec<String> {
     let mut names: Vec<String> = vec![
         "help".into(),
         "clear".into(),
-        "download".into(),
         "attach".into(),
         "attach file".into(),
         "attach dir".into(),
@@ -117,9 +108,6 @@ fn base_command_names() -> Vec<String> {
         "onboard".into(),
         "reload-skills".into(),
         "gateway".into(),
-        "gateway start".into(),
-        "gateway stop".into(),
-        "gateway restart".into(),
         "reload".into(),
         "provider".into(),
         "model".into(),
@@ -362,8 +350,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             messages: vec![
                 "Available commands:".to_string(),
                 "  /help                    - Show this help".to_string(),
-                "  /clear                   - Clear messages and conversation memory".to_string(),
-                "  /download <id> [path]    - Download media attachment to file".to_string(),
+                "  /clear                   - Clear the message display".to_string(),
                 "  /attach file <path>      - Attach a file to the next prompt".to_string(),
                 "  /attach dir <path>       - Attach a directory to the next prompt".to_string(),
                 "  /attach clear            - Clear prompt attachments".to_string(),
@@ -373,9 +360,6 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     .to_string(),
                 "  /reload-skills           - Reload skills".to_string(),
                 "  /gateway                 - Show gateway connection status".to_string(),
-                "  /gateway start           - Connect to the gateway".to_string(),
-                "  /gateway stop            - Disconnect from the gateway".to_string(),
-                "  /gateway restart         - Restart the gateway connection".to_string(),
                 "  /reload                  - Reload gateway config (no restart)".to_string(),
                 "  /provider <name>         - Change the AI provider".to_string(),
                 "  /provider add <id> <url> - Add a custom provider (local/self-hosted)"
@@ -388,6 +372,8 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /engines start <engine>  - Start a local engine (also: stop/install)"
                     .to_string(),
                 "  /engines pull <e> <m>    - Download a model for an engine".to_string(),
+                "  /engines models <engine> - List an engine's models (also: load/unload/remove)"
+                    .to_string(),
                 "  /skills                  - Show loaded skills".to_string(),
                 "  /skill                   - Skill management (info/install/publish/link)"
                     .to_string(),
@@ -416,32 +402,29 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /thread rename <id> <l>  - Rename a thread".to_string(),
                 "  /thread bg               - Background the current thread".to_string(),
                 "  /thread fg <id>          - Foreground a thread by ID".to_string(),
+                "  /quit (/q, /exit)        - Exit the TUI".to_string(),
+                "".to_string(),
+                "Keyboard shortcuts:".to_string(),
+                "  Ctrl+C quit · Esc cancel run/close dialog · Tab focus threads".to_string(),
+                "  Ctrl+P pair gateway · Ctrl+H system info · Ctrl+J services".to_string(),
+                "  Ctrl+D message details · Ctrl+E collapse message".to_string(),
+                "  Ctrl+Y copy message · Ctrl+S save message to ~/.rustyclaw/messages".to_string(),
+                "  ↑/↓ scroll messages · Enter send · Shift+Enter newline".to_string(),
             ],
             action: CommandAction::None,
         },
         "clear" => CommandResponse {
-            messages: vec!["Messages and conversation memory cleared.".to_string()],
+            messages: Vec::new(),
             action: CommandAction::ClearMessages,
         },
-        "download" => {
-            if parts.len() < 2 {
-                CommandResponse {
-                    messages: vec![
-                        "Usage: /download <media_id> [destination_path]".to_string(),
-                        "Example: /download media_0001".to_string(),
-                        "Example: /download media_0001 ~/Downloads/image.jpg".to_string(),
-                    ],
-                    action: CommandAction::None,
-                }
-            } else {
-                let media_id = parts[1].to_string();
-                let dest_path = parts.get(2).map(|s| s.to_string());
-                CommandResponse {
-                    messages: vec![format!("Downloading {}...", media_id)],
-                    action: CommandAction::Download(media_id, dest_path),
-                }
-            }
-        }
+        "download" => CommandResponse {
+            // No client-side media registry exists yet to download from.
+            messages: vec![
+                "Media downloads aren't implemented in this client yet.".to_string(),
+                "Tool results that produce files save them on the gateway host.".to_string(),
+            ],
+            action: CommandAction::None,
+        },
         "attach" => match parts.get(1).copied() {
             Some("file") => {
                 let path = trimmed
@@ -536,22 +519,21 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             action: CommandAction::None,
         },
         "gateway" => match parts.get(1).copied() {
-            Some("start") => CommandResponse {
-                messages: vec!["Starting gateway connection…".to_string()],
-                action: CommandAction::GatewayStart,
-            },
-            Some("stop") => CommandResponse {
-                messages: vec!["Stopping gateway connection…".to_string()],
-                action: CommandAction::GatewayStop,
-            },
-            Some("restart") => CommandResponse {
-                messages: vec!["Restarting gateway connection…".to_string()],
-                action: CommandAction::GatewayRestart,
+            Some("start" | "stop" | "restart") => CommandResponse {
+                // The TUI's connection is established by the startup
+                // connection dialog; the daemon itself is controlled from
+                // the CLI.
+                messages: vec![
+                    "The TUI cannot control the gateway daemon.".to_string(),
+                    "Control it from a terminal:  rustyclaw gateway start|stop|restart".to_string(),
+                    "To reconnect this client, restart the TUI.".to_string(),
+                ],
+                action: CommandAction::None,
             },
             Some(sub) => CommandResponse {
                 messages: vec![
                     format!("Unknown gateway subcommand: {}", sub),
-                    "Usage: /gateway start|stop|restart".to_string(),
+                    "Usage: /gateway — show connection status".to_string(),
                 ],
                 action: CommandAction::None,
             },

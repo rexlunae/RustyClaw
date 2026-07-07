@@ -65,6 +65,7 @@ pub(super) fn apply_gw_event(
         mut user_prompt_input,
         mut user_prompt_type,
         mut user_prompt_selected,
+        mut user_prompt_checked,
         mut show_credential_request,
         mut credential_request_id,
         mut credential_request_provider,
@@ -445,6 +446,23 @@ pub(super) fn apply_gw_event(
                 _ => 0,
             };
             user_prompt_selected.set(default_sel);
+            // Seed MultiSelect checkboxes from the prompt's defaults.
+            let checked = match &prompt.prompt_type {
+                rustyclaw_core::user_prompt_types::PromptType::MultiSelect {
+                    options,
+                    defaults,
+                } => {
+                    let mut checked = vec![false; options.len()];
+                    for &i in defaults {
+                        if let Some(slot) = checked.get_mut(i) {
+                            *slot = true;
+                        }
+                    }
+                    checked
+                }
+                _ => Vec::new(),
+            };
+            user_prompt_checked.set(checked);
             show_user_prompt.set(true);
 
             // Build informative message based on prompt type
@@ -455,6 +473,10 @@ pub(super) fn apply_gw_event(
                 }
                 rustyclaw_core::user_prompt_types::PromptType::Confirm { .. } => {
                     "Yes/No".to_string()
+                }
+                rustyclaw_core::user_prompt_types::PromptType::MultiSelect { options, .. } => {
+                    let opt_list: Vec<_> = options.iter().map(|o| o.label.as_str()).collect();
+                    format!("Select any of: {} (Space toggles)", opt_list.join(", "))
                 }
                 _ => "Type your answer".to_string(),
             };
@@ -971,6 +993,28 @@ pub(super) fn apply_gw_event(
                     message
                 )));
             }
+            messages.set(m);
+        }
+        GwEvent::ClearMessages => {
+            streaming_buf.set(String::new());
+            selected_message_idx.set(None);
+            scroll_offset.set(0);
+            messages.set(vec![DisplayMessage::info(
+                "Messages cleared. (Thread history on the gateway is unaffected — switch threads to reload it.)",
+            )]);
+        }
+        GwEvent::ShowGatewayStatus => {
+            let status = gw_status.get();
+            let model_label = dynamic_model_label
+                .read()
+                .clone()
+                .unwrap_or_else(|| "(no model)".to_string());
+            let mut m = messages.read().clone();
+            m.push(DisplayMessage::info(format!(
+                "Gateway: {} · {}",
+                status.label(),
+                model_label
+            )));
             messages.set(m);
         }
         // ── Gateway panels (cron / memory / MCP / channels) ──────────────

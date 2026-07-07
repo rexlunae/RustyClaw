@@ -103,6 +103,7 @@ pub struct RootProps {
     pub user_prompt_input: String,
     pub user_prompt_type: Option<rustyclaw_core::user_prompt_types::PromptType>,
     pub user_prompt_selected: usize,
+    pub user_prompt_checked: Vec<bool>,
 
     // credential request dialog overlay
     pub show_credential_request: bool,
@@ -425,6 +426,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                             input: props.user_prompt_input.clone(),
                             prompt_type: props.user_prompt_type.clone(),
                             selected: props.user_prompt_selected,
+                            checked: props.user_prompt_checked.clone(),
                         )
                     }
                 }.into_any()
