@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **User-configured custom model providers.** New `[[custom_providers]]`
+  config section (id, display name, base URL, API format, optional API-key
+  secret, optional static model list). Entries are registered into the
+  provider catalogue at load time (`providers::set_custom_providers`), so
+  they appear alongside the built-ins in the TUI `/provider` selector, the
+  onboarding wizard, the desktop settings/model bar, tab completion, and
+  every credential/base-URL resolution path. Chat dispatch maps each custom
+  provider's `api_format` (`openai` | `anthropic` | `gemini` | `xai`) onto
+  the matching genai adapter, and model listing honours the format (with a
+  static-list fallback when the endpoint is unreachable). New TUI commands:
+  `/provider add <id> <base_url> [format=…] [key=…] [models=…] [name=…]`,
+  `/provider remove <id>`, `/provider list`.
+- **Joshua local inference engine.** [Joshua](https://github.com/rexlunae/joshua)
+  (pure-Rust GGUF server) is now a first-class engine and provider:
+  detect/install (`cargo install`), start/stop (`joshua serve --model … --addr
+  127.0.0.1:8331`), GGUF model scan of `~/.rustyclaw/models/joshua` (or the
+  configured `models_dir`), Hugging Face pulls (GGUF + `tokenizer.json`), and
+  load/unload by restarting the single-model server. `EngineConfig` gains a
+  `default_model` field for single-model-per-process engines, and engine
+  auto-start (`engine_service_defs`) resolves the GGUF to serve.
+- **`/engines` panel in the TUI.** The previously stubbed engines dialog is
+  now wired end-to-end: `/engines` opens a live panel showing each engine's
+  install/run state, endpoint, and models; ↑/↓ selects an engine, Enter lists
+  its models, `s` starts/stops, `i` installs, `r` refreshes, and pull progress
+  renders in-panel. Subcommands: `/engines start|stop|install <engine>`,
+  `/engines models <engine>`, `/engines pull <engine> <model>`,
+  `/engines load|unload|remove <engine> <model>`.
+
+### Fixed
+
+- Switching providers no longer carries a stale `base_url` override from the
+  previous provider into the new selection (it is kept only when the new
+  provider has no catalogue URL, e.g. `custom` / `copilot-proxy`).
+
 ### Changed
 
 - **Provider backend migrated to the `genai` crate.** The gateway's hand-rolled

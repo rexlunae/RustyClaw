@@ -30,6 +30,43 @@ use_secrets = true
 # host_key = "/home/user/.rustyclaw/ssh_host_key"  # Auto-generated if missing
 # authorized_keys = "/home/user/.rustyclaw/authorized_clients"
 
+# Selected model provider and default model
+# [model]
+# provider = "anthropic"
+# model = "claude-sonnet-4-20250514"
+
+# ── Custom model providers ────────────────────────────────────────────────
+# Register your own providers (self-hosted / local OpenAI-compatible servers,
+# alternative API gateways, …). They appear in every provider menu alongside
+# the built-ins and can be managed from the TUI with:
+#   /provider add <id> <base_url> [format=…] [key=…] [models=…] [name=…]
+#   /provider remove <id>
+#   /provider list
+#
+# [[custom_providers]]
+# id = "my-vllm"                                # lowercase letters/digits/-/_
+# display_name = "vLLM on the GPU box"          # optional, defaults to id
+# base_url = "http://192.168.1.50:8000/v1"
+# api_format = "openai"                         # openai | anthropic | gemini | xai
+# api_key_secret = "MY_VLLM_API_KEY"            # optional; vault secret or env var
+# models = ["qwen3-coder-30b", "llama-3.3-70b"] # optional; /v1/models is also queried
+
+# ── Local inference engines ───────────────────────────────────────────────
+# Engines are managed from the TUI /engines panel (install/start/stop/pull).
+# Joshua (https://github.com/rexlunae/joshua) is a pure-Rust GGUF server:
+# one process serves one model, picked from models_dir at startup.
+#
+# [engines.joshua]
+# enabled = true
+# port = 8331                                   # RustyClaw's default for joshua
+# models_dir = "/home/user/.rustyclaw/models/joshua"
+# default_model = "qwen3-4b-Q4_K_M"             # GGUF file stem to serve
+# auto_start = true                             # start with the gateway
+#
+# [engines.ollama]
+# enabled = true
+# auto_start = false
+
 # Messenger configurations
 # [[messengers]]
 # name = "slack"

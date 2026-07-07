@@ -479,9 +479,8 @@ impl SecretsManager {
     /// Produce a human-readable label and [`SecretKind`] for a legacy
     /// bare vault key.
     pub(super) fn label_for_legacy_key(key: &str) -> (String, SecretKind) {
-        use crate::providers::PROVIDERS;
-        // Check known providers first.
-        for p in PROVIDERS {
+        // Check known providers first (built-in and custom).
+        for p in crate::providers::all_providers() {
             if p.secret_key == Some(key) {
                 let kind = match p.auth_method {
                     crate::providers::AuthMethod::DeviceFlow => SecretKind::Token,

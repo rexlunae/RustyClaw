@@ -606,8 +606,16 @@ pub fn create_model_registry() -> SharedModelRegistry {
 
 /// Infer the [`ProviderKind`] from a provider id.
 pub fn infer_provider_kind(provider_id: &str) -> ProviderKind {
+    // Custom providers pointing at the local host count as internal.
+    if let Some(cfg) = crate::providers::custom_provider_config(provider_id) {
+        return if cfg.is_local() {
+            ProviderKind::Internal
+        } else {
+            ProviderKind::External
+        };
+    }
     match provider_id {
-        "ollama" | "lmstudio" | "exo" | "llamacpp" | "vllm" => ProviderKind::Internal,
+        "ollama" | "lmstudio" | "exo" | "llamacpp" | "vllm" | "joshua" => ProviderKind::Internal,
         "github-copilot" => ProviderKind::Subscription,
         _ => ProviderKind::External,
     }
@@ -623,8 +631,9 @@ pub fn infer_cost_tier(provider_id: &str, model_id: &str) -> CostTier {
     // Local / subscription providers are always free at point-of-use.
     if matches!(
         provider_id,
-        "ollama" | "lmstudio" | "exo" | "github-copilot"
-    ) {
+        "ollama" | "lmstudio" | "exo" | "llamacpp" | "joshua" | "github-copilot"
+    ) || infer_provider_kind(provider_id).is_local()
+    {
         return CostTier::Free;
     }
 

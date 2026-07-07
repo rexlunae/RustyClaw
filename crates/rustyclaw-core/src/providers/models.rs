@@ -51,6 +51,77 @@ pub async fn fetch_models_detailed(
         return Ok(static_models);
     }
 
+    // Custom providers: dispatch on the configured API format.  Anthropic-
+    // format endpoints have no reliable public models listing, so fall back
+    // to the configured static list.
+    if let Some(format) = api_format_for_provider(provider_id) {
+        let result = match format {
+            ApiFormat::Gemini => fetch_google_models_detailed(base, api_key).await,
+            ApiFormat::Anthropic => {
+                let static_models: Vec<ModelInfo> = def
+                    .models
+                    .iter()
+                    .map(|id| ModelInfo {
+                        id: id.to_string(),
+                        name: None,
+                        context_length: None,
+                        pricing_prompt: None,
+                        pricing_completion: None,
+                    })
+                    .collect();
+                if static_models.is_empty() {
+                    Err(anyhow!(
+                        "{} uses the Anthropic API format, which has no model-list endpoint. \
+                         Add a `models = [...]` list to its [[custom_providers]] entry.",
+                        def.display
+                    ))
+                } else {
+                    Ok(static_models)
+                }
+            }
+            ApiFormat::OpenAi | ApiFormat::Xai => {
+                // Live fetch, falling back to the configured static list when
+                // the endpoint is unreachable (e.g. local server not running).
+                match fetch_openai_compatible_models_detailed(base, api_key).await {
+                    Ok(models) if !models.is_empty() => Ok(models),
+                    other => {
+                        let static_models: Vec<ModelInfo> = def
+                            .models
+                            .iter()
+                            .map(|id| ModelInfo {
+                                id: id.to_string(),
+                                name: None,
+                                context_length: None,
+                                pricing_prompt: None,
+                                pricing_completion: None,
+                            })
+                            .collect();
+                        if static_models.is_empty() {
+                            other
+                        } else {
+                            if let Err(e) = other {
+                                tracing::warn!(
+                                    provider = provider_id,
+                                    error = %format!("{:#}", e),
+                                    "Live model fetch failed — using configured static list"
+                                );
+                            }
+                            Ok(static_models)
+                        }
+                    }
+                }
+            }
+        };
+        return match result {
+            Ok(models) if models.is_empty() => Err(anyhow!(
+                "The {} API returned an empty model list.",
+                def.display
+            )),
+            Ok(models) => Ok(models),
+            Err(e) => Err(e.context(format!("Failed to fetch models from {}", def.display))),
+        };
+    }
+
     let result: Result<Vec<ModelInfo>> = match provider_id {
         // Google Gemini uses a different response shape
         "google" => fetch_google_models_detailed(base, api_key).await,
