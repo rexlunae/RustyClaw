@@ -111,6 +111,15 @@ pub(crate) enum UserInput {
     },
     /// Cancel the current provider-flow dialog
     CancelProviderFlow,
+    /// Engines panel: select an engine (fetch its model list)
+    EngineSelect(String),
+    /// Engines panel: lifecycle action (install/start/stop)
+    EngineAction {
+        engine: String,
+        action: String,
+    },
+    /// Engines panel: refresh the engine list
+    EngineRefresh,
     /// Initiate SSH pairing connection
     PairingConnect {
         host: String,
@@ -562,10 +571,12 @@ impl App {
                                 config.model = Some(rustyclaw_core::config::ModelProvider {
                                     provider: provider_id.clone(),
                                     model: existing_model,
-                                    base_url: config
-                                        .model
-                                        .as_ref()
-                                        .and_then(|m| m.base_url.clone()),
+                                    base_url:
+                                        rustyclaw_core::providers::base_url_override_for_switch(
+                                            &provider_id,
+                                            config.model.as_ref().map(|m| m.provider.as_str()),
+                                            config.model.as_ref().and_then(|m| m.base_url.clone()),
+                                        ),
                                 });
                                 let _ = config.save(None);
                                 // Reload gateway
@@ -626,10 +637,15 @@ impl App {
                                     config.model = Some(rustyclaw_core::config::ModelProvider {
                                         provider: provider_id.clone(),
                                         model: existing_model,
-                                        base_url: config
-                                            .model
-                                            .as_ref()
-                                            .and_then(|m| m.base_url.clone()),
+                                        base_url:
+                                            rustyclaw_core::providers::base_url_override_for_switch(
+                                                &provider_id,
+                                                config.model.as_ref().map(|m| m.provider.as_str()),
+                                                config
+                                                    .model
+                                                    .as_ref()
+                                                    .and_then(|m| m.base_url.clone()),
+                                            ),
                                     });
                                     let _ = config.save(None);
                                     let _ = client.send(GatewayCommand::Reload).await;
@@ -692,10 +708,15 @@ impl App {
                                     config.model = Some(rustyclaw_core::config::ModelProvider {
                                         provider: provider_id.clone(),
                                         model: existing_model,
-                                        base_url: config
-                                            .model
-                                            .as_ref()
-                                            .and_then(|m| m.base_url.clone()),
+                                        base_url:
+                                            rustyclaw_core::providers::base_url_override_for_switch(
+                                                &provider_id,
+                                                config.model.as_ref().map(|m| m.provider.as_str()),
+                                                config
+                                                    .model
+                                                    .as_ref()
+                                                    .and_then(|m| m.base_url.clone()),
+                                            ),
                                     });
                                     let _ = config.save(None);
                                     let _ = client.send(GatewayCommand::Reload).await;
@@ -845,7 +866,11 @@ impl App {
                     config.model = Some(rustyclaw_core::config::ModelProvider {
                         provider: provider.clone(),
                         model: existing_model,
-                        base_url: config.model.as_ref().and_then(|m| m.base_url.clone()),
+                        base_url: rustyclaw_core::providers::base_url_override_for_switch(
+                            &provider,
+                            config.model.as_ref().map(|m| m.provider.as_str()),
+                            config.model.as_ref().and_then(|m| m.base_url.clone()),
+                        ),
                     });
                     let _ = config.save(None);
                     // Reload gateway
@@ -907,6 +932,21 @@ impl App {
                 }
                 Ok(UserInput::CancelProviderFlow) => {
                     // User cancelled — nothing to do
+                }
+                Ok(UserInput::EngineSelect(engine)) => {
+                    let _ = client
+                        .send(GatewayCommand::EngineModelList { engine })
+                        .await;
+                }
+                Ok(UserInput::EngineAction { engine, action }) => {
+                    let _ = client
+                        .send(GatewayCommand::EngineAction { engine, action })
+                        .await;
+                    // Refresh the list so status changes show up.
+                    let _ = client.send(GatewayCommand::EngineList).await;
+                }
+                Ok(UserInput::EngineRefresh) => {
+                    let _ = client.send(GatewayCommand::EngineList).await;
                 }
                 #[allow(unused_variables)]
                 Ok(UserInput::PairingConnect {

@@ -166,19 +166,18 @@ pub(crate) enum GwEvent {
     },
     /// SSH pairing connection failed.
     PairingError(String),
+    /// Open the local engines panel (data arrives via EngineListResult).
+    ShowEngines,
     /// Engine list result received.
-    #[allow(dead_code)]
     EngineListResult {
         engines: Vec<rustyclaw_view::LocalEngineData>,
     },
     /// Engine model list result received.
-    #[allow(dead_code)]
     EngineModelListResult {
         engine: String,
         models: Vec<rustyclaw_view::LocalModelData>,
     },
     /// Pull progress update.
-    #[allow(dead_code)]
     EnginePullProgress {
         engine: String,
         model: String,

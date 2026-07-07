@@ -166,6 +166,11 @@ pub struct Config {
     /// Local inference engine configurations.
     #[serde(default)]
     pub engines: HashMap<String, crate::engines::EngineConfig>,
+    /// User-defined model providers (e.g. self-hosted OpenAI-compatible
+    /// servers).  Registered into the provider catalogue on load so they
+    /// appear alongside built-in providers in every selector.
+    #[serde(default)]
+    pub custom_providers: Vec<crate::providers::CustomProviderConfig>,
 }
 
 /// Configuration for a messenger backend.
@@ -320,6 +325,7 @@ impl Default for Config {
             workspace_context: WorkspaceContextConfig::default(),
             services: HashMap::new(),
             engines: HashMap::new(),
+            custom_providers: Vec::new(),
         }
     }
 }
@@ -450,6 +456,8 @@ impl Config {
             let mut config = config;
             // Migrate legacy flat layout if detected.
             config.migrate_legacy_layout()?;
+            // Make user-defined providers visible to the provider catalogue.
+            crate::providers::set_custom_providers(&config.custom_providers);
             Ok(config)
         } else {
             Ok(Config::default())
@@ -470,6 +478,10 @@ impl Config {
 
         let content = toml::to_string_pretty(self)?;
         std::fs::write(&config_path, content)?;
+
+        // Keep the runtime provider catalogue in sync with edits made
+        // through the UI (add/remove custom provider then save).
+        crate::providers::set_custom_providers(&self.custom_providers);
         Ok(())
     }
 

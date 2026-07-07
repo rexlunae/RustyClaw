@@ -279,8 +279,17 @@ fn build_client(http: &reqwest::Client, req: &ProviderRequest) -> Client {
 
 /// Map a RustyClaw provider id onto a genai adapter. Anthropic, Google, and
 /// xAI have native adapters; every other (OpenAI-compatible) provider uses the
-/// OpenAI adapter pointed at its configured base URL.
+/// OpenAI adapter pointed at its configured base URL.  Custom providers map
+/// through their configured [`super::ApiFormat`].
 fn adapter_for(provider: &str) -> AdapterKind {
+    if let Some(format) = providers::api_format_for_provider(provider) {
+        return match format {
+            providers::ApiFormat::OpenAi => AdapterKind::OpenAI,
+            providers::ApiFormat::Anthropic => AdapterKind::Anthropic,
+            providers::ApiFormat::Gemini => AdapterKind::Gemini,
+            providers::ApiFormat::Xai => AdapterKind::Xai,
+        };
+    }
     match provider {
         "anthropic" => AdapterKind::Anthropic,
         "google" => AdapterKind::Gemini,

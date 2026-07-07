@@ -5,6 +5,7 @@
 //! across Ollama, Exo, llama.cpp, and LM Studio.
 
 pub mod exo;
+pub mod joshua;
 pub mod llamacpp;
 pub mod lmstudio;
 pub mod ollama;
@@ -70,6 +71,10 @@ pub struct EngineConfig {
     /// Extra CLI arguments for the engine process.
     #[serde(default)]
     pub extra_args: Vec<String>,
+    /// Model to load at startup, for engines that serve a single model per
+    /// process (e.g. Joshua).  Matched against model names from `list_models`.
+    #[serde(default)]
+    pub default_model: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -85,6 +90,7 @@ impl Default for EngineConfig {
             models_dir: None,
             auto_start: false,
             extra_args: Vec::new(),
+            default_model: None,
         }
     }
 }
@@ -374,6 +380,7 @@ impl EngineRegistry {
                 Box::new(exo::ExoEngine),
                 Box::new(llamacpp::LlamaCppEngine),
                 Box::new(lmstudio::LmStudioEngine),
+                Box::new(joshua::JoshuaEngine),
             ],
         }
     }
@@ -474,6 +481,27 @@ fn engine_start_command(id: &str, cfg: &EngineConfig) -> (String, Vec<String>) {
             }
             (cmd, args)
         }
+        "joshua" => {
+            let cmd = "joshua".to_string();
+            let mut a = vec!["serve".to_string()];
+            let port = cfg.port.unwrap_or(joshua::DEFAULT_PORT);
+            a.extend(["--addr".to_string(), format!("127.0.0.1:{}", port)]);
+            // One joshua process serves one model; resolve which GGUF to
+            // load (extra_args --model wins, then default_model, then the
+            // sole model in the models dir).
+            if !args.iter().any(|arg| arg == "--model" || arg == "-m") {
+                match joshua::resolve_model_path(cfg) {
+                    Ok(path) => {
+                        a.extend(["--model".to_string(), path.display().to_string()]);
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Cannot auto-start joshua without a model");
+                    }
+                }
+            }
+            a.extend(args);
+            (cmd, a)
+        }
         _ => ("echo".to_string(), vec!["unsupported-engine".to_string()]),
     }
 }
@@ -485,6 +513,7 @@ fn default_port(id: &str) -> u16 {
         "exo" => 52415,
         "llamacpp" => 8080,
         "lmstudio" => 1234,
+        "joshua" => joshua::DEFAULT_PORT,
         _ => 8080,
     }
 }

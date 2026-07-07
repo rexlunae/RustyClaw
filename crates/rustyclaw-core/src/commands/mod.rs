@@ -52,6 +52,16 @@ pub enum CommandAction {
     ThreadBackground,
     /// Foreground a thread by ID
     ThreadForeground(u64),
+    /// Show the local engines panel (fetches the engine list)
+    ShowEngines,
+    /// Engine lifecycle action: (engine, action) with action ∈ install|start|stop
+    EngineAction(String, String),
+    /// List models for an engine
+    EngineModelList(String),
+    /// Pull/download a model for an engine: (engine, model)
+    EngineModelPull(String, String),
+    /// Model-level engine action: (engine, model, action) with action ∈ load|unload|remove
+    EngineModelAction(String, String, String),
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +147,17 @@ fn base_command_names() -> Vec<String> {
         "channels".into(),
         "approvals".into(),
         "engines".into(),
+        "engines start".into(),
+        "engines stop".into(),
+        "engines install".into(),
+        "engines models".into(),
+        "engines pull".into(),
+        "engines load".into(),
+        "engines unload".into(),
+        "engines remove".into(),
+        "provider add".into(),
+        "provider remove".into(),
+        "provider list".into(),
     ];
     for p in providers::provider_ids() {
         names.push(format!("provider {}", p));
@@ -324,7 +345,16 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /gateway restart         - Restart the gateway connection".to_string(),
                 "  /reload                  - Reload gateway config (no restart)".to_string(),
                 "  /provider <name>         - Change the AI provider".to_string(),
+                "  /provider add <id> <url> - Add a custom provider (local/self-hosted)"
+                    .to_string(),
+                "  /provider remove <id>    - Remove a custom provider".to_string(),
+                "  /provider list           - List built-in and custom providers".to_string(),
                 "  /model <name>            - Change the AI model".to_string(),
+                "  /engines                 - Local engines panel (Ollama/llama.cpp/Joshua/…)"
+                    .to_string(),
+                "  /engines start <engine>  - Start a local engine (also: stop/install)"
+                    .to_string(),
+                "  /engines pull <e> <m>    - Download a model for an engine".to_string(),
                 "  /skills                  - Show loaded skills".to_string(),
                 "  /skill                   - Skill management (info/install/publish/link)"
                     .to_string(),
@@ -510,6 +540,11 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             action: CommandAction::ShowSecrets,
         },
         "provider" => match parts.get(1) {
+            Some(&"add") => handle_provider_add(&parts[2..], context),
+            Some(&"remove") | Some(&"rm") | Some(&"delete") => {
+                handle_provider_remove(&parts[2..], context)
+            }
+            Some(&"list") | Some(&"ls") => handle_provider_list(),
             Some(name) => {
                 let name = name.to_string();
                 CommandResponse {
@@ -522,6 +557,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 action: CommandAction::ShowProviderSelector,
             },
         },
+        "engines" | "engine" => handle_engines_subcommand(&parts[1..]),
         "model" => match parts.get(1) {
             Some(name) => {
                 let name = name.to_string();
@@ -552,6 +588,259 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             ],
             action: CommandAction::None,
         },
+    }
+}
+
+// ── Custom provider management ──────────────────────────────────────────────
+
+const PROVIDER_ADD_USAGE: &str = "Usage: /provider add <id> <base_url> [format=openai|anthropic|gemini|xai] \
+     [key=SECRET_NAME] [models=a,b,c] [name=Display Name]";
+
+/// `/provider add <id> <base_url> [format=…] [key=…] [models=…] [name=…]`
+fn handle_provider_add(args: &[&str], context: &mut CommandContext<'_>) -> CommandResponse {
+    let (Some(id), Some(base_url)) = (args.first(), args.get(1)) else {
+        return CommandResponse {
+            messages: vec![
+                PROVIDER_ADD_USAGE.to_string(),
+                "Example: /provider add my-vllm http://192.168.1.50:8000/v1 models=qwen3-coder"
+                    .to_string(),
+            ],
+            action: CommandAction::None,
+        };
+    };
+
+    let mut cfg = crate::providers::CustomProviderConfig {
+        id: id.to_string(),
+        display_name: None,
+        base_url: base_url.to_string(),
+        api_format: crate::providers::ApiFormat::default(),
+        api_key_secret: None,
+        models: Vec::new(),
+    };
+
+    // Remaining tokens are key=value options; `name=` consumes the rest
+    // of the line so display names can contain spaces.
+    let mut i = 2;
+    while i < args.len() {
+        let token = args[i];
+        if let Some(value) = token.strip_prefix("format=") {
+            match crate::providers::ApiFormat::parse(value) {
+                Some(f) => cfg.api_format = f,
+                None => {
+                    return CommandResponse {
+                        messages: vec![format!(
+                            "Unknown API format '{}'. Options: openai, anthropic, gemini, xai",
+                            value
+                        )],
+                        action: CommandAction::None,
+                    };
+                }
+            }
+        } else if let Some(value) = token.strip_prefix("key=") {
+            cfg.api_key_secret = Some(value.to_string());
+        } else if let Some(value) = token.strip_prefix("models=") {
+            cfg.models = value
+                .split(',')
+                .map(|m| m.trim().to_string())
+                .filter(|m| !m.is_empty())
+                .collect();
+        } else if let Some(value) = token.strip_prefix("name=") {
+            let mut name = value.to_string();
+            for rest in &args[i + 1..] {
+                name.push(' ');
+                name.push_str(rest);
+            }
+            cfg.display_name = Some(name);
+            break;
+        } else {
+            return CommandResponse {
+                messages: vec![
+                    format!("Unknown option '{}'.", token),
+                    PROVIDER_ADD_USAGE.to_string(),
+                ],
+                action: CommandAction::None,
+            };
+        }
+        i += 1;
+    }
+
+    if let Err(e) = cfg.validate() {
+        return CommandResponse {
+            messages: vec![format!("Invalid provider: {}", e)],
+            action: CommandAction::None,
+        };
+    }
+
+    let replacing = context
+        .config
+        .custom_providers
+        .iter()
+        .position(|p| p.id == cfg.id);
+    let mut messages = Vec::new();
+    match replacing {
+        Some(idx) => {
+            context.config.custom_providers[idx] = cfg.clone();
+            messages.push(format!("Updated custom provider '{}'.", cfg.id));
+        }
+        None => {
+            context.config.custom_providers.push(cfg.clone());
+            messages.push(format!(
+                "Added custom provider '{}' ({}).",
+                cfg.id,
+                cfg.api_format.display()
+            ));
+        }
+    }
+
+    if let Err(e) = context.config.save(None) {
+        return CommandResponse {
+            messages: vec![format!("Failed to save config: {}", e)],
+            action: CommandAction::None,
+        };
+    }
+
+    if let Some(secret) = &cfg.api_key_secret {
+        messages.push(format!(
+            "API key: store it with /secrets as '{}' (or export it as an environment variable).",
+            secret
+        ));
+    }
+    messages.push(format!("Switch to it with: /provider {}", cfg.id));
+    CommandResponse {
+        messages,
+        action: CommandAction::None,
+    }
+}
+
+/// `/provider remove <id>`
+fn handle_provider_remove(args: &[&str], context: &mut CommandContext<'_>) -> CommandResponse {
+    let Some(id) = args.first() else {
+        return CommandResponse {
+            messages: vec!["Usage: /provider remove <id>".to_string()],
+            action: CommandAction::None,
+        };
+    };
+
+    let before = context.config.custom_providers.len();
+    context.config.custom_providers.retain(|p| p.id != *id);
+    if context.config.custom_providers.len() == before {
+        let hint = if crate::providers::PROVIDERS.iter().any(|p| p.id == *id) {
+            format!(" ('{}' is a built-in provider and can't be removed)", id)
+        } else {
+            String::new()
+        };
+        return CommandResponse {
+            messages: vec![format!("No custom provider named '{}'{}.", id, hint)],
+            action: CommandAction::None,
+        };
+    }
+
+    if let Err(e) = context.config.save(None) {
+        return CommandResponse {
+            messages: vec![format!("Failed to save config: {}", e)],
+            action: CommandAction::None,
+        };
+    }
+
+    let mut messages = vec![format!("Removed custom provider '{}'.", id)];
+    let active = context
+        .config
+        .model
+        .as_ref()
+        .map(|m| m.provider.as_str())
+        .unwrap_or("");
+    if active == *id {
+        messages
+            .push("Note: it was the active provider — pick another with /provider.".to_string());
+    }
+    CommandResponse {
+        messages,
+        action: CommandAction::None,
+    }
+}
+
+/// `/provider list`
+fn handle_provider_list() -> CommandResponse {
+    let mut lines = vec!["Providers:".to_string()];
+    for p in crate::providers::PROVIDERS {
+        lines.push(format!("  {} — {}", p.id, p.display));
+    }
+    let custom = crate::providers::custom_provider_defs();
+    if custom.is_empty() {
+        lines.push("No custom providers. Add one with /provider add <id> <base_url>".to_string());
+    } else {
+        lines.push("Custom providers:".to_string());
+        for p in custom {
+            lines.push(format!(
+                "  {} — {} [{}]",
+                p.id,
+                p.display,
+                p.base_url.unwrap_or("no URL")
+            ));
+        }
+    }
+    CommandResponse {
+        messages: lines,
+        action: CommandAction::None,
+    }
+}
+
+// ── Engine commands ─────────────────────────────────────────────────────────
+
+/// `/engines [start|stop|install|models|pull|load|unload|remove] …`
+fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
+    let usage = || CommandResponse {
+        messages: vec![
+            "Usage: /engines — open the engines panel".to_string(),
+            "       /engines start|stop|install <engine>".to_string(),
+            "       /engines models <engine>".to_string(),
+            "       /engines pull <engine> <model>".to_string(),
+            "       /engines load|unload|remove <engine> <model>".to_string(),
+            "Engines: ollama, exo, llamacpp, lmstudio, joshua".to_string(),
+        ],
+        action: CommandAction::None,
+    };
+
+    match args.first() {
+        None => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowEngines,
+        },
+        Some(&action) if matches!(action, "start" | "stop" | "install") => match args.get(1) {
+            Some(engine) => CommandResponse {
+                messages: vec![format!("Requesting {} {}…", engine, action)],
+                action: CommandAction::EngineAction(engine.to_string(), action.to_string()),
+            },
+            None => usage(),
+        },
+        Some(&"models") => match args.get(1) {
+            Some(engine) => CommandResponse {
+                messages: Vec::new(),
+                action: CommandAction::EngineModelList(engine.to_string()),
+            },
+            None => usage(),
+        },
+        Some(&"pull") => match (args.get(1), args.get(2)) {
+            (Some(engine), Some(model)) => CommandResponse {
+                messages: vec![format!("Pulling {} via {}…", model, engine)],
+                action: CommandAction::EngineModelPull(engine.to_string(), model.to_string()),
+            },
+            _ => usage(),
+        },
+        Some(&action) if matches!(action, "load" | "unload" | "remove") => {
+            match (args.get(1), args.get(2)) {
+                (Some(engine), Some(model)) => CommandResponse {
+                    messages: vec![format!("Requesting {} {} for {}…", engine, action, model)],
+                    action: CommandAction::EngineModelAction(
+                        engine.to_string(),
+                        model.to_string(),
+                        action.to_string(),
+                    ),
+                },
+                _ => usage(),
+            }
+        }
+        Some(_) => usage(),
     }
 }
 
