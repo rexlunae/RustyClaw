@@ -2,7 +2,7 @@
 //!
 //! Handles model_* tool calls by interacting with the shared ModelRegistry.
 
-use rustyclaw_core::tools::error::{ToolError, ToolResult};
+use rustyclaw_core::tools::error::ToolResult;
 use serde_json::{Value, json};
 use tracing::instrument;
 
@@ -412,8 +412,7 @@ fn parse_service_name(args: &Value) -> ToolResult {
     args.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "Missing required parameter: name (service name)".to_string())
-        .map_err(ToolError::from)
+        .ok_or_else(|| rustyclaw_core::tools::error::missing_param("name (service name)"))
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -424,8 +423,7 @@ fn parse_model_id(args: &Value) -> ToolResult {
         .or_else(|| args.get("modelId"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "Missing required parameter: id (model ID)".to_string())
-        .map_err(ToolError::from)
+        .ok_or_else(|| rustyclaw_core::tools::error::missing_param("id (model ID)"))
 }
 
 /// Generate system prompt section for model selection guidance.

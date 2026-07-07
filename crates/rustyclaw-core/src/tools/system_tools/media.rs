@@ -1,7 +1,7 @@
 //! Media tools: screenshot capture and clipboard access.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -145,7 +145,7 @@ pub fn exec_screenshot(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .arg(target.display().to_string())
                 .output()
         })
-        .map_err(|e| format!("Screenshot failed: {}", e))?;
+        .map_err(|e| ToolError::context("Screenshot failed", e))?;
 
     if output.status.success() && target.exists() {
         let size = std::fs::metadata(&target)
@@ -188,15 +188,17 @@ pub fn exec_clipboard(args: &Value, _workspace_dir: &Path) -> ToolResult {
                 .arg("pbcopy 2>/dev/null || xclip -selection clipboard 2>/dev/null")
                 .stdin(std::process::Stdio::piped())
                 .spawn()
-                .map_err(|e| format!("Clipboard write failed: {}", e))?;
+                .map_err(|e| ToolError::context("Clipboard write failed", e))?;
 
             if let Some(mut stdin) = child.stdin.take() {
                 use std::io::Write;
                 stdin
                     .write_all(content.as_bytes())
-                    .map_err(|e| format!("Write failed: {}", e))?;
+                    .map_err(|e| ToolError::context("Write failed", e))?;
             }
-            let status = child.wait().map_err(|e| format!("Wait failed: {}", e))?;
+            let status = child
+                .wait()
+                .map_err(|e| ToolError::context("Wait failed", e))?;
             if status.success() {
                 Ok(json!({ "status": "ok", "length": content.len() }).to_string())
             } else {

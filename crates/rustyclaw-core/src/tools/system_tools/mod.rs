@@ -26,7 +26,7 @@ pub use monitor::{exec_battery_health_async, exec_system_monitor_async};
 pub use security::{exec_audit_sensitive_async, exec_secure_delete_async};
 pub use text::exec_summarize_file_async;
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use std::path::Path;
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
@@ -37,7 +37,7 @@ pub(crate) fn sh(script: &str) -> ToolResult {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
@@ -48,7 +48,7 @@ pub(crate) async fn sh_async(script: &str) -> ToolResult {
         .arg(script)
         .output()
         .await
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 

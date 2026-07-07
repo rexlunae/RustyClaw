@@ -45,11 +45,10 @@ pub async fn exec_ollama_manage_async(args: &Value, _workspace_dir: &Path) -> To
             let install_result = match os {
                 "macos" => sh_async("brew install ollama 2>&1").await,
                 "linux" => sh_async("curl -fsSL https://ollama.com/install.sh | sh 2>&1").await,
-                _ => Err(format!(
+                _ => Err(ToolError::msg(format!(
                     "Unsupported OS for automatic install: {}. Visit https://ollama.com/download",
                     os
-                ))
-                .map_err(ToolError::from),
+                ))),
             };
             match install_result {
                 Ok(out) => Ok(format!("Ollama installed successfully.\n{}", out)),
@@ -513,11 +512,10 @@ pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
             let install_result = match os {
                 "macos" => sh("brew install ollama 2>&1"),
                 "linux" => sh("curl -fsSL https://ollama.com/install.sh | sh 2>&1"),
-                _ => Err(format!(
+                _ => Err(ToolError::msg(format!(
                     "Unsupported OS for automatic install: {}. Visit https://ollama.com/download",
                     os
-                ))
-                .map_err(ToolError::from),
+                ))),
             };
             match install_result {
                 Ok(out) => Ok(format!("Ollama installed successfully.\n{}", out)),

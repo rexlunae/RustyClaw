@@ -86,8 +86,7 @@ pub(crate) fn get_node(args: &Value) -> ToolResult {
     args.get("node")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
-        .ok_or_else(|| "Missing required parameter: node".to_string())
-        .map_err(ToolError::from)
+        .ok_or_else(|| crate::tools::error::missing_param("node"))
 }
 
 /// Extract command array from args.

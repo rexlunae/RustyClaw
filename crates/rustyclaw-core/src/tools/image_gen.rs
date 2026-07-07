@@ -3,7 +3,7 @@
 //! Provider-agnostic image generation routed through the provider abstraction.
 //! Gated behind the `image-gen` Cargo feature flag.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -109,7 +109,7 @@ async fn generate_openai(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("OpenAI API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("OpenAI API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -123,7 +123,7 @@ async fn generate_openai(
     let result: Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse OpenAI response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse OpenAI response", e))?;
 
     let image_url = result
         .get("data")
@@ -182,7 +182,7 @@ async fn generate_gemini(
         .json(&body)
         .send()
         .await
-        .map_err(|e| format!("Gemini API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Gemini API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -196,7 +196,7 @@ async fn generate_gemini(
     let result: Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse Gemini response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse Gemini response", e))?;
 
     // Extract base64 image data from Gemini response
     let image_data = result
@@ -265,12 +265,12 @@ async fn download_image(
         .get(url)
         .send()
         .await
-        .map_err(|e| format!("Failed to download image: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to download image", e))?;
 
     let bytes = response
         .bytes()
         .await
-        .map_err(|e| format!("Failed to read image bytes: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to read image bytes", e))?;
 
     let file_path = if let Some(path) = output_path {
         let p = Path::new(path);
@@ -291,7 +291,8 @@ async fn download_image(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write image file: {}", e))?;
+    std::fs::write(&file_path, &bytes)
+        .map_err(|e| ToolError::context("Failed to write image file", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
 }
@@ -326,7 +327,8 @@ fn save_base64_image(
         let _ = std::fs::create_dir_all(parent);
     }
 
-    std::fs::write(&file_path, &bytes).map_err(|e| format!("Failed to write image file: {}", e))?;
+    std::fs::write(&file_path, &bytes)
+        .map_err(|e| ToolError::context("Failed to write image file", e))?;
 
     Ok(file_path.to_string_lossy().to_string())
 }

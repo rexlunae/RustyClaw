@@ -1,7 +1,7 @@
 //! Patch tool: apply unified diff patches.
 
 use super::helpers::resolve_path;
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -76,7 +76,7 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
             // Ensure parent directory exists
             if let Some(parent) = full_path.parent() {
                 std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create directory: {}", e))?;
+                    .map_err(|e| ToolError::context("Failed to create directory", e))?;
             }
 
             std::fs::write(&full_path, new_content)

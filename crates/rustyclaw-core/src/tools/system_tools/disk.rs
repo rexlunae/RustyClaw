@@ -1,7 +1,7 @@
 //! Disk usage analysis and file classification.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -171,7 +171,7 @@ pub async fn exec_classify_files_async(args: &Value, workspace_dir: &Path) -> To
 
     let metadata = tokio::fs::metadata(&target)
         .await
-        .map_err(|e| format!("Cannot read: {}", e))?;
+        .map_err(|e| ToolError::context("Cannot read", e))?;
     if !metadata.is_dir() {
         return Err(format!("Not a directory: {}", target.display()).into());
     }
@@ -265,7 +265,7 @@ pub fn exec_classify_files(args: &Value, workspace_dir: &Path) -> ToolResult {
     let mut categories: std::collections::HashMap<&str, Vec<String>> =
         std::collections::HashMap::new();
     for entry in std::fs::read_dir(&target)
-        .map_err(|e| format!("Cannot read: {}", e))?
+        .map_err(|e| ToolError::context("Cannot read", e))?
         .flatten()
     {
         let name = entry.file_name().to_string_lossy().to_string();

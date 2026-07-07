@@ -2,7 +2,7 @@
 //!
 //! Async implementations live in `async_impl`.
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -279,7 +279,7 @@ fn sh(script: &str) -> ToolResult {
         .arg("-c")
         .arg(script)
         .output()
-        .map_err(|e| format!("shell error: {}", e))?;
+        .map_err(|e| ToolError::context("shell error", e))?;
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();

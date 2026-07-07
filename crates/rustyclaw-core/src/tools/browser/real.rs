@@ -2,7 +2,7 @@
 //! `browser` feature.
 
 use super::*;
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use chromiumoxide::cdp::browser_protocol::page::CaptureScreenshotFormat;
 use chromiumoxide::{Browser, BrowserConfig, Page};
 use futures_util::StreamExt;
@@ -39,7 +39,7 @@ pub async fn ensure_browser() -> ToolResult<()> {
         .with_head() // Show browser window (use .headless() for headless)
         .viewport(None) // Use default viewport
         .build()
-        .map_err(|e| format!("Failed to build browser config: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to build browser config", e))?;
 
     let (browser, mut handler) = Browser::launch(config)
         .await
@@ -334,7 +334,7 @@ pub async fn press_key(tab_id: Option<&str>, key: &str) -> ToolResult {
         .text(key.to_string())
         .r#type(DispatchKeyEventType::KeyDown)
         .build()
-        .map_err(|e| format!("Failed to build key down params: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to build key down params", e))?;
     page.execute(key_down)
         .await
         .map_err(|e| format!("Key down failed: {}", e))?;
@@ -345,7 +345,7 @@ pub async fn press_key(tab_id: Option<&str>, key: &str) -> ToolResult {
         .text(key.to_string())
         .r#type(DispatchKeyEventType::KeyUp)
         .build()
-        .map_err(|e| format!("Failed to build key up params: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to build key up params", e))?;
     page.execute(key_up)
         .await
         .map_err(|e| format!("Key up failed: {}", e))?;
@@ -376,7 +376,7 @@ pub async fn evaluate(tab_id: Option<&str>, script: &str) -> ToolResult {
         .await
         .map_err(|e| format!("Evaluate failed: {}", e))?
         .into_value()
-        .map_err(|e| format!("Failed to convert result: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to convert result", e))?;
 
     Ok(result.to_string())
 }

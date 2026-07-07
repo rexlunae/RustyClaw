@@ -6,7 +6,7 @@
 //! - Per-page extraction with page ranges
 //! - Configurable output limits
 
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -163,8 +163,8 @@ fn exec_pdf_info(args: &Value, workspace_dir: &Path) -> ToolResult {
     }
 
     // Fallback: basic file info
-    let metadata =
-        std::fs::metadata(&path).map_err(|e| format!("Failed to read file metadata: {}", e))?;
+    let metadata = std::fs::metadata(&path)
+        .map_err(|e| ToolError::context("Failed to read file metadata", e))?;
 
     Ok(format!(
         "File: {}\nSize: {} bytes\nNote: Install poppler-utils for full PDF metadata (pdfinfo).",

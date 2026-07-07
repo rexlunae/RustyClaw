@@ -3,7 +3,7 @@
 //! Async implementations live in `async_impl`.
 
 use super::helpers::resolve_path;
-use crate::tools::error::ToolResult;
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -110,7 +110,7 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> ToolResult {
             }
 
             let content = std::fs::read_to_string(&config_path)
-                .map_err(|e| format!("Failed to read config: {}", e))?;
+                .map_err(|e| ToolError::context("Failed to read config", e))?;
 
             let hash = format!(
                 "{:x}",
@@ -144,16 +144,16 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing raw config for config.apply")?;
 
-            let _: serde_json::Value =
-                serde_json::from_str(raw).map_err(|e| format!("Invalid JSON config: {}", e))?;
+            let _: serde_json::Value = serde_json::from_str(raw)
+                .map_err(|e| ToolError::context("Invalid JSON config", e))?;
 
             if let Some(parent) = config_path.parent() {
                 std::fs::create_dir_all(parent)
-                    .map_err(|e| format!("Failed to create config directory: {}", e))?;
+                    .map_err(|e| ToolError::context("Failed to create config directory", e))?;
             }
 
             std::fs::write(&config_path, raw)
-                .map_err(|e| format!("Failed to write config: {}", e))?;
+                .map_err(|e| ToolError::context("Failed to write config", e))?;
 
             Ok(format!(
                 "Config written to {}. Gateway restart required for changes to take effect.",
@@ -167,14 +167,14 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> ToolResult {
                 .and_then(|v| v.as_str())
                 .ok_or("Missing raw patch for config.patch")?;
 
-            let patch: serde_json::Value =
-                serde_json::from_str(raw).map_err(|e| format!("Invalid JSON patch: {}", e))?;
+            let patch: serde_json::Value = serde_json::from_str(raw)
+                .map_err(|e| ToolError::context("Invalid JSON patch", e))?;
 
             let existing = if config_path.exists() {
                 let content = std::fs::read_to_string(&config_path)
-                    .map_err(|e| format!("Failed to read config: {}", e))?;
+                    .map_err(|e| ToolError::context("Failed to read config", e))?;
                 serde_json::from_str(&content)
-                    .map_err(|e| format!("Failed to parse existing config: {}", e))?
+                    .map_err(|e| ToolError::context("Failed to parse existing config", e))?
             } else {
                 serde_json::json!({})
             };
@@ -184,10 +184,10 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> ToolResult {
             let merged = merge_json(existing, patch);
 
             let output = serde_json::to_string_pretty(&merged)
-                .map_err(|e| format!("Failed to serialize config: {}", e))?;
+                .map_err(|e| ToolError::context("Failed to serialize config", e))?;
 
             std::fs::write(&config_path, &output)
-                .map_err(|e| format!("Failed to write config: {}", e))?;
+                .map_err(|e| ToolError::context("Failed to write config", e))?;
 
             Ok(format!(
                 "Config patched at {}. Gateway restart required for changes to take effect.",
@@ -328,7 +328,7 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let output_dir = workspace_dir.join(".tts");
     fs::create_dir_all(&output_dir)
-        .map_err(|e| format!("Failed to create TTS output directory: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create TTS output directory", e))?;
 
     let timestamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -376,7 +376,7 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> ToolResult {
             "response_format": "mp3"
         }))
         .send()
-        .map_err(|e| format!("TTS API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("TTS API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -386,12 +386,12 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let audio_bytes = response
         .bytes()
-        .map_err(|e| format!("Failed to read TTS response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to read TTS response", e))?;
 
     let mut file = fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create output file: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to create output file", e))?;
     file.write_all(&audio_bytes)
-        .map_err(|e| format!("Failed to write audio file: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to write audio file", e))?;
 
     Ok(format!(
         "TTS conversion complete:\n- Text: {} chars\n- Voice: {}\n- Model: {}\n- Output: {}\n\nMEDIA: {}",
@@ -450,7 +450,8 @@ pub fn exec_image(args: &Value, workspace_dir: &Path) -> ToolResult {
             }
         };
 
-        let bytes = fs::read(&full_path).map_err(|e| format!("Failed to read image: {}", e))?;
+        let bytes =
+            fs::read(&full_path).map_err(|e| ToolError::context("Failed to read image", e))?;
 
         use base64::{Engine as _, engine::general_purpose::STANDARD};
         let base64_data = STANDARD.encode(&bytes);
@@ -496,7 +497,7 @@ fn send_discord_sync(channel_id: &str, content: &str) -> ToolResult {
         .header("Content-Type", "application/json")
         .json(&serde_json::json!({ "content": content }))
         .send()
-        .map_err(|e| format!("Discord API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Discord API request failed", e))?;
 
     if response.status().is_success() {
         let data: Value = response.json().unwrap_or_default();
@@ -527,7 +528,7 @@ fn send_telegram_sync(chat_id: &str, content: &str) -> ToolResult {
             "parse_mode": "Markdown"
         }))
         .send()
-        .map_err(|e| format!("Telegram API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Telegram API request failed", e))?;
 
     if response.status().is_success() {
         let data: Value = response.json().unwrap_or_default();
@@ -563,7 +564,7 @@ fn send_webhook_sync(url: &str, target: &str, content: &str) -> ToolResult {
             "timestamp": chrono::Utc::now().to_rfc3339()
         }))
         .send()
-        .map_err(|e| format!("Webhook request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Webhook request failed", e))?;
 
     if response.status().is_success() {
         Ok(format!("Message sent via webhook to {}", target))
@@ -602,7 +603,7 @@ fn call_openai_vision_sync(
             "max_tokens": 1024
         }))
         .send()
-        .map_err(|e| format!("Vision API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Vision API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -612,7 +613,7 @@ fn call_openai_vision_sync(
 
     let data: Value = response
         .json()
-        .map_err(|e| format!("Failed to parse vision response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse vision response", e))?;
 
     let content = data["choices"][0]["message"]["content"]
         .as_str()
@@ -667,7 +668,7 @@ fn call_anthropic_vision_sync(
             }]
         }))
         .send()
-        .map_err(|e| format!("Vision API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Vision API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -677,7 +678,7 @@ fn call_anthropic_vision_sync(
 
     let data: Value = response
         .json()
-        .map_err(|e| format!("Failed to parse vision response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse vision response", e))?;
 
     let content = data["content"][0]["text"]
         .as_str()
@@ -735,7 +736,7 @@ fn call_google_vision_sync(
             }]
         }))
         .send()
-        .map_err(|e| format!("Vision API request failed: {}", e))?;
+        .map_err(|e| ToolError::context("Vision API request failed", e))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -745,7 +746,7 @@ fn call_google_vision_sync(
 
     let data: Value = response
         .json()
-        .map_err(|e| format!("Failed to parse vision response: {}", e))?;
+        .map_err(|e| ToolError::context("Failed to parse vision response", e))?;
 
     let content = data["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
