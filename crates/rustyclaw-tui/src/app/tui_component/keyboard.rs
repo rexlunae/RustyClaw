@@ -138,6 +138,14 @@ pub(super) fn apply_key_event(
         show_engines_dialog: _,
         engines_data: _,
         engines_cursor: _,
+        show_cron_dialog: _,
+        cron_data: _,
+        show_memory_dialog: _,
+        memory_data: _,
+        show_mcp_dialog: _,
+        mcp_data: _,
+        show_channels_dialog: _,
+        channels_data: _,
     } = ui;
     match event {
         TerminalEvent::Key(KeyEvent {

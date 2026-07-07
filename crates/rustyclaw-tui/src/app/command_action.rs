@@ -318,6 +318,92 @@ pub(super) async fn handle_command_action(
                 })
                 .await;
         }
+        CommandAction::ShowCron => {
+            let _ = gw_tx.send(GwEvent::ShowCron);
+            let _ = client.send(GatewayCommand::CronList).await;
+        }
+        CommandAction::CronAdd(name, expr, payload) => {
+            let _ = gw_tx.send(GwEvent::ShowCron);
+            let _ = client
+                .send(GatewayCommand::CronUpsert {
+                    id: None,
+                    name,
+                    expr,
+                    payload,
+                    paused: false,
+                })
+                .await;
+        }
+        CommandAction::CronAction(id, action) => {
+            let _ = gw_tx.send(GwEvent::ShowCron);
+            let _ = client.send(GatewayCommand::CronAction { id, action }).await;
+        }
+        CommandAction::ShowMemory(query) => {
+            let _ = gw_tx.send(GwEvent::ShowMemory {
+                query: query.clone(),
+            });
+            let _ = client
+                .send(GatewayCommand::MemoryList { query, limit: None })
+                .await;
+        }
+        CommandAction::MemoryAdd(category, content) => {
+            let _ = gw_tx.send(GwEvent::ShowMemory { query: None });
+            let _ = client
+                .send(GatewayCommand::MemoryUpsert {
+                    id: None,
+                    content,
+                    category,
+                })
+                .await;
+        }
+        CommandAction::MemoryDelete(id) => {
+            let _ = gw_tx.send(GwEvent::ShowMemory { query: None });
+            let _ = client.send(GatewayCommand::MemoryDelete { id }).await;
+        }
+        CommandAction::HistorySearch(query) => {
+            let _ = gw_tx.send(GwEvent::ShowMemory {
+                query: Some(query.clone()),
+            });
+            // Populate both halves of the memory panel.
+            let _ = client
+                .send(GatewayCommand::MemoryList {
+                    query: Some(query.clone()),
+                    limit: None,
+                })
+                .await;
+            let _ = client
+                .send(GatewayCommand::HistorySearch { query, limit: None })
+                .await;
+        }
+        CommandAction::ShowMcp => {
+            let _ = gw_tx.send(GwEvent::ShowMcp);
+            let _ = client.send(GatewayCommand::McpList).await;
+        }
+        CommandAction::McpConnect(name, command) => {
+            let _ = gw_tx.send(GwEvent::ShowMcp);
+            let _ = client
+                .send(GatewayCommand::McpConnect {
+                    name,
+                    command,
+                    url: None,
+                    env: Vec::new(),
+                })
+                .await;
+        }
+        CommandAction::McpDisconnect(name) => {
+            let _ = gw_tx.send(GwEvent::ShowMcp);
+            let _ = client.send(GatewayCommand::McpDisconnect { name }).await;
+        }
+        CommandAction::ShowChannels => {
+            let _ = gw_tx.send(GwEvent::ShowChannels);
+            let _ = client.send(GatewayCommand::ChannelStatus).await;
+        }
+        CommandAction::ChannelPair(channel, action) => {
+            let _ = gw_tx.send(GwEvent::ShowChannels);
+            let _ = client
+                .send(GatewayCommand::ChannelPair { channel, action })
+                .await;
+        }
         _ => {}
     }
     Ok(false)

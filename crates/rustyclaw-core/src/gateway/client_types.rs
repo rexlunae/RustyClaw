@@ -13,7 +13,10 @@ use crate::user_prompt_types::UserPrompt;
 
 pub use crate::gateway::protocol::SecretEntryDto;
 pub use crate::gateway::protocol::ServiceInfoDto;
-pub use crate::gateway::protocol::frames::{EngineInfoDto, EngineModelDto};
+pub use crate::gateway::protocol::frames::{
+    ChannelStatusDto, CronJobDto, EngineInfoDto, EngineModelDto, HistoryEntryDto, McpServerDto,
+    MemoryEntryDto, ToolConfigDto,
+};
 
 // ── Events (server → client) ────────────────────────────────────────────────
 
@@ -280,6 +283,52 @@ pub enum GatewayEvent {
         ok: bool,
         message: String,
     },
+
+    // ── Panels ────────────────────────────────────────────────────────────
+    /// Cron job list result.
+    CronListResult { jobs: Vec<CronJobDto> },
+    /// Cron upsert result.
+    CronUpsertResult {
+        ok: bool,
+        job: Option<CronJobDto>,
+        message: Option<String>,
+    },
+    /// Cron action result.
+    CronActionResult { ok: bool, message: Option<String> },
+    /// Memory entry list result.
+    MemoryListResult { entries: Vec<MemoryEntryDto> },
+    /// Memory upsert result.
+    MemoryUpsertResult {
+        ok: bool,
+        id: Option<String>,
+        message: Option<String>,
+    },
+    /// Memory delete result.
+    MemoryDeleteResult { ok: bool, message: Option<String> },
+    /// History search result.
+    HistorySearchResult { entries: Vec<HistoryEntryDto> },
+    /// MCP server list result.
+    McpListResult { servers: Vec<McpServerDto> },
+    /// MCP connect result.
+    McpConnectResult {
+        ok: bool,
+        server: Option<McpServerDto>,
+        message: Option<String>,
+    },
+    /// MCP disconnect result.
+    McpDisconnectResult { ok: bool, message: Option<String> },
+    /// Tool configuration list result.
+    ToolConfigResult { tools: Vec<ToolConfigDto> },
+    /// Tool toggle result.
+    ToolToggleResult { ok: bool, message: Option<String> },
+    /// Channel status result.
+    ChannelStatusResult { channels: Vec<ChannelStatusDto> },
+    /// Channel pair result.
+    ChannelPairResult {
+        ok: bool,
+        channel: Option<ChannelStatusDto>,
+        message: Option<String>,
+    },
 }
 
 // ── Commands (client → server) ──────────────────────────────────────────────
@@ -488,6 +537,84 @@ pub enum GatewayCommand {
         #[serde(default)]
         extra_args: Vec<String>,
     },
+
+    // ── Panel commands ─────────────────────────────────────────────────
+    /// List cron jobs.
+    #[serde(rename = "cron_list")]
+    CronList,
+
+    /// Create or update a cron job.
+    #[serde(rename = "cron_upsert")]
+    CronUpsert {
+        id: Option<String>,
+        name: String,
+        expr: String,
+        payload: String,
+        paused: bool,
+    },
+
+    /// Pause/resume/run/remove a cron job.
+    #[serde(rename = "cron_action")]
+    CronAction { id: String, action: CronActionKind },
+
+    /// List memory entries (optionally filtered).
+    #[serde(rename = "memory_list")]
+    MemoryList {
+        query: Option<String>,
+        limit: Option<usize>,
+    },
+
+    /// Create or update a memory entry.
+    #[serde(rename = "memory_upsert")]
+    MemoryUpsert {
+        id: Option<String>,
+        content: String,
+        category: Option<String>,
+    },
+
+    /// Delete a memory entry.
+    #[serde(rename = "memory_delete")]
+    MemoryDelete { id: String },
+
+    /// Search conversation history.
+    #[serde(rename = "history_search")]
+    HistorySearch { query: String, limit: Option<usize> },
+
+    /// List MCP servers.
+    #[serde(rename = "mcp_list")]
+    McpList,
+
+    /// Connect an MCP server.
+    #[serde(rename = "mcp_connect")]
+    McpConnect {
+        name: String,
+        command: Option<String>,
+        url: Option<String>,
+        env: Vec<(String, String)>,
+    },
+
+    /// Disconnect an MCP server.
+    #[serde(rename = "mcp_disconnect")]
+    McpDisconnect { name: String },
+
+    /// List tool configuration.
+    #[serde(rename = "tool_config_list")]
+    ToolConfigList,
+
+    /// Toggle a tool's enabled state.
+    #[serde(rename = "tool_toggle")]
+    ToolToggle { tool_name: String, enabled: bool },
+
+    /// Request messenger channel status.
+    #[serde(rename = "channel_status")]
+    ChannelStatus,
+
+    /// Pair/unpair a messenger channel.
+    #[serde(rename = "channel_pair")]
+    ChannelPair {
+        channel: String,
+        action: ChannelPairActionKind,
+    },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -498,8 +625,8 @@ pub enum GatewayCommand {
 // exactly one place.
 
 use crate::gateway::{
-    ChatMessage, ClientFrame, ClientFrameType, ClientPayload, EngineActionKind, ModelActionKind,
-    ServerFrame, ServerPayload, StatusType,
+    ChannelPairActionKind, ChatMessage, ClientFrame, ClientFrameType, ClientPayload,
+    CronActionKind, EngineActionKind, ModelActionKind, ServerFrame, ServerPayload, StatusType,
 };
 
 impl GatewayCommand {
@@ -739,6 +866,93 @@ impl GatewayCommand {
                     context_length,
                     extra_args,
                 },
+            },
+            // ── Panels ───────────────────────────────────────────────
+            GatewayCommand::CronList => ClientFrame {
+                frame_type: ClientFrameType::CronListRequest,
+                payload: ClientPayload::CronListRequest,
+            },
+            GatewayCommand::CronUpsert {
+                id,
+                name,
+                expr,
+                payload,
+                paused,
+            } => ClientFrame {
+                frame_type: ClientFrameType::CronUpsertRequest,
+                payload: ClientPayload::CronUpsertRequest {
+                    id,
+                    name,
+                    expr,
+                    payload,
+                    paused,
+                },
+            },
+            GatewayCommand::CronAction { id, action } => ClientFrame {
+                frame_type: ClientFrameType::CronActionRequest,
+                payload: ClientPayload::CronActionRequest { id, action },
+            },
+            GatewayCommand::MemoryList { query, limit } => ClientFrame {
+                frame_type: ClientFrameType::MemoryListRequest,
+                payload: ClientPayload::MemoryListRequest { query, limit },
+            },
+            GatewayCommand::MemoryUpsert {
+                id,
+                content,
+                category,
+            } => ClientFrame {
+                frame_type: ClientFrameType::MemoryUpsertRequest,
+                payload: ClientPayload::MemoryUpsertRequest {
+                    id,
+                    content,
+                    category,
+                },
+            },
+            GatewayCommand::MemoryDelete { id } => ClientFrame {
+                frame_type: ClientFrameType::MemoryDeleteRequest,
+                payload: ClientPayload::MemoryDeleteRequest { id },
+            },
+            GatewayCommand::HistorySearch { query, limit } => ClientFrame {
+                frame_type: ClientFrameType::HistorySearchRequest,
+                payload: ClientPayload::HistorySearchRequest { query, limit },
+            },
+            GatewayCommand::McpList => ClientFrame {
+                frame_type: ClientFrameType::McpListRequest,
+                payload: ClientPayload::McpListRequest,
+            },
+            GatewayCommand::McpConnect {
+                name,
+                command,
+                url,
+                env,
+            } => ClientFrame {
+                frame_type: ClientFrameType::McpConnectRequest,
+                payload: ClientPayload::McpConnectRequest {
+                    name,
+                    command,
+                    url,
+                    env,
+                },
+            },
+            GatewayCommand::McpDisconnect { name } => ClientFrame {
+                frame_type: ClientFrameType::McpDisconnectRequest,
+                payload: ClientPayload::McpDisconnectRequest { name },
+            },
+            GatewayCommand::ToolConfigList => ClientFrame {
+                frame_type: ClientFrameType::ToolConfigRequest,
+                payload: ClientPayload::ToolConfigRequest,
+            },
+            GatewayCommand::ToolToggle { tool_name, enabled } => ClientFrame {
+                frame_type: ClientFrameType::ToolToggleRequest,
+                payload: ClientPayload::ToolToggleRequest { tool_name, enabled },
+            },
+            GatewayCommand::ChannelStatus => ClientFrame {
+                frame_type: ClientFrameType::ChannelStatusRequest,
+                payload: ClientPayload::ChannelStatusRequest,
+            },
+            GatewayCommand::ChannelPair { channel, action } => ClientFrame {
+                frame_type: ClientFrameType::ChannelPairRequest,
+                payload: ClientPayload::ChannelPairRequest { channel, action },
             },
         }
     }
@@ -1048,24 +1262,64 @@ impl GatewayEvent {
             ServerPayload::Empty
             | ServerPayload::TasksUpdate { .. }
             | ServerPayload::ThreadCreated { .. } => None,
-            // New panel results — handled by UI directly, not as GatewayEvent.
-            ServerPayload::CronListResult { .. }
-            | ServerPayload::CronUpsertResult { .. }
-            | ServerPayload::CronActionResult { .. }
-            | ServerPayload::MemoryListResult { .. }
-            | ServerPayload::MemoryUpsertResult { .. }
-            | ServerPayload::MemoryDeleteResult { .. }
-            | ServerPayload::HistorySearchResult { .. }
-            | ServerPayload::UsageStatsResult { .. }
+            // ── Panels ───────────────────────────────────────────────
+            ServerPayload::CronListResult { jobs } => Some(GatewayEvent::CronListResult { jobs }),
+            ServerPayload::CronUpsertResult { ok, job, message } => {
+                Some(GatewayEvent::CronUpsertResult { ok, job, message })
+            }
+            ServerPayload::CronActionResult { ok, message } => {
+                Some(GatewayEvent::CronActionResult { ok, message })
+            }
+            ServerPayload::MemoryListResult { entries } => {
+                Some(GatewayEvent::MemoryListResult { entries })
+            }
+            ServerPayload::MemoryUpsertResult { ok, id, message } => {
+                Some(GatewayEvent::MemoryUpsertResult { ok, id, message })
+            }
+            ServerPayload::MemoryDeleteResult { ok, message } => {
+                Some(GatewayEvent::MemoryDeleteResult { ok, message })
+            }
+            ServerPayload::HistorySearchResult { entries } => {
+                Some(GatewayEvent::HistorySearchResult { entries })
+            }
+            ServerPayload::McpListResult { servers } => {
+                Some(GatewayEvent::McpListResult { servers })
+            }
+            ServerPayload::McpConnectResult {
+                ok,
+                server,
+                message,
+            } => Some(GatewayEvent::McpConnectResult {
+                ok,
+                server,
+                message,
+            }),
+            ServerPayload::McpDisconnectResult { ok, message } => {
+                Some(GatewayEvent::McpDisconnectResult { ok, message })
+            }
+            ServerPayload::ToolConfigResult { tools } => {
+                Some(GatewayEvent::ToolConfigResult { tools })
+            }
+            ServerPayload::ToolToggleResult { ok, message } => {
+                Some(GatewayEvent::ToolToggleResult { ok, message })
+            }
+            ServerPayload::ChannelStatusResult { channels } => {
+                Some(GatewayEvent::ChannelStatusResult { channels })
+            }
+            ServerPayload::ChannelPairResult {
+                ok,
+                channel,
+                message,
+            } => Some(GatewayEvent::ChannelPairResult {
+                ok,
+                channel,
+                message,
+            }),
+            // Panel results without a wired backend yet, and streaming
+            // frames handled at a lower layer.
+            ServerPayload::UsageStatsResult { .. }
             | ServerPayload::LogsResult { .. }
             | ServerPayload::LogsAppend { .. }
-            | ServerPayload::McpListResult { .. }
-            | ServerPayload::McpConnectResult { .. }
-            | ServerPayload::McpDisconnectResult { .. }
-            | ServerPayload::ToolConfigResult { .. }
-            | ServerPayload::ToolToggleResult { .. }
-            | ServerPayload::ChannelStatusResult { .. }
-            | ServerPayload::ChannelPairResult { .. }
             | ServerPayload::PendingApprovalsResult { .. }
             | ServerPayload::ApprovalsBatchResult { .. }
             | ServerPayload::ToolOutputStart { .. }

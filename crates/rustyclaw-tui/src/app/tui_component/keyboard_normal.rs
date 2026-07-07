@@ -144,6 +144,14 @@ pub(super) fn handle_normal_key(
         mut show_engines_dialog,
         mut engines_data,
         mut engines_cursor,
+        mut show_cron_dialog,
+        mut cron_data,
+        mut show_memory_dialog,
+        mut memory_data,
+        mut show_mcp_dialog,
+        mut mcp_data,
+        mut show_channels_dialog,
+        mut channels_data,
     } = ui;
     // ── Normal mode keyboard ────────────────────────
     // System info dialog: Esc to close
@@ -158,6 +166,73 @@ pub(super) fn handle_normal_key(
     if show_services_dialog.get() {
         if code == KeyCode::Esc {
             show_services_dialog.set(false);
+        }
+        return;
+    }
+
+    // Gateway panel dialogs: Esc to close, ↑/↓ to move the selection.
+    // Mutations go through their slash subcommands (/cron pause …).
+    if show_cron_dialog.get() {
+        match code {
+            KeyCode::Esc => show_cron_dialog.set(false),
+            KeyCode::Up | KeyCode::Down => {
+                let mut data = cron_data.read().clone().unwrap_or_default();
+                if code == KeyCode::Up {
+                    data.select_prev();
+                } else {
+                    data.select_next();
+                }
+                cron_data.set(Some(data));
+            }
+            _ => {}
+        }
+        return;
+    }
+    if show_memory_dialog.get() {
+        match code {
+            KeyCode::Esc => show_memory_dialog.set(false),
+            KeyCode::Up | KeyCode::Down => {
+                let mut data = memory_data.read().clone().unwrap_or_default();
+                if code == KeyCode::Up {
+                    data.select_prev();
+                } else {
+                    data.select_next();
+                }
+                memory_data.set(Some(data));
+            }
+            _ => {}
+        }
+        return;
+    }
+    if show_mcp_dialog.get() {
+        match code {
+            KeyCode::Esc => show_mcp_dialog.set(false),
+            KeyCode::Up | KeyCode::Down => {
+                let mut data = mcp_data.read().clone().unwrap_or_default();
+                if code == KeyCode::Up {
+                    data.select_prev();
+                } else {
+                    data.select_next();
+                }
+                mcp_data.set(Some(data));
+            }
+            _ => {}
+        }
+        return;
+    }
+    if show_channels_dialog.get() {
+        match code {
+            KeyCode::Esc => show_channels_dialog.set(false),
+            KeyCode::Up | KeyCode::Down => {
+                let mut data = channels_data.read().clone().unwrap_or_default();
+                if code == KeyCode::Up {
+                    data.select_prev();
+                } else {
+                    data.select_next();
+                }
+                channels_data.set(Some(data));
+            }
+            _ => {}
         }
         return;
     }

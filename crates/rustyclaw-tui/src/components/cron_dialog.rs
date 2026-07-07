@@ -6,7 +6,6 @@
 use crate::theme;
 use iocraft::prelude::*;
 
-#[allow(dead_code)]
 #[derive(Default, Props)]
 pub struct CronDialogProps {
     pub data: Option<rustyclaw_view::CronPanelData>,

@@ -129,4 +129,12 @@ pub(super) struct Ui {
     pub show_engines_dialog: State<bool>,
     pub engines_data: State<Option<rustyclaw_view::EnginesPanelData>>,
     pub engines_cursor: State<usize>,
+    pub show_cron_dialog: State<bool>,
+    pub cron_data: State<Option<rustyclaw_view::CronPanelData>>,
+    pub show_memory_dialog: State<bool>,
+    pub memory_data: State<Option<rustyclaw_view::MemoryPanelData>>,
+    pub show_mcp_dialog: State<bool>,
+    pub mcp_data: State<Option<rustyclaw_view::McpPanelData>>,
+    pub show_channels_dialog: State<bool>,
+    pub channels_data: State<Option<rustyclaw_view::ChannelsPanelData>>,
 }

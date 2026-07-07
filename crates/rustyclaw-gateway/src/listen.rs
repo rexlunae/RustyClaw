@@ -173,10 +173,9 @@ pub async fn run_gateway(
     // so a slow server doesn't hold up gateway startup.
     #[cfg(feature = "mcp")]
     {
-        let mcp_mgr: rustyclaw_core::mcp::SharedMcpManager =
-            std::sync::Arc::new(tokio::sync::Mutex::new(
-                rustyclaw_core::mcp::McpManager::new(config.mcp.clone()),
-            ));
+        let mcp_mgr: rustyclaw_core::mcp::SharedMcpManager = std::sync::Arc::new(
+            tokio::sync::Mutex::new(rustyclaw_core::mcp::McpManager::new(config.mcp.clone())),
+        );
         rustyclaw_core::runtime_ctx::set_mcp_manager(mcp_mgr.clone());
         if config.mcp.has_servers() {
             let server_count = config.mcp.servers.len();

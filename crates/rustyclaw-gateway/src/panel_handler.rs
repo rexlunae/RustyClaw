@@ -235,8 +235,11 @@ fn job_to_dto(store: &CronStore, job: &CronJob) -> CronJobDto {
 fn cron_list(config: &Config) -> ServerFrame {
     let jobs = match open_cron_store(config) {
         Ok(store) => {
-            let mut dtos: Vec<CronJobDto> =
-                store.list(true).iter().map(|j| job_to_dto(&store, j)).collect();
+            let mut dtos: Vec<CronJobDto> = store
+                .list(true)
+                .iter()
+                .map(|j| job_to_dto(&store, j))
+                .collect();
             dtos.sort_by(|a, b| a.name.cmp(&b.name));
             dtos
         }
@@ -471,8 +474,7 @@ fn memory_upsert(
                 let insert_at = match &category {
                     Some(cat) => {
                         let heading = format!("## {}", cat.trim());
-                        let heading_idx =
-                            lines.iter().position(|l| l.trim() == heading.as_str());
+                        let heading_idx = lines.iter().position(|l| l.trim() == heading.as_str());
                         match heading_idx {
                             Some(h) => {
                                 // Insert after the last line of this section.
@@ -654,10 +656,12 @@ async fn mcp_connect(
 
     let result: Result<McpServerDto, String> = async {
         if url.is_some() {
-            return Err("URL-based MCP transports are not yet supported — use a stdio command".into());
+            return Err(
+                "URL-based MCP transports are not yet supported — use a stdio command".into(),
+            );
         }
-        let mgr = rustyclaw_core::runtime_ctx::get_mcp_manager()
-            .ok_or("MCP manager not initialised")?;
+        let mgr =
+            rustyclaw_core::runtime_ctx::get_mcp_manager().ok_or("MCP manager not initialised")?;
 
         // An explicit command defines (and persists) the server; otherwise
         // the name must refer to a configured server.
@@ -728,8 +732,8 @@ async fn mcp_connect(
 #[cfg(feature = "mcp")]
 async fn mcp_disconnect(name: String) -> ServerFrame {
     let result: Result<(), String> = async {
-        let mgr = rustyclaw_core::runtime_ctx::get_mcp_manager()
-            .ok_or("MCP manager not initialised")?;
+        let mgr =
+            rustyclaw_core::runtime_ctx::get_mcp_manager().ok_or("MCP manager not initialised")?;
         let mgr = mgr.lock().await;
         mgr.disconnect(&name).await.map_err(|e| e.to_string())
     }
@@ -822,8 +826,9 @@ fn tool_category(name: &str) -> &'static str {
         "disk_usage" | "classify_files" | "system_monitor" | "battery_health" | "app_index"
         | "cloud_browse" | "browser_cache" | "screenshot" | "clipboard" | "audit_sensitive"
         | "secure_delete" | "summarize_file" => "system",
-        "pkg_manage" | "net_info" | "net_scan" | "service_manage" | "user_manage"
-        | "firewall" => "sysadmin",
+        "pkg_manage" | "net_info" | "net_scan" | "service_manage" | "user_manage" | "firewall" => {
+            "sysadmin"
+        }
         "ollama_manage" | "exo_manage" | "agent_setup" => "engines",
         "ast_grep_manage" | "uv_manage" | "npm_manage" => "code",
         "pdf" => "documents",
@@ -853,14 +858,20 @@ fn tool_config_list(config: &Config) -> ServerFrame {
                 enabled: !matches!(permission, ToolPermission::Deny),
                 policy: permission.to_string(),
                 description: if summary == "Unknown tool" {
-                    def.description.lines().next().unwrap_or_default().to_string()
+                    def.description
+                        .lines()
+                        .next()
+                        .unwrap_or_default()
+                        .to_string()
                 } else {
                     summary.to_string()
                 },
             }
         })
         .collect();
-    tools.sort_by(|a, b| (a.category.clone(), a.name.clone()).cmp(&(b.category.clone(), b.name.clone())));
+    tools.sort_by(|a, b| {
+        (a.category.clone(), a.name.clone()).cmp(&(b.category.clone(), b.name.clone()))
+    });
 
     ServerFrame {
         frame_type: ServerFrameType::ToolConfigResult,
@@ -979,7 +990,10 @@ mod tests {
         ));
         assert!(matches!(
             parse_schedule("every 5m"),
-            Ok(Schedule::Every { every_ms: 300_000, .. })
+            Ok(Schedule::Every {
+                every_ms: 300_000,
+                ..
+            })
         ));
         assert!(matches!(
             parse_schedule("every 1500"),

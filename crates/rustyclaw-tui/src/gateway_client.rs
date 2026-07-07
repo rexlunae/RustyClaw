@@ -8,7 +8,7 @@
 //!
 //! [`GatewayClient`]: rustyclaw_core::gateway::GatewayClient
 
-use crate::app::GwEvent;
+use crate::app::{GwEvent, PanelKind};
 use rustyclaw_core::gateway::GatewayEvent;
 
 /// Adapt a shared gateway event into a TUI UI event.
@@ -406,6 +406,60 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             ok,
             message,
         },
+
+        // ── Panels ───────────────────────────────────────────────────────
+        E::CronListResult { jobs } => GwEvent::CronListResult {
+            jobs: jobs.iter().map(Into::into).collect(),
+        },
+        E::CronUpsertResult { ok, message, .. } => GwEvent::PanelActionResult {
+            panel: PanelKind::Cron,
+            ok,
+            message,
+        },
+        E::CronActionResult { ok, message } => GwEvent::PanelActionResult {
+            panel: PanelKind::Cron,
+            ok,
+            message,
+        },
+        E::MemoryListResult { entries } => GwEvent::MemoryListResult {
+            entries: entries.iter().map(Into::into).collect(),
+        },
+        E::MemoryUpsertResult { ok, message, .. } => GwEvent::PanelActionResult {
+            panel: PanelKind::Memory,
+            ok,
+            message,
+        },
+        E::MemoryDeleteResult { ok, message } => GwEvent::PanelActionResult {
+            panel: PanelKind::Memory,
+            ok,
+            message,
+        },
+        E::HistorySearchResult { entries } => GwEvent::HistorySearchResult {
+            entries: entries.iter().map(Into::into).collect(),
+        },
+        E::McpListResult { servers } => GwEvent::McpListResult {
+            servers: servers.iter().map(Into::into).collect(),
+        },
+        E::McpConnectResult { ok, message, .. } => GwEvent::PanelActionResult {
+            panel: PanelKind::Mcp,
+            ok,
+            message,
+        },
+        E::McpDisconnectResult { ok, message } => GwEvent::PanelActionResult {
+            panel: PanelKind::Mcp,
+            ok,
+            message,
+        },
+        E::ChannelStatusResult { channels } => GwEvent::ChannelStatusResult {
+            channels: channels.iter().map(Into::into).collect(),
+        },
+        E::ChannelPairResult { ok, message, .. } => GwEvent::PanelActionResult {
+            panel: PanelKind::Channels,
+            ok,
+            message,
+        },
+        // The TUI edits tool permissions through its local dialog.
+        E::ToolConfigResult { .. } | E::ToolToggleResult { .. } => return None,
     };
 
     Some(ev)

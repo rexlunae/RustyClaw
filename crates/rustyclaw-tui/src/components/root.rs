@@ -7,13 +7,17 @@ use iocraft::prelude::*;
 
 use crate::components::api_key_dialog::ApiKeyDialog;
 use crate::components::auth_dialog::AuthDialog;
+use crate::components::channels_dialog::ChannelsDialog;
 use crate::components::command_menu::CommandMenu;
 use crate::components::credential_request_dialog::CredentialRequestDialog;
+use crate::components::cron_dialog::CronDialog;
 use crate::components::details_dialog::DetailsDialog;
 use crate::components::device_flow_dialog::DeviceFlowDialog;
 use crate::components::engines_dialog::EnginesDialog;
 use crate::components::hatching_dialog::HatchingDialog;
 use crate::components::input_bar::InputBar;
+use crate::components::mcp_dialog::McpDialog;
+use crate::components::memory_dialog::MemoryDialog;
 use crate::components::messages::Messages;
 use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
@@ -169,6 +173,16 @@ pub struct RootProps {
     // engines dialog overlay (/engines)
     pub show_engines_dialog: bool,
     pub engines_data: Option<rustyclaw_view::EnginesPanelData>,
+
+    // gateway panel overlays (/cron, /memory, /mcp, /channels)
+    pub show_cron_dialog: bool,
+    pub cron_data: Option<rustyclaw_view::CronPanelData>,
+    pub show_memory_dialog: bool,
+    pub memory_data: Option<rustyclaw_view::MemoryPanelData>,
+    pub show_mcp_dialog: bool,
+    pub mcp_data: Option<rustyclaw_view::McpPanelData>,
+    pub show_channels_dialog: bool,
+    pub channels_data: Option<rustyclaw_view::ChannelsPanelData>,
 }
 
 #[component]
@@ -240,6 +254,16 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     // Engines dialog state
     let show_engines = props.show_engines_dialog;
     let engines = props.engines_data.clone();
+
+    // Gateway panel dialog state
+    let show_cron = props.show_cron_dialog;
+    let cron = props.cron_data.clone();
+    let show_memory = props.show_memory_dialog;
+    let memory = props.memory_data.clone();
+    let show_mcp = props.show_mcp_dialog;
+    let mcp = props.mcp_data.clone();
+    let show_channels = props.show_channels_dialog;
+    let channels = props.channels_data.clone();
 
     element! {
         View(
@@ -666,6 +690,82 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         EnginesDialog(
                             data: engines,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Cron dialog overlay (/cron) ─────────────────────────────
+            #(if show_cron {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        CronDialog(
+                            data: cron,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Memory dialog overlay (/memory) ─────────────────────────
+            #(if show_memory {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        MemoryDialog(
+                            data: memory,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── MCP dialog overlay (/mcp) ───────────────────────────────
+            #(if show_mcp {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        McpDialog(
+                            data: mcp,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Channels dialog overlay (/channels) ─────────────────────
+            #(if show_channels {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        ChannelsDialog(
+                            data: channels,
                         )
                     }
                 }.into_any()
