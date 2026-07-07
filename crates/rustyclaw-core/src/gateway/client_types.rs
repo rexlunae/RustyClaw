@@ -465,6 +465,10 @@ pub enum GatewayCommand {
     #[serde(rename = "secrets_delete_credential")]
     SecretsDeleteCredential { name: String },
 
+    /// Ask whether the vault has TOTP 2FA configured
+    #[serde(rename = "secrets_has_totp")]
+    SecretsHasTotp,
+
     /// Reload gateway configuration (apply provider/model changes without restart)
     #[serde(rename = "reload")]
     Reload,
@@ -789,6 +793,10 @@ impl GatewayCommand {
             GatewayCommand::SecretsDeleteCredential { name } => ClientFrame {
                 frame_type: ClientFrameType::SecretsDeleteCredential,
                 payload: ClientPayload::SecretsDeleteCredential { name },
+            },
+            GatewayCommand::SecretsHasTotp => ClientFrame {
+                frame_type: ClientFrameType::SecretsHasTotp,
+                payload: ClientPayload::SecretsHasTotp,
             },
             GatewayCommand::Reload => ClientFrame {
                 frame_type: ClientFrameType::Reload,

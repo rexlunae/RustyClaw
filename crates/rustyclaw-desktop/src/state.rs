@@ -200,6 +200,15 @@ pub struct AppState {
     pub tools_data: Option<rustyclaw_view::ToolConfigPanelData>,
     /// Set when a tool toggle completed and the list should be re-fetched.
     pub tools_stale: bool,
+
+    /// User-defined custom providers from the local config (shown and
+    /// edited in Settings).
+    pub custom_providers: Vec<rustyclaw_core::providers::CustomProviderConfig>,
+
+    /// Whether the skills manager dialog is visible.
+    pub show_skills_dialog: bool,
+    /// Skills for the skills manager dialog.
+    pub skills_data: Vec<rustyclaw_view::SkillInfoData>,
 }
 
 impl Default for AppState {
@@ -287,6 +296,11 @@ impl Default for AppState {
             show_tools_dialog: false,
             tools_data: None,
             tools_stale: false,
+            custom_providers: rustyclaw_core::config::Config::load(None)
+                .map(|cfg| cfg.custom_providers)
+                .unwrap_or_default(),
+            show_skills_dialog: false,
+            skills_data: Vec::new(),
         }
     }
 }

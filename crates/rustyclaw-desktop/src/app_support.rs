@@ -364,10 +364,16 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         }
         GatewayEvent::SecretsListResult { ok, entries } => {
             if ok {
+                // Keep the last-known TOTP state; it arrives separately
+                // via SecretsHasTotpResult.
+                let (agent_access, has_totp) = {
+                    let s = state.read();
+                    (s.agent_access, s.secrets_data.has_totp)
+                };
                 let data = SecretsDialogData::from_vault(
                     entries.iter().map(Into::into).collect(),
-                    state.read().agent_access,
-                    false, // has_totp — would need gateway peek
+                    agent_access,
+                    has_totp,
                 );
                 state.write().secrets_data = data;
             } else {
@@ -432,11 +438,13 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         }
         // Secrets-management results without a desktop UI surface. These are
         // driven from the TUI's secrets manager; the desktop ignores them.
+        GatewayEvent::SecretsHasTotpResult { has_totp } => {
+            state.write().secrets_data.has_totp = has_totp;
+        }
         GatewayEvent::SecretsGetResult { .. }
         | GatewayEvent::SecretsPeekResult { .. }
         | GatewayEvent::SecretsSetDisabledResult { .. }
         | GatewayEvent::SecretsDeleteCredentialResult { .. }
-        | GatewayEvent::SecretsHasTotpResult { .. }
         | GatewayEvent::SecretsSetupTotpResult { .. }
         | GatewayEvent::SecretsVerifyTotpResult { .. }
         | GatewayEvent::SecretsRemoveTotpResult { .. } => {}
@@ -942,4 +950,41 @@ pub(crate) fn stop_swarm(name: &str) -> anyhow::Result<()> {
         .map_err(|_| anyhow::anyhow!("Swarm manager lock poisoned"))?;
     m.stop(name)?;
     Ok(())
+}
+
+/// Load the local skills list for the skills manager dialog.
+///
+/// Skills live on the local filesystem, so this mirrors the TUI's local
+/// `SkillManager` rather than going through the gateway.
+pub(crate) fn load_skills_list() -> Vec<rustyclaw_view::SkillInfoData> {
+    let Ok(config) = rustyclaw_core::config::Config::load(None) else {
+        return Vec::new();
+    };
+    let mut mgr = rustyclaw_core::skills::SkillManager::with_dirs(config.skills_dirs());
+    let _ = mgr.load_skills();
+    mgr.get_skills()
+        .iter()
+        .map(|s| rustyclaw_view::SkillInfoData {
+            name: s.name.clone(),
+            description: s.description.clone().unwrap_or_default(),
+            enabled: s.enabled,
+        })
+        .collect()
+}
+
+/// Toggle a skill's enabled state and return the refreshed list.
+pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
+    if let Ok(config) = rustyclaw_core::config::Config::load(None) {
+        let mut mgr = rustyclaw_core::skills::SkillManager::with_dirs(config.skills_dirs());
+        let _ = mgr.load_skills();
+        let enabled = mgr
+            .get_skills()
+            .iter()
+            .find(|s| s.name == name)
+            .map(|s| s.enabled);
+        if let Some(enabled) = enabled {
+            let _ = mgr.set_skill_enabled(name, !enabled);
+        }
+    }
+    load_skills_list()
 }
