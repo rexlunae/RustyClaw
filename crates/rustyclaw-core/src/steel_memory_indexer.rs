@@ -49,7 +49,7 @@ impl Indexer for SteelMemoryIndexer {
             .add_memory(&chunk.content, INGEST_WING, source, Some(&chunk.source_id))
             .await
             .map(|_id| ())
-            .map_err(MemoryTreeError::Summarizer)
+            .map_err(|e| MemoryTreeError::Summarizer(e.to_string()))
     }
 
     async fn semantic_search(
@@ -62,7 +62,7 @@ impl Indexer for SteelMemoryIndexer {
             .steel
             .search(query, limit * 2, None)
             .await
-            .map_err(MemoryTreeError::Summarizer)?;
+            .map_err(|e| MemoryTreeError::Summarizer(e.to_string()))?;
         let hits: Vec<SemanticHit> = results
             .into_iter()
             .filter(|r| r.wing == INGEST_WING)

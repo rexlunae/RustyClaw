@@ -266,20 +266,82 @@ impl std::fmt::Display for SandboxMode {
     }
 }
 
+// ── Errors ──────────────────────────────────────────────────────────────────
+
+/// Typed sandbox errors.
+///
+/// Policy verdicts (`ReadDenied`, `NotAllowed`, `ExecDenied`, `Command*`,
+/// `SymlinkRace`) are deliberate security decisions; the remaining variants
+/// are environment or execution failures.  Callers at the AI-tool boundary
+/// flatten these with `.to_string()`; internal callers can match on the
+/// distinction.
+#[derive(Debug, thiserror::Error)]
+pub enum SandboxError {
+    /// A path is inside a `deny_read` protected area.
+    #[error("Access denied: path {} is in protected area", path.display())]
+    ReadDenied { path: PathBuf },
+    /// A path falls outside a non-empty allow-list.
+    #[error("Access denied: path {} is not in allowed areas", path.display())]
+    NotAllowed { path: PathBuf },
+    /// Executing a binary from a `deny_exec` protected area.
+    #[error("Execution denied: {} is in protected area (deny_exec)", path.display())]
+    ExecDenied { path: PathBuf },
+    /// The command string contains a null byte.
+    #[error("Command contains null byte — blocked for security")]
+    CommandNullByte,
+    /// The command string exceeds the maximum allowed length.
+    #[error("Command too long (max 4096 characters) — blocked for security")]
+    CommandTooLong,
+    /// The command string matches a credential-exfiltration pattern.
+    #[error("Command blocked: contains credential exfiltration pattern")]
+    CommandExfiltration,
+    /// A path resolved differently on consecutive lookups.
+    #[error("Access denied: path changed between resolutions — possible symlink race attack")]
+    SymlinkRace,
+    /// Canonicalizing a path failed.
+    #[error("Path resolution failed for {}: {source}", path.display())]
+    PathResolution {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    /// Spawning the (sandboxed) process failed.
+    #[error("Sandboxed command failed: {0}")]
+    Spawn(#[from] std::io::Error),
+    /// The requested sandbox backend is not available on this platform.
+    #[error("{0}")]
+    Unsupported(&'static str),
+    /// Landlock setup failed.
+    #[cfg(target_os = "linux")]
+    #[error("Landlock error while {context}: {source}")]
+    Landlock {
+        context: String,
+        #[source]
+        source: landlock::RulesetError,
+    },
+    /// A path needed for a Landlock rule could not be opened.
+    #[cfg(target_os = "linux")]
+    #[error("Cannot open {} for Landlock: {source}", path.display())]
+    LandlockPath {
+        path: PathBuf,
+        #[source]
+        source: landlock::PathFdError,
+    },
+}
+
 // ── Path Validation (All Platforms) ─────────────────────────────────────────
 
 /// Validate that a path does not escape allowed boundaries.
-pub fn validate_path(path: &Path, policy: &SandboxPolicy) -> Result<(), String> {
+pub fn validate_path(path: &Path, policy: &SandboxPolicy) -> Result<(), SandboxError> {
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
 
     // Check deny lists
     for denied in &policy.deny_read {
         if let Ok(denied_canon) = denied.canonicalize() {
             if canonical.starts_with(&denied_canon) {
-                return Err(format!(
-                    "Access denied: path {} is in protected area",
-                    path.display()
-                ));
+                return Err(SandboxError::ReadDenied {
+                    path: path.to_path_buf(),
+                });
             }
         }
     }
@@ -293,10 +355,9 @@ pub fn validate_path(path: &Path, policy: &SandboxPolicy) -> Result<(), String> 
                 .unwrap_or(false)
         });
         if !allowed {
-            return Err(format!(
-                "Access denied: path {} is not in allowed areas",
-                path.display()
-            ));
+            return Err(SandboxError::NotAllowed {
+                path: path.to_path_buf(),
+            });
         }
     }
 

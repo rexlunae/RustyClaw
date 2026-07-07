@@ -201,9 +201,10 @@ impl SshConnection {
 // ── Helpers ──────────────────────────────────────────────────────────────
 
 /// Fallback: deserialize a bare `ServerFrame` wrapped in a control wire frame.
-fn bare_to_wire_frame(data: &[u8]) -> std::result::Result<WireFrame<ServerFrame>, String> {
-    let frame: ServerFrame = bincode::serde::decode_from_slice(data, bincode::config::standard())
-        .map(|(f, _)| f)
-        .map_err(|e| format!("Bincode decode error: {}", e))?;
+fn bare_to_wire_frame(
+    data: &[u8],
+) -> std::result::Result<WireFrame<ServerFrame>, crate::gateway::protocol::FrameCodecError> {
+    let frame: ServerFrame =
+        bincode::serde::decode_from_slice(data, bincode::config::standard()).map(|(f, _)| f)?;
     Ok(WireFrame::control(frame))
 }

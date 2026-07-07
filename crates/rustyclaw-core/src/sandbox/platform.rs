@@ -191,9 +191,14 @@ pub fn wrap_with_macos_sandbox(_command: &str, _policy: &SandboxPolicy) -> (Stri
 ///
 /// **Warning:** This is irreversible for this process!
 #[cfg(target_os = "linux")]
-pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
+pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), SandboxError> {
     use landlock::{
         ABI, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
+    };
+
+    let landlock_err = |context: &str| {
+        let context = context.to_string();
+        move |e: landlock::RulesetError| SandboxError::Landlock { context, source: e }
     };
 
     let abi = ABI::V2;
@@ -202,9 +207,9 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
     // By "handling" these, any path NOT explicitly allowed will be denied
     let mut ruleset = Ruleset::default()
         .handle_access(AccessFs::from_all(abi))
-        .map_err(|e| format!("Landlock ruleset creation failed: {}", e))?
+        .map_err(|e| landlock_err("creating ruleset")(e))?
         .create()
-        .map_err(|e| format!("Landlock not supported (kernel < 5.13): {}", e))?;
+        .map_err(|e| landlock_err("creating ruleset (kernel < 5.13?)")(e))?;
 
     // Define standard system paths that should be readable
     let system_read_paths = [
@@ -224,7 +229,9 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
                 Ok(fd) => {
                     ruleset = ruleset
                         .add_rule(PathBeneath::new(fd, AccessFs::from_read(abi)))
-                        .map_err(|e| format!("Failed to add read rule for {}: {}", path_str, e))?;
+                        .map_err(|e| {
+                            landlock_err(&format!("adding read rule for {}", path_str))(e)
+                        })?;
                 }
                 Err(e) => {
                     warn!(path = %path_str, error = %e, "Cannot open path for Landlock read rule");
@@ -241,7 +248,9 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
                 Ok(fd) => {
                     ruleset = ruleset
                         .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))
-                        .map_err(|e| format!("Failed to add rw rule for {}: {}", path_str, e))?;
+                        .map_err(|e| {
+                            landlock_err(&format!("adding rw rule for {}", path_str))(e)
+                        })?;
                 }
                 Err(e) => {
                     warn!(path = %path_str, error = %e, "Cannot open path for Landlock rw rule");
@@ -256,13 +265,13 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
             Ok(fd) => {
                 ruleset = ruleset
                     .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))
-                    .map_err(|e| format!("Failed to add workspace rule: {}", e))?;
+                    .map_err(|e| landlock_err("adding workspace rule")(e))?;
             }
             Err(e) => {
-                return Err(format!(
-                    "Cannot open workspace {:?} for Landlock: {}",
-                    policy.workspace, e
-                ));
+                return Err(SandboxError::LandlockPath {
+                    path: policy.workspace.clone(),
+                    source: e,
+                });
             }
         }
     }
@@ -275,7 +284,7 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
                     ruleset = ruleset
                         .add_rule(PathBeneath::new(fd, AccessFs::from_all(abi)))
                         .map_err(|e| {
-                            format!("Failed to add allow rule for {:?}: {}", allowed_path, e)
+                            landlock_err(&format!("adding allow rule for {:?}", allowed_path))(e)
                         })?;
                 }
                 Err(e) => {
@@ -303,7 +312,7 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
     // Apply the restrictions (irreversible!)
     ruleset
         .restrict_self()
-        .map_err(|e| format!("Failed to apply Landlock restrictions: {}", e))?;
+        .map_err(|e| landlock_err("applying restrictions")(e))?;
 
     info!(
         workspace = ?policy.workspace,
@@ -315,8 +324,10 @@ pub fn apply_landlock(policy: &SandboxPolicy) -> Result<(), String> {
 }
 
 #[cfg(not(target_os = "linux"))]
-pub fn apply_landlock(_policy: &SandboxPolicy) -> Result<(), String> {
-    Err("Landlock is only supported on Linux".to_string())
+pub fn apply_landlock(_policy: &SandboxPolicy) -> Result<(), SandboxError> {
+    Err(SandboxError::Unsupported(
+        "Landlock is only supported on Linux",
+    ))
 }
 
 // ── Unified Sandbox Runner ──────────────────────────────────────────────────
@@ -326,7 +337,7 @@ pub fn run_sandboxed(
     command: &str,
     policy: &SandboxPolicy,
     mode: SandboxMode,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, SandboxError> {
     let caps = SandboxCapabilities::detect();
 
     // Resolve Auto mode
@@ -384,12 +395,11 @@ pub fn run_sandboxed(
     }
 }
 
-pub(crate) fn run_unsandboxed(command: &str) -> Result<std::process::Output, String> {
-    std::process::Command::new("sh")
+pub(crate) fn run_unsandboxed(command: &str) -> Result<std::process::Output, SandboxError> {
+    Ok(std::process::Command::new("sh")
         .arg("-c")
         .arg(command)
-        .output()
-        .map_err(|e| format!("Command failed: {}", e))
+        .output()?)
 }
 
 /// Extract explicit paths from a shell command string.
@@ -459,7 +469,7 @@ pub fn extract_paths_from_command(command: &str) -> Vec<PathBuf> {
 pub(crate) fn run_with_path_validation(
     command: &str,
     policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, SandboxError> {
     // Extract explicit paths from command
     let paths = extract_paths_from_command(command);
 
@@ -485,10 +495,9 @@ pub(crate) fn run_with_path_validation(
                     (cmd_path.canonicalize(), denied.canonicalize())
                 {
                     if cmd_canon.starts_with(&denied_canon) {
-                        return Err(format!(
-                            "Execution denied: {} is in protected area (deny_exec)",
-                            first_token
-                        ));
+                        return Err(SandboxError::ExecDenied {
+                            path: cmd_path.to_path_buf(),
+                        });
                     }
                 }
             }
@@ -510,7 +519,7 @@ pub(crate) fn run_with_path_validation(
 fn run_with_bubblewrap(
     command: &str,
     policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, SandboxError> {
     let (cmd, args) = wrap_with_bwrap(command, policy);
 
     let mut proc = std::process::Command::new(&cmd);
@@ -530,37 +539,37 @@ fn run_with_bubblewrap(
         }
     }
 
-    proc.output()
-        .map_err(|e| format!("Sandboxed command failed: {}", e))
+    Ok(proc.output()?)
 }
 
 #[cfg(not(target_os = "linux"))]
 fn run_with_bubblewrap(
     _command: &str,
     _policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
-    Err("Bubblewrap is only available on Linux".to_string())
+) -> Result<std::process::Output, SandboxError> {
+    Err(SandboxError::Unsupported(
+        "Bubblewrap is only available on Linux",
+    ))
 }
 
 #[cfg(target_os = "macos")]
 fn run_with_macos_sandbox(
     command: &str,
     policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, SandboxError> {
     let (cmd, args) = wrap_with_macos_sandbox(command, policy);
 
-    std::process::Command::new(&cmd)
-        .args(&args)
-        .output()
-        .map_err(|e| format!("Sandboxed command failed: {}", e))
+    Ok(std::process::Command::new(&cmd).args(&args).output()?)
 }
 
 #[cfg(not(target_os = "macos"))]
 fn run_with_macos_sandbox(
     _command: &str,
     _policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
-    Err("macOS sandbox is only available on macOS".to_string())
+) -> Result<std::process::Output, SandboxError> {
+    Err(SandboxError::Unsupported(
+        "macOS sandbox is only available on macOS",
+    ))
 }
 
 // ── Combined Landlock + Bubblewrap (Linux) ──────────────────────────────────
@@ -672,7 +681,7 @@ fn wrap_with_combined_bwrap(command: &str, policy: &SandboxPolicy) -> (String, V
 fn run_with_landlock_bwrap(
     command: &str,
     policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
+) -> Result<std::process::Output, SandboxError> {
     // Generate extra-restrictive bwrap configuration
     let (cmd, args) = wrap_with_combined_bwrap(command, policy);
 
@@ -699,16 +708,17 @@ fn run_with_landlock_bwrap(
         "Defense-in-depth sandbox active"
     );
 
-    proc.output()
-        .map_err(|e| format!("Combined sandboxed command failed: {}", e))
+    Ok(proc.output()?)
 }
 
 #[cfg(not(target_os = "linux"))]
 fn run_with_landlock_bwrap(
     _command: &str,
     _policy: &SandboxPolicy,
-) -> Result<std::process::Output, String> {
-    Err("Landlock+Bubblewrap is only available on Linux".to_string())
+) -> Result<std::process::Output, SandboxError> {
+    Err(SandboxError::Unsupported(
+        "Landlock+Bubblewrap is only available on Linux",
+    ))
 }
 
 // ── Docker Container (Cross-Platform) ──────────────────────────────────────
@@ -723,7 +733,10 @@ fn run_with_landlock_bwrap(
 /// - **Auto-cleanup**: Container removed after execution
 ///
 /// Inspired by IronClaw's Docker sandbox approach.
-fn run_with_docker(command: &str, policy: &SandboxPolicy) -> Result<std::process::Output, String> {
+fn run_with_docker(
+    command: &str,
+    policy: &SandboxPolicy,
+) -> Result<std::process::Output, SandboxError> {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     // Generate unique container name
@@ -802,10 +815,9 @@ fn run_with_docker(command: &str, policy: &SandboxPolicy) -> Result<std::process
     );
 
     // Execute docker command
-    std::process::Command::new("docker")
+    Ok(std::process::Command::new("docker")
         .args(&docker_args)
-        .output()
-        .map_err(|e| format!("Docker execution failed: {}", e))
+        .output()?)
 }
 
 // ── Sandbox Manager ─────────────────────────────────────────────────────────
@@ -847,7 +859,7 @@ impl Sandbox {
     }
 
     /// Initialize process-wide sandbox (for Landlock).
-    pub fn init(&self) -> Result<(), String> {
+    pub fn init(&self) -> Result<(), SandboxError> {
         if self.effective_mode() == SandboxMode::Landlock {
             apply_landlock(&self.policy)?;
         }
@@ -855,7 +867,7 @@ impl Sandbox {
     }
 
     /// Check if a path is accessible under the current policy.
-    pub fn check_path(&self, path: &Path) -> Result<(), String> {
+    pub fn check_path(&self, path: &Path) -> Result<(), SandboxError> {
         if self.mode == SandboxMode::None {
             return Ok(());
         }
@@ -863,7 +875,7 @@ impl Sandbox {
     }
 
     /// Run a command with appropriate sandboxing.
-    pub fn run_command(&self, command: &str) -> Result<std::process::Output, String> {
+    pub fn run_command(&self, command: &str) -> Result<std::process::Output, SandboxError> {
         run_sandboxed(command, &self.policy, self.mode)
     }
 

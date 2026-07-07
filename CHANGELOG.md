@@ -45,6 +45,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Completed the typed-error migration started in #303.** Remaining
+  internal `Result<_, String>` plumbing now uses per-module `thiserror`
+  enums, with strings only at the documented display boundaries:
+  `SteelMemoryError` (steel_memory.rs — audit follow-up #1),
+  `SandboxError` (sandbox + command-safety helpers — audit follow-up #2,
+  policy verdicts distinguishable from execution failures),
+  `TaskError` (tasks/manager.rs), `SubtaskError` (threads/subtask.rs —
+  replaces the `"Cancelled"` sentinel-string comparison), `ReceiptError`
+  (protocols/receipt.rs), `CustomProviderError` (providers/custom.rs),
+  `MissingRequestField` (gateway resolve_request),
+  `ProcessManager::spawn` returns `ProcessError`, the SSH bare-frame
+  fallback returns `FrameCodecError`, and the desktop swarm helpers
+  propagate `SwarmError` via `anyhow` instead of pre-flattening.
+  `docs/RUST_IDIOMS_AUDIT.md` follow-ups #1 and #2 are marked fixed.
 - **Provider backend migrated to the `genai` crate.** The gateway's hand-rolled
   OpenAI / Anthropic / Google HTTP clients
   (`rustyclaw-gateway/src/providers/{openai,anthropic,google}.rs`) are replaced

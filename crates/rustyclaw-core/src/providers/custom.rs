@@ -117,40 +117,49 @@ pub struct CustomProviderConfig {
     pub models: Vec<String>,
 }
 
+/// Why a [`CustomProviderConfig`] entry was rejected.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CustomProviderError {
+    #[error("Provider id must not be empty")]
+    EmptyId,
+    #[error("Provider id '{0}' may only contain lowercase letters, digits, '-' and '_'")]
+    InvalidId(String),
+    #[error("Provider id '{0}' is a built-in provider")]
+    BuiltInCollision(String),
+    #[error("Base URL '{0}' must start with http:// or https://")]
+    InvalidBaseUrl(String),
+    #[error("api_key_secret must not be empty when set")]
+    EmptyApiKeySecret,
+}
+
 impl CustomProviderConfig {
     /// Display name, falling back to the id.
     pub fn display(&self) -> &str {
         self.display_name.as_deref().unwrap_or(&self.id)
     }
 
-    /// Validate the entry, returning a human-readable error on failure.
-    pub fn validate(&self) -> Result<(), String> {
+    /// Validate the entry.
+    pub fn validate(&self) -> Result<(), CustomProviderError> {
         let id = self.id.trim();
         if id.is_empty() {
-            return Err("Provider id must not be empty".into());
+            return Err(CustomProviderError::EmptyId);
         }
         if !id
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
         {
-            return Err(format!(
-                "Provider id '{}' may only contain lowercase letters, digits, '-' and '_'",
-                id
-            ));
+            return Err(CustomProviderError::InvalidId(id.to_string()));
         }
         if super::PROVIDERS.iter().any(|p| p.id == id) {
-            return Err(format!("Provider id '{}' is a built-in provider", id));
+            return Err(CustomProviderError::BuiltInCollision(id.to_string()));
         }
         let url = self.base_url.trim();
         if !url.starts_with("http://") && !url.starts_with("https://") {
-            return Err(format!(
-                "Base URL '{}' must start with http:// or https://",
-                url
-            ));
+            return Err(CustomProviderError::InvalidBaseUrl(url.to_string()));
         }
         if let Some(secret) = &self.api_key_secret {
             if secret.trim().is_empty() {
-                return Err("api_key_secret must not be empty when set".into());
+                return Err(CustomProviderError::EmptyApiKeySecret);
             }
         }
         Ok(())
@@ -298,12 +307,21 @@ mod tests {
     #[test]
     fn validate_rejects_bad_entries() {
         assert!(cfg("my-provider").validate().is_ok());
-        assert!(cfg("").validate().is_err());
-        assert!(cfg("Has Spaces").validate().is_err());
-        assert!(cfg("anthropic").validate().is_err(), "built-in collision");
+        assert_eq!(cfg("").validate(), Err(CustomProviderError::EmptyId));
+        assert!(matches!(
+            cfg("Has Spaces").validate(),
+            Err(CustomProviderError::InvalidId(_))
+        ));
+        assert!(matches!(
+            cfg("anthropic").validate(),
+            Err(CustomProviderError::BuiltInCollision(_))
+        ));
         let mut bad_url = cfg("ok-id");
         bad_url.base_url = "localhost:8000".into();
-        assert!(bad_url.validate().is_err());
+        assert!(matches!(
+            bad_url.validate(),
+            Err(CustomProviderError::InvalidBaseUrl(_))
+        ));
     }
 
     #[test]

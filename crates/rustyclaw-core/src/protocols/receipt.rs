@@ -122,21 +122,38 @@ impl TaskReceipt {
     }
 
     /// Validate that the receipt is complete
-    pub fn validate(&self) -> Result<(), String> {
+    pub fn validate(&self) -> Result<(), ReceiptError> {
         if self.task_id.is_empty() {
-            return Err("task_id is required".to_string());
+            return Err(ReceiptError::MissingTaskId);
         }
         if self.agent.is_empty() {
-            return Err("agent is required".to_string());
+            return Err(ReceiptError::MissingAgent);
         }
         if self.status != "complete" {
-            return Err(format!("status must be 'complete', got '{}'", self.status));
+            return Err(ReceiptError::NotComplete(self.status.clone()));
         }
         if self.verification.is_empty() {
-            return Err("verification message is required".to_string());
+            return Err(ReceiptError::MissingVerification);
         }
         Ok(())
     }
+}
+
+/// Why a receipt failed validation.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReceiptError {
+    /// The receipt has no task id.
+    #[error("task_id is required")]
+    MissingTaskId,
+    /// The receipt has no agent name.
+    #[error("agent is required")]
+    MissingAgent,
+    /// The receipt status is not "complete".
+    #[error("status must be 'complete', got '{0}'")]
+    NotComplete(String),
+    /// The receipt has no verification message.
+    #[error("verification message is required")]
+    MissingVerification,
 }
 
 /// Store for managing task receipts

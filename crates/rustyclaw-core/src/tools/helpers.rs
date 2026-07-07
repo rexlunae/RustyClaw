@@ -1,7 +1,7 @@
 //! Helper functions and global state for the tools system.
 
 use crate::process_manager::{ProcessManager, SharedProcessManager};
-use crate::sandbox::{Sandbox, SandboxMode, SandboxPolicy};
+use crate::sandbox::{Sandbox, SandboxError, SandboxMode, SandboxPolicy};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::{debug, error, warn};
@@ -43,7 +43,10 @@ pub fn sandbox() -> Option<&'static Sandbox> {
 }
 
 /// Run a command through the sandbox (or unsandboxed if not initialized).
-pub fn run_sandboxed_command(command: &str, cwd: &Path) -> Result<std::process::Output, String> {
+pub fn run_sandboxed_command(
+    command: &str,
+    cwd: &Path,
+) -> Result<std::process::Output, SandboxError> {
     if let Some(sb) = SANDBOX.get() {
         debug!(mode = ?sb.mode, cwd = %cwd.display(), "Running sandboxed command");
         // Update policy workspace to the actual cwd for this command
@@ -53,12 +56,11 @@ pub fn run_sandboxed_command(command: &str, cwd: &Path) -> Result<std::process::
     } else {
         debug!(cwd = %cwd.display(), "Running unsandboxed command (no sandbox configured)");
         // No sandbox configured, run directly
-        std::process::Command::new("sh")
+        Ok(std::process::Command::new("sh")
             .arg("-c")
             .arg(command)
             .current_dir(cwd)
-            .output()
-            .map_err(|e| format!("Command failed: {}", e))
+            .output()?)
     }
 }
 
@@ -130,7 +132,7 @@ pub fn is_protected_path(path: &Path) -> bool {
 ///
 /// Returns `Ok(canonical)` if the path resolves consistently twice,
 /// or `Err` if the path changed between resolutions (possible symlink race).
-pub fn resolve_path_no_race(path: &Path) -> Result<PathBuf, String> {
+pub fn resolve_path_no_race(path: &Path) -> Result<PathBuf, SandboxError> {
     // Unless the source file exists, there's nothing to check for races.
     if !path.exists() {
         // For non-existent paths, just canonicalize what we can of the parent,
@@ -151,10 +153,16 @@ pub fn resolve_path_no_race(path: &Path) -> Result<PathBuf, String> {
         // Double-canonicalize to catch symlink swaps.
         let canon1 = path
             .canonicalize()
-            .map_err(|e| format!("Path resolution failed: {}", e))?;
+            .map_err(|e| SandboxError::PathResolution {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
         let canon2 = path
             .canonicalize()
-            .map_err(|e| format!("Path resolution failed (retry): {}", e))?;
+            .map_err(|e| SandboxError::PathResolution {
+                path: path.to_path_buf(),
+                source: e,
+            })?;
 
         if canon1 != canon2 {
             error!(
@@ -162,10 +170,7 @@ pub fn resolve_path_no_race(path: &Path) -> Result<PathBuf, String> {
                 path2 = %canon2.display(),
                 "Path changed between resolutions — possible symlink race attack"
             );
-            return Err(
-                "Access denied: path changed between resolutions — possible symlink race attack"
-                    .to_string(),
-            );
+            return Err(SandboxError::SymlinkRace);
         }
 
         Ok(canon2)
@@ -348,21 +353,20 @@ pub fn command_has_exfiltration_patterns(command: &str) -> bool {
 }
 
 /// Validate a command string for basic safety.
-/// Returns an error message for unsafe commands.
-pub fn validate_command_safe(command: &str) -> Result<(), String> {
+pub fn validate_command_safe(command: &str) -> Result<(), SandboxError> {
     // Null bytes are always blocked.
     if command.contains('\0') {
-        return Err("Command contains null byte — blocked for security".to_string());
+        return Err(SandboxError::CommandNullByte);
     }
 
     // Check command length.
     if command.len() > 4096 {
-        return Err("Command too long (max 4096 characters) — blocked for security".to_string());
+        return Err(SandboxError::CommandTooLong);
     }
 
     // Check for credential exfiltration patterns.
     if command_has_exfiltration_patterns(command) {
-        return Err("Command blocked: contains credential exfiltration pattern".to_string());
+        return Err(SandboxError::CommandExfiltration);
     }
 
     Ok(())

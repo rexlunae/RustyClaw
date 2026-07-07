@@ -145,7 +145,10 @@ async fn exec_task_foreground(
 ) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
 
-    task_mgr.set_foreground(task_id).await?;
+    task_mgr
+        .set_foreground(task_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let task = task_mgr
         .get(task_id)
@@ -168,7 +171,10 @@ async fn exec_task_background(
 ) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
 
-    task_mgr.set_background(task_id).await?;
+    task_mgr
+        .set_background(task_id)
+        .await
+        .map_err(|e| e.to_string())?;
 
     let task = task_mgr
         .get(task_id)
@@ -188,7 +194,7 @@ async fn exec_task_background(
 async fn exec_task_cancel(args: &Value, task_mgr: &SharedTaskManager) -> Result<String, String> {
     let task_id = parse_task_id(args)?;
 
-    task_mgr.cancel(task_id).await?;
+    task_mgr.cancel(task_id).await.map_err(|e| e.to_string())?;
 
     Ok(json!({
         "success": true,
@@ -313,7 +319,10 @@ async fn exec_task_describe(
         return Err("No task ID provided and no session context".to_string());
     };
 
-    task_mgr.set_description(task_id, description).await?;
+    task_mgr
+        .set_description(task_id, description)
+        .await
+        .map_err(|e| e.to_string())?;
 
     Ok(json!({
         "success": true,

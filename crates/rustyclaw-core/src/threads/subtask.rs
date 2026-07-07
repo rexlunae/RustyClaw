@@ -29,6 +29,27 @@ pub enum SubtaskResult {
     Cancelled,
 }
 
+/// Why a subtask did not produce a value.
+///
+/// The `Failed` message is the subtask function's own failure payload
+/// (subagent/model-boundary string); the other variants are harness-level
+/// outcomes that used to be encoded as sentinel strings.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SubtaskError {
+    /// The subtask was cancelled via its `CancellationToken`.
+    #[error("Cancelled")]
+    Cancelled,
+    /// The subtask function reported a failure.
+    #[error("{0}")]
+    Failed(String),
+    /// The handle was already joined.
+    #[error("SubtaskHandle already joined")]
+    AlreadyJoined,
+    /// The result channel closed without a result (panic or abort).
+    #[error("Subtask channel closed unexpectedly")]
+    ChannelClosed,
+}
+
 /// Handle to a running subtask. Allows joining, cancelling, and updating status.
 ///
 /// The type parameter `T` is the return type of the async function.
@@ -41,7 +62,7 @@ pub struct SubtaskHandle<T: Send + 'static> {
     cancel_token: CancellationToken,
 
     /// Oneshot receiver for the result.
-    result_rx: Option<oneshot::Receiver<Result<T, String>>>,
+    result_rx: Option<oneshot::Receiver<Result<T, SubtaskError>>>,
 
     /// Shared thread manager for status updates.
     thread_mgr: SharedThreadManager,
@@ -55,19 +76,14 @@ impl<T: Send + 'static> SubtaskHandle<T> {
     ///
     /// This consumes the handle. After joining, the thread status is updated
     /// to Completed or Failed.
-    pub async fn join(mut self) -> Result<T, String> {
-        let rx = self
-            .result_rx
-            .take()
-            .ok_or_else(|| "SubtaskHandle already joined".to_string())?;
+    pub async fn join(mut self) -> Result<T, SubtaskError> {
+        let rx = self.result_rx.take().ok_or(SubtaskError::AlreadyJoined)?;
 
         match rx.await {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(e)) => Err(e),
-            Err(_) => {
-                // Sender dropped — task panicked or was aborted
-                Err("Subtask channel closed unexpectedly".to_string())
-            }
+            // Sender dropped — task panicked or was aborted
+            Err(_) => Err(SubtaskError::ChannelClosed),
         }
     }
 
@@ -207,12 +223,8 @@ where
 
     let join_handle = tokio::spawn(async move {
         let result = tokio::select! {
-            _ = token.cancelled() => {
-                Err("Cancelled".to_string())
-            }
-            res = task_fn(token.clone(), mgr.clone()) => {
-                res
-            }
+            _ = token.cancelled() => Err(SubtaskError::Cancelled),
+            res = task_fn(token.clone(), mgr.clone()) => res.map_err(SubtaskError::Failed),
         };
 
         // Update thread status based on result
@@ -223,12 +235,12 @@ where
                     mgr_guard.complete(tid, Some("Completed".to_string()), None);
                     debug!(thread_id = %tid, "Subagent subtask completed");
                 }
-                Err(e) if e == "Cancelled" => {
+                Err(SubtaskError::Cancelled) => {
                     mgr_guard.set_status(tid, ThreadStatus::Cancelled);
                     debug!(thread_id = %tid, "Subagent subtask cancelled");
                 }
                 Err(e) => {
-                    mgr_guard.fail(tid, e);
+                    mgr_guard.fail(tid, e.to_string());
                     warn!(thread_id = %tid, error = %e, "Subagent subtask failed");
                 }
             }
@@ -286,12 +298,8 @@ where
 
     let join_handle = tokio::spawn(async move {
         let result = tokio::select! {
-            _ = token.cancelled() => {
-                Err("Cancelled".to_string())
-            }
-            res = task_fn(token.clone(), mgr.clone()) => {
-                res
-            }
+            _ = token.cancelled() => Err(SubtaskError::Cancelled),
+            res = task_fn(token.clone(), mgr.clone()) => res.map_err(SubtaskError::Failed),
         };
 
         // Update thread status
@@ -302,12 +310,12 @@ where
                     mgr_guard.complete(tid, Some("Completed".to_string()), None);
                     debug!(thread_id = %tid, "Task completed");
                 }
-                Err(e) if e == "Cancelled" => {
+                Err(SubtaskError::Cancelled) => {
                     mgr_guard.set_status(tid, ThreadStatus::Cancelled);
                     debug!(thread_id = %tid, "Task cancelled");
                 }
                 Err(e) => {
-                    mgr_guard.fail(tid, e);
+                    mgr_guard.fail(tid, e.to_string());
                     warn!(thread_id = %tid, error = %e, "Task failed");
                 }
             }
@@ -362,12 +370,8 @@ where
 
     let join_handle = tokio::spawn(async move {
         let result = tokio::select! {
-            _ = token.cancelled() => {
-                Err("Cancelled".to_string())
-            }
-            res = task_fn(token.clone(), mgr.clone()) => {
-                res
-            }
+            _ = token.cancelled() => Err(SubtaskError::Cancelled),
+            res = task_fn(token.clone(), mgr.clone()) => res.map_err(SubtaskError::Failed),
         };
 
         {
@@ -377,12 +381,12 @@ where
                     mgr_guard.complete(tid, Some("Finished".to_string()), None);
                     debug!(thread_id = %tid, "Background thread finished");
                 }
-                Err(e) if e == "Cancelled" => {
+                Err(SubtaskError::Cancelled) => {
                     mgr_guard.set_status(tid, ThreadStatus::Cancelled);
                     debug!(thread_id = %tid, "Background thread cancelled");
                 }
                 Err(e) => {
-                    mgr_guard.fail(tid, e);
+                    mgr_guard.fail(tid, e.to_string());
                     warn!(thread_id = %tid, error = %e, "Background thread failed");
                 }
             }
@@ -603,8 +607,10 @@ mod tests {
 
         let thread_id = handle.thread_id;
         let result = handle.join().await;
-        assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), "something went wrong");
+        assert_eq!(
+            result.unwrap_err(),
+            SubtaskError::Failed("something went wrong".to_string())
+        );
 
         // Thread should be marked as failed
         let mgr_guard = mgr.read().await;

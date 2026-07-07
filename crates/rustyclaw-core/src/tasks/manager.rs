@@ -7,6 +7,17 @@ use tracing::{debug, info, instrument, warn};
 
 use super::model::{Task, TaskId, TaskKind, TaskProgress, TaskStatus};
 
+/// Errors from task-manager operations.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum TaskError {
+    /// No task with this id exists.
+    #[error("Task {0} not found")]
+    NotFound(TaskId),
+    /// The task is not attached to a session.
+    #[error("Task {0} has no session")]
+    NoSession(TaskId),
+}
+
 /// Handle to a running task for control and monitoring.
 pub struct TaskHandle {
     /// Task ID
@@ -254,17 +265,13 @@ impl TaskManager {
 
     /// Set a task as the foreground task for its session.
     #[instrument(skip(self))]
-    pub async fn set_foreground(&self, id: TaskId) -> Result<(), String> {
+    pub async fn set_foreground(&self, id: TaskId) -> Result<(), TaskError> {
         let mut tasks = self.tasks.write().await;
 
         // Get session key first
         let session = {
-            let task = tasks
-                .get(&id)
-                .ok_or_else(|| format!("Task {} not found", id))?;
-            task.session_key
-                .clone()
-                .ok_or_else(|| "Task has no session".to_string())?
+            let task = tasks.get(&id).ok_or(TaskError::NotFound(id))?;
+            task.session_key.clone().ok_or(TaskError::NoSession(id))?
         };
 
         // Background the current foreground task if any
@@ -290,11 +297,9 @@ impl TaskManager {
 
     /// Background a task.
     #[instrument(skip(self))]
-    pub async fn set_background(&self, id: TaskId) -> Result<(), String> {
+    pub async fn set_background(&self, id: TaskId) -> Result<(), TaskError> {
         let mut tasks = self.tasks.write().await;
-        let task = tasks
-            .get_mut(&id)
-            .ok_or_else(|| format!("Task {} not found", id))?;
+        let task = tasks.get_mut(&id).ok_or(TaskError::NotFound(id))?;
 
         task.background();
 
@@ -397,7 +402,7 @@ impl TaskManager {
     }
 
     /// Cancel a task.
-    pub async fn cancel(&self, id: TaskId) -> Result<(), String> {
+    pub async fn cancel(&self, id: TaskId) -> Result<(), TaskError> {
         // Send cancel command if task is running
         if let Some(control_tx) = self.controls.read().await.get(&id) {
             let _ = control_tx.send(TaskControl::Cancel).await;
@@ -416,12 +421,12 @@ impl TaskManager {
             info!(task_id = %id, "Task cancelled");
             Ok(())
         } else {
-            Err(format!("Task {} not found", id))
+            Err(TaskError::NotFound(id))
         }
     }
 
     /// Set task description.
-    pub async fn set_description(&self, id: TaskId, description: &str) -> Result<(), String> {
+    pub async fn set_description(&self, id: TaskId, description: &str) -> Result<(), TaskError> {
         let mut tasks = self.tasks.write().await;
         if let Some(task) = tasks.get_mut(&id) {
             task.description = Some(description.to_string());
@@ -432,7 +437,7 @@ impl TaskManager {
             info!(task_id = %id, description, "Task description updated");
             Ok(())
         } else {
-            Err(format!("Task {} not found", id))
+            Err(TaskError::NotFound(id))
         }
     }
 
