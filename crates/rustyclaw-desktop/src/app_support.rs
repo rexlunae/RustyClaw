@@ -591,6 +591,96 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 s.push_notice(MessageRole::Error, format!("Engine error: {}", message));
             }
         }
+        // ── Panels (cron / memory / MCP / channels / tool config) ─────────
+        GatewayEvent::CronListResult { jobs } => {
+            let mut s = state.write();
+            let panel = s
+                .cron_data
+                .get_or_insert_with(rustyclaw_view::CronPanelData::default);
+            panel.jobs = jobs.iter().map(Into::into).collect();
+            panel.status = None;
+        }
+        GatewayEvent::CronUpsertResult { ok, message, .. }
+        | GatewayEvent::CronActionResult { ok, message } => {
+            let mut s = state.write();
+            s.cron_stale = true;
+            if !ok {
+                let msg = message.unwrap_or_else(|| "cron operation failed".into());
+                s.push_notice(MessageRole::Error, format!("Cron: {}", msg));
+            }
+        }
+        GatewayEvent::MemoryListResult { entries } => {
+            let mut s = state.write();
+            let panel = s
+                .memory_data
+                .get_or_insert_with(rustyclaw_view::MemoryPanelData::default);
+            panel.entries = entries.iter().map(Into::into).collect();
+            panel.status = None;
+        }
+        GatewayEvent::MemoryUpsertResult { ok, message, .. }
+        | GatewayEvent::MemoryDeleteResult { ok, message } => {
+            let mut s = state.write();
+            s.memory_stale = true;
+            if !ok {
+                let msg = message.unwrap_or_else(|| "memory operation failed".into());
+                s.push_notice(MessageRole::Error, format!("Memory: {}", msg));
+            }
+        }
+        GatewayEvent::HistorySearchResult { entries } => {
+            let mut s = state.write();
+            let panel = s
+                .memory_data
+                .get_or_insert_with(rustyclaw_view::MemoryPanelData::default);
+            panel.history = entries.iter().map(Into::into).collect();
+        }
+        GatewayEvent::McpListResult { servers } => {
+            let mut s = state.write();
+            let panel = s
+                .mcp_data
+                .get_or_insert_with(rustyclaw_view::McpPanelData::default);
+            panel.servers = servers.iter().map(Into::into).collect();
+            panel.status = None;
+        }
+        GatewayEvent::McpConnectResult { ok, message, .. }
+        | GatewayEvent::McpDisconnectResult { ok, message } => {
+            let mut s = state.write();
+            s.mcp_stale = true;
+            if !ok {
+                let msg = message.unwrap_or_else(|| "MCP operation failed".into());
+                s.push_notice(MessageRole::Error, format!("MCP: {}", msg));
+            }
+        }
+        GatewayEvent::ChannelStatusResult { channels } => {
+            let mut s = state.write();
+            let panel = s
+                .channels_data
+                .get_or_insert_with(rustyclaw_view::ChannelsPanelData::default);
+            panel.channels = channels.iter().map(Into::into).collect();
+            panel.status = None;
+        }
+        GatewayEvent::ChannelPairResult { ok, message, .. } => {
+            let mut s = state.write();
+            s.channels_stale = true;
+            if !ok {
+                let msg = message.unwrap_or_else(|| "channel operation failed".into());
+                s.push_notice(MessageRole::Error, format!("Channels: {}", msg));
+            }
+        }
+        GatewayEvent::ToolConfigResult { tools } => {
+            let mut s = state.write();
+            let panel = s
+                .tools_data
+                .get_or_insert_with(rustyclaw_view::ToolConfigPanelData::default);
+            panel.tools = tools.iter().map(Into::into).collect();
+        }
+        GatewayEvent::ToolToggleResult { ok, message } => {
+            let mut s = state.write();
+            s.tools_stale = true;
+            if !ok {
+                let msg = message.unwrap_or_else(|| "tool toggle failed".into());
+                s.push_notice(MessageRole::Error, format!("Tools: {}", msg));
+            }
+        }
     }
 }
 

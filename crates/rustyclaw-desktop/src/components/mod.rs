@@ -55,12 +55,10 @@ mod vault_unlock;
 pub use analytics::AnalyticsDialog;
 #[allow(unused_imports)]
 pub use approvals::ApprovalsDialog;
-#[allow(unused_imports)]
 pub use channels::ChannelsDialog;
 pub use chat::Chat;
 pub use connection::ConnectionDialog;
 pub use credential_request::CredentialRequestDialog;
-#[allow(unused_imports)]
 pub use cron::CronDialog;
 pub use device_flow::DeviceFlowDialog;
 #[allow(unused_imports)]
@@ -69,9 +67,7 @@ pub use file_browser::FileBrowser;
 pub use hatching::HatchingDialog;
 #[allow(unused_imports)]
 pub use logs::LogsDialog;
-#[allow(unused_imports)]
 pub use mcp::McpDialog;
-#[allow(unused_imports)]
 pub use memory::MemoryDialog;
 pub use new_project::NewProjectDialog;
 pub use pairing::{PairingDialog, generate_qr_code};
@@ -82,7 +78,6 @@ pub use sidebar::Sidebar;
 pub use swarm_panel::SwarmPanel;
 pub use system_info::SystemInfoDialog;
 pub use tool_approval::ToolApprovalDialog;
-#[allow(unused_imports)]
 pub use tools_config::ToolsConfigDialog;
 pub use user_prompt::UserPromptDialog;
 pub use vault_unlock::VaultUnlockDialog;
