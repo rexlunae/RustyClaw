@@ -1,6 +1,7 @@
 //! System monitoring: CPU, memory, disk, network stats; battery health.
 
 use super::{sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -8,10 +9,7 @@ use tracing::{debug, instrument};
 // ── Async implementations ───────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir))]
-pub async fn exec_system_monitor_async(
-    args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_system_monitor_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let metric = args.get("metric").and_then(|v| v.as_str()).unwrap_or("all");
     debug!(metric, "System monitor request");
 
@@ -58,10 +56,7 @@ pub async fn exec_system_monitor_async(
 }
 
 #[instrument(skip(_args, _workspace_dir))]
-pub async fn exec_battery_health_async(
-    _args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_battery_health_async(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     let pmset = sh_async("pmset -g batt 2>/dev/null")
         .await
         .unwrap_or_default();
@@ -90,7 +85,7 @@ pub async fn exec_battery_health_async(
 // ── Sync implementations ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_system_monitor(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_system_monitor(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let metric = args.get("metric").and_then(|v| v.as_str()).unwrap_or("all");
     let mut result = serde_json::Map::new();
 
@@ -117,7 +112,7 @@ pub fn exec_system_monitor(args: &Value, _workspace_dir: &Path) -> Result<String
 }
 
 #[instrument(skip(_args, _workspace_dir))]
-pub fn exec_battery_health(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_battery_health(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     let pmset = sh("pmset -g batt 2>/dev/null").unwrap_or_default();
     let linux = sh("cat /sys/class/power_supply/BAT0/status 2>/dev/null").unwrap_or_default();
 

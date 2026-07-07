@@ -39,7 +39,12 @@ fn test_read_file_no_path() {
     let args = json!({});
     let result = exec_read_file(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -99,7 +104,7 @@ fn test_edit_file_no_match() {
     let args = json!({ "path": "f.txt", "old_string": "zzz", "new_string": "ZZZ" });
     let result = exec_edit_file(&args, &dir);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not found"));
+    assert!(result.unwrap_err().to_string().contains("not found"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -113,7 +118,7 @@ fn test_edit_file_multiple_matches() {
     let args = json!({ "path": "f.txt", "old_string": "aaa", "new_string": "bbb" });
     let result = exec_edit_file(&args, &dir);
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("2 times"));
+    assert!(result.unwrap_err().to_string().contains("2 times"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -297,7 +302,12 @@ fn test_web_fetch_missing_url() {
     let args = json!({});
     let result = exec_web_fetch(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -305,7 +315,7 @@ fn test_web_fetch_invalid_url() {
     let args = json!({ "url": "not-a-url" });
     let result = exec_web_fetch(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("http"));
+    assert!(result.unwrap_err().to_string().contains("http"));
 }
 
 #[test]
@@ -316,7 +326,7 @@ fn test_web_fetch_blocks_localhost_ssrf() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("blocked") || err.contains("Security"),
+        err.to_string().contains("blocked") || err.to_string().contains("Security"),
         "expected SSRF rejection, got: {err}"
     );
 }
@@ -329,7 +339,7 @@ fn test_web_fetch_blocks_private_ip_ssrf() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("blocked") || err.contains("Security"),
+        err.to_string().contains("blocked") || err.to_string().contains("Security"),
         "expected SSRF rejection, got: {err}"
     );
 }
@@ -342,7 +352,7 @@ fn test_web_fetch_blocks_cloud_metadata_ssrf() {
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(
-        err.contains("blocked") || err.contains("Security"),
+        err.to_string().contains("blocked") || err.to_string().contains("Security"),
         "expected SSRF rejection, got: {err}"
     );
 }
@@ -378,7 +388,12 @@ fn test_web_search_missing_query() {
     let args = json!({});
     let result = exec_web_search(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -389,7 +404,7 @@ fn test_web_search_no_api_key() {
     let args = json!({ "query": "test" });
     let result = exec_web_search(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("BRAVE_API_KEY"));
+    assert!(result.unwrap_err().to_string().contains("BRAVE_API_KEY"));
 }
 
 #[test]
@@ -414,7 +429,12 @@ fn test_process_missing_action() {
     let args = json!({});
     let result = exec_process(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -422,7 +442,7 @@ fn test_process_invalid_action() {
     let args = json!({ "action": "invalid" });
     let result = exec_process(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unknown action"));
+    assert!(result.unwrap_err().to_string().contains("Unknown action"));
 }
 
 #[test]
@@ -481,7 +501,12 @@ fn test_memory_search_missing_query() {
     let args = json!({});
     let result = exec_memory_search(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 // ── memory_get ──────────────────────────────────────────────────
@@ -500,7 +525,12 @@ fn test_memory_get_missing_path() {
     let args = json!({});
     let result = exec_memory_get(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -508,7 +538,12 @@ fn test_memory_get_invalid_path() {
     let args = json!({ "path": "../etc/passwd" });
     let result = exec_memory_get(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("not a valid memory file"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("not a valid memory file")
+    );
 }
 
 // ── cron ────────────────────────────────────────────────────────
@@ -526,7 +561,12 @@ fn test_cron_missing_action() {
     let args = json!({});
     let result = exec_cron(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]
@@ -534,7 +574,7 @@ fn test_cron_invalid_action() {
     let args = json!({ "action": "invalid" });
     let result = exec_cron(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Unknown action"));
+    assert!(result.unwrap_err().to_string().contains("Unknown action"));
 }
 
 // ── sessions_list ───────────────────────────────────────────────
@@ -560,7 +600,12 @@ fn test_sessions_spawn_missing_task() {
     let args = json!({});
     let result = exec_sessions_spawn(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 // ── sessions_send ───────────────────────────────────────────────
@@ -577,7 +622,12 @@ fn test_sessions_send_missing_message() {
     let args = json!({});
     let result = exec_sessions_send(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 // ── sessions_history ────────────────────────────────────────────
@@ -637,7 +687,12 @@ fn test_apply_patch_missing_patch() {
     let args = json!({});
     let result = exec_apply_patch(&args, ws());
     assert!(result.is_err());
-    assert!(result.unwrap_err().contains("Missing required parameter"));
+    assert!(
+        result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing required parameter")
+    );
 }
 
 #[test]

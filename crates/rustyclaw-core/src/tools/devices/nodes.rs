@@ -1,6 +1,7 @@
 //! Nodes tool: discover and control remote devices via SSH, ADB, VNC, RDP.
 
 use super::{get_command_array, get_node, has_command, has_command_async, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -119,7 +120,7 @@ fn parse_rdp_target(target: &str) -> ParsedNode {
 // ── Async implementation ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -217,11 +218,11 @@ pub async fn exec_nodes_async(args: &Value, _workspace_dir: &Path) -> Result<Str
         _ => Err(format!(
             "Unknown action: {}. Valid: status, describe, run, screen_snap, camera_snap, camera_list, screen_record, location_get, notify, click, type, key, invoke",
             action
-        )),
+        ).into()),
     }
 }
 
-async fn node_status_async() -> Result<String, String> {
+async fn node_status_async() -> ToolResult {
     let mut nodes = Vec::new();
 
     // Check ADB devices
@@ -328,7 +329,7 @@ async fn node_status_async() -> Result<String, String> {
     .to_string())
 }
 
-async fn node_describe_async(node: &str) -> Result<String, String> {
+async fn node_describe_async(node: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
             let cmd = format!(
@@ -343,7 +344,7 @@ async fn node_describe_async(node: &str) -> Result<String, String> {
                 .to_string()),
                 Err(e) => Ok(json!({
                     "node": node, "type": "ssh", "user": user, "host": host, "port": port,
-                    "status": "unreachable", "error": e
+                    "status": "unreachable", "error": e.to_string()
                 })
                 .to_string()),
             }
@@ -362,7 +363,7 @@ async fn node_describe_async(node: &str) -> Result<String, String> {
                     }).to_string())
                 }
                 Err(e) => Ok(json!({
-                    "node": node, "type": "adb", "device": device, "status": "error", "error": e
+                    "node": node, "type": "adb", "device": device, "status": "error", "error": e.to_string()
                 })
                 .to_string()),
             }
@@ -389,7 +390,7 @@ async fn node_describe_async(node: &str) -> Result<String, String> {
     }
 }
 
-async fn node_run_async(node: &str, command: &[String]) -> Result<String, String> {
+async fn node_run_async(node: &str, command: &[String]) -> ToolResult {
     let cmd_str = command.join(" ");
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
@@ -405,7 +406,7 @@ async fn node_run_async(node: &str, command: &[String]) -> Result<String, String
                 "node": node, "command": cmd_str,
                 "exit_code": if output.is_ok() { 0 } else { 1 },
                 "stdout": output.as_ref().map(|s| s.as_str()).unwrap_or(""),
-                "stderr": output.as_ref().err().map(|s| s.as_str()).unwrap_or("")
+                "stderr": output.as_ref().err().map(|e| e.to_string()).unwrap_or_default()
             })
             .to_string())
         }
@@ -420,16 +421,16 @@ async fn node_run_async(node: &str, command: &[String]) -> Result<String, String
                 "node": node, "command": cmd_str,
                 "exit_code": if output.is_ok() { 0 } else { 1 },
                 "stdout": output.as_ref().map(|s| s.as_str()).unwrap_or(""),
-                "stderr": output.as_ref().err().map(|s| s.as_str()).unwrap_or("")
+                "stderr": output.as_ref().err().map(|e| e.to_string()).unwrap_or_default()
             })
             .to_string())
         }
-        ParsedNode::Vnc { .. } => Err("VNC nodes don't support command execution.".to_string()),
-        ParsedNode::Rdp { .. } => Err("RDP nodes don't support command execution.".to_string()),
+        ParsedNode::Vnc { .. } => Err("VNC nodes don't support command execution.".into()),
+        ParsedNode::Rdp { .. } => Err("RDP nodes don't support command execution.".into()),
     }
 }
 
-async fn node_screen_snap_async(node: &str, _facing: &str) -> Result<String, String> {
+async fn node_screen_snap_async(node: &str, _facing: &str) -> ToolResult {
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
     match parse_node(node) {
         ParsedNode::Adb { device } => {
@@ -446,9 +447,7 @@ async fn node_screen_snap_async(node: &str, _facing: &str) -> Result<String, Str
         ParsedNode::Ssh { user, host, port } => {
             let local = format!("/tmp/ssh_snap_{}.png", timestamp);
             let out = sh_async(&format!("ssh -o ConnectTimeout=10 -p {} {}@{} 'DISPLAY=:0 scrot -o /tmp/screenshot.png && cat /tmp/screenshot.png'", port, user, host)).await?;
-            tokio::fs::write(&local, out.as_bytes())
-                .await
-                .map_err(|e| e.to_string())?;
+            tokio::fs::write(&local, out.as_bytes()).await?;
             Ok(
                 json!({"node": node, "type": "ssh", "action": "screen_snap", "path": local})
                     .to_string(),
@@ -465,7 +464,7 @@ async fn node_screen_snap_async(node: &str, _facing: &str) -> Result<String, Str
                 ))
                 .await?;
             } else {
-                return Err("No VNC tool available.".to_string());
+                return Err("No VNC tool available.".into());
             }
             Ok(
                 json!({"node": node, "type": "vnc", "action": "screen_snap", "path": local})
@@ -480,7 +479,7 @@ async fn node_screen_snap_async(node: &str, _facing: &str) -> Result<String, Str
     }
 }
 
-async fn node_click_async(node: &str, x: i32, y: i32, button: &str) -> Result<String, String> {
+async fn node_click_async(node: &str, x: i32, y: i32, button: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Adb { device } => {
             sh_async(&format!("adb -s {} shell input tap {} {}", device, x, y)).await?;
@@ -516,18 +515,18 @@ async fn node_click_async(node: &str, x: i32, y: i32, button: &str) -> Result<St
                 ))
                 .await?;
             } else {
-                return Err("No VNC tool available.".to_string());
+                return Err("No VNC tool available.".into());
             }
             Ok(
                 json!({"node": node, "action": "click", "x": x, "y": y, "button": button})
                     .to_string(),
             )
         }
-        ParsedNode::Rdp { .. } => Err("RDP click requires interactive session.".to_string()),
+        ParsedNode::Rdp { .. } => Err("RDP click requires interactive session.".into()),
     }
 }
 
-async fn node_type_text_async(node: &str, text: &str) -> Result<String, String> {
+async fn node_type_text_async(node: &str, text: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Adb { device } => {
             let escaped = text.replace(' ', "%s").replace('\'', "\\'");
@@ -564,15 +563,15 @@ async fn node_type_text_async(node: &str, text: &str) -> Result<String, String> 
                 ))
                 .await?;
             } else {
-                return Err("No VNC tool available.".to_string());
+                return Err("No VNC tool available.".into());
             }
             Ok(json!({"node": node, "action": "type", "length": text.len()}).to_string())
         }
-        ParsedNode::Rdp { .. } => Err("RDP typing requires interactive session.".to_string()),
+        ParsedNode::Rdp { .. } => Err("RDP typing requires interactive session.".into()),
     }
 }
 
-async fn node_send_key_async(node: &str, key: &str) -> Result<String, String> {
+async fn node_send_key_async(node: &str, key: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Adb { device } => {
             let key_upper = key.to_uppercase();
@@ -588,7 +587,7 @@ async fn node_send_key_async(node: &str, key: &str) -> Result<String, String> {
                 "LEFT" => "21",
                 "RIGHT" => "22",
                 k if k.parse::<u32>().is_ok() => k,
-                _ => return Err(format!("Unknown key: {}", key)),
+                _ => return Err(format!("Unknown key: {}", key).into()),
             };
             sh_async(&format!(
                 "adb -s {} shell input keyevent {}",
@@ -611,15 +610,15 @@ async fn node_send_key_async(node: &str, key: &str) -> Result<String, String> {
             } else if has_command_async("vncdotool").await {
                 sh_async(&format!("vncdotool -s {}::{} key {}", host, port, key)).await?;
             } else {
-                return Err("No VNC tool available.".to_string());
+                return Err("No VNC tool available.".into());
             }
             Ok(json!({"node": node, "action": "key", "key": key}).to_string())
         }
-        ParsedNode::Rdp { .. } => Err("RDP key press requires interactive session.".to_string()),
+        ParsedNode::Rdp { .. } => Err("RDP key press requires interactive session.".into()),
     }
 }
 
-async fn node_notify_async(node: &str, title: &str, body: &str) -> Result<String, String> {
+async fn node_notify_async(node: &str, title: &str, body: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Adb { device } => {
             let _ = sh_async(&format!(
@@ -641,14 +640,14 @@ async fn node_notify_async(node: &str, title: &str, body: &str) -> Result<String
             })
             .to_string())
         }
-        _ => Err("Notifications require ADB or SSH.".to_string()),
+        _ => Err("Notifications require ADB or SSH.".into()),
     }
 }
 
-async fn adb_camera_list_async(node: &str) -> Result<String, String> {
+async fn adb_camera_list_async(node: &str) -> ToolResult {
     let device = match parse_node(node) {
         ParsedNode::Adb { device } => device,
-        _ => return Err("camera_list only works with ADB nodes".to_string()),
+        _ => return Err("camera_list only works with ADB nodes".into()),
     };
     let out = sh_async(&format!(
         "adb -s {} shell \"dumpsys media.camera | grep -E 'Camera|Facing'\"",
@@ -658,10 +657,10 @@ async fn adb_camera_list_async(node: &str) -> Result<String, String> {
     Ok(json!({"node": node, "cameras": out.trim(), "note": "Use camera app + screen_record for capture"}).to_string())
 }
 
-async fn adb_screen_record_async(node: &str, duration_ms: u64) -> Result<String, String> {
+async fn adb_screen_record_async(node: &str, duration_ms: u64) -> ToolResult {
     let device = match parse_node(node) {
         ParsedNode::Adb { device } => device,
-        _ => return Err("screen_record only works with ADB nodes".to_string()),
+        _ => return Err("screen_record only works with ADB nodes".into()),
     };
     let secs = (duration_ms / 1000).clamp(1, 180);
     let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
@@ -682,10 +681,10 @@ async fn adb_screen_record_async(node: &str, duration_ms: u64) -> Result<String,
     )
 }
 
-async fn adb_location_get_async(node: &str) -> Result<String, String> {
+async fn adb_location_get_async(node: &str) -> ToolResult {
     let device = match parse_node(node) {
         ParsedNode::Adb { device } => device,
-        _ => return Err("location_get only works with ADB nodes".to_string()),
+        _ => return Err("location_get only works with ADB nodes".into()),
     };
     let out = sh_async(&format!(
         "adb -s {} shell \"dumpsys location | grep -A2 'last location'\"",
@@ -709,7 +708,7 @@ async fn adb_location_get_async(node: &str) -> Result<String, String> {
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -737,12 +736,12 @@ pub fn exec_nodes(args: &Value, _workspace_dir: &Path) -> Result<String, String>
             Ok("Direct connection nodes don't require pairing approval.".to_string())
         }
         _ => Err(
-            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support.".to_string()
+            "Sync nodes tool only supports: status, describe, run, pending. Use async for full support.".into()
         ),
     }
 }
 
-fn node_status_sync() -> Result<String, String> {
+fn node_status_sync() -> ToolResult {
     let adb_out = sh("adb devices -l 2>/dev/null").unwrap_or_default();
     let mut nodes = Vec::new();
     for line in adb_out.lines().skip(1) {
@@ -764,7 +763,7 @@ fn node_status_sync() -> Result<String, String> {
     .to_string())
 }
 
-fn node_describe_sync(node: &str) -> Result<String, String> {
+fn node_describe_sync(node: &str) -> ToolResult {
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
             let out = sh(&format!(
@@ -786,7 +785,7 @@ fn node_describe_sync(node: &str) -> Result<String, String> {
     }
 }
 
-fn node_run_sync(node: &str, command: &[String]) -> Result<String, String> {
+fn node_run_sync(node: &str, command: &[String]) -> ToolResult {
     let cmd_str = command.join(" ");
     match parse_node(node) {
         ParsedNode::Ssh { user, host, port } => {
@@ -813,6 +812,6 @@ fn node_run_sync(node: &str, command: &[String]) -> Result<String, String> {
                     .to_string(),
             )
         }
-        _ => Err("Sync run only supports SSH and ADB.".to_string()),
+        _ => Err("Sync run only supports SSH and ADB.".into()),
     }
 }

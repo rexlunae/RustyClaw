@@ -21,7 +21,7 @@ mod thread;
 pub use display::{
     TaskIcon, TaskIndicator, format_task_icons, format_task_indicators, format_task_status,
 };
-pub use manager::{TaskEvent, TaskHandle, TaskManager};
+pub use manager::{TaskError, TaskEvent, TaskHandle, TaskManager};
 pub use model::{Task, TaskId, TaskKind, TaskProgress, TaskStatus};
 pub use thread::{
     MessageRole, SharedThreadManager, TaskThread, ThreadInfo, ThreadManager, ThreadMessage,

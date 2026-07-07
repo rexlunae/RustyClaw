@@ -4,6 +4,7 @@
 // (tree-sitter AST patterns). Uses the native Rust API instead of shelling out
 // to the CLI, so this works anywhere the tool compiles.
 
+use crate::tools::error::{ToolError, ToolResult};
 use ast_grep_core::matcher::Pattern;
 use ast_grep_language::{LanguageExt, SupportLang};
 use serde_json::Value;
@@ -12,7 +13,7 @@ use tracing::instrument;
 
 /// `ast_grep_manage` — structural code search, lint, and rewrite via ast-grep.
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_ast_grep(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_ast_grep(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -91,13 +92,13 @@ pub fn exec_ast_grep(args: &Value, workspace_dir: &Path) -> Result<String, Strin
         _ => Err(format!(
             "Unknown ast-grep action: '{}'. Valid actions: setup, search, run, scan, test, new, version, help.",
             action
-        )),
+        ).into()),
     }
 }
 
 // ── Search ──────────────────────────────────────────────────────────────────
 
-fn do_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn do_search(args: &Value, workspace_dir: &Path) -> ToolResult {
     let pattern_str = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -180,7 +181,7 @@ fn do_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 
 // ── Rewrite ─────────────────────────────────────────────────────────────────
 
-fn do_rewrite(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+fn do_rewrite(args: &Value, workspace_dir: &Path) -> ToolResult {
     let pattern_str = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -207,7 +208,7 @@ fn do_rewrite(args: &Value, workspace_dir: &Path) -> Result<String, String> {
         let source = match std::fs::read_to_string(file_path) {
             Ok(s) => s,
             Err(e) => {
-                return Err(format!("Cannot read {}: {}", file_path.display(), e));
+                return Err(format!("Cannot read {}: {}", file_path.display(), e).into());
             }
         };
 
@@ -302,7 +303,7 @@ LANGUAGE CODES:
 "#;
 
 /// Parse a language extension/code into a SupportLang.
-fn parse_lang(s: &str) -> Result<SupportLang, String> {
+fn parse_lang(s: &str) -> ToolResult<SupportLang> {
     // Normalize: strip leading dot, lowercase
     let normalized = s.trim_start_matches('.').to_lowercase();
 
@@ -314,11 +315,11 @@ fn parse_lang(s: &str) -> Result<SupportLang, String> {
                 "Unsupported language: '{}'. Try: rs, py, ts, js, go, java, rb, c, cpp, cs, sh, yaml, json, html, css, php",
                 s
             )
-        })
+        }).map_err(ToolError::from)
 }
 
 /// Resolve a glob/file path string into absolute paths.
-fn resolve_files(pattern: &str, workspace_dir: &Path) -> Result<Vec<std::path::PathBuf>, String> {
+fn resolve_files(pattern: &str, workspace_dir: &Path) -> ToolResult<Vec<std::path::PathBuf>> {
     let _cwd = if Path::new(pattern).is_absolute() {
         std::path::PathBuf::from(".")
     } else {
@@ -375,7 +376,7 @@ fn resolve_files(pattern: &str, workspace_dir: &Path) -> Result<Vec<std::path::P
 
 // ── Setup (CLI install) ─────────────────────────────────────────────────────
 
-fn do_setup() -> Result<String, String> {
+fn do_setup() -> ToolResult {
     if is_installed() {
         let version = sh("ast-grep --version 2>&1").unwrap_or_else(|_| "unknown".into());
         return Ok(format!(
@@ -394,7 +395,7 @@ fn do_setup() -> Result<String, String> {
             result
         ))
     } else {
-        Err(format!("Installation may have failed.\n{}", result))
+        Err(format!("Installation may have failed.\n{}", result).into())
     }
 }
 
@@ -408,7 +409,7 @@ fn is_installed() -> bool {
 
 // ── Shell helpers (for CLI-only actions) ────────────────────────────────────
 
-fn sh(script: &str) -> Result<String, String> {
+fn sh(script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -420,9 +421,9 @@ fn sh(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -434,7 +435,7 @@ fn sh(script: &str) -> Result<String, String> {
     }
 }
 
-fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
+fn sh_in(dir: &Path, script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -447,9 +448,9 @@ fn sh_in(dir: &Path, script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {

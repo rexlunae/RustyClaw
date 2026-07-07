@@ -1,6 +1,7 @@
 //! Application index, cloud storage browsing, browser cache auditing.
 
 use super::{expand_tilde, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -20,7 +21,7 @@ fn human_size(bytes: u64) -> String {
 // ── Async implementations ───────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir))]
-pub async fn exec_app_index_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_app_index_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("");
     let sort_by = args.get("sort").and_then(|v| v.as_str()).unwrap_or("size");
     debug!(filter, sort = sort_by, "App index");
@@ -96,10 +97,7 @@ pub async fn exec_app_index_async(args: &Value, _workspace_dir: &Path) -> Result
 }
 
 #[instrument(skip(args, _workspace_dir))]
-pub async fn exec_cloud_browse_async(
-    args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_cloud_browse_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -141,7 +139,7 @@ pub async fn exec_cloud_browse_async(
             let target = expand_tilde(path_str);
             let exists = tokio::fs::try_exists(&target).await.unwrap_or(false);
             if !exists {
-                return Err(format!("Not found: {}", target.display()));
+                return Err(format!("Not found: {}", target.display()).into());
             }
             let listing = sh_async(&format!(
                 "ls -lhS '{}' 2>/dev/null | head -50",
@@ -154,15 +152,12 @@ pub async fn exec_cloud_browse_async(
                     .to_string(),
             )
         }
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }
 
 #[instrument(skip(args, _workspace_dir))]
-pub async fn exec_browser_cache_async(
-    args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_browser_cache_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -239,14 +234,14 @@ pub async fn exec_browser_cache_async(
             }
             Ok(json!({ "action": "clear", "cleared": cleared }).to_string())
         }
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }
 
 // ── Sync implementations ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_app_index(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_app_index(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("");
     let sort_by = args.get("sort").and_then(|v| v.as_str()).unwrap_or("size");
 
@@ -279,7 +274,7 @@ pub fn exec_app_index(args: &Value, _workspace_dir: &Path) -> Result<String, Str
 }
 
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_cloud_browse(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_cloud_browse(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -299,12 +294,12 @@ pub fn exec_cloud_browse(args: &Value, _workspace_dir: &Path) -> Result<String, 
             }
             Ok(json!({ "cloud_folders": found }).to_string())
         }
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }
 
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_browser_cache(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_browser_cache(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -330,6 +325,6 @@ pub fn exec_browser_cache(args: &Value, _workspace_dir: &Path) -> Result<String,
             }
             Ok(json!({ "action": "scan", "caches": results }).to_string())
         }
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }

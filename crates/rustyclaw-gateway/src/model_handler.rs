@@ -2,6 +2,7 @@
 //!
 //! Handles model_* tool calls by interacting with the shared ModelRegistry.
 
+use rustyclaw_core::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use tracing::instrument;
 
@@ -32,7 +33,7 @@ pub async fn execute_model_tool(
     name: &str,
     args: &Value,
     model_registry: &SharedModelRegistry,
-) -> Result<String, String> {
+) -> ToolResult {
     match name {
         "model_list" => exec_model_list(args, model_registry).await,
         "model_enable" => exec_model_enable(args, model_registry).await,
@@ -46,15 +47,12 @@ pub async fn execute_model_tool(
         "service_stop" => exec_service_stop(args).await,
         "service_restart" => exec_service_restart(args).await,
         "service_logs" => exec_service_logs(args).await,
-        _ => Err(format!("Unknown model tool: {}", name)),
+        _ => Err(format!("Unknown model tool: {}", name).into()),
     }
 }
 
 /// List available models.
-async fn exec_model_list(
-    args: &Value,
-    model_registry: &SharedModelRegistry,
-) -> Result<String, String> {
+async fn exec_model_list(args: &Value, model_registry: &SharedModelRegistry) -> ToolResult {
     let tier_filter = args
         .get("tier")
         .and_then(|v| v.as_str())
@@ -132,10 +130,7 @@ async fn exec_model_list(
 }
 
 /// Enable a model.
-async fn exec_model_enable(
-    args: &Value,
-    model_registry: &SharedModelRegistry,
-) -> Result<String, String> {
+async fn exec_model_enable(args: &Value, model_registry: &SharedModelRegistry) -> ToolResult {
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
@@ -150,10 +145,7 @@ async fn exec_model_enable(
 }
 
 /// Disable a model.
-async fn exec_model_disable(
-    args: &Value,
-    model_registry: &SharedModelRegistry,
-) -> Result<String, String> {
+async fn exec_model_disable(args: &Value, model_registry: &SharedModelRegistry) -> ToolResult {
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
@@ -168,10 +160,7 @@ async fn exec_model_disable(
 }
 
 /// Set the active model.
-async fn exec_model_set(
-    args: &Value,
-    model_registry: &SharedModelRegistry,
-) -> Result<String, String> {
+async fn exec_model_set(args: &Value, model_registry: &SharedModelRegistry) -> ToolResult {
     let model_id = parse_model_id(args)?;
 
     let mut registry = model_registry.write().await;
@@ -185,7 +174,8 @@ async fn exec_model_set(
             return Err(format!(
                 "Model '{}' is not usable (enabled: {}, available: {})",
                 model_id, model.enabled, model.available
-            ));
+            )
+            .into());
         }
     }
 
@@ -200,10 +190,7 @@ async fn exec_model_set(
 }
 
 /// Get model recommendation for task complexity.
-async fn exec_model_recommend(
-    args: &Value,
-    model_registry: &SharedModelRegistry,
-) -> Result<String, String> {
+async fn exec_model_recommend(args: &Value, model_registry: &SharedModelRegistry) -> ToolResult {
     let complexity_str = args
         .get("complexity")
         .and_then(|v| v.as_str())
@@ -218,7 +205,8 @@ async fn exec_model_recommend(
             return Err(format!(
                 "Unknown complexity: {}. Use: simple, medium, complex, critical",
                 complexity_str
-            ));
+            )
+            .into());
         }
     };
 
@@ -254,7 +242,7 @@ async fn exec_model_recommend(
 
 // ── Host & load tools ───────────────────────────────────────────────────────
 
-async fn exec_host_info() -> Result<String, String> {
+async fn exec_host_info() -> ToolResult {
     let host = rustyclaw_core::runtime_ctx::get_host()
         .ok_or_else(|| "Host capabilities not yet detected".to_string())?;
 
@@ -299,7 +287,7 @@ async fn exec_host_info() -> Result<String, String> {
     .to_string())
 }
 
-async fn exec_load_status() -> Result<String, String> {
+async fn exec_load_status() -> ToolResult {
     let tracker = rustyclaw_core::runtime_ctx::get_load_tracker()
         .ok_or_else(|| "Load tracker not yet initialised".to_string())?;
 
@@ -330,7 +318,7 @@ async fn exec_load_status() -> Result<String, String> {
 
 // ── Service tools ───────────────────────────────────────────────────────────
 
-async fn exec_service_list() -> Result<String, String> {
+async fn exec_service_list() -> ToolResult {
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
     let mgr = mgr.read().await;
@@ -358,7 +346,7 @@ async fn exec_service_list() -> Result<String, String> {
     .to_string())
 }
 
-async fn exec_service_start(args: &Value) -> Result<String, String> {
+async fn exec_service_start(args: &Value) -> ToolResult {
     let name = parse_service_name(args)?;
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
@@ -373,7 +361,7 @@ async fn exec_service_start(args: &Value) -> Result<String, String> {
     .to_string())
 }
 
-async fn exec_service_stop(args: &Value) -> Result<String, String> {
+async fn exec_service_stop(args: &Value) -> ToolResult {
     let name = parse_service_name(args)?;
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
@@ -387,7 +375,7 @@ async fn exec_service_stop(args: &Value) -> Result<String, String> {
     .to_string())
 }
 
-async fn exec_service_restart(args: &Value) -> Result<String, String> {
+async fn exec_service_restart(args: &Value) -> ToolResult {
     let name = parse_service_name(args)?;
     let mgr = rustyclaw_core::runtime_ctx::get_service_manager()
         .ok_or_else(|| "Service manager not initialised".to_string())?;
@@ -402,7 +390,7 @@ async fn exec_service_restart(args: &Value) -> Result<String, String> {
     .to_string())
 }
 
-async fn exec_service_logs(args: &Value) -> Result<String, String> {
+async fn exec_service_logs(args: &Value) -> ToolResult {
     let name = parse_service_name(args)?;
     let tail = args
         .get("tail")
@@ -420,22 +408,24 @@ async fn exec_service_logs(args: &Value) -> Result<String, String> {
     .to_string())
 }
 
-fn parse_service_name(args: &Value) -> Result<String, String> {
+fn parse_service_name(args: &Value) -> ToolResult {
     args.get("name")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "Missing required parameter: name (service name)".to_string())
+        .map_err(ToolError::from)
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
-fn parse_model_id(args: &Value) -> Result<String, String> {
+fn parse_model_id(args: &Value) -> ToolResult {
     args.get("id")
         .or_else(|| args.get("model"))
         .or_else(|| args.get("modelId"))
         .and_then(|v| v.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| "Missing required parameter: id (model ID)".to_string())
+        .map_err(ToolError::from)
 }
 
 /// Generate system prompt section for model selection guidance.

@@ -1,12 +1,13 @@
 //! Model management tools for the agent.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
 /// List available models.
 #[instrument(skip(args, _workspace_dir), fields(action = "list"))]
-pub fn exec_model_list(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_model_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let tier = args.get("tier").and_then(|v| v.as_str());
     let enabled_only = args
         .get("enabledOnly")
@@ -34,7 +35,7 @@ pub fn exec_model_list(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 /// Enable a model.
 #[instrument(skip(args, _workspace_dir), fields(action = "enable"))]
-pub fn exec_model_enable(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_model_enable(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let model_id = args
         .get("id")
         .or_else(|| args.get("model"))
@@ -53,7 +54,7 @@ pub fn exec_model_enable(args: &Value, _workspace_dir: &Path) -> Result<String, 
 
 /// Disable a model.
 #[instrument(skip(args, _workspace_dir), fields(action = "disable"))]
-pub fn exec_model_disable(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_model_disable(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let model_id = args
         .get("id")
         .or_else(|| args.get("model"))
@@ -72,7 +73,7 @@ pub fn exec_model_disable(args: &Value, _workspace_dir: &Path) -> Result<String,
 
 /// Set the active model.
 #[instrument(skip(args, _workspace_dir), fields(action = "set"))]
-pub fn exec_model_set(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_model_set(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let model_id = args
         .get("id")
         .or_else(|| args.get("model"))
@@ -91,7 +92,7 @@ pub fn exec_model_set(args: &Value, _workspace_dir: &Path) -> Result<String, Str
 
 /// Get model recommendation for a task complexity.
 #[instrument(skip(args, _workspace_dir), fields(action = "recommend"))]
-pub fn exec_model_recommend(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_model_recommend(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let complexity = args
         .get("complexity")
         .and_then(|v| v.as_str())

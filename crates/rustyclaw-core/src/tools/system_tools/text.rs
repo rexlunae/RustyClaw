@@ -1,6 +1,7 @@
 //! File summarization: quick summaries of files based on type.
 
 use super::{expand_tilde, resolve_path, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -20,10 +21,7 @@ fn human_size(bytes: u64) -> String {
 // ── Async implementation ────────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub async fn exec_summarize_file_async(
-    args: &Value,
-    workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_summarize_file_async(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -40,14 +38,14 @@ pub async fn exec_summarize_file_async(
 
     let exists = tokio::fs::try_exists(&target).await.unwrap_or(false);
     if !exists {
-        return Err(format!("File not found: {}", target.display()));
+        return Err(format!("File not found: {}", target.display()).into());
     }
 
     let meta = tokio::fs::metadata(&target)
         .await
         .map_err(|e| format!("Cannot read: {}", e))?;
     if meta.is_dir() {
-        return Err(format!("Path is a directory: {}", target.display()));
+        return Err(format!("Path is a directory: {}", target.display()).into());
     }
 
     let mut result = serde_json::Map::new();
@@ -206,7 +204,7 @@ pub async fn exec_summarize_file_async(
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_summarize_file(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_summarize_file(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path_str = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -220,12 +218,12 @@ pub fn exec_summarize_file(args: &Value, workspace_dir: &Path) -> Result<String,
     };
 
     if !target.exists() {
-        return Err(format!("File not found: {}", target.display()));
+        return Err(format!("File not found: {}", target.display()).into());
     }
 
     let meta = std::fs::metadata(&target).map_err(|e| format!("Cannot read: {}", e))?;
     if meta.is_dir() {
-        return Err(format!("Path is a directory: {}", target.display()));
+        return Err(format!("Path is a directory: {}", target.display()).into());
     }
 
     let mut result = serde_json::Map::new();

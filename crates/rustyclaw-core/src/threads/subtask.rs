@@ -50,6 +50,12 @@ pub enum SubtaskError {
     ChannelClosed,
 }
 
+impl From<String> for SubtaskError {
+    fn from(message: String) -> Self {
+        Self::Failed(message)
+    }
+}
+
 /// Handle to a running subtask. Allows joining, cancelling, and updating status.
 ///
 /// The type parameter `T` is the return type of the async function.
@@ -193,7 +199,7 @@ pub async fn spawn_subagent<F, Fut, T>(
 ) -> SubtaskHandle<T>
 where
     F: FnOnce(CancellationToken, SharedThreadManager) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, String>> + Send + 'static,
+    Fut: Future<Output = Result<T, SubtaskError>> + Send + 'static,
     T: Send + 'static,
 {
     let cancel_token = CancellationToken::new();
@@ -224,7 +230,7 @@ where
     let join_handle = tokio::spawn(async move {
         let result = tokio::select! {
             _ = token.cancelled() => Err(SubtaskError::Cancelled),
-            res = task_fn(token.clone(), mgr.clone()) => res.map_err(SubtaskError::Failed),
+            res = task_fn(token.clone(), mgr.clone()) => res,
         };
 
         // Update thread status based on result
@@ -270,7 +276,7 @@ pub async fn spawn_task<F, Fut, T>(
 ) -> SubtaskHandle<T>
 where
     F: FnOnce(CancellationToken, SharedThreadManager) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<T, String>> + Send + 'static,
+    Fut: Future<Output = Result<T, SubtaskError>> + Send + 'static,
     T: Send + 'static,
 {
     let cancel_token = CancellationToken::new();
@@ -299,7 +305,7 @@ where
     let join_handle = tokio::spawn(async move {
         let result = tokio::select! {
             _ = token.cancelled() => Err(SubtaskError::Cancelled),
-            res = task_fn(token.clone(), mgr.clone()) => res.map_err(SubtaskError::Failed),
+            res = task_fn(token.clone(), mgr.clone()) => res,
         };
 
         // Update thread status
@@ -344,7 +350,7 @@ pub async fn spawn_background<F, Fut>(
 ) -> SubtaskHandle<()>
 where
     F: FnOnce(CancellationToken, SharedThreadManager) -> Fut + Send + 'static,
-    Fut: Future<Output = Result<(), String>> + Send + 'static,
+    Fut: Future<Output = Result<(), SubtaskError>> + Send + 'static,
 {
     let cancel_token = CancellationToken::new();
     let (result_tx, result_rx) = oneshot::channel();
@@ -371,7 +377,7 @@ where
     let join_handle = tokio::spawn(async move {
         let result = tokio::select! {
             _ = token.cancelled() => Err(SubtaskError::Cancelled),
-            res = task_fn(token.clone(), mgr.clone()) => res.map_err(SubtaskError::Failed),
+            res = task_fn(token.clone(), mgr.clone()) => res,
         };
 
         {
@@ -529,7 +535,7 @@ mod tests {
             |token, _mgr| async move {
                 // Wait until cancelled
                 token.cancelled().await;
-                Err("Cancelled".to_string())
+                Err(SubtaskError::Cancelled)
             },
         )
         .await;
@@ -601,7 +607,9 @@ mod tests {
         let handle = spawn_subagent(
             mgr.clone(),
             SpawnOptions::new("Failing Task"),
-            |_token, _mgr| async move { Err::<String, _>("something went wrong".to_string()) },
+            |_token, _mgr| async move {
+                Err::<String, _>(SubtaskError::Failed("something went wrong".to_string()))
+            },
         )
         .await;
 

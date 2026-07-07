@@ -70,13 +70,23 @@ plumbing that used `Result<_, String>` or flattened errors mid-propagation.
    (`validate_command_safe`, `resolve_path_no_race`,
    `run_sandboxed_command`) all return it; `ServiceError::CommandRejected`
    now carries it as a typed source.
-3. **Gateway parse helpers** — `parse_task_id` (`task_handler.rs`),
-   `parse_service_name`/`parse_model_id` (`model_handler.rs`) return
-   `Result<_, String>`; low priority since they feed directly into the tool
-   boundary.
-4. **`SubconsciousError(String)` / `SyncError(String)`** — typed newtypes
-   around opaque strings; better than bare `String` but should grow real
-   variants when those modules are next touched.
+3. **[fixed]** ~~Gateway parse helpers~~ — the whole AI-tool layer
+   (all `exec_*` implementations in `core/src/tools/**` and the gateway
+   tool handlers, parse helpers included) now returns `ToolResult`
+   (`Result<String, ToolError>`). `ToolError` carries `#[from]`
+   conversions for the per-module enums (`SandboxError`, `ProcessError`,
+   `TaskError`, `ServiceError`, `RegistryError`, `CronError`,
+   `ConsolidationError`, `MemoryIndexError`, `SessionError`, `SwarmError`,
+   `SteelMemoryError`, plus `io`/`serde_json`/`reqwest`) and a `Msg`
+   variant for bespoke messages (reached via `From<String>`, keeping
+   `.map_err(|e| format!("context: {e}"))?` as the context idiom).
+   The gateway's tool executor is the single flatten point. The tool-call
+   rate limiter returns a typed `RateLimitError`.
+4. **[fixed]** ~~`SubconsciousError(String)` / `SyncError(String)`~~ —
+   both are now enums (`Message(String)` for implementation-described
+   failures, `Source(anyhow::Error)` preserving cause chains), and the
+   subtask spawn functions' closure contract is `Result<T, SubtaskError>`
+   instead of `Result<T, String>`.
 5. **`gateway/errors.rs`** is the reference implementation for the
    display-boundary pattern (typed kind + source, formatted only in
    `user_message`) — new error types should imitate it.

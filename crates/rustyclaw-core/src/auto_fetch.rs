@@ -146,23 +146,30 @@ pub struct SyncOutcome {
     pub items_ingested: usize,
 }
 
+/// Why a memory-source sync failed.
 #[derive(Debug, thiserror::Error)]
-#[error("{0}")]
-pub struct SyncError(pub String);
+pub enum SyncError {
+    /// Failure described by the source implementation.
+    #[error("{0}")]
+    Message(String),
+    /// Underlying error with its context chain preserved.
+    #[error("{0:#}")]
+    Source(anyhow::Error),
+}
 
 impl From<String> for SyncError {
     fn from(s: String) -> Self {
-        Self(s)
+        Self::Message(s)
     }
 }
 impl From<&str> for SyncError {
     fn from(s: &str) -> Self {
-        Self(s.to_string())
+        Self::Message(s.to_string())
     }
 }
 impl From<anyhow::Error> for SyncError {
     fn from(e: anyhow::Error) -> Self {
-        Self(format!("{:#}", e))
+        Self::Source(e)
     }
 }
 
@@ -284,10 +291,11 @@ impl AutoFetchScheduler {
                     results.push(TickResult::ok(&toolkit, &conn, outcome.items_ingested));
                 }
                 Err(e) => {
-                    warn!(toolkit, conn, error = %e.0, "auto_fetch sync failed");
-                    state.record_failure(&e.0);
+                    let msg = e.to_string();
+                    warn!(toolkit, conn, error = %msg, "auto_fetch sync failed");
+                    state.record_failure(&msg);
                     self.state.put(&toolkit, &conn, state).await;
-                    results.push(TickResult::failed(&toolkit, &conn, &e.0));
+                    results.push(TickResult::failed(&toolkit, &conn, &msg));
                 }
             }
         }

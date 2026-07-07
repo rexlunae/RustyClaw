@@ -1,5 +1,6 @@
 //! Canvas tool: UI presentation and page capture.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -12,7 +13,7 @@ static CANVAS_URL: Mutex<Option<String>> = Mutex::new(None);
 // ── Async implementation ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -143,11 +144,11 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> Result<St
         _ => Err(format!(
             "Unknown action: {}. Valid: present, hide, navigate, eval, snapshot, a2ui_push, a2ui_reset",
             action
-        )),
+        ).into()),
     }
 }
 
-async fn open_in_browser_async(url: &str) -> Result<(), String> {
+async fn open_in_browser_async(url: &str) -> ToolResult<()> {
     #[cfg(target_os = "macos")]
     let cmd = "open";
     #[cfg(target_os = "linux")]
@@ -212,7 +213,7 @@ async fn fetch_page_text_async(url: &str, max_chars: usize) -> String {
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -330,11 +331,11 @@ pub fn exec_canvas(args: &Value, _workspace_dir: &Path) -> Result<String, String
             Ok(json!({"status": action, "note": "A2UI handled."}).to_string())
         }
 
-        _ => Err(format!("Unknown action: {}", action)),
+        _ => Err(format!("Unknown action: {}", action).into()),
     }
 }
 
-fn open_in_browser(url: &str) -> Result<(), String> {
+fn open_in_browser(url: &str) -> ToolResult<()> {
     #[cfg(target_os = "macos")]
     let cmd = "open";
     #[cfg(target_os = "linux")]

@@ -45,6 +45,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **AI-tool layer moved to typed errors (`ToolError` / `ToolResult`).**
+  All `exec_*` tool implementations (~45 files in `core/src/tools/**` and
+  the gateway tool handlers) now return `ToolResult` instead of
+  `Result<String, String>`. `ToolError`'s `Display` is the exact
+  model-facing message; per-module typed errors (`SandboxError`,
+  `ProcessError`, `TaskError`, `ServiceError`, `RegistryError`,
+  `CronError`, `ConsolidationError`, `MemoryIndexError`, `SessionError`,
+  `SwarmError`, `SteelMemoryError`, `io`/`serde_json`/`reqwest`) propagate
+  into it with plain `?`, bespoke messages route through `ToolError::Msg`,
+  and the gateway tool executor is the single point where the error is
+  flattened to the model-payload string. Also typed in the same pass: the
+  tool-call rate limiter (`RateLimitError`), `read_memory_file`
+  (`MemoryIndexError::{InvalidPath, NotFound}`), `SubconsciousError` and
+  `SyncError` (now enums preserving `anyhow` cause chains), and the
+  subtask closure contract (`Result<T, SubtaskError>`). The dead
+  `tools::{ToolCall, ToolResult}` wire structs (zero users) were removed,
+  and STYLE_GUIDE §5 now describes the `ToolError` pattern instead of the
+  `Result<String, String>` exception.
+
 - **Completed the typed-error migration started in #303.** Remaining
   internal `Result<_, String>` plumbing now uses per-module `thiserror`
   enums, with strings only at the documented display boundaries:

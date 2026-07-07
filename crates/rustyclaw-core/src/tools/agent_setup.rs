@@ -5,6 +5,7 @@
 // ollama (local model server).  Can be invoked via `/agent setup`,
 // the `rustyclaw setup` CLI, or as an agent-callable tool.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 
@@ -12,7 +13,7 @@ use std::path::Path;
 ///
 /// Optional `components` array lets the caller pick a subset:
 ///   `["uv"]`, `["ollama","exo"]`, etc.  Default: all three.
-pub fn exec_agent_setup(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_agent_setup(args: &Value, workspace_dir: &Path) -> ToolResult {
     let setup_args = json!({"action": "setup"});
 
     // Which components to set up
@@ -62,7 +63,7 @@ pub fn exec_agent_setup(args: &Value, workspace_dir: &Path) -> Result<String, St
     }
 
     if errors.len() == components.len() {
-        Err(output)
+        Err(output.into())
     } else {
         Ok(output)
     }

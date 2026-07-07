@@ -1,6 +1,7 @@
 //! Service management: start, stop, restart, enable, disable, logs.
 
 use super::{detect_service_manager, detect_service_manager_async, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -8,10 +9,7 @@ use tracing::{debug, instrument};
 // ── Async implementation ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_service_manage_async(
-    args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_service_manage_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -43,7 +41,7 @@ pub async fn exec_service_manage_async(
                     }
                 }
                 "sysvinit" => "ls /etc/init.d/ | head -50".to_string(),
-                _ => return Err(format!("Unknown init system: {}", init)),
+                _ => return Err(format!("Unknown init system: {}", init).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "list", "init_system": init, "filter": filter, "output": output }).to_string())
@@ -58,7 +56,7 @@ pub async fn exec_service_manage_async(
                     svc, svc
                 ),
                 "sysvinit" => format!("/etc/init.d/{} status 2>&1", svc),
-                _ => return Err(format!("Unknown init system: {}", init)),
+                _ => return Err(format!("Unknown init system: {}", init).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "status", "service": svc, "init_system": init, "output": output }).to_string())
@@ -70,7 +68,7 @@ pub async fn exec_service_manage_async(
                 "systemd" => format!("sudo systemctl start {} 2>&1", svc),
                 "launchd" => format!("sudo launchctl start {} 2>&1", svc),
                 "sysvinit" => format!("sudo /etc/init.d/{} start 2>&1", svc),
-                _ => return Err(format!("Unknown init system: {}", init)),
+                _ => return Err(format!("Unknown init system: {}", init).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "start", "service": svc, "init_system": init, "output": if output.is_empty() { "Service started.".into() } else { output } }).to_string())
@@ -82,7 +80,7 @@ pub async fn exec_service_manage_async(
                 "systemd" => format!("sudo systemctl stop {} 2>&1", svc),
                 "launchd" => format!("sudo launchctl stop {} 2>&1", svc),
                 "sysvinit" => format!("sudo /etc/init.d/{} stop 2>&1", svc),
-                _ => return Err(format!("Unknown init system: {}", init)),
+                _ => return Err(format!("Unknown init system: {}", init).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "stop", "service": svc, "init_system": init, "output": if output.is_empty() { "Service stopped.".into() } else { output } }).to_string())
@@ -94,7 +92,7 @@ pub async fn exec_service_manage_async(
                 "systemd" => format!("sudo systemctl restart {} 2>&1", svc),
                 "launchd" => format!("sudo launchctl kickstart -k system/{} 2>&1", svc),
                 "sysvinit" => format!("sudo /etc/init.d/{} restart 2>&1", svc),
-                _ => return Err(format!("Unknown init system: {}", init)),
+                _ => return Err(format!("Unknown init system: {}", init).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "restart", "service": svc, "init_system": init, "output": if output.is_empty() { "Service restarted.".into() } else { output } }).to_string())
@@ -108,7 +106,7 @@ pub async fn exec_service_manage_async(
                     "sudo launchctl load -w /Library/LaunchDaemons/{}.plist 2>&1",
                     svc
                 ),
-                _ => return Err("enable requires systemd or launchd".to_string()),
+                _ => return Err("enable requires systemd or launchd".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "enable", "service": svc, "init_system": init, "output": if output.is_empty() { "Service enabled.".into() } else { output } }).to_string())
@@ -122,7 +120,7 @@ pub async fn exec_service_manage_async(
                     "sudo launchctl unload -w /Library/LaunchDaemons/{}.plist 2>&1",
                     svc
                 ),
-                _ => return Err("disable requires systemd or launchd".to_string()),
+                _ => return Err("disable requires systemd or launchd".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "disable", "service": svc, "init_system": init, "output": if output.is_empty() { "Service disabled.".into() } else { output } }).to_string())
@@ -137,7 +135,7 @@ pub async fn exec_service_manage_async(
                     "log show --predicate 'subsystem==\"{}\"' --last 5m --style compact 2>&1 | tail -{}",
                     svc, lines
                 ),
-                _ => return Err("Service logs require systemd or launchd".to_string()),
+                _ => return Err("Service logs require systemd or launchd".into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "logs", "service": svc, "lines": lines, "init_system": init, "output": output }).to_string())
@@ -146,14 +144,15 @@ pub async fn exec_service_manage_async(
         _ => Err(format!(
             "Unknown action: {}. Valid: list, status, start, stop, restart, enable, disable, logs",
             action
-        )),
+        )
+        .into()),
     }
 }
 
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_service_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_service_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -167,7 +166,7 @@ pub fn exec_service_manage(args: &Value, _workspace_dir: &Path) -> Result<String
             let cmd = match init {
                 "systemd" => "systemctl list-units --type=service --no-pager | head -50",
                 "launchd" => "launchctl list | head -50",
-                _ => return Err(format!("Unknown init: {}", init)),
+                _ => return Err(format!("Unknown init: {}", init).into()),
             };
             let output = sh(cmd)?;
             Ok(json!({ "action": "list", "init_system": init, "output": output }).to_string())
@@ -177,14 +176,11 @@ pub fn exec_service_manage(args: &Value, _workspace_dir: &Path) -> Result<String
             let cmd = match init {
                 "systemd" => format!("systemctl status {} --no-pager 2>&1", svc),
                 "launchd" => format!("launchctl list {} 2>&1", svc),
-                _ => return Err(format!("Unknown init: {}", init)),
+                _ => return Err(format!("Unknown init: {}", init).into()),
             };
             let output = sh(&cmd)?;
             Ok(json!({ "action": "status", "service": svc, "output": output }).to_string())
         }
-        _ => Err(format!(
-            "Sync not fully supported for '{}'. Use async.",
-            action
-        )),
+        _ => Err(format!("Sync not fully supported for '{}'. Use async.", action).into()),
     }
 }

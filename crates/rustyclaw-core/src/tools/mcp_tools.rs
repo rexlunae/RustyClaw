@@ -4,13 +4,14 @@
 //! themselves are dynamically registered with prefixed names (mcp_<server>_<tool>)
 //! and dispatched through the gateway's MCP handler.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
 
 /// List connected MCP servers and their tools.
 #[instrument(skip(_args, _workspace_dir), fields(action = "list"))]
-pub fn exec_mcp_list(_args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_mcp_list(_args: &Value, _workspace_dir: &Path) -> ToolResult {
     debug!("Listing MCP servers");
 
     // This is a stub — the gateway intercepts this and uses its MCP manager
@@ -38,14 +39,14 @@ pub fn exec_mcp_list(_args: &Value, _workspace_dir: &Path) -> Result<String, Str
 
 /// Connect to an MCP server.
 #[instrument(skip(args, _workspace_dir), fields(action = "connect"))]
-pub fn exec_mcp_connect(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_mcp_connect(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let name = args.get("name").and_then(|v| v.as_str());
     let command = args.get("command").and_then(|v| v.as_str());
 
     debug!(?name, ?command, "Connecting to MCP server");
 
     if name.is_none() && command.is_none() {
-        return Err("Either 'name' (from config) or 'command' is required".to_string());
+        return Err("Either 'name' (from config) or 'command' is required".into());
     }
 
     // This is a stub — the gateway handles actual connections
@@ -60,7 +61,7 @@ pub fn exec_mcp_connect(args: &Value, _workspace_dir: &Path) -> Result<String, S
 
 /// Disconnect from an MCP server.
 #[instrument(skip(args, _workspace_dir), fields(action = "disconnect"))]
-pub fn exec_mcp_disconnect(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_mcp_disconnect(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())

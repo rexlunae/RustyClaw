@@ -6,6 +6,7 @@
 //
 // Provides both sync and async implementations.
 
+use crate::tools::error::{ToolError, ToolResult};
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -14,10 +15,7 @@ use tracing::{debug, instrument};
 
 /// `ollama_manage` — unified Ollama administration tool (async).
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_ollama_manage_async(
-    args: &Value,
-    _workspace_dir: &Path,
-) -> Result<String, String> {
+pub async fn exec_ollama_manage_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -50,11 +48,12 @@ pub async fn exec_ollama_manage_async(
                 _ => Err(format!(
                     "Unsupported OS for automatic install: {}. Visit https://ollama.com/download",
                     os
-                )),
+                ))
+                .map_err(ToolError::from),
             };
             match install_result {
                 Ok(out) => Ok(format!("Ollama installed successfully.\n{}", out)),
-                Err(e) => Err(format!("Failed to install Ollama: {}", e)),
+                Err(e) => Err(format!("Failed to install Ollama: {}", e).into()),
             }
         }
 
@@ -295,7 +294,7 @@ pub async fn exec_ollama_manage_async(
                     "Model '{}' loaded into memory (keep_alive: 10m).",
                     model
                 )),
-                Err(e) => Err(format!("Failed to load model '{}': {}", model, e)),
+                Err(e) => Err(format!("Failed to load model '{}': {}", model, e).into()),
             }
         }
 
@@ -314,7 +313,7 @@ pub async fn exec_ollama_manage_async(
             });
             match ollama_api_async("POST", "/api/generate", Some(&body)).await {
                 Ok(_) => Ok(format!("Model '{}' unloaded from memory.", model)),
-                Err(e) => Err(format!("Failed to unload model '{}': {}", model, e)),
+                Err(e) => Err(format!("Failed to unload model '{}': {}", model, e).into()),
             }
         }
 
@@ -334,14 +333,15 @@ pub async fn exec_ollama_manage_async(
             "Unknown ollama action: '{}'. Valid actions: setup, serve, stop, status, \
              pull, rm, list, show, ps, load, unload, copy.",
             action
-        )),
+        )
+        .into()),
     }
 }
 
 // ── Async helpers ───────────────────────────────────────────────────────────
 
 /// Run a shell command asynchronously.
-async fn sh_async(script: &str) -> Result<String, String> {
+async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -354,9 +354,9 @@ async fn sh_async(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -369,11 +369,7 @@ async fn sh_async(script: &str) -> Result<String, String> {
 }
 
 /// Hit the Ollama REST API asynchronously.
-async fn ollama_api_async(
-    method: &str,
-    path: &str,
-    body: Option<&Value>,
-) -> Result<String, String> {
+async fn ollama_api_async(method: &str, path: &str, body: Option<&Value>) -> ToolResult {
     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".into());
     let url = format!("{}{}", host, path);
 
@@ -388,7 +384,7 @@ async fn ollama_api_async(
             req
         }
         "DELETE" => client.delete(&url),
-        _ => return Err(format!("Unsupported HTTP method: {}", method)),
+        _ => return Err(format!("Unsupported HTTP method: {}", method).into()),
     };
 
     let response = request
@@ -399,13 +395,14 @@ async fn ollama_api_async(
     if !response.status().is_success() {
         let status = response.status();
         let error = response.text().await.unwrap_or_default();
-        return Err(format!("Ollama API error ({}): {}", status, error));
+        return Err(format!("Ollama API error ({}): {}", status, error).into());
     }
 
     response
         .text()
         .await
         .map_err(|e| format!("Failed to read response: {}", e))
+        .map_err(ToolError::from)
 }
 
 async fn is_ollama_installed_async() -> bool {
@@ -424,7 +421,7 @@ async fn is_ollama_running_async() -> bool {
 // ── Sync implementations ────────────────────────────────────────────────────
 
 /// Run a shell command, returning trimmed stdout or an error with stderr.
-fn sh(script: &str) -> Result<String, String> {
+fn sh(script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -436,9 +433,9 @@ fn sh(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
     if !stderr.is_empty() && !stdout.is_empty() {
@@ -451,7 +448,7 @@ fn sh(script: &str) -> Result<String, String> {
 }
 
 /// Hit the Ollama REST API (default http://127.0.0.1:11434).
-fn ollama_api(method: &str, path: &str, body: Option<&Value>) -> Result<String, String> {
+fn ollama_api(method: &str, path: &str, body: Option<&Value>) -> ToolResult {
     let host = std::env::var("OLLAMA_HOST").unwrap_or_else(|_| "http://127.0.0.1:11434".into());
     let url = format!("{}{}", host, path);
 
@@ -469,9 +466,9 @@ fn ollama_api(method: &str, path: &str, body: Option<&Value>) -> Result<String, 
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Ollama API request failed ({})", output.status)
+            format!("Ollama API request failed ({})", output.status).into()
         } else {
-            format!("Ollama API error: {}", stderr)
+            format!("Ollama API error: {}", stderr).into()
         });
     }
     Ok(stdout)
@@ -490,7 +487,7 @@ fn is_ollama_running() -> bool {
 }
 
 /// `ollama_manage` — unified Ollama administration tool (sync).
-pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -518,11 +515,12 @@ pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> Result<String,
                 _ => Err(format!(
                     "Unsupported OS for automatic install: {}. Visit https://ollama.com/download",
                     os
-                )),
+                ))
+                .map_err(ToolError::from),
             };
             match install_result {
                 Ok(out) => Ok(format!("Ollama installed successfully.\n{}", out)),
-                Err(e) => Err(format!("Failed to install Ollama: {}", e)),
+                Err(e) => Err(format!("Failed to install Ollama: {}", e).into()),
             }
         }
 
@@ -765,7 +763,7 @@ pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> Result<String,
                     "Model '{}' loaded into memory (keep_alive: 10m).",
                     model
                 )),
-                Err(e) => Err(format!("Failed to load model '{}': {}", model, e)),
+                Err(e) => Err(format!("Failed to load model '{}': {}", model, e).into()),
             }
         }
 
@@ -784,7 +782,7 @@ pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> Result<String,
             });
             match ollama_api("POST", "/api/generate", Some(&body)) {
                 Ok(_) => Ok(format!("Model '{}' unloaded from memory.", model)),
-                Err(e) => Err(format!("Failed to unload model '{}': {}", model, e)),
+                Err(e) => Err(format!("Failed to unload model '{}': {}", model, e).into()),
             }
         }
 
@@ -804,6 +802,7 @@ pub fn exec_ollama_manage(args: &Value, _workspace_dir: &Path) -> Result<String,
             "Unknown ollama action: '{}'. Valid actions: setup, serve, stop, status, \
              pull, rm, list, show, ps, load, unload, copy.",
             action
-        )),
+        )
+        .into()),
     }
 }

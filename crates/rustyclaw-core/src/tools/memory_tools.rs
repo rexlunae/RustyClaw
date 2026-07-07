@@ -2,6 +2,7 @@
 //!
 //! Uses Steel Memory for semantic vector search with embeddings.
 
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -9,7 +10,7 @@ use tracing::{debug, instrument};
 /// Search memory using Steel Memory semantic vector search.
 #[cfg(feature = "semantic-memory")]
 #[instrument(skip(args, workspace_dir), fields(query))]
-pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> ToolResult {
     let query = args
         .get("query")
         .and_then(|v| v.as_str())
@@ -30,16 +31,14 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
     let rt = tokio::runtime::Handle::try_current().map_err(|_| "No tokio runtime available")?;
 
     rt.block_on(async move {
-        let index =
-            crate::steel_memory::SteelMemoryIndex::new(&workspace).map_err(|e| e.to_string())?;
+        let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
 
         // Index workspace (idempotent - will dedupe in future)
         let _ = index.index_workspace().await;
 
         let results = index
             .search(&query_owned, max_results, Some(min_score))
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
 
         if results.is_empty() {
             return Ok("No matching memories found.".to_string());
@@ -79,7 +78,7 @@ pub fn exec_memory_search(args: &Value, workspace_dir: &Path) -> Result<String, 
 
 /// Read content from a memory file.
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> ToolResult {
     let path = args
         .get("path")
         .and_then(|v| v.as_str())
@@ -97,13 +96,18 @@ pub fn exec_memory_get(args: &Value, workspace_dir: &Path) -> Result<String, Str
 
     debug!(path, from_line, num_lines, "Reading memory file");
 
-    crate::memory::read_memory_file(workspace_dir, path, from_line, num_lines)
+    Ok(crate::memory::read_memory_file(
+        workspace_dir,
+        path,
+        from_line,
+        num_lines,
+    )?)
 }
 
 /// Add a memory to the semantic index.
 #[cfg(feature = "semantic-memory")]
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> ToolResult {
     let content = args
         .get("content")
         .and_then(|v| v.as_str())
@@ -129,12 +133,10 @@ pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, Str
     let rt = tokio::runtime::Handle::try_current().map_err(|_| "No tokio runtime available")?;
 
     rt.block_on(async move {
-        let index =
-            crate::steel_memory::SteelMemoryIndex::new(&workspace).map_err(|e| e.to_string())?;
+        let index = crate::steel_memory::SteelMemoryIndex::new(&workspace)?;
         let id = index
             .add_memory(&content_owned, &wing_owned, &room_owned, None)
-            .await
-            .map_err(|e| e.to_string())?;
+            .await?;
         Ok(format!("Memory added with ID: {}", id))
     })
 }
@@ -147,7 +149,7 @@ pub fn exec_add_memory(args: &Value, workspace_dir: &Path) -> Result<String, Str
 ///
 /// The LLM decides what's important enough to persist.
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> ToolResult {
     let history_entry = args
         .get("history_entry")
         .and_then(|v| v.as_str())
@@ -165,15 +167,11 @@ pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, St
     let consolidation = crate::memory_consolidation::MemoryConsolidation::new(config);
 
     // Append to HISTORY.md
-    let history_size = consolidation
-        .append_history(workspace_dir, history_entry)
-        .map_err(|e| e.to_string())?;
+    let history_size = consolidation.append_history(workspace_dir, history_entry)?;
 
     // Update MEMORY.md if provided
     let memory_size = if let Some(content) = memory_update {
-        consolidation
-            .update_memory(workspace_dir, content)
-            .map_err(|e| e.to_string())?
+        consolidation.update_memory(workspace_dir, content)?
     } else {
         consolidation
             .read_memory(workspace_dir)
@@ -198,7 +196,7 @@ pub fn exec_save_memory(args: &Value, workspace_dir: &Path) -> Result<String, St
 
 /// Search HISTORY.md for past entries matching a pattern.
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_search_history(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_search_history(args: &Value, workspace_dir: &Path) -> ToolResult {
     let pattern = args
         .get("pattern")
         .and_then(|v| v.as_str())
@@ -214,9 +212,7 @@ pub fn exec_search_history(args: &Value, workspace_dir: &Path) -> Result<String,
     let config = crate::memory_consolidation::ConsolidationConfig::default();
     let consolidation = crate::memory_consolidation::MemoryConsolidation::new(config);
 
-    let results = consolidation
-        .search_history(workspace_dir, pattern, max_results)
-        .map_err(|e| e.to_string())?;
+    let results = consolidation.search_history(workspace_dir, pattern, max_results)?;
 
     if results.is_empty() {
         return Ok(format!(

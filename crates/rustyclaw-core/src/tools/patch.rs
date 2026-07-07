@@ -1,13 +1,14 @@
 //! Patch tool: apply unified diff patches.
 
 use super::helpers::resolve_path;
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
 
 /// Apply a unified diff patch to files.
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
     let patch_content = args
         .get("patch")
         .and_then(|v| v.as_str())
@@ -26,7 +27,7 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> Result<String, St
 
     if hunks.is_empty() {
         warn!("No valid hunks found in patch");
-        return Err("No valid hunks found in patch".to_string());
+        return Err("No valid hunks found in patch".into());
     }
 
     debug!(hunk_count = hunks.len(), "Parsed patch hunks");
@@ -115,7 +116,7 @@ pub enum DiffLine {
 }
 
 /// Parse a unified diff into hunks.
-pub fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
+pub fn parse_unified_diff(patch: &str) -> ToolResult<Vec<DiffHunk>> {
     let mut hunks = Vec::new();
     let mut current_file: Option<String> = None;
     let mut lines = patch.lines().peekable();
@@ -139,7 +140,7 @@ pub fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
         // Parse hunk header: @@ -old_start,old_count +new_start,new_count @@
         if let Some(header) = line.strip_prefix("@@ ") {
             let Some(ref file_path) = current_file else {
-                return Err("Hunk without file header".to_string());
+                return Err("Hunk without file header".into());
             };
 
             let end = header.find(" @@").unwrap_or(header.len());
@@ -184,7 +185,7 @@ pub fn parse_unified_diff(patch: &str) -> Result<Vec<DiffHunk>, String> {
 }
 
 /// Parse a range like "10,5" or "10" into (start, count).
-fn parse_range(s: &str) -> Result<(usize, usize), String> {
+fn parse_range(s: &str) -> ToolResult<(usize, usize)> {
     if let Some((start, count)) = s.split_once(',') {
         Ok((
             start.parse().map_err(|_| "Invalid range start")?,
@@ -196,7 +197,7 @@ fn parse_range(s: &str) -> Result<(usize, usize), String> {
 }
 
 /// Apply a single hunk to content lines.
-fn apply_hunk(lines: &[String], hunk: &DiffHunk) -> Result<Vec<String>, String> {
+fn apply_hunk(lines: &[String], hunk: &DiffHunk) -> ToolResult<Vec<String>> {
     let mut result = Vec::new();
     let start_idx = hunk.old_start.saturating_sub(1); // 1-indexed to 0-indexed
 
@@ -223,7 +224,8 @@ fn apply_hunk(lines: &[String], hunk: &DiffHunk) -> Result<Vec<String>, String> 
                         old_idx + 1,
                         text,
                         lines.get(old_idx).unwrap_or(&String::new())
-                    ));
+                    )
+                    .into());
                 }
                 old_idx += 1;
                 // Don't add to result (line is removed)

@@ -3,6 +3,7 @@
 //! Gives the agent a lightweight todo/checklist that persists within the
 //! session. Distinct from `task_*` tools which manage OS processes.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Mutex;
@@ -82,7 +83,7 @@ fn next_id() -> u32 {
 
 /// Execute the `todo` tool.
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -172,7 +173,7 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                     })
                     .to_string())
                 }
-                None => Err(format!("Todo item not found: {}", id)),
+                None => Err(format!("Todo item not found: {}", id).into()),
             }
         }
 
@@ -200,7 +201,7 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
                     })
                     .to_string())
                 }
-                None => Err(format!("Todo item not found: {}", id)),
+                None => Err(format!("Todo item not found: {}", id).into()),
             }
         }
 
@@ -263,7 +264,8 @@ pub fn exec_todo(args: &Value, _workspace_dir: &Path) -> Result<String, String> 
         _ => Err(format!(
             "Unknown action: '{}'. Valid actions: add, update_status, remove, list, clear",
             action
-        )),
+        )
+        .into()),
     }
 }
 

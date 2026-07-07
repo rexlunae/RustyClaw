@@ -7,6 +7,7 @@
 //! until the host is wired in.
 #![allow(dead_code)]
 
+use rustyclaw_core::tools::error::ToolResult;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tracing::{debug, instrument, warn};
@@ -27,7 +28,7 @@ pub async fn execute_canvas_tool(
     args: &serde_json::Value,
     canvas: &SharedCanvasHost,
     session: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     debug!("Executing canvas tool");
 
     let host = canvas.lock().await;
@@ -78,7 +79,7 @@ pub async fn execute_canvas_tool(
 
             match host.write_file(session, path, content.as_bytes()).await {
                 Ok(file_path) => Ok(format!("Wrote canvas file: {}", file_path.display())),
-                Err(e) => Err(format!("Failed to write canvas file: {}", e)),
+                Err(e) => Err(format!("Failed to write canvas file: {}", e).into()),
             }
         }
 
@@ -93,7 +94,7 @@ pub async fn execute_canvas_tool(
                 // Simple text push
                 match host.push_text(session, text).await {
                     Ok(()) => Ok("A2UI text pushed".to_string()),
-                    Err(e) => Err(format!("Failed to push A2UI: {}", e)),
+                    Err(e) => Err(format!("Failed to push A2UI: {}", e).into()),
                 }
             } else if let Some(jsonl) = jsonl {
                 // Parse JSONL and push
@@ -106,12 +107,12 @@ pub async fn execute_canvas_tool(
                 match messages {
                     Ok(msgs) => match host.push_a2ui(session, msgs).await {
                         Ok(()) => Ok("A2UI messages pushed".to_string()),
-                        Err(e) => Err(format!("Failed to push A2UI: {}", e)),
+                        Err(e) => Err(format!("Failed to push A2UI: {}", e).into()),
                     },
-                    Err(e) => Err(format!("Invalid A2UI JSONL: {}", e)),
+                    Err(e) => Err(format!("Invalid A2UI JSONL: {}", e).into()),
                 }
             } else {
-                Err("Either 'text' or 'jsonl' parameter required".to_string())
+                Err("Either 'text' or 'jsonl' parameter required".into())
             }
         }
 
@@ -121,7 +122,7 @@ pub async fn execute_canvas_tool(
 
             match host.reset_a2ui(session).await {
                 Ok(()) => Ok("A2UI state reset".to_string()),
-                Err(e) => Err(format!("Failed to reset A2UI: {}", e)),
+                Err(e) => Err(format!("Failed to reset A2UI: {}", e).into()),
             }
         }
 
@@ -136,13 +137,13 @@ pub async fn execute_canvas_tool(
                         base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
                     Ok(format!("data:image/png;base64,{}", b64))
                 }
-                Err(e) => Err(format!("Snapshot failed: {}", e)),
+                Err(e) => Err(format!("Snapshot failed: {}", e).into()),
             }
         }
 
         _ => {
             warn!(tool = name, "Unknown canvas tool");
-            Err(format!("Unknown canvas tool: {}", name))
+            Err(format!("Unknown canvas tool: {}", name).into())
         }
     }
 }

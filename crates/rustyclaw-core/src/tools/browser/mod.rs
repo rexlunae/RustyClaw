@@ -3,6 +3,7 @@
 //! This module provides real browser automation when the `browser` feature is enabled.
 //! Falls back to stub implementation when disabled.
 
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -15,7 +16,7 @@ mod real;
 /// When compiled with `browser` feature, uses real chromiumoxide CDP.
 /// Otherwise, returns helpful stub responses.
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_browser(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_browser(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -41,7 +42,7 @@ pub fn exec_browser(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
 }
 
 #[cfg(feature = "browser")]
-async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String> {
+async fn exec_browser_async(args: &Value, action: &str) -> ToolResult {
     let tab_id = args.get("targetId").and_then(|v| v.as_str());
 
     match action {
@@ -124,7 +125,7 @@ async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String
                         .ok_or("Missing 'fn' for evaluate")?;
                     real::evaluate(tab_id, script).await
                 }
-                _ => Err(format!("Unknown act kind: {}", kind)),
+                _ => Err(format!("Unknown act kind: {}", kind).into()),
             }
         }
 
@@ -153,7 +154,7 @@ async fn exec_browser_async(args: &Value, action: &str) -> Result<String, String
         _ => Err(format!(
             "Unknown action: {}. Valid: status, start, stop, tabs, open, navigate, screenshot, snapshot, close, act, profiles",
             action
-        )),
+        ).into()),
     }
 }
 
@@ -164,6 +165,7 @@ mod lite {
     //! Uses reqwest to fetch pages, parses HTML to extract interactive elements,
     //! links, and text content.  Tracks "tabs" (URL + cached content) in memory.
 
+    use crate::tools::error::{ToolError, ToolResult};
     use serde_json::{Value, json};
     use std::collections::HashMap;
     use std::sync::{Mutex, OnceLock};
@@ -198,17 +200,18 @@ mod lite {
         })
     }
 
-    fn http_client() -> Result<reqwest::blocking::Client, String> {
+    fn http_client() -> ToolResult<reqwest::blocking::Client> {
         reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(15))
             .user_agent("Mozilla/5.0 (compatible; RustyClaw/0.1; +https://github.com/RustyClaw)")
             .redirect(reqwest::redirect::Policy::limited(10))
             .build()
             .map_err(|e| format!("HTTP client error: {}", e))
+            .map_err(ToolError::from)
     }
 
     /// Fetch a URL and build a LiteTab from the response.
-    fn fetch_tab(url: &str) -> Result<LiteTab, String> {
+    fn fetch_tab(url: &str) -> ToolResult<LiteTab> {
         let client = http_client()?;
         let resp = client
             .get(url)
@@ -216,7 +219,7 @@ mod lite {
             .map_err(|e| format!("Request failed: {}", e))?;
 
         if !resp.status().is_success() {
-            return Err(format!("HTTP {}", resp.status()));
+            return Err(format!("HTTP {}", resp.status()).into());
         }
 
         let body = resp
@@ -406,7 +409,7 @@ mod lite {
 
     // ── Public API ──────────────────────────────────────────────────────────
 
-    pub fn status() -> Result<String, String> {
+    pub fn status() -> ToolResult {
         let br = browser().lock().map_err(|_| "lock poisoned")?;
         Ok(json!({
             "running": true,
@@ -418,19 +421,19 @@ mod lite {
         .to_string())
     }
 
-    pub fn start() -> Result<String, String> {
+    pub fn start() -> ToolResult {
         // No-op in lite mode; browser() initialises lazily
         Ok("Browser lite mode ready (reqwest-based). No external browser needed.".to_string())
     }
 
-    pub fn stop() -> Result<String, String> {
+    pub fn stop() -> ToolResult {
         let mut br = browser().lock().map_err(|_| "lock poisoned")?;
         br.tabs.clear();
         br.next_id = 0;
         Ok("Lite browser state cleared.".to_string())
     }
 
-    pub fn list_tabs() -> Result<String, String> {
+    pub fn list_tabs() -> ToolResult {
         let br = browser().lock().map_err(|_| "lock poisoned")?;
         let tabs: Vec<Value> = br
             .tabs
@@ -446,7 +449,7 @@ mod lite {
         Ok(json!({ "tabs": tabs }).to_string())
     }
 
-    pub fn open_tab(url: &str) -> Result<String, String> {
+    pub fn open_tab(url: &str) -> ToolResult {
         let tab = fetch_tab(url)?;
         let mut br = browser().lock().map_err(|_| "lock poisoned")?;
         let id = format!("tab_{}", br.next_id);
@@ -462,13 +465,13 @@ mod lite {
         .to_string())
     }
 
-    pub fn navigate(tab_id: Option<&str>, url: &str) -> Result<String, String> {
+    pub fn navigate(tab_id: Option<&str>, url: &str) -> ToolResult {
         let tab = fetch_tab(url)?;
         let mut br = browser().lock().map_err(|_| "lock poisoned")?;
         let id = match tab_id {
             Some(id) => {
                 if !br.tabs.contains_key(id) {
-                    return Err(format!("Tab not found: {}", id));
+                    return Err(format!("Tab not found: {}", id).into());
                 }
                 id.to_string()
             }
@@ -484,7 +487,7 @@ mod lite {
         .to_string())
     }
 
-    pub fn snapshot(tab_id: Option<&str>) -> Result<String, String> {
+    pub fn snapshot(tab_id: Option<&str>) -> ToolResult {
         let br = browser().lock().map_err(|_| "lock poisoned")?;
         let tab = match tab_id {
             Some(id) => br
@@ -503,7 +506,7 @@ mod lite {
         .to_string())
     }
 
-    pub fn get_content(tab_id: Option<&str>) -> Result<String, String> {
+    pub fn get_content(tab_id: Option<&str>) -> ToolResult {
         let br = browser().lock().map_err(|_| "lock poisoned")?;
         let tab = match tab_id {
             Some(id) => br
@@ -520,25 +523,25 @@ mod lite {
         }
     }
 
-    pub fn screenshot() -> Result<String, String> {
+    pub fn screenshot() -> ToolResult {
         Ok(json!({
             "note": "Screenshots require the 'browser' feature (CDP). Use 'snapshot' for an accessibility-style view of the page.",
         })
         .to_string())
     }
 
-    pub fn close_tab(tab_id: &str) -> Result<String, String> {
+    pub fn close_tab(tab_id: &str) -> ToolResult {
         let mut br = browser().lock().map_err(|_| "lock poisoned")?;
         if br.tabs.remove(tab_id).is_some() {
             Ok(json!({ "success": true, "closed": tab_id }).to_string())
         } else {
-            Err(format!("Tab not found: {}", tab_id))
+            Err(format!("Tab not found: {}", tab_id).into())
         }
     }
 }
 
 #[cfg(not(feature = "browser"))]
-fn exec_browser_stub(args: &Value, action: &str) -> Result<String, String> {
+fn exec_browser_stub(args: &Value, action: &str) -> ToolResult {
     debug!(action, "Browser stub mode (feature not enabled)");
     let tab_id = args.get("targetId").and_then(|v| v.as_str());
 
@@ -589,7 +592,7 @@ fn exec_browser_stub(args: &Value, action: &str) -> Result<String, String> {
                     "note": "JavaScript evaluation requires the 'browser' feature (CDP). Use 'get_content' for page text.",
                 })
                 .to_string()),
-                _ => Err(format!("Unknown act kind: {}", kind)),
+                _ => Err(format!("Unknown act kind: {}", kind).into()),
             }
         }
 
@@ -610,7 +613,7 @@ fn exec_browser_stub(args: &Value, action: &str) -> Result<String, String> {
         _ => Err(format!(
             "Unknown action: {}. Valid: status, start, stop, tabs, open, navigate, snapshot, screenshot, close, act, content, profiles",
             action
-        )),
+        ).into()),
     }
 }
 
@@ -631,6 +634,6 @@ mod tests {
         let args = json!({});
         let result = exec_browser(&args, &PathBuf::from("/tmp"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("action"));
+        assert!(result.unwrap_err().to_string().contains("action"));
     }
 }

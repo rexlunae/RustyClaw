@@ -26,12 +26,13 @@ pub use monitor::{exec_battery_health_async, exec_system_monitor_async};
 pub use security::{exec_audit_sensitive_async, exec_secure_delete_async};
 pub use text::exec_summarize_file_async;
 
+use crate::tools::error::ToolResult;
 use std::path::Path;
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
 /// Run a shell pipeline via `sh -c` (sync).
-pub(crate) fn sh(script: &str) -> Result<String, String> {
+pub(crate) fn sh(script: &str) -> ToolResult {
     let output = std::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -41,7 +42,7 @@ pub(crate) fn sh(script: &str) -> Result<String, String> {
 }
 
 /// Run a shell pipeline via `sh -c` (async).
-pub(crate) async fn sh_async(script: &str) -> Result<String, String> {
+pub(crate) async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)

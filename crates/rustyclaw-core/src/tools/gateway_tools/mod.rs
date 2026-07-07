@@ -3,6 +3,7 @@
 //! Async implementations live in `async_impl`.
 
 use super::helpers::resolve_path;
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -28,7 +29,7 @@ const PROTECTED_CONFIG_PATHS: &[&str] = &[
 ];
 
 /// Recursively check if a JSON value tries to modify any protected config key.
-pub(crate) fn check_protected_config(value: &serde_json::Value, path: &str) -> Result<(), String> {
+pub(crate) fn check_protected_config(value: &serde_json::Value, path: &str) -> ToolResult<()> {
     if let serde_json::Value::Object(map) = value {
         for (k, v) in map {
             let sub = if path.is_empty() {
@@ -40,7 +41,8 @@ pub(crate) fn check_protected_config(value: &serde_json::Value, path: &str) -> R
                 return Err(format!(
                     "Cannot modify protected config key '{}' via config.patch",
                     sub
-                ));
+                )
+                .into());
             }
             if let serde_json::Value::Object(_) = v {
                 check_protected_config(v, &sub)?;
@@ -70,7 +72,7 @@ pub(crate) fn merge_json(base: Value, patch: Value) -> Value {
 
 /// Gateway management (sync wrapper).
 #[instrument(skip(args, workspace_dir), fields(action))]
-pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -203,14 +205,14 @@ pub fn exec_gateway(args: &Value, workspace_dir: &Path) -> Result<String, String
             Err(format!(
                 "Unknown action: {}. Valid: restart, config.get, config.schema, config.apply, config.patch, update.run",
                 action
-            ))
+            ).into())
         }
     }
 }
 
 /// Send messages via channel plugins (sync wrapper).
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_message(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -248,7 +250,7 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
 
                     match webhook_url {
                         Some(url) => send_webhook_sync(&url, target, message),
-                        None => Err("Missing webhookUrl for webhook channel".to_string()),
+                        None => Err("Missing webhookUrl for webhook channel".into()),
                     }
                 }
                 _ => {
@@ -281,7 +283,7 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
                 .unwrap_or_default();
 
             if targets.is_empty() {
-                return Err("No targets specified for broadcast".to_string());
+                return Err("No targets specified for broadcast".into());
             }
 
             let channel = args
@@ -296,22 +298,23 @@ pub fn exec_message(args: &Value, _workspace_dir: &Path) -> Result<String, Strin
                     "telegram" => send_telegram_sync(target, message),
                     _ => Ok(format!("Would send to {}", target)),
                 };
-                results.push(format!("{}: {}", target, result.unwrap_or_else(|e| e)));
+                results.push(format!(
+                    "{}: {}",
+                    target,
+                    result.unwrap_or_else(|e| e.to_string())
+                ));
             }
 
             Ok(format!("Broadcast results:\n{}", results.join("\n")))
         }
 
-        _ => Err(format!(
-            "Unknown action: {}. Valid: send, broadcast",
-            action
-        )),
+        _ => Err(format!("Unknown action: {}. Valid: send, broadcast", action).into()),
     }
 }
 
 /// Text-to-speech using OpenAI API (sync wrapper).
 #[instrument(skip(args, workspace_dir), fields(text_len))]
-pub fn exec_tts(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_tts(args: &Value, workspace_dir: &Path) -> ToolResult {
     use std::fs;
     use std::io::Write;
 
@@ -378,7 +381,7 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> Result<String, String> {
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().unwrap_or_default();
-        return Err(format!("TTS API error ({}): {}", status, error_body));
+        return Err(format!("TTS API error ({}): {}", status, error_body).into());
     }
 
     let audio_bytes = response
@@ -402,7 +405,7 @@ pub fn exec_tts(args: &Value, workspace_dir: &Path) -> Result<String, String> {
 
 /// Analyze an image using a vision model (sync wrapper).
 #[instrument(skip(args, workspace_dir))]
-pub fn exec_image(args: &Value, workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_image(args: &Value, workspace_dir: &Path) -> ToolResult {
     use std::fs;
 
     let image_path = args
@@ -424,7 +427,7 @@ pub fn exec_image(args: &Value, workspace_dir: &Path) -> Result<String, String> 
     } else {
         let full_path = resolve_path(workspace_dir, image_path);
         if !full_path.exists() {
-            return Err(format!("Image file not found: {}", image_path));
+            return Err(format!("Image file not found: {}", image_path).into());
         }
 
         let ext = full_path
@@ -442,7 +445,8 @@ pub fn exec_image(args: &Value, workspace_dir: &Path) -> Result<String, String> 
                 return Err(format!(
                     "Unsupported image format: {}. Supported: jpg, jpeg, png, gif, webp",
                     ext
-                ));
+                )
+                .into());
             }
         };
 
@@ -477,7 +481,7 @@ pub fn exec_image(args: &Value, workspace_dir: &Path) -> Result<String, String> 
 
 // ── Sync helper functions ───────────────────────────────────────────────────
 
-fn send_discord_sync(channel_id: &str, content: &str) -> Result<String, String> {
+fn send_discord_sync(channel_id: &str, content: &str) -> ToolResult {
     let token = std::env::var("DISCORD_BOT_TOKEN").map_err(|_| "DISCORD_BOT_TOKEN not set")?;
 
     let client = reqwest::blocking::Client::new();
@@ -504,11 +508,11 @@ fn send_discord_sync(channel_id: &str, content: &str) -> Result<String, String> 
     } else {
         let status = response.status();
         let error = response.text().unwrap_or_default();
-        Err(format!("Discord API error ({}): {}", status, error))
+        Err(format!("Discord API error ({}): {}", status, error).into())
     }
 }
 
-fn send_telegram_sync(chat_id: &str, content: &str) -> Result<String, String> {
+fn send_telegram_sync(chat_id: &str, content: &str) -> ToolResult {
     let token = std::env::var("TELEGRAM_BOT_TOKEN").map_err(|_| "TELEGRAM_BOT_TOKEN not set")?;
 
     let client = reqwest::blocking::Client::new();
@@ -537,16 +541,17 @@ fn send_telegram_sync(chat_id: &str, content: &str) -> Result<String, String> {
             Err(format!(
                 "Telegram API error: {}",
                 data["description"].as_str().unwrap_or("unknown")
-            ))
+            )
+            .into())
         }
     } else {
         let status = response.status();
         let error = response.text().unwrap_or_default();
-        Err(format!("Telegram API error ({}): {}", status, error))
+        Err(format!("Telegram API error ({}): {}", status, error).into())
     }
 }
 
-fn send_webhook_sync(url: &str, target: &str, content: &str) -> Result<String, String> {
+fn send_webhook_sync(url: &str, target: &str, content: &str) -> ToolResult {
     let client = reqwest::blocking::Client::new();
 
     let response = client
@@ -564,7 +569,7 @@ fn send_webhook_sync(url: &str, target: &str, content: &str) -> Result<String, S
         Ok(format!("Message sent via webhook to {}", target))
     } else {
         let status = response.status();
-        Err(format!("Webhook error ({})", status))
+        Err(format!("Webhook error ({})", status).into())
     }
 }
 
@@ -573,7 +578,7 @@ fn call_openai_vision_sync(
     image_data: &str,
     _is_url: bool,
     prompt: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::blocking::Client::new();
 
     let image_content = serde_json::json!({
@@ -602,7 +607,7 @@ fn call_openai_vision_sync(
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().unwrap_or_default();
-        return Err(format!("Vision API error ({}): {}", status, error_body));
+        return Err(format!("Vision API error ({}): {}", status, error_body).into());
     }
 
     let data: Value = response
@@ -622,7 +627,7 @@ fn call_anthropic_vision_sync(
     is_url: bool,
     media_type: &str,
     prompt: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::blocking::Client::new();
 
     let image_content = if is_url {
@@ -667,7 +672,7 @@ fn call_anthropic_vision_sync(
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().unwrap_or_default();
-        return Err(format!("Vision API error ({}): {}", status, error_body));
+        return Err(format!("Vision API error ({}): {}", status, error_body).into());
     }
 
     let data: Value = response
@@ -686,7 +691,7 @@ fn call_google_vision_sync(
     image_data: &str,
     is_url: bool,
     prompt: &str,
-) -> Result<String, String> {
+) -> ToolResult {
     let client = reqwest::blocking::Client::new();
 
     let image_part = if is_url {
@@ -735,7 +740,7 @@ fn call_google_vision_sync(
     if !response.status().is_success() {
         let status = response.status();
         let error_body = response.text().unwrap_or_default();
-        return Err(format!("Vision API error ({}): {}", status, error_body));
+        return Err(format!("Vision API error ({}): {}", status, error_body).into());
     }
 
     let data: Value = response

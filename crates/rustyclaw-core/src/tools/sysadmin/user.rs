@@ -1,6 +1,7 @@
 //! User and group management: list, add, remove, group membership.
 
 use super::{sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -8,7 +9,7 @@ use tracing::{debug, instrument};
 // ── Async implementation ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -114,14 +115,14 @@ pub async fn exec_user_manage_async(args: &Value, _workspace_dir: &Path) -> Resu
         _ => Err(format!(
             "Unknown action: {}. Valid: whoami, list_users, list_groups, user_info, add_user, remove_user, add_to_group, last_logins",
             action
-        )),
+        ).into()),
     }
 }
 
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_user_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_user_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -142,9 +143,6 @@ pub fn exec_user_manage(args: &Value, _workspace_dir: &Path) -> Result<String, S
             };
             Ok(json!({ "action": "list_users", "output": output }).to_string())
         }
-        _ => Err(format!(
-            "Sync not fully supported for '{}'. Use async.",
-            action
-        )),
+        _ => Err(format!("Sync not fully supported for '{}'. Use async.", action).into()),
     }
 }

@@ -3,6 +3,7 @@
 //! Provides agent-callable tools for creating, listing, inspecting, messaging,
 //! and stopping swarms.
 
+use crate::tools::error::ToolResult;
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
@@ -13,7 +14,7 @@ use crate::swarm::{SwarmConfig, SwarmStatus, builtin_templates, swarm_manager};
 
 /// Create a new swarm from a built-in template or inline JSON config.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let template_name = args.get("template").and_then(|v| v.as_str());
     let custom_config = args.get("config");
 
@@ -43,8 +44,8 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> Result<String, 
         .lock()
         .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
 
-    mgr.create(config).map_err(|e| e.to_string())?;
-    mgr.start(&name).map_err(|e| e.to_string())?;
+    mgr.create(config)?;
+    mgr.start(&name)?;
 
     let inst = mgr.get(&name).ok_or("Swarm vanished after creation")?;
 
@@ -67,7 +68,7 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> Result<String, 
 
 /// List all swarms and their status.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_swarm_list(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_swarm_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let _ = args; // no parameters needed
     let manager = swarm_manager();
     let mgr = manager
@@ -106,7 +107,7 @@ pub fn exec_swarm_list(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 /// Get detailed status for a named swarm.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_swarm_status(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_swarm_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -168,7 +169,7 @@ pub fn exec_swarm_status(args: &Value, _workspace_dir: &Path) -> Result<String, 
 
 /// Send a task/message to a specific agent within a swarm.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let swarm_name = args
         .get("swarm")
         .and_then(|v| v.as_str())
@@ -200,7 +201,8 @@ pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> Result<String, St
             return Err(format!(
                 "Swarm '{swarm_name}' is not running (status: {})",
                 inst.status
-            ));
+            )
+            .into());
         }
 
         let agent = inst
@@ -240,9 +242,7 @@ pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> Result<String, St
         .map_err(|_| "Failed to acquire session manager lock".to_string())?;
 
     let session_key = if let Some(existing) = existing_session {
-        sess_mgr
-            .send_message(&existing, message)
-            .map_err(|e| e.to_string())?;
+        sess_mgr.send_message(&existing, message)?;
         existing
     } else {
         let label = format!("swarm:{}:{}", swarm_name, target);
@@ -273,7 +273,7 @@ pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 /// Stop a running swarm and clean up its agent sessions.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let name = args
         .get("name")
         .and_then(|v| v.as_str())
@@ -305,7 +305,7 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, St
     let mut mgr = manager
         .lock()
         .map_err(|_| "Failed to re-acquire swarm manager lock".to_string())?;
-    mgr.stop(name).map_err(|e| e.to_string())?;
+    mgr.stop(name)?;
 
     Ok(format!(
         "Swarm '{}' stopped. {} agent sessions completed.",
@@ -318,7 +318,7 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> Result<String, St
 
 /// List available swarm templates.
 #[instrument(skip(args, _workspace_dir))]
-pub fn exec_swarm_templates(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_swarm_templates(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let _ = args;
     let templates = builtin_templates();
 

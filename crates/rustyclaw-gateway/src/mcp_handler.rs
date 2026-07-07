@@ -6,6 +6,7 @@
 //! for completion; `dead_code` is allowed here until the manager is wired in.
 #![allow(dead_code)]
 
+use rustyclaw_core::tools::error::ToolResult;
 #[cfg(feature = "mcp")]
 use tracing::{debug, instrument, warn};
 
@@ -33,7 +34,7 @@ pub async fn execute_mcp_tool(
     name: &str,
     args: &serde_json::Value,
     mcp_mgr: &SharedMcpManager,
-) -> Result<String, String> {
+) -> ToolResult {
     debug!("Executing MCP tool");
 
     let mgr = mcp_mgr.lock().await;
@@ -57,15 +58,12 @@ pub async fn execute_mcp_tool(
 
 /// Stub for when MCP feature is disabled.
 #[cfg(not(feature = "mcp"))]
-pub async fn execute_mcp_tool(
-    name: &str,
-    _args: &serde_json::Value,
-    _mcp_mgr: &(),
-) -> Result<String, String> {
+pub async fn execute_mcp_tool(name: &str, _args: &serde_json::Value, _mcp_mgr: &()) -> ToolResult {
     Err(format!(
         "MCP tool '{}' called but MCP support is not enabled. Rebuild with --features mcp",
         name
-    ))
+    )
+    .into())
 }
 
 /// Get MCP tool schemas for the system prompt.

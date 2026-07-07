@@ -48,6 +48,12 @@ pub enum MemoryIndexError {
         #[source]
         source: std::io::Error,
     },
+    /// A path is outside the memory scope (`MEMORY.md` / `memory/*.md`).
+    #[error("Path '{0}' is not a valid memory file. Must be MEMORY.md or memory/*.md")]
+    InvalidPath(String),
+    /// The requested memory file does not exist.
+    #[error("Memory file not found: {0}")]
+    NotFound(String),
 }
 
 /// Memory search index.
@@ -381,23 +387,22 @@ pub fn read_memory_file(
     relative_path: &str,
     from_line: Option<usize>,
     num_lines: Option<usize>,
-) -> Result<String, String> {
+) -> Result<String, MemoryIndexError> {
     // Validate path is within memory scope
     if !is_valid_memory_path(relative_path) {
-        return Err(format!(
-            "Path '{}' is not a valid memory file. Must be MEMORY.md or memory/*.md",
-            relative_path
-        ));
+        return Err(MemoryIndexError::InvalidPath(relative_path.to_string()));
     }
 
     let full_path = workspace.join(relative_path);
 
     if !full_path.exists() {
-        return Err(format!("Memory file not found: {}", relative_path));
+        return Err(MemoryIndexError::NotFound(relative_path.to_string()));
     }
 
-    let content = fs::read_to_string(&full_path)
-        .map_err(|e| format!("Failed to read {}: {}", relative_path, e))?;
+    let content = fs::read_to_string(&full_path).map_err(|e| MemoryIndexError::ReadFile {
+        path: relative_path.to_string(),
+        source: e,
+    })?;
 
     let lines: Vec<&str> = content.lines().collect();
     let total_lines = lines.len();

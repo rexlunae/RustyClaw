@@ -1,6 +1,7 @@
 //! Package management: install, uninstall, upgrade, search, list, info.
 
 use super::{detect_pkg_manager, detect_pkg_manager_async, sh, sh_async};
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use tracing::{debug, instrument, warn};
@@ -8,7 +9,7 @@ use tracing::{debug, instrument, warn};
 // ── Async implementation ────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -31,7 +32,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
         let (m, n) = detect_pkg_manager_async().await;
         if m.is_empty() {
             warn!("No supported package manager found");
-            return Err("No supported package manager found on this system".to_string());
+            return Err("No supported package manager found on this system".into());
         }
         (m, n)
     };
@@ -53,7 +54,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 "flatpak" => format!("flatpak install -y {}", pkg),
                 "port" => format!("sudo port install {}", pkg),
                 "nix-env" => format!("nix-env -iA nixpkgs.{}", pkg),
-                _ => return Err(format!("Unknown package manager: {}", mgr)),
+                _ => return Err(format!("Unknown package manager: {}", mgr).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "install", "package": pkg, "manager": mgr_name, "output": output }).to_string())
@@ -73,7 +74,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 "flatpak" => format!("flatpak uninstall -y {}", pkg),
                 "port" => format!("sudo port uninstall {}", pkg),
                 "nix-env" => format!("nix-env -e {}", pkg),
-                _ => return Err(format!("Unknown package manager: {}", mgr)),
+                _ => return Err(format!("Unknown package manager: {}", mgr).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "uninstall", "package": pkg, "manager": mgr_name, "output": output }).to_string())
@@ -91,7 +92,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                     "apk" => format!("sudo apk upgrade {}", pkg),
                     "snap" => format!("sudo snap refresh {}", pkg),
                     "nix-env" => format!("nix-env -u {}", pkg),
-                    _ => return Err(format!("Unknown package manager: {}", mgr)),
+                    _ => return Err(format!("Unknown package manager: {}", mgr).into()),
                 }
             } else {
                 match mgr {
@@ -106,7 +107,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                     "apk" => "sudo apk upgrade".to_string(),
                     "snap" => "sudo snap refresh".to_string(),
                     "nix-env" => "nix-env -u".to_string(),
-                    _ => return Err(format!("Unknown package manager: {}", mgr)),
+                    _ => return Err(format!("Unknown package manager: {}", mgr).into()),
                 }
             };
             let output = sh_async(&cmd).await?;
@@ -125,7 +126,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 "apk" => format!("apk search {} | head -30", query),
                 "snap" => format!("snap find {} | head -20", query),
                 "nix-env" => format!("nix-env -qaP '.*{}.*' 2>/dev/null | head -30", query),
-                _ => return Err(format!("Unknown package manager: {}", mgr)),
+                _ => return Err(format!("Unknown package manager: {}", mgr).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "search", "query": query, "manager": mgr_name, "results": output }).to_string())
@@ -145,7 +146,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 "apk" => "apk list --installed 2>/dev/null | head -100".to_string(),
                 "snap" => "snap list".to_string(),
                 "nix-env" => "nix-env -q | head -100".to_string(),
-                _ => return Err(format!("Unknown package manager: {}", mgr)),
+                _ => return Err(format!("Unknown package manager: {}", mgr).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(json!({ "action": "list", "manager": mgr_name, "packages": output }).to_string())
@@ -166,7 +167,7 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
                 "apk" => format!("apk info {} 2>/dev/null", pkg),
                 "snap" => format!("snap info {}", pkg),
                 "nix-env" => format!("nix-env -qaP --description '.*{}.*' 2>/dev/null", pkg),
-                _ => return Err(format!("Unknown package manager: {}", mgr)),
+                _ => return Err(format!("Unknown package manager: {}", mgr).into()),
             };
             let output = sh_async(&cmd).await?;
             Ok(
@@ -182,14 +183,15 @@ pub async fn exec_pkg_manage_async(args: &Value, _workspace_dir: &Path) -> Resul
         _ => Err(format!(
             "Unknown action: {}. Valid: install, uninstall, upgrade, search, list, info, detect",
             action
-        )),
+        )
+        .into()),
     }
 }
 
 // ── Sync implementation ─────────────────────────────────────────────────────
 
 #[instrument(skip(args, _workspace_dir), fields(action))]
-pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> Result<String, String> {
+pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let action = args
         .get("action")
         .and_then(|v| v.as_str())
@@ -205,7 +207,7 @@ pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> Result<String, St
     } else {
         let (m, n) = detect_pkg_manager();
         if m.is_empty() {
-            return Err("No supported package manager found".to_string());
+            return Err("No supported package manager found".into());
         }
         (m, n)
     };
@@ -218,7 +220,7 @@ pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> Result<String, St
                 "apt" | "apt-get" => format!("sudo apt-get install -y {}", pkg),
                 "dnf" => format!("sudo dnf install -y {}", pkg),
                 "pacman" => format!("sudo pacman -S --noconfirm {}", pkg),
-                _ => return Err(format!("Unknown manager: {}", mgr)),
+                _ => return Err(format!("Unknown manager: {}", mgr).into()),
             };
             let output = sh(&cmd)?;
             Ok(json!({ "action": "install", "package": pkg, "manager": mgr_name, "output": output }).to_string())
@@ -226,9 +228,6 @@ pub fn exec_pkg_manage(args: &Value, _workspace_dir: &Path) -> Result<String, St
         "detect" => {
             Ok(json!({ "action": "detect", "manager": mgr_name, "command": mgr }).to_string())
         }
-        _ => Err(format!(
-            "Sync not fully supported for '{}'. Use async.",
-            action
-        )),
+        _ => Err(format!("Sync not fully supported for '{}'. Use async.", action).into()),
     }
 }

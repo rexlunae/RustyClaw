@@ -45,8 +45,7 @@ impl ToolRateLimiter {
     }
 
     /// Check whether a tool call of `name` is allowed.
-    /// If denied, returns an error message.
-    pub fn check(&mut self, name: &str) -> Result<(), String> {
+    pub fn check(&mut self, name: &str) -> Result<(), RateLimitError> {
         let now = Instant::now();
         let cutoff = now - std::time::Duration::from_millis(self.window_ms);
 
@@ -62,12 +61,11 @@ impl ToolRateLimiter {
         // Count current-call-name entries in the window
         let count = self.buckets.iter().filter(|(n, _)| n == name).count();
         if count >= self.max_calls {
-            return Err(format!(
-                "Rate limit exceeded: '{}' called {} times in {}ms window",
-                name,
-                count + 1,
-                self.window_ms,
-            ));
+            return Err(RateLimitError::Exceeded {
+                tool: name.to_string(),
+                count: count + 1,
+                window_ms: self.window_ms,
+            });
         }
 
         self.buckets.push_back((name.to_string(), now));
@@ -87,11 +85,26 @@ fn rate_limiter() -> &'static Mutex<ToolRateLimiter> {
     })
 }
 
-/// Check the rate limiter for a tool call.  If denied, return the error text.
-pub fn check_rate_limit(name: &str) -> Result<(), String> {
+/// Why a tool call was rejected before execution.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum RateLimitError {
+    /// The per-tool call budget for the window was exhausted.
+    #[error("Rate limit exceeded: '{tool}' called {count} times in {window_ms}ms window")]
+    Exceeded {
+        tool: String,
+        count: usize,
+        window_ms: u64,
+    },
+    /// The limiter's lock was poisoned by a panicking task.
+    #[error("Rate limiter poisoned")]
+    Poisoned,
+}
+
+/// Check the rate limiter for a tool call.
+pub fn check_rate_limit(name: &str) -> Result<(), RateLimitError> {
     rate_limiter()
         .lock()
-        .map_err(|e| format!("Rate limiter poisoned: {}", e))
+        .map_err(|_| RateLimitError::Poisoned)
         .and_then(|mut limiter| limiter.check(name))
 }
 
@@ -108,7 +121,7 @@ pub async fn execute_tool_by_type(
     // Apply rate limiting before executing any tool.
     if let Err(err) = check_rate_limit(name) {
         tracing::warn!(tool = name, "Rate limit hit");
-        return (err, true);
+        return (err.to_string(), true);
     }
 
     if tools::is_secrets_tool(name) {
@@ -124,7 +137,8 @@ pub async fn execute_tool_by_type(
     } else {
         match tools::execute_tool(name, arguments, workspace_dir).await {
             Ok(text) => (text, false),
-            Err(err) => (err, true),
+            // The single point where a ToolError becomes the model-facing string.
+            Err(err) => (err.to_string(), true),
         }
     }
 }

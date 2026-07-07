@@ -25,10 +25,11 @@ pub use user::exec_user_manage_async;
 
 // ── Shared helpers ──────────────────────────────────────────────────────────
 
+use crate::tools::error::ToolResult;
 use std::process::Command;
 
 /// Run a shell pipeline via `sh -c` and return stdout (trimmed) - sync version.
-pub(crate) fn sh(script: &str) -> Result<String, String> {
+pub(crate) fn sh(script: &str) -> ToolResult {
     let output = Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -40,9 +41,9 @@ pub(crate) fn sh(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
 
@@ -56,7 +57,7 @@ pub(crate) fn sh(script: &str) -> Result<String, String> {
 }
 
 /// Run a shell pipeline via `sh -c` - async version.
-pub(crate) async fn sh_async(script: &str) -> Result<String, String> {
+pub(crate) async fn sh_async(script: &str) -> ToolResult {
     let output = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(script)
@@ -69,9 +70,9 @@ pub(crate) async fn sh_async(script: &str) -> Result<String, String> {
 
     if !output.status.success() && stdout.is_empty() {
         return Err(if stderr.is_empty() {
-            format!("Command exited with {}", output.status)
+            format!("Command exited with {}", output.status).into()
         } else {
-            stderr
+            stderr.into()
         });
     }
 

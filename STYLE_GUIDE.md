@@ -177,10 +177,15 @@ pub use messengers::{Messenger, Message};
 Typed errors are small per-module `thiserror` enums defined next to the code
 that produces them (`CronError` in `cron.rs`, `SsrfError` in
 `security/ssrf.rs`, …) — there is deliberately no crate-wide `CoreError`
-catch-all. One documented exception (see `rustyclaw-core/src/error.rs`):
-AI-tool implementations return `Result<String, String>` because the error
-string is the payload sent back to the model; that boundary is where typed
-errors get flattened with `.to_string()`, and no earlier.
+catch-all. AI-tool implementations return `ToolResult`
+(`Result<String, ToolError>`, see `rustyclaw-core/src/tools/error.rs`):
+`ToolError`'s `Display` output is the payload sent back to the model,
+per-module typed errors propagate into it via `#[from]`/`?`, and bespoke
+messages route through `ToolError::Msg` (so
+`.map_err(|e| format!("context: {e}"))?` remains the idiom for adding
+context at the failure site). The dispatch layer that packages tool output
+for the model is the single place a `ToolError` is flattened to a string —
+nowhere earlier.
 
 ### No naked `unwrap()` in library code
 
