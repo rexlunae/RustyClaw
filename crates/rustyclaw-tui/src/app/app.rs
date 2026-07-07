@@ -18,6 +18,7 @@ use std::sync::mpsc as sync_mpsc;
 use rustyclaw_core::commands::{CommandContext, CommandResponse, handle_command};
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{GatewayClient, GatewayCommand};
+use rustyclaw_core::gateway::protocol::frames::EngineActionKind;
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
 use rustyclaw_core::soul::SoulManager;
@@ -943,8 +944,12 @@ impl App {
                         .await;
                 }
                 Ok(UserInput::EngineAction { engine, action }) => {
+                    let Ok(kind) = action.parse::<EngineActionKind>() else {
+                        tracing::warn!("unknown engine action: {action}");
+                        continue;
+                    };
                     let _ = client
-                        .send(GatewayCommand::EngineAction { engine, action })
+                        .send(GatewayCommand::EngineAction { engine, action: kind })
                         .await;
                     // Refresh the list so status changes show up.
                     let _ = client.send(GatewayCommand::EngineList).await;

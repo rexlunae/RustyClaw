@@ -1,12 +1,13 @@
 //! Dispatch for `CommandAction`s produced by slash-command handling in the TUI run loop.
 
 use rustyclaw_view::anyhow::Result;
-use rustyclaw_view::tokio;
+use rustyclaw_view::{tokio, tracing};
 use std::sync::mpsc as sync_mpsc;
 
 use rustyclaw_core::commands::CommandAction;
 use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::{GatewayClient, GatewayCommand};
+use rustyclaw_core::gateway::protocol::frames::{EngineActionKind, ModelActionKind};
 use rustyclaw_core::secrets::SecretsManager;
 use rustyclaw_core::skills::SkillManager;
 use rustyclaw_view::PromptAttachment;
@@ -284,8 +285,12 @@ pub(super) async fn handle_command_action(
             let _ = client.send(GatewayCommand::EngineList).await;
         }
         CommandAction::EngineAction(engine, action) => {
+            let Ok(kind) = action.parse::<EngineActionKind>() else {
+                tracing::warn!("unknown engine action: {action}");
+                return Ok(false);
+            };
             let _ = client
-                .send(GatewayCommand::EngineAction { engine, action })
+                .send(GatewayCommand::EngineAction { engine, action: kind })
                 .await;
         }
         CommandAction::EngineModelList(engine) => {
@@ -308,11 +313,15 @@ pub(super) async fn handle_command_action(
                 .await;
         }
         CommandAction::EngineModelAction(engine, model, action) => {
+            let Ok(kind) = action.parse::<ModelActionKind>() else {
+                tracing::warn!("unknown engine model action: {action}");
+                return Ok(false);
+            };
             let _ = client
                 .send(GatewayCommand::EngineModelAction {
                     engine,
                     model,
-                    action,
+                    action: kind,
                     context_length: None,
                     extra_args: Vec::new(),
                 })
