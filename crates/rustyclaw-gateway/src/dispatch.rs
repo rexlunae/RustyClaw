@@ -25,6 +25,57 @@ use crate::{
 };
 use protocol::server::send_frame;
 
+/// Execute a tool while forwarding its live output to the client.
+///
+/// The tool runs with a channel sink; while its future is pending, each
+/// chunk the tool pushes (stdout/stderr of a running command) is emitted
+/// as a ToolOutputDelta frame so the client's tool panel can update in
+/// place. The writer stays owned by this loop — the tool only holds the
+/// channel's sender.
+#[allow(clippy::too_many_arguments)]
+async fn execute_tool_with_live_output(
+    writer: &mut dyn transport::TransportWriter,
+    tool_id: &str,
+    name: &str,
+    arguments: &serde_json::Value,
+    workspace_dir: &std::path::Path,
+    vault: &SharedVault,
+    skill_mgr: &SharedSkillManager,
+) -> Result<(String, bool)> {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<tools::ToolOutputChunk>();
+    let exec = tool_executor::execute_tool_by_type(
+        name,
+        arguments,
+        workspace_dir,
+        vault,
+        skill_mgr,
+        Some(tx),
+    );
+    tokio::pin!(exec);
+    let mut rx_open = true;
+    let result = loop {
+        tokio::select! {
+            chunk = rx.recv(), if rx_open => {
+                match chunk {
+                    Some(c) => {
+                        protocol::server::send_tool_output_delta(
+                            writer, tool_id, &c.chunk, c.is_stderr,
+                        )
+                        .await?;
+                    }
+                    None => rx_open = false,
+                }
+            }
+            res = &mut exec => break res,
+        }
+    };
+    // Drain chunks pushed just before the tool completed.
+    while let Ok(c) = rx.try_recv() {
+        protocol::server::send_tool_output_delta(writer, tool_id, &c.chunk, c.is_stderr).await?;
+    }
+    Ok(result)
+}
+
 async fn execute_user_prompt(
     writer: &mut dyn transport::TransportWriter,
     call_id: &str,
@@ -886,14 +937,16 @@ pub(crate) async fn dispatch_text_message(
                         } else if tools::is_dom_query_tool(&tc.name) {
                             execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
                         } else {
-                            tool_executor::execute_tool_by_type(
+                            execute_tool_with_live_output(
+                                writer,
+                                &tc.id,
                                 &tc.name,
                                 &tc.arguments,
                                 workspace_dir,
                                 vault,
                                 skill_mgr,
                             )
-                            .await
+                            .await?
                         }
                     }
                 }
@@ -907,14 +960,16 @@ pub(crate) async fn dispatch_text_message(
                     } else if tools::is_dom_query_tool(&tc.name) {
                         execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
                     } else {
-                        tool_executor::execute_tool_by_type(
+                        execute_tool_with_live_output(
+                            writer,
+                            &tc.id,
                             &tc.name,
                             &tc.arguments,
                             workspace_dir,
                             vault,
                             skill_mgr,
                         )
-                        .await
+                        .await?
                     }
                 }
             };

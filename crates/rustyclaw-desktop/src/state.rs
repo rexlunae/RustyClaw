@@ -443,6 +443,16 @@ impl AppState {
         }
     }
 
+    /// Append live output to a still-running tool call, wherever its
+    /// message sits.
+    pub fn append_tool_output(&mut self, id: &str, chunk: &str) {
+        for msg in self.messages.iter_mut().rev() {
+            if msg.append_tool_output(id, chunk) {
+                return;
+            }
+        }
+    }
+
     /// Set the result for a tool call, stamping the wall-clock duration
     /// measured since the matching `add_tool_call`.
     pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {

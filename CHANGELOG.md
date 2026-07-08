@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live tool activity.** Running commands now show their output as it
+  happens, inside the same panel as the tool call. `execute_command`
+  reads the child's pipes incrementally and the gateway forwards each
+  chunk over the previously-stubbed `ToolOutputDelta` frame; both
+  clients fold the chunks into the running call's panel, which stays
+  open while running (running work is what you want to watch) and
+  collapses to the compact one-liner when it finishes. Output is
+  rendered the way a terminal would: `\r`-redrawing progress bars
+  overwrite their line in place instead of stacking hundreds of lines,
+  ANSI color/cursor escapes are stripped, and the live tail is bounded
+  (last 40 lines). The desktop also stops emitting a separate "tool
+  result" bubble per call — the invocation, live progress, duration,
+  and final result are one component now, halving transcript noise for
+  agentic work.
+
 - **The agent explains itself: visible reasoning, compact tool activity,
   timings.** The gateway has always streamed the model's reasoning text
   over the wire, but the client event layer discarded it — users only

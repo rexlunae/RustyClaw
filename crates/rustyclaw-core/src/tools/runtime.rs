@@ -14,11 +14,15 @@ use std::time::{Duration, Instant};
 use tokio::process::Command;
 use tracing::{debug, instrument, warn};
 
-/// Execute a shell command with background support and optional sandboxing.
-///
-/// This is an async function that uses tokio for process management.
-#[instrument(skip(args, workspace_dir), fields(command))]
-pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> ToolResult {
+/// Execute a shell command with background support and optional sandboxing,
+/// streaming stdout/stderr chunks into `sink` (when given) as the process
+/// produces them, so clients can show live progress for long commands.
+#[instrument(skip(args, workspace_dir, sink), fields(command))]
+pub async fn exec_execute_command_streaming(
+    args: &Value,
+    workspace_dir: &Path,
+    sink: Option<super::ToolOutputSink>,
+) -> ToolResult {
     let command = args
         .get("command")
         .and_then(|v| v.as_str())
@@ -130,7 +134,14 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
     let yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
     let timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
 
-    // Use tokio::select! to wait for either completion or timeout
+    // Read the pipes incrementally instead of buffering with
+    // wait_with_output(): the readers accumulate the full output for the
+    // final result AND forward each chunk to `sink` while the process
+    // runs, which is what lets clients render live progress.
+    let out_task = tokio::spawn(pump_stream(child.stdout.take(), sink.clone(), false));
+    let err_task = tokio::spawn(pump_stream(child.stderr.take(), sink, true));
+
+    // Wait for completion, timeout, or the auto-background deadline.
     loop {
         tokio::select! {
             // Check if process has output or exited
@@ -140,10 +151,12 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
                 child.try_wait()
             } => {
                 match result {
-                    Ok(Some(_status)) => {
-                        // Process finished - collect output
-                        let output = child.wait_with_output().await
-                            .map_err(|e| ToolError::context("Failed to get command output", e))?;
+                    Ok(Some(status)) => {
+                        // Process finished — the readers drain to EOF and
+                        // return the accumulated bytes.
+                        let stdout = out_task.await.unwrap_or_default();
+                        let stderr = err_task.await.unwrap_or_default();
+                        let output = std::process::Output { status, stdout, stderr };
                         return format_output_async(output, timeout_secs);
                     }
                     Ok(None) => {
@@ -153,6 +166,8 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
                         // Check if we should auto-background
                         if now >= yield_deadline {
                             debug!(yield_ms, "Auto-backgrounding long-running process");
+                            // Dropping the child closes the pipes; the
+                            // reader tasks end on EOF.
                             return background_child(child, command, &cwd, timeout_deadline).await;
                         }
 
@@ -170,6 +185,53 @@ pub async fn exec_execute_command_async(args: &Value, workspace_dir: &Path) -> T
             }
         }
     }
+}
+
+/// Cap on how many bytes of live output are *streamed* per pipe. The full
+/// output is still accumulated for the final result (which has its own
+/// 50KB cap); this only bounds the frames pushed to clients while running.
+const STREAM_CAP_BYTES: usize = 65_536;
+
+/// Drain a child pipe to EOF, accumulating everything and forwarding
+/// chunks to the sink (best-effort, capped). Returns the full bytes.
+///
+/// Chunks are decoded lossily for streaming; a multi-byte character split
+/// across reads may render momentarily as a replacement character, but
+/// the final result is decoded from the complete buffer.
+async fn pump_stream<R>(
+    reader: Option<R>,
+    sink: Option<super::ToolOutputSink>,
+    is_stderr: bool,
+) -> Vec<u8>
+where
+    R: tokio::io::AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt;
+
+    let mut buf = Vec::new();
+    let Some(mut reader) = reader else {
+        return buf;
+    };
+    let mut chunk = [0u8; 4096];
+    let mut streamed = 0usize;
+    loop {
+        match reader.read(&mut chunk).await {
+            Ok(0) | Err(_) => break,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if let Some(sink) = &sink
+                    && streamed < STREAM_CAP_BYTES
+                {
+                    streamed += n;
+                    let _ = sink.send(super::ToolOutputChunk {
+                        chunk: String::from_utf8_lossy(&chunk[..n]).into_owned(),
+                        is_stderr,
+                    });
+                }
+            }
+        }
+    }
+    buf
 }
 
 /// Move a tokio child process to the sync ProcessManager for background execution.

@@ -110,6 +110,9 @@ pub fn check_rate_limit(name: &str) -> Result<(), RateLimitError> {
 
 /// Execute a tool by name, routing to the appropriate handler.
 ///
+/// Tools that produce incremental output (currently `execute_command`)
+/// stream it into `output` as it arrives; other tools ignore the sink.
+///
 /// Returns `(output_text, is_error)`.
 pub async fn execute_tool_by_type(
     name: &str,
@@ -117,6 +120,7 @@ pub async fn execute_tool_by_type(
     workspace_dir: &Path,
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
+    output: Option<tools::ToolOutputSink>,
 ) -> (String, bool) {
     // Apply rate limiting before executing any tool.
     if let Err(err) = check_rate_limit(name) {
@@ -135,7 +139,7 @@ pub async fn execute_tool_by_type(
             Err(err) => (err.to_string(), true),
         }
     } else {
-        match tools::execute_tool(name, arguments, workspace_dir).await {
+        match tools::execute_tool_streaming(name, arguments, workspace_dir, output).await {
             Ok(text) => (text, false),
             // The single point where a ToolError becomes the model-facing string.
             Err(err) => (err.to_string(), true),

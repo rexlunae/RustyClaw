@@ -138,39 +138,42 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             .unwrap_or_else(|_| serde_json::Value::String(tc.arguments.clone()));
 
         let hint = tool_call_hint(&tc.name, &arguments);
-        let result_hint = tc.result.as_deref().map(|r| {
-            if tc.is_error {
+        // One panel per call: the invocation, live progress, and final
+        // result all render inside the same ToolCall component (no
+        // separate ToolResult bubble doubling the transcript).
+        //
+        // While running, the streamed output tail renders as a terminal
+        // block with a "running" badge, updating in place. Once done,
+        // the real result takes its place.
+        let result_hint = match (tc.result.as_deref(), tc.live_output.is_empty()) {
+            (Some(r), _) => Some(if tc.is_error {
                 ToolResultHint::Plain(r.to_string())
             } else {
                 tool_result_hint(&tc.name, &arguments, r)
-            }
-        });
+            }),
+            (None, false) => Some(ToolResultHint::Terminal {
+                exit_code: None,
+                output: tc.live_output.clone(),
+            }),
+            (None, true) => None,
+        };
 
+        // Carry the measured execution time in the panel header so it
+        // reads "execute_command · 2.3s".
+        let name = match tc.duration_ms {
+            Some(ms) => format!("{} · {}", tc.name, rustyclaw_view::format_duration_ms(ms)),
+            None => tc.name.clone(),
+        };
         transcript.push(
             ChatRole::Assistant,
             ChatMessagePayload::ToolCall(ToolCall {
-                name: tc.name.clone(),
+                name,
                 arguments,
                 status,
                 hint,
                 result_hint,
             }),
         );
-        if let Some(result) = &tc.result {
-            // Carry the measured execution time in the result header so
-            // the panel reads "execute_command · 2.3s".
-            let name = match tc.duration_ms {
-                Some(ms) => format!("{} · {}", tc.name, rustyclaw_view::format_duration_ms(ms)),
-                None => tc.name.clone(),
-            };
-            transcript.push(
-                ChatRole::Tool,
-                ChatMessagePayload::ToolResult {
-                    name,
-                    content: result.clone(),
-                },
-            );
-        }
     }
 }
 

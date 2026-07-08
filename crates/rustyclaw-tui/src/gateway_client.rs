@@ -78,6 +78,9 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             result,
             is_error,
         },
+        // stderr chunks merge into the same tail a terminal would show;
+        // the flag isn't currently surfaced in either client.
+        E::ToolOutput { id, chunk, .. } => GwEvent::ToolOutput { id, chunk },
         E::ToolApprovalRequest {
             id,
             name,
