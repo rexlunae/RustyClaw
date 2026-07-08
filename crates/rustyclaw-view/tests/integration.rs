@@ -769,3 +769,44 @@ fn thinking_summary_carries_duration() {
     data.is_streaming = true;
     assert_eq!(data.thinking_summary(), "Thinking…");
 }
+
+#[test]
+fn thinking_truncation_is_char_boundary_safe() {
+    // 120 two-byte characters: byte 120 falls mid-character, which used
+    // to panic in display_content_truncated's byte slicing.
+    let data = MessageBubbleData {
+        role: MessageRole::Thinking,
+        content: "é".repeat(200),
+        ..Default::default()
+    };
+    let shown = data.display_content();
+    assert!(shown.ends_with('…'));
+    assert_eq!(shown.chars().count(), 121); // 120 chars + ellipsis
+
+    // The collapsed gist path handles multi-byte input too.
+    let collapsed = MessageBubbleData {
+        collapsed: true,
+        ..data
+    };
+    let gist = collapsed.content_for_render();
+    assert!(gist.contains('…'));
+}
+
+#[test]
+fn conversions_propagate_duration() {
+    let mut msg = ChatMessage::start_thinking();
+    msg.duration_ms = Some(1_500);
+    let bubble = MessageBubbleData::from_chat_message(&msg, None);
+    assert_eq!(bubble.duration_ms, Some(1_500));
+
+    let tc = ToolCallInfo {
+        id: "tc".into(),
+        name: "read_file".into(),
+        arguments: "{}".into(),
+        result: Some("ok".into()),
+        is_error: false,
+        collapsed: true,
+        duration_ms: Some(400),
+    };
+    assert_eq!(ToolCallData::from(&tc).duration_ms, Some(400));
+}

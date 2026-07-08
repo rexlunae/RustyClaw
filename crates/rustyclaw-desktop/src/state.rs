@@ -430,8 +430,10 @@ impl AppState {
     }
 
     /// Open a thinking block: push a streaming Thinking message that
-    /// accumulates reasoning deltas.
+    /// accumulates reasoning deltas. Any block left open by a dropped
+    /// stream is folded first, so only one block is ever open.
     pub fn start_thinking_message(&mut self) {
+        self.end_thinking_message();
         self.is_thinking = true;
         self.thinking_started = Some(std::time::Instant::now());
         self.messages.push_back(ChatMessage::start_thinking());

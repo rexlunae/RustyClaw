@@ -13,6 +13,28 @@ use crate::types::DisplayMessage;
 
 type UserTx = Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>>;
 
+/// Close the newest open thinking block, if any: stamp its duration and
+/// fold it to its one-line gist, or drop it when no reasoning text ever
+/// arrived. "Open" means not yet closed out — closing always collapses
+/// the block and records the duration when known. Returns whether a
+/// block was closed.
+fn close_open_thinking(m: &mut Vec<DisplayMessage>, duration_ms: Option<u64>) -> bool {
+    let Some(idx) = m.iter().rposition(|x| {
+        x.role == rustyclaw_core::types::MessageRole::Thinking
+            && x.duration_ms.is_none()
+            && !x.collapsed
+    }) else {
+        return false;
+    };
+    if m[idx].content.trim().is_empty() {
+        m.remove(idx);
+    } else {
+        m[idx].duration_ms = duration_ms;
+        m[idx].collapsed = true;
+    }
+    true
+}
+
 /// Apply a single gateway event to the UI state bundle.
 pub(super) fn apply_gw_event(
     ev: GwEvent,
@@ -329,6 +351,9 @@ pub(super) fn apply_gw_event(
             }
             thinking_start.set(Some(Instant::now()));
             let mut m = messages.read().clone();
+            // A dropped stream can leave a block open with no ThinkingEnd;
+            // fold it (without a duration) so only one block is ever open.
+            close_open_thinking(&mut m, None);
             m.push(DisplayMessage::thinking(""));
             messages.set(m);
         }
@@ -360,15 +385,7 @@ pub(super) fn apply_gw_event(
             // The open block is usually last, but text chunks may already
             // have started a new assistant bubble after it — search from
             // the rear for the newest thinking block not yet closed out.
-            if let Some(idx) = m.iter().rposition(|x| {
-                x.role == rustyclaw_core::types::MessageRole::Thinking && x.duration_ms.is_none()
-            }) {
-                if m[idx].content.trim().is_empty() {
-                    m.remove(idx);
-                } else {
-                    m[idx].duration_ms = duration_ms;
-                    m[idx].collapsed = true;
-                }
+            if close_open_thinking(&mut m, duration_ms) {
                 messages.set(m);
             }
         }

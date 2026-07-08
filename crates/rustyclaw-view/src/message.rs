@@ -94,7 +94,7 @@ impl MessageBubbleData {
             agent_name,
             has_details: false,
             collapsed: false,
-            duration_ms: None,
+            duration_ms: msg.duration_ms,
         }
     }
 
@@ -199,10 +199,13 @@ impl MessageBubbleData {
     }
 
     /// Like [`display_content`](Self::display_content) but with a
-    /// custom truncation limit for thinking messages.
+    /// custom truncation limit for thinking messages. Truncates on
+    /// character boundaries — reasoning text is arbitrary UTF-8, and a
+    /// byte slice could split a multi-byte character and panic.
     pub fn display_content_truncated(&self, thinking_max_chars: usize) -> Cow<'_, str> {
-        if self.role == MessageRole::Thinking && self.content.len() > thinking_max_chars {
-            format!("{}…", &self.content[..thinking_max_chars]).into()
+        if self.role == MessageRole::Thinking && self.content.chars().count() > thinking_max_chars {
+            let truncated: String = self.content.chars().take(thinking_max_chars).collect();
+            format!("{truncated}…").into()
         } else {
             self.content.as_str().into()
         }
@@ -513,7 +516,7 @@ impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {
             result: tc.result.clone(),
             is_error: tc.is_error,
             collapsed: tc.collapsed,
-            duration_ms: None,
+            duration_ms: tc.duration_ms,
         }
     }
 }
