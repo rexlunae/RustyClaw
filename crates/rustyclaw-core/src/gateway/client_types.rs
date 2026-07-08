@@ -93,6 +93,14 @@ pub enum GatewayEvent {
         is_error: bool,
     },
 
+    /// A chunk of live stdout/stderr from a still-running tool, so the
+    /// tool's panel can show progress as it happens.
+    ToolOutput {
+        id: String,
+        chunk: String,
+        is_stderr: bool,
+    },
+
     /// Tool approval request
     ToolApprovalRequest {
         id: String,
@@ -1378,13 +1386,24 @@ impl GatewayEvent {
                 lines,
                 message,
             }),
+            // Live stdout/stderr from a running tool. Start/End stay
+            // unsurfaced: ToolCall/ToolResult already delimit the
+            // lifecycle for clients.
+            ServerPayload::ToolOutputDelta {
+                tool_id,
+                chunk,
+                is_stderr,
+            } => Some(GatewayEvent::ToolOutput {
+                id: tool_id,
+                chunk,
+                is_stderr,
+            }),
             // Panel results without a wired backend yet, and streaming
             // frames handled at a lower layer.
             ServerPayload::LogsAppend { .. }
             | ServerPayload::PendingApprovalsResult { .. }
             | ServerPayload::ApprovalsBatchResult { .. }
             | ServerPayload::ToolOutputStart { .. }
-            | ServerPayload::ToolOutputDelta { .. }
             | ServerPayload::ToolOutputEnd { .. }
             | ServerPayload::VoiceTranscript { .. }
             | ServerPayload::VoiceStateUpdate { .. }

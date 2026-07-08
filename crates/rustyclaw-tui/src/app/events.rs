@@ -49,6 +49,11 @@ pub(crate) enum GwEvent {
         result: String,
         is_error: bool,
     },
+    /// A chunk of live stdout/stderr from a still-running tool.
+    ToolOutput {
+        id: String,
+        chunk: String,
+    },
     /// Gateway requests user approval for a tool call (Ask mode).
     ToolApprovalRequest {
         id: String,

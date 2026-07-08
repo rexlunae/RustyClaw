@@ -1,6 +1,9 @@
 use crate::theme;
 use iocraft::prelude::*;
 
+/// How many trailing lines of a running tool's live output to show.
+const LIVE_TAIL_LINES: usize = 6;
+
 #[derive(Default, Props)]
 pub struct ToolCallPanelProps {
     pub data: rustyclaw_view::ToolCallData,
@@ -15,20 +18,26 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
         theme::INFO
     };
 
-    // Collapsed (default) → single dim line: header + status + arg/result peek.
-    // Expanded → header line plus truncated args and result beneath.
-    let collapsed = props.data.collapsed;
+    // Presentation states:
+    //  - Running → always "open": header plus the live output tail,
+    //    updating in place as the process writes (the collapsed flag is
+    //    ignored — a running command is exactly what the user wants to
+    //    watch).
+    //  - Done, collapsed (default) → a single dim line: what ran, the
+    //    outcome, how long it took, and a one-line gist of the result.
+    //  - Done, expanded (Ctrl+E) → header plus truncated args + result.
+    let running = props.data.is_running();
+    let collapsed = props.data.collapsed && !running;
 
-    // Compact but informative: what the call *does* (derived from the
-    // arguments), the outcome, how long it took, and a one-line gist of
-    // what came back — all on a single dim row when collapsed.
     let action = props.data.compact_action();
     let duration = props
         .data
         .duration_label()
         .map(|d| format!(" {d}"))
         .unwrap_or_default();
-    let header = if collapsed {
+    let header = if running {
+        format!("🔧 {action} · {status_icon} {status_label}")
+    } else if collapsed {
         let gist = props
             .data
             .result_gist()
@@ -42,12 +51,19 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
         )
     };
 
-    let args = if collapsed {
+    // Live tail while running; args/result detail when expanded after
+    // completion.
+    let live_tail = if running {
+        props.data.live_tail(LIVE_TAIL_LINES)
+    } else {
+        None
+    };
+    let args = if collapsed || running {
         String::new()
     } else {
         props.data.arguments_preview(600, 12)
     };
-    let result = if collapsed {
+    let result = if collapsed || running {
         None
     } else {
         props.data.result_preview(2000, 40)
@@ -65,6 +81,13 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
                 color,
                 weight: if collapsed { Weight::Normal } else { Weight::Bold },
             )
+            #(if let Some(tail) = live_tail {
+                element! {
+                    Text(content: tail, color: theme::TEXT_DIM, wrap: TextWrap::Wrap)
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
             #(if !args.is_empty() {
                 element! {
                     Text(content: format!("→ {args}"), color: theme::TEXT_DIM, wrap: TextWrap::Wrap)

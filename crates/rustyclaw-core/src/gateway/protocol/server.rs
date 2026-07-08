@@ -414,6 +414,25 @@ pub async fn send_tool_call(
     send_frame(writer, &frame).await
 }
 
+/// Build and send a live tool-output delta (a chunk of stdout/stderr from
+/// a still-running tool, so clients can show progress as it happens).
+pub async fn send_tool_output_delta(
+    writer: &mut dyn TransportWriter,
+    tool_id: &str,
+    chunk: &str,
+    is_stderr: bool,
+) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ToolOutputDelta,
+        payload: ServerPayload::ToolOutputDelta {
+            tool_id: tool_id.into(),
+            chunk: chunk.into(),
+            is_stderr,
+        },
+    };
+    send_frame(writer, &frame).await
+}
+
 /// Build and send a tool result frame.
 pub async fn send_tool_result(
     writer: &mut dyn TransportWriter,

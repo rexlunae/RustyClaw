@@ -438,6 +438,17 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
+        GwEvent::ToolOutput { id, chunk } => {
+            // Live output from a running tool: fold it into that tool's
+            // panel so the row updates in place while the process runs.
+            let mut m = messages.read().clone();
+            for msg in m.iter_mut().rev() {
+                if msg.append_tool_output(&id, &chunk) {
+                    messages.set(m);
+                    return;
+                }
+            }
+        }
         GwEvent::ToolResult {
             id,
             name,

@@ -95,7 +95,20 @@ impl DisplayMessageData {
             is_error: false,
             collapsed: true,
             duration_ms: None,
+            live_output: String::new(),
         });
+    }
+
+    /// Append a chunk of live output to a still-running tool call.
+    /// Returns whether a matching (open) call was found.
+    pub fn append_tool_output(&mut self, id: &str, chunk: &str) -> bool {
+        for tc in &mut self.tool_calls {
+            if tc.id == id && tc.result.is_none() {
+                rustyclaw_core::ui::append_terminal_chunk(&mut tc.live_output, chunk);
+                return true;
+            }
+        }
+        false
     }
 
     /// Set the result for a tool call by id, with the client-measured
@@ -112,6 +125,8 @@ impl DisplayMessageData {
                 tc.result = Some(result);
                 tc.is_error = is_error;
                 tc.duration_ms = duration_ms;
+                // The final result supersedes the live tail.
+                tc.live_output = String::new();
                 return;
             }
         }

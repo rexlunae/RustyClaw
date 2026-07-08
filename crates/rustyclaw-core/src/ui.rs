@@ -51,6 +51,119 @@ pub struct ToolCallInfo {
     /// between the ToolCall and ToolResult events (None while running
     /// or when replayed from history, which carries no timings).
     pub duration_ms: Option<u64>,
+    /// Live output tail streamed while the tool runs (already processed
+    /// by [`append_terminal_chunk`]: CR-overwrites applied, ANSI escapes
+    /// stripped, bounded). Cleared when the final result arrives.
+    pub live_output: String,
+}
+
+/// Maximum characters kept in a live-output tail.
+pub const TERMINAL_TAIL_MAX_CHARS: usize = 4_000;
+/// Maximum lines kept in a live-output tail.
+pub const TERMINAL_TAIL_MAX_LINES: usize = 40;
+
+/// Append a chunk of raw process output to a live tail the way a
+/// terminal would render it:
+///
+/// - A carriage return followed by more text on the same line rewinds to
+///   the start of the line, so progress bars that redraw with `\r`
+///   overwrite in place instead of stacking new lines.
+/// - CRLF is treated as a plain newline.
+/// - A trailing `\r` is deferred (kept in the buffer) so the decision
+///   can be made when the next chunk arrives.
+/// - ANSI CSI/OSC escape sequences (colors, cursor movement) are
+///   stripped: neither client renders them, and raw escapes would
+///   corrupt the TUI's layout.
+/// - The buffer is bounded to the last [`TERMINAL_TAIL_MAX_LINES`] lines
+///   and [`TERMINAL_TAIL_MAX_CHARS`] characters.
+pub fn append_terminal_chunk(buf: &mut String, chunk: &str) {
+    // A '\r' deferred from the previous chunk is re-processed now that
+    // its lookahead exists.
+    let mut pending_cr = buf.ends_with('\r');
+    if pending_cr {
+        buf.pop();
+    }
+    let mut chars = chunk.chars().peekable();
+    loop {
+        let c = if pending_cr {
+            pending_cr = false;
+            '\r'
+        } else {
+            match chars.next() {
+                Some(c) => c,
+                None => break,
+            }
+        };
+        match c {
+            '\r' => match chars.peek() {
+                // CRLF → the '\n' alone moves to the next line.
+                Some(&'\n') => {}
+                // Chunk ends in '\r' — defer until the next chunk.
+                None => buf.push('\r'),
+                // Text follows on the same line: rewind to overwrite it.
+                Some(_) => match buf.rfind('\n') {
+                    Some(i) => buf.truncate(i + 1),
+                    None => buf.clear(),
+                },
+            },
+            // Strip ANSI escape sequences.
+            '\u{1b}' => match chars.peek() {
+                // CSI: ESC [ params… final-byte (@ through ~).
+                Some('[') => {
+                    chars.next();
+                    while let Some(&n) = chars.peek() {
+                        chars.next();
+                        if ('\u{40}'..='\u{7e}').contains(&n) {
+                            break;
+                        }
+                    }
+                }
+                // OSC: ESC ] … terminated by BEL or ESC \.
+                Some(']') => {
+                    chars.next();
+                    while let Some(n) = chars.next() {
+                        if n == '\u{07}' {
+                            break;
+                        }
+                        if n == '\u{1b}' {
+                            if chars.peek() == Some(&'\\') {
+                                chars.next();
+                            }
+                            break;
+                        }
+                    }
+                }
+                // Two-character escape (ESC c, ESC 7, …).
+                _ => {
+                    chars.next();
+                }
+            },
+            _ => buf.push(c),
+        }
+    }
+    cap_terminal_tail(buf);
+}
+
+/// Trim a live tail from the front to its line/char bounds.
+fn cap_terminal_tail(buf: &mut String) {
+    let excess_lines = buf.lines().count().saturating_sub(TERMINAL_TAIL_MAX_LINES);
+    if excess_lines > 0 {
+        let mut idx = 0;
+        for _ in 0..excess_lines {
+            match buf[idx..].find('\n') {
+                Some(i) => idx += i + 1,
+                None => break,
+            }
+        }
+        buf.drain(..idx);
+    }
+    if buf.len() > TERMINAL_TAIL_MAX_CHARS {
+        let mut cut = buf.len() - TERMINAL_TAIL_MAX_CHARS;
+        while !buf.is_char_boundary(cut) {
+            cut += 1;
+        }
+        buf.drain(..cut);
+    }
 }
 
 // ── Thread / session types ──────────────────────────────────────────────────
@@ -180,7 +293,20 @@ impl ChatMessage {
             is_error: false,
             collapsed: true,
             duration_ms: None,
+            live_output: String::new(),
         });
+    }
+
+    /// Append a chunk of live output to a still-running tool call.
+    /// Returns whether a matching (open) call was found.
+    pub fn append_tool_output(&mut self, id: &str, chunk: &str) -> bool {
+        for tool in &mut self.tool_calls {
+            if tool.id == id && tool.result.is_none() {
+                append_terminal_chunk(&mut tool.live_output, chunk);
+                return true;
+            }
+        }
+        false
     }
 
     /// Set the result for a tool call by ID, with the client-measured
@@ -197,6 +323,8 @@ impl ChatMessage {
                 tool.result = Some(result);
                 tool.is_error = is_error;
                 tool.duration_ms = duration_ms;
+                // The final result supersedes the live tail.
+                tool.live_output = String::new();
                 return;
             }
         }
@@ -438,5 +566,84 @@ impl StreamingState {
         } else {
             "Streaming…".to_string()
         }
+    }
+}
+
+#[cfg(test)]
+mod terminal_tail_tests {
+    use super::*;
+
+    fn tail(chunks: &[&str]) -> String {
+        let mut buf = String::new();
+        for c in chunks {
+            append_terminal_chunk(&mut buf, c);
+        }
+        buf
+    }
+
+    #[test]
+    fn plain_text_appends() {
+        assert_eq!(
+            tail(&["hello ", "world\n", "second"]),
+            "hello world\nsecond"
+        );
+    }
+
+    #[test]
+    fn carriage_return_overwrites_the_line() {
+        // A progress bar redrawing with \r keeps only the latest state.
+        assert_eq!(tail(&["step 1/3\rstep 2/3\rstep 3/3"]), "step 3/3");
+        // Earlier completed lines are untouched.
+        assert_eq!(tail(&["done\n10%\r20%\r100%"]), "done\n100%");
+    }
+
+    #[test]
+    fn crlf_is_a_plain_newline() {
+        assert_eq!(tail(&["a\r\nb"]), "a\nb");
+    }
+
+    #[test]
+    fn trailing_cr_defers_across_chunks() {
+        // \r at a chunk boundary: followed by \n → CRLF (line survives);
+        // followed by text → overwrite.
+        assert_eq!(tail(&["progress 50%\r", "\ndone"]), "progress 50%\ndone");
+        assert_eq!(tail(&["progress 50%\r", "progress 99%"]), "progress 99%");
+    }
+
+    #[test]
+    fn ansi_escapes_are_stripped() {
+        assert_eq!(tail(&["\u{1b}[32mgreen\u{1b}[0m ok"]), "green ok");
+        // OSC title sequence, BEL-terminated.
+        assert_eq!(tail(&["\u{1b}]0;title\u{07}text"]), "text");
+        // CSI split across chunks is not supported (rare); but a full
+        // sequence within one chunk never leaks.
+        assert!(!tail(&["\u{1b}[1;31mred"]).contains('\u{1b}'));
+    }
+
+    #[test]
+    fn tail_is_bounded() {
+        let mut buf = String::new();
+        for i in 0..200 {
+            append_terminal_chunk(&mut buf, &format!("line {i}\n"));
+        }
+        assert!(buf.lines().count() <= TERMINAL_TAIL_MAX_LINES);
+        assert!(buf.ends_with("line 199\n"));
+        let mut big = String::new();
+        append_terminal_chunk(&mut big, &"x".repeat(TERMINAL_TAIL_MAX_CHARS * 2));
+        assert!(big.len() <= TERMINAL_TAIL_MAX_CHARS);
+    }
+
+    #[test]
+    fn live_output_lifecycle_on_message() {
+        let mut msg = ChatMessage::start_assistant("a".into());
+        msg.add_tool_call("t1".into(), "execute_command".into(), "{}".into());
+        assert!(msg.append_tool_output("t1", "building…\r"));
+        assert!(msg.append_tool_output("t1", "built 10/100\rbuilt 100/100\n"));
+        assert_eq!(msg.tool_calls[0].live_output, "built 100/100\n");
+        // Unknown / already-finished calls report false.
+        assert!(!msg.append_tool_output("nope", "x"));
+        msg.set_tool_result("t1", "ok".into(), false, Some(10));
+        assert!(msg.tool_calls[0].live_output.is_empty());
+        assert!(!msg.append_tool_output("t1", "late chunk"));
     }
 }
