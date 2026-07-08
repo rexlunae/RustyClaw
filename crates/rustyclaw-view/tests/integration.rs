@@ -776,6 +776,17 @@ fn process_and_backgrounded_calls_read_clearly() {
         ..Default::default()
     };
     assert_eq!(normal.result_gist().as_deref(), Some("3 lines"));
+
+    // A command that merely emits JSON with a "status" (no sessionId) — e.g.
+    // a health check returning {"status":"ok"} — must NOT be mistaken for a
+    // backgrounded session; it gists by line count like any other output.
+    let health = ToolCallData {
+        name: "execute_command".into(),
+        arguments: r#"{"command":"curl .../health"}"#.into(),
+        result: Some(r#"{"status":"ok"}"#.into()),
+        ..Default::default()
+    };
+    assert_eq!(health.result_gist().as_deref(), Some("1 lines"));
 }
 
 #[test]
