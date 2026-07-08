@@ -285,12 +285,15 @@ pub(super) fn handle_normal_key(
             KeyCode::Esc => {
                 show_engines_dialog.set(false);
             }
-            KeyCode::Up | KeyCode::Down => {
+            // ←/→ (and Tab) switch between engine tabs. Up/Down are kept as
+            // aliases so either navigation style works.
+            KeyCode::Left | KeyCode::Up | KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
                 let mut data = engines_data.read().clone().unwrap_or_default();
                 let len = data.engines.len();
                 if len > 0 {
                     let cur = engines_cursor.get();
-                    let next = if code == KeyCode::Up {
+                    let back = matches!(code, KeyCode::Left | KeyCode::Up);
+                    let next = if back {
                         cur.saturating_sub(1)
                     } else {
                         (cur + 1).min(len - 1)

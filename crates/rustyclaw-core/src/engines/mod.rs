@@ -218,6 +218,96 @@ fn format_bytes(bytes: u64) -> String {
 /// Channel for streaming progress updates.
 pub type ProgressSink = tokio::sync::mpsc::Sender<PullProgress>;
 
+/// Run a shell script, streaming each output line to `sink` while
+/// accumulating the full combined stdout+stderr for the return value.
+///
+/// This is the streaming counterpart to each engine's buffered `sh()`
+/// helper: installers shell out to `curl … | sh`, `brew install`, etc.,
+/// which emit progress on stdout/stderr as they run. Reading the pipes
+/// line by line (instead of awaiting `output()`) is what lets the engines
+/// dialog show live install progress. Each line is forwarded as a
+/// [`PullProgress`] with the line in `status` and `percent = 0` (installers
+/// rarely report a percentage). On failure the accumulated output is
+/// included in the error so the user sees what went wrong.
+pub async fn stream_shell(
+    script: &str,
+    label: &str,
+    sink: Option<&ProgressSink>,
+) -> Result<String> {
+    use tokio::io::{AsyncBufReadExt, BufReader};
+
+    let mut child = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(script)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+
+    // Read stdout and stderr concurrently, merging their lines in arrival
+    // order into one channel so a chatty stream on either pipe can't block
+    // the other.
+    let (line_tx, mut line_rx) = tokio::sync::mpsc::channel::<String>(64);
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    let out_tx = line_tx.clone();
+    let out_task = tokio::spawn(async move {
+        if let Some(stdout) = stdout {
+            let mut lines = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if out_tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+    let err_task = tokio::spawn(async move {
+        if let Some(stderr) = stderr {
+            let mut lines = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = lines.next_line().await {
+                if line_tx.send(line).await.is_err() {
+                    break;
+                }
+            }
+        }
+    });
+
+    let mut collected = String::new();
+    while let Some(line) = line_rx.recv().await {
+        if !collected.is_empty() {
+            collected.push('\n');
+        }
+        collected.push_str(&line);
+        if let Some(sink) = sink {
+            // Best-effort: a dropped receiver just stops the streaming.
+            let _ = sink
+                .send(PullProgress {
+                    model: label.to_string(),
+                    status: line,
+                    percent: 0.0,
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                })
+                .await;
+        }
+    }
+    let _ = out_task.await;
+    let _ = err_task.await;
+
+    let status = child.wait().await?;
+    let trimmed = collected.trim().to_string();
+    if !status.success() {
+        anyhow::bail!(
+            "{}",
+            if trimmed.is_empty() {
+                "Command failed".to_string()
+            } else {
+                trimmed
+            }
+        );
+    }
+    Ok(trimmed)
+}
+
 // ── Host-fit & pre-flight ───────────────────────────────────────────────────
 
 /// Result of a host-fit check for a model.
@@ -515,5 +605,43 @@ fn default_port(id: &str) -> u16 {
         "lmstudio" => 1234,
         "joshua" => joshua::DEFAULT_PORT,
         _ => 8080,
+    }
+}
+
+#[cfg(test)]
+mod stream_shell_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn streams_lines_and_returns_full_output() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let out = stream_shell("printf 'one\\ntwo\\nthree\\n'", "test", Some(&tx))
+            .await
+            .expect("script succeeds");
+        drop(tx);
+
+        let mut streamed = Vec::new();
+        while let Some(p) = rx.recv().await {
+            streamed.push(p.status);
+        }
+        assert_eq!(streamed, vec!["one", "two", "three"]);
+        assert_eq!(out, "one\ntwo\nthree");
+    }
+
+    #[tokio::test]
+    async fn failure_includes_output_in_error() {
+        // No sink: still runs, and a non-zero exit surfaces the output.
+        let err = stream_shell("echo boom; exit 3", "test", None)
+            .await
+            .expect_err("non-zero exit is an error");
+        assert!(err.to_string().contains("boom"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn works_without_a_sink() {
+        let out = stream_shell("echo hello", "test", None)
+            .await
+            .expect("script succeeds");
+        assert_eq!(out, "hello");
     }
 }

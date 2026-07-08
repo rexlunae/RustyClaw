@@ -613,6 +613,39 @@ mod serialization {
     }
 
     #[test]
+    fn test_engine_action_progress_frame_value() {
+        assert_eq!(ServerFrameType::EngineActionProgress as u8, 82);
+    }
+
+    #[test]
+    fn test_server_engine_action_progress_bincode_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::EngineActionProgress,
+            payload: ServerPayload::EngineActionProgress {
+                engine: "ollama".into(),
+                line: ">>> downloading manifest".into(),
+                percent: 0.0,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        match decoded.payload {
+            ServerPayload::EngineActionProgress {
+                engine,
+                line,
+                percent,
+            } => {
+                assert_eq!(engine, "ollama");
+                assert_eq!(line, ">>> downloading manifest");
+                assert_eq!(percent, 0.0);
+            }
+            _ => panic!("Expected EngineActionProgress payload"),
+        }
+    }
+
+    #[test]
     fn test_wire_frame_round_trip_preserves_stream_id() {
         let frame = ClientFrame {
             frame_type: ClientFrameType::Chat,

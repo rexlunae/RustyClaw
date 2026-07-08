@@ -1089,7 +1089,29 @@ pub(super) fn apply_gw_event(
             }
             engines_data.set(Some(data));
         }
-        GwEvent::EngineActionResult { ok, message, .. } => {
+        GwEvent::EngineActionProgress { engine, line } => {
+            // Fold the install line into that engine's tab so its output
+            // renders live in the dialog rather than scrolling the chat.
+            let mut data = engines_data.read().clone().unwrap_or_default();
+            data.push_install_line(&engine, line);
+            engines_data.set(Some(data));
+        }
+        GwEvent::EngineActionResult {
+            engine,
+            ok,
+            message,
+            ..
+        } => {
+            // Record the terminal outcome on the engine's install panel (so
+            // the dialog shows "install complete/failed"), and also surface a
+            // one-line notice in the chat. Only finish an install that's
+            // actually in progress — EngineActionResult also fires for
+            // start/stop, which must not overwrite a completed install.
+            let mut data = engines_data.read().clone().unwrap_or_default();
+            if data.install_output.get(&engine).is_some_and(|o| !o.done) {
+                data.finish_install(&engine, ok, message.clone());
+            }
+            engines_data.set(Some(data));
             let mut m = messages.read().clone();
             if ok {
                 m.push(DisplayMessage::info(format!("Engine: {}", message)));

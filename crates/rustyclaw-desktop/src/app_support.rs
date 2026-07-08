@@ -585,6 +585,11 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             panel.host_ram_bytes = host_ram;
             panel.host_vram_bytes = host_vram;
             panel.host_gpu_name = host_gpu;
+            // Default the active tab to the first engine so the dialog opens
+            // on a populated tab instead of a blank one.
+            if panel.selected_engine.is_none() {
+                panel.selected_engine = panel.engines.first().map(|e| e.id.clone());
+            }
         }
         GatewayEvent::EngineModelListResult { engine, models } => {
             let mut s = state.write();
@@ -618,18 +623,37 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 status,
             });
         }
+        GatewayEvent::EngineActionProgress {
+            engine,
+            line,
+            percent: _,
+        } => {
+            // Fold the install line into the engine's tab so it renders live.
+            let mut s = state.write();
+            let panel = s
+                .engines_data
+                .get_or_insert_with(rustyclaw_view::EnginesPanelData::default);
+            panel.push_install_line(&engine, line);
+        }
         GatewayEvent::EngineActionResult {
-            engine: _,
+            engine,
             model,
             ok,
             message,
         } => {
             let mut s = state.write();
-            // A pull just finished (successfully or not) — clear the bar.
-            if model.is_some()
-                && let Some(ref mut panel) = s.engines_data
-            {
-                panel.pull_progress = None;
+            if let Some(ref mut panel) = s.engines_data {
+                // A pull just finished (successfully or not) — clear the bar.
+                if model.is_some() {
+                    panel.pull_progress = None;
+                }
+                // Record the terminal outcome on the engine's install panel,
+                // but only while an install is actually in progress —
+                // EngineActionResult also fires for start/stop, which must
+                // not overwrite a completed install's status.
+                if panel.install_output.get(&engine).is_some_and(|o| !o.done) {
+                    panel.finish_install(&engine, ok, message.clone());
+                }
             }
             // Refresh engine/model lists so the dialog reflects the change.
             if ok {

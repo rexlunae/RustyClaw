@@ -308,6 +308,12 @@ pub enum GatewayEvent {
         ok: bool,
         message: String,
     },
+    /// Streamed output line from an in-progress engine action (install).
+    EngineActionProgress {
+        engine: String,
+        line: String,
+        percent: f32,
+    },
 
     // ── Panels ────────────────────────────────────────────────────────────
     /// Cron job list result.
@@ -1487,6 +1493,15 @@ impl GatewayEvent {
                 model,
                 ok,
                 message,
+            }),
+            ServerPayload::EngineActionProgress {
+                engine,
+                line,
+                percent,
+            } => Some(GatewayEvent::EngineActionProgress {
+                engine,
+                line,
+                percent,
             }),
         }
     }

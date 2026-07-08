@@ -140,6 +140,24 @@ async fn handle_engine_list(
     send_frame(writer, &frame).await
 }
 
+/// Build and send an `EngineActionProgress` frame carrying one output line.
+async fn send_action_progress(
+    writer: &mut dyn TransportWriter,
+    engine: &str,
+    line: String,
+    percent: f32,
+) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::EngineActionProgress,
+        payload: ServerPayload::EngineActionProgress {
+            engine: engine.to_string(),
+            line,
+            percent,
+        },
+    };
+    send_frame(writer, &frame).await
+}
+
 async fn handle_engine_action(
     writer: &mut dyn TransportWriter,
     registry: &EngineRegistry,
@@ -148,15 +166,53 @@ async fn handle_engine_action(
     action: EngineActionKind,
 ) -> Result<()> {
     let cfg = configs.get(&engine).cloned().unwrap_or_default();
-    let result = if let Some(eng) = registry.get(&engine) {
-        match action {
-            EngineActionKind::Install => eng.install(None).await,
-            EngineActionKind::Start => eng.start(&cfg).await,
-            EngineActionKind::Stop => eng.stop().await,
-        }
-    } else {
-        Err(anyhow::anyhow!("Unknown engine: {}", engine))
+
+    let Some(eng) = registry.get(&engine) else {
+        return send_action_result(
+            writer,
+            engine.clone(),
+            None,
+            false,
+            format!("Unknown engine: {engine}"),
+        )
+        .await;
     };
+
+    // Install streams its output; start/stop return a single result.
+    let result = match action {
+        EngineActionKind::Install => {
+            // Drive the install while concurrently draining and forwarding
+            // its output lines — the engine awaits `send` on the sink, so an
+            // unread channel would stall the install (same rule as pull).
+            let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+            send_action_progress(writer, &engine, "starting install…".into(), 0.0).await?;
+            let result = {
+                let mut install_fut = std::pin::pin!(eng.install(Some(tx)));
+                let mut rx_open = true;
+                loop {
+                    tokio::select! {
+                        progress = rx.recv(), if rx_open => {
+                            match progress {
+                                Some(p) => {
+                                    send_action_progress(writer, &engine, p.status, p.percent).await?;
+                                }
+                                None => rx_open = false,
+                            }
+                        }
+                        res = &mut install_fut => break res,
+                    }
+                }
+            };
+            // Forward any lines buffered right before completion.
+            while let Ok(p) = rx.try_recv() {
+                send_action_progress(writer, &engine, p.status, p.percent).await?;
+            }
+            result
+        }
+        EngineActionKind::Start => eng.start(&cfg).await,
+        EngineActionKind::Stop => eng.stop().await,
+    };
+
     let (ok, message) = match result {
         Ok(msg) => (true, msg),
         Err(e) => {

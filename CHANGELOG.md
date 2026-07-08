@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Engines dialog: per-engine tabs and live install output.** The Local
+  Engines & Models dialog now renders one tab per detected engine (←/→ or
+  Tab to switch in the TUI; a Bulma tab strip on desktop), so each
+  engine's status, models, and actions have their own focused view instead
+  of one long combined list. Engine installs — which previously ran
+  silently — now stream their output live: `execute`-style installers
+  (`curl … | sh`, `brew install`, `cargo install …`) are read line by
+  line via a new `stream_shell` helper in core, forwarded over a new
+  `EngineActionProgress` frame (mirroring how model-pull progress already
+  streams), and folded into the installing engine's tab as a bounded,
+  live-updating log that ends with "install complete" / "install failed".
+  The install output is tracked per engine and survives the frequent
+  engine-list refreshes.
+
 - **Live display and inline controls for long-running processes.** While
   a tool call executes, the gateway now streams a `ToolStatus` frame
   every second (after a 2s grace period so fast tools stay silent)
