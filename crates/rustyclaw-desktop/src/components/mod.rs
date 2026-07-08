@@ -9,9 +9,9 @@
 //!   - `input_bar.rs`      — text input + model bar
 //!   - `sidebar.rs`        — project/thread sidebar
 //!   - `tool_call.rs`      — tool call panel
+//!   - `user_prompt.rs`    — inline agent-question card (`ask_user` tool)
 //!   - dialog modules      — credential, device_flow, hatching,
-//!     pairing, settings, swarm, tool_approval,
-//!     user_prompt, vault_unlock
+//!     pairing, settings, swarm, tool_approval, vault_unlock
 //!
 //! This module also provides the shared Bulma plumbing: [`tone_color`]
 //! maps the view layer's semantic [`Tone`] to a Bulma colour, and
@@ -79,7 +79,6 @@ pub use swarm_panel::SwarmPanel;
 pub use system_info::SystemInfoDialog;
 pub use tool_approval::ToolApprovalDialog;
 pub use tools_config::ToolsConfigDialog;
-pub use user_prompt::UserPromptDialog;
 pub use vault_unlock::VaultUnlockDialog;
 
 /// Copy text to the system clipboard via the webview's Clipboard API.

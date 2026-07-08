@@ -993,6 +993,63 @@ body,
     max-height: 200px;
 }
 
+/* ── Inline user prompt (agent questions in the chat stream) ────────────── */
+
+/* The card takes the composer's place at the bottom of the transcript while
+   the agent waits for a structured answer: same sticky anchoring as the
+   input box so the question never scrolls out of view. */
+.rc-inline-prompt {
+    position: sticky;
+    bottom: 0;
+    z-index: 5;
+    width: 100%;
+    max-width: var(--rc-content-max-w);
+    margin: auto auto 0;
+    padding: 14px 20px 12px;
+    background: var(--rc-bg);
+    border-top: 1px solid var(--rc-border);
+    animation: rc-pop-in 0.25s ease-out;
+}
+
+.rc-inline-prompt-header {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+}
+
+.rc-inline-prompt-title {
+    font-weight: 600;
+    font-size: 14.5px;
+    color: var(--rc-text-strong);
+}
+
+.rc-inline-prompt-desc {
+    color: var(--rc-text-muted);
+    font-size: 13px;
+    margin-bottom: 10px;
+}
+
+.rc-inline-prompt-form .rc-inline-prompt-field-label {
+    font-size: 13px;
+    margin-bottom: 4px;
+}
+
+.rc-inline-prompt-required {
+    color: var(--rc-primary);
+}
+
+.rc-inline-prompt-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.rc-inline-prompt-confirm {
+    margin-bottom: 0;
+}
+
 /* User prompt select options */
 .rc-confirm-options {
     display: flex;
@@ -1008,10 +1065,19 @@ body,
 }
 
 .rc-select-option {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
     padding: 8px 12px;
     border-radius: var(--bulma-radius);
     cursor: pointer;
     border: 1px solid transparent;
+}
+
+.rc-select-option input[type="radio"],
+.rc-select-option input[type="checkbox"] {
+    accent-color: var(--rc-primary);
+    cursor: pointer;
 }
 
 .rc-select-option:hover {

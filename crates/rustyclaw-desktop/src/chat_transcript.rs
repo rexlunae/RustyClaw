@@ -17,8 +17,13 @@ use rustyclaw_view::serde_json;
 use rustyclaw_view::{ChatSurfaceData, PromptAttachment, PromptAttachmentKind};
 
 /// Build the transcript shown by `ChatSurface` from the live message list and
-/// the current busy state.
-pub fn to_transcript(messages: &[ChatMessage], surface: &ChatSurfaceData) -> ChatTranscript {
+/// the current busy state. `awaiting_user` is set while an `ask_user` prompt
+/// is on screen, so the busy row reads as waiting rather than working.
+pub fn to_transcript(
+    messages: &[ChatMessage],
+    surface: &ChatSurfaceData,
+    awaiting_user: bool,
+) -> ChatTranscript {
     let mut transcript = ChatTranscript::default();
 
     for msg in messages {
@@ -29,7 +34,12 @@ pub fn to_transcript(messages: &[ChatMessage], surface: &ChatSurfaceData) -> Cha
     // thinking before any tokens arrive, then a streaming/processing status.
     // While a live reasoning block is on screen its own "Thinking…" header
     // is the indicator, so don't stack a typing row underneath it.
-    if surface.is_thinking {
+    if awaiting_user {
+        transcript.push(
+            ChatRole::Assistant,
+            ChatMessagePayload::Status("Waiting for your answer…".to_string()),
+        );
+    } else if surface.is_thinking {
         let live_reasoning = messages
             .last()
             .map(|m| m.role == MessageRole::Thinking && m.is_streaming)
@@ -137,6 +147,16 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         let arguments: serde_json::Value = serde_json::from_str(&tc.arguments)
             .unwrap_or_else(|_| serde_json::Value::String(tc.arguments.clone()));
 
+        // The agent's structured questions (`ask_user`) read as part of the
+        // conversation, not as a tool-call panel dumping the raw JSON
+        // arguments. While unanswered the interactive card at the bottom of
+        // the stream shows the question; once a result exists the exchange
+        // is rendered here as a question bubble plus the user's answer.
+        if tc.name == "ask_user" {
+            push_ask_user(transcript, &arguments, tc.result.as_deref(), tc.is_error);
+            continue;
+        }
+
         let hint = tool_call_hint(&tc.name, &arguments);
         // One panel per call: the invocation, live progress, and final
         // result all render inside the same ToolCall component (no
@@ -174,6 +194,66 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
                 result_hint,
             }),
         );
+    }
+}
+
+/// The exact string the gateway returns when a prompt is dismissed
+/// (see `execute_user_prompt` in rustyclaw-gateway); rendered as a muted
+/// notice rather than as a user answer bubble.
+const PROMPT_DISMISSED_RESULT: &str = "User dismissed the prompt without answering.";
+
+/// Render an `ask_user` tool call as a chat exchange: the question as an
+/// assistant bubble (title, description, options) and, when present, the
+/// answer as a user bubble. Nothing is emitted while the answer is still
+/// pending — the interactive inline card shows the question until then.
+fn push_ask_user(
+    transcript: &mut ChatTranscript,
+    args: &serde_json::Value,
+    result: Option<&str>,
+    is_error: bool,
+) {
+    let Some(result) = result else {
+        return;
+    };
+
+    let title = str_field(args, "title").unwrap_or_else(|| "Question".to_string());
+    let mut md = format!("💬 **{}**", title);
+    if let Some(desc) = str_field(args, "description").filter(|d| !d.is_empty()) {
+        md.push_str("\n\n");
+        md.push_str(&desc);
+    }
+    if let Some(options) = args.get("options").and_then(|v| v.as_array()) {
+        for opt in options {
+            let label = opt
+                .as_str()
+                .map(String::from)
+                .or_else(|| opt.get("label").and_then(|v| v.as_str()).map(String::from));
+            if let Some(label) = label {
+                md.push_str(&format!("\n- {}", label));
+                if let Some(desc) = opt.get("description").and_then(|v| v.as_str()) {
+                    md.push_str(&format!(" — {}", desc));
+                }
+            }
+        }
+    }
+    transcript.push(
+        ChatRole::Assistant,
+        ChatMessagePayload::Markdown(sanitize_markdown(&md)),
+    );
+
+    if is_error {
+        transcript.push(
+            ChatRole::System,
+            ChatMessagePayload::Text(format!("⚠️ {}", result)),
+        );
+    } else if result == PROMPT_DISMISSED_RESULT {
+        transcript.push(
+            ChatRole::System,
+            ChatMessagePayload::Text(format!("ℹ️ {}", result)),
+        );
+    } else {
+        // The structured answer is the user's reply in the conversation.
+        transcript.push(ChatRole::User, ChatMessagePayload::Text(result.to_string()));
     }
 }
 
@@ -363,4 +443,80 @@ pub fn to_context_items(attachments: &[PromptAttachment]) -> Vec<ContextItem> {
             },
         })
         .collect()
+}
+
+#[cfg(test)]
+mod ask_user_tests {
+    use super::*;
+    use rustyclaw_core::ui::ToolCallInfo;
+
+    fn ask_user_message(result: Option<&str>, is_error: bool) -> ChatMessage {
+        let mut msg = ChatMessage::start_assistant("m1".to_string());
+        msg.is_streaming = false;
+        msg.tool_calls.push(ToolCallInfo {
+            id: "call_1".to_string(),
+            name: "ask_user".to_string(),
+            arguments: r#"{"prompt_type":"select","title":"Pick a colour",
+                "description":"Used for the theme.",
+                "options":[{"label":"Red"},{"label":"Blue","description":"calm"}]}"#
+                .to_string(),
+            result: result.map(String::from),
+            is_error,
+            collapsed: false,
+            duration_ms: None,
+            live_output: String::new(),
+        });
+        msg
+    }
+
+    fn transcript_for(msg: &ChatMessage) -> ChatTranscript {
+        let mut transcript = ChatTranscript::default();
+        push_message(&mut transcript, msg);
+        transcript
+    }
+
+    #[test]
+    fn pending_question_emits_nothing() {
+        // While unanswered the inline card shows the question; the
+        // transcript must not render the tool call (raw JSON) at all.
+        let transcript = transcript_for(&ask_user_message(None, false));
+        assert!(transcript.messages.is_empty());
+    }
+
+    #[test]
+    fn answered_question_renders_as_conversation() {
+        let transcript = transcript_for(&ask_user_message(Some("Blue"), false));
+        assert_eq!(transcript.messages.len(), 2);
+
+        match &transcript.messages[0].payload {
+            ChatMessagePayload::Markdown(md) => {
+                assert!(md.contains("Pick a colour"));
+                assert!(md.contains("Used for the theme."));
+                assert!(md.contains("Blue — calm"));
+                assert!(!md.contains("prompt_type"));
+            }
+            other => panic!("expected question markdown, got {other:?}"),
+        }
+        assert_eq!(transcript.messages[1].role, ChatRole::User);
+        match &transcript.messages[1].payload {
+            ChatMessagePayload::Text(answer) => assert_eq!(answer, "Blue"),
+            other => panic!("expected answer text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dismissed_and_errored_prompts_render_as_notices() {
+        let dismissed = transcript_for(&ask_user_message(Some(PROMPT_DISMISSED_RESULT), false));
+        assert_eq!(dismissed.messages[1].role, ChatRole::System);
+
+        let errored = transcript_for(&ask_user_message(
+            Some("User prompt timed out after 5 minutes."),
+            true,
+        ));
+        assert_eq!(errored.messages[1].role, ChatRole::System);
+        match &errored.messages[1].payload {
+            ChatMessagePayload::Text(text) => assert!(text.starts_with("⚠️")),
+            other => panic!("expected notice text, got {other:?}"),
+        }
+    }
 }
