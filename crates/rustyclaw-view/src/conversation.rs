@@ -16,6 +16,9 @@ pub struct DisplayMessageData {
     pub details: Option<String>,
     pub tool_calls: Vec<ToolCallData>,
     pub collapsed: bool,
+    /// Wall-clock duration of the activity this message represents (ms).
+    /// Set on Thinking messages when the reasoning block completes.
+    pub duration_ms: Option<u64>,
 }
 
 impl DisplayMessageData {
@@ -26,6 +29,7 @@ impl DisplayMessageData {
             details: None,
             tool_calls: Vec::new(),
             collapsed: false,
+            duration_ms: None,
         }
     }
 
@@ -41,6 +45,7 @@ impl DisplayMessageData {
             details: Some(details.into()),
             tool_calls: Vec::new(),
             collapsed: false,
+            duration_ms: None,
         }
     }
 
@@ -89,15 +94,24 @@ impl DisplayMessageData {
             result: None,
             is_error: false,
             collapsed: true,
+            duration_ms: None,
         });
     }
 
-    /// Set the result for a tool call by id.
-    pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {
+    /// Set the result for a tool call by id, with the client-measured
+    /// execution time (None when replaying history, which has no timings).
+    pub fn set_tool_result(
+        &mut self,
+        id: &str,
+        result: String,
+        is_error: bool,
+        duration_ms: Option<u64>,
+    ) {
         for tc in &mut self.tool_calls {
             if tc.id == id {
                 tc.result = Some(result);
                 tc.is_error = is_error;
+                tc.duration_ms = duration_ms;
                 return;
             }
         }
@@ -138,6 +152,7 @@ impl DisplayMessageData {
             agent_name,
             has_details,
             collapsed: self.collapsed,
+            duration_ms: self.duration_ms,
         }
     }
 }
@@ -195,7 +210,7 @@ pub fn convert_history(
                     d.role == MessageRole::Assistant
                         && d.tool_calls.iter().any(|tc| &tc.id == call_id)
                 }) {
-                    prev.set_tool_result(call_id, m.content.clone(), false);
+                    prev.set_tool_result(call_id, m.content.clone(), false, None);
                     continue;
                 }
             }

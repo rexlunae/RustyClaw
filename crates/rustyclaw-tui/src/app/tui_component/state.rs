@@ -21,6 +21,11 @@ pub(super) struct Ui {
     pub gw_status: State<rustyclaw_core::types::GatewayStatus>,
     pub streaming: State<bool>,
     pub stream_start: State<Option<Instant>>,
+    /// When the current thinking block began (for "Thought for Xs").
+    pub thinking_start: State<Option<Instant>>,
+    /// Start times of in-flight tool calls, by tool-call id, so results
+    /// can be stamped with a wall-clock duration.
+    pub tool_started: State<HashMap<String, Instant>>,
     pub elapsed: State<String>,
     pub scroll_offset: State<i32>,
     pub spinner_tick: State<usize>,

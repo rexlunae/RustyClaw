@@ -19,28 +19,27 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
     // Expanded → header line plus truncated args and result beneath.
     let collapsed = props.data.collapsed;
 
-    let header = format!(
-        "{} · {} {}",
-        props.data.summary(),
-        status_icon,
-        status_label
-    );
-
-    // Short inline peek shown when collapsed so the row is one line but still
-    // hints at what ran / what came back.
-    let peek = if collapsed {
-        let src = props
+    // Compact but informative: what the call *does* (derived from the
+    // arguments), the outcome, how long it took, and a one-line gist of
+    // what came back — all on a single dim row when collapsed.
+    let action = props.data.compact_action();
+    let duration = props
+        .data
+        .duration_label()
+        .map(|d| format!(" {d}"))
+        .unwrap_or_default();
+    let header = if collapsed {
+        let gist = props
             .data
-            .result_preview(80, 1)
-            .unwrap_or_else(|| props.data.arguments_preview(80, 1));
-        let one = src.replace('\n', " ");
-        if one.trim().is_empty() {
-            String::new()
-        } else {
-            format!("  {one}")
-        }
+            .result_gist()
+            .map(|g| format!(" · {g}"))
+            .unwrap_or_default();
+        format!("🔧 {action} · {status_icon}{duration}{gist}")
     } else {
-        String::new()
+        format!(
+            "🔧 {} — {action} · {status_icon} {status_label}{duration}",
+            props.data.name
+        )
     };
 
     let args = if collapsed {
@@ -62,7 +61,7 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
             flex_direction: FlexDirection::Column,
         ) {
             Text(
-                content: format!("{header}{peek}"),
+                content: header,
                 color,
                 weight: if collapsed { Weight::Normal } else { Weight::Bold },
             )

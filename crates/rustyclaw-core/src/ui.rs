@@ -32,6 +32,10 @@ pub struct ChatMessage {
     pub timestamp: chrono::DateTime<chrono::Utc>,
     pub tool_calls: Vec<ToolCallInfo>,
     pub is_streaming: bool,
+    /// Wall-clock duration of the activity this message represents (ms).
+    /// Set on Thinking messages when the reasoning block completes, so
+    /// renderers can say "Thought for 4.2s".
+    pub duration_ms: Option<u64>,
 }
 
 /// Information about a tool call within a message.
@@ -43,6 +47,10 @@ pub struct ToolCallInfo {
     pub result: Option<String>,
     pub is_error: bool,
     pub collapsed: bool,
+    /// Wall-clock execution time in milliseconds, measured client-side
+    /// between the ToolCall and ToolResult events (None while running
+    /// or when replayed from history, which carries no timings).
+    pub duration_ms: Option<u64>,
 }
 
 // ── Thread / session types ──────────────────────────────────────────────────
@@ -106,6 +114,7 @@ impl ChatMessage {
             timestamp: chrono::Utc::now(),
             tool_calls: Vec::new(),
             is_streaming: false,
+            duration_ms: None,
         }
     }
 
@@ -118,6 +127,20 @@ impl ChatMessage {
             timestamp: chrono::Utc::now(),
             tool_calls: Vec::new(),
             is_streaming: true,
+            duration_ms: None,
+        }
+    }
+
+    /// Start a new thinking block (streaming reasoning text).
+    pub fn start_thinking() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            role: MessageRole::Thinking,
+            content: String::new(),
+            timestamp: chrono::Utc::now(),
+            tool_calls: Vec::new(),
+            is_streaming: true,
+            duration_ms: None,
         }
     }
 
@@ -131,6 +154,7 @@ impl ChatMessage {
             timestamp: chrono::Utc::now(),
             tool_calls: Vec::new(),
             is_streaming: false,
+            duration_ms: None,
         }
     }
 
@@ -155,15 +179,24 @@ impl ChatMessage {
             result: None,
             is_error: false,
             collapsed: true,
+            duration_ms: None,
         });
     }
 
-    /// Set the result for a tool call by ID.
-    pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {
+    /// Set the result for a tool call by ID, with the client-measured
+    /// execution time (None when replaying history, which has no timings).
+    pub fn set_tool_result(
+        &mut self,
+        id: &str,
+        result: String,
+        is_error: bool,
+        duration_ms: Option<u64>,
+    ) {
         for tool in &mut self.tool_calls {
             if tool.id == id {
                 tool.result = Some(result);
                 tool.is_error = is_error;
+                tool.duration_ms = duration_ms;
                 return;
             }
         }

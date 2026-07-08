@@ -53,6 +53,12 @@ pub struct MessageBubbleData {
     /// "show details" action.
     pub has_details: bool,
     pub collapsed: bool,
+
+    /// Wall-clock duration of the activity this message represents,
+    /// in milliseconds. Set for Thinking messages (measured client-side
+    /// between ThinkingStart and ThinkingEnd) so the header can say
+    /// "Thought for 4.2s".
+    pub duration_ms: Option<u64>,
 }
 
 impl Default for MessageBubbleData {
@@ -65,6 +71,7 @@ impl Default for MessageBubbleData {
             agent_name: None,
             has_details: false,
             collapsed: false,
+            duration_ms: None,
         }
     }
 }
@@ -87,6 +94,7 @@ impl MessageBubbleData {
             agent_name,
             has_details: false,
             collapsed: false,
+            duration_ms: msg.duration_ms,
         }
     }
 
@@ -124,6 +132,27 @@ impl MessageBubbleData {
     /// call replaces the manual match in each client.
     pub fn icon(&self) -> &'static str {
         self.role.icon()
+    }
+
+    /// The bubble header label. Same as [`display_name`](Self::display_name)
+    /// except for Thinking messages, which get a summary that carries the
+    /// measured duration: "Thought for 4.2s" (or "Thinking…" mid-stream).
+    pub fn header_label(&self) -> Cow<'_, str> {
+        if self.role == MessageRole::Thinking {
+            self.thinking_summary().into()
+        } else {
+            self.display_name()
+        }
+    }
+
+    /// One-line summary for a Thinking block, shown as its collapsed
+    /// header in both clients.
+    pub fn thinking_summary(&self) -> String {
+        match self.duration_ms {
+            Some(ms) => format!("Thought for {}", format_duration_ms(ms)),
+            None if self.is_streaming => "Thinking…".to_string(),
+            None => "Thought".to_string(),
+        }
     }
 
     /// The avatar glyph for this message's role, as shown next to the
@@ -170,10 +199,13 @@ impl MessageBubbleData {
     }
 
     /// Like [`display_content`](Self::display_content) but with a
-    /// custom truncation limit for thinking messages.
+    /// custom truncation limit for thinking messages. Truncates on
+    /// character boundaries — reasoning text is arbitrary UTF-8, and a
+    /// byte slice could split a multi-byte character and panic.
     pub fn display_content_truncated(&self, thinking_max_chars: usize) -> Cow<'_, str> {
-        if self.role == MessageRole::Thinking && self.content.len() > thinking_max_chars {
-            format!("{}…", &self.content[..thinking_max_chars]).into()
+        if self.role == MessageRole::Thinking && self.content.chars().count() > thinking_max_chars {
+            let truncated: String = self.content.chars().take(thinking_max_chars).collect();
+            format!("{truncated}…").into()
         } else {
             self.content.as_str().into()
         }
@@ -184,10 +216,18 @@ impl MessageBubbleData {
     /// Lines to show when collapsed.
     pub const COLLAPSED_PREVIEW_LINES: usize = 8;
 
+    /// Preview length for a collapsed Thinking block's one-line gist.
+    pub const THINKING_PREVIEW_CHARS: usize = 120;
+
     /// Whether this message is long enough to be collapsible.
     ///
-    /// Checks byte length first (O(1)) before counting lines (O(N)).
+    /// Thinking blocks are always collapsible (they collapse to a
+    /// one-line gist rather than an 8-line preview). Other roles check
+    /// byte length first (O(1)) before counting lines (O(N)).
     pub fn is_collapsible(&self) -> bool {
+        if self.role == MessageRole::Thinking {
+            return !self.content.trim().is_empty();
+        }
         self.content.len() > Self::AUTO_COLLAPSE_CHARS
             || self.content.lines().count() > Self::AUTO_COLLAPSE_LINES
     }
@@ -196,6 +236,24 @@ impl MessageBubbleData {
     ///
     /// Returns a borrow in the common (uncollapsed) case to avoid allocation.
     pub fn content_for_render(&self) -> Cow<'_, str> {
+        if self.role == MessageRole::Thinking {
+            if !self.collapsed {
+                return Cow::Borrowed(&self.content);
+            }
+            // Collapsed reasoning: a single dim gist line keeps the
+            // transcript compact while hinting at what was considered.
+            let first = self
+                .content
+                .lines()
+                .find(|l| !l.trim().is_empty())
+                .unwrap_or("")
+                .trim();
+            let mut gist: String = first.chars().take(Self::THINKING_PREVIEW_CHARS).collect();
+            if gist.len() < first.len() || self.content.lines().count() > 1 {
+                gist.push('…');
+            }
+            return format!("{gist} (Ctrl+E to expand)").into();
+        }
         if self.collapsed && self.is_collapsible() {
             let lines: Vec<&str> = self
                 .content
@@ -241,6 +299,11 @@ pub struct ToolCallData {
 
     /// Whether the panel starts collapsed.
     pub collapsed: bool,
+
+    /// Wall-clock execution time in milliseconds, measured client-side
+    /// between the ToolCall and ToolResult events. None while running
+    /// or for calls replayed from history (which carries no timings).
+    pub duration_ms: Option<u64>,
 }
 
 impl Default for ToolCallData {
@@ -252,6 +315,7 @@ impl Default for ToolCallData {
             result: None,
             is_error: false,
             collapsed: true,
+            duration_ms: None,
         }
     }
 }
@@ -315,6 +379,132 @@ impl ToolCallData {
             .as_deref()
             .map(|r| rustyclaw_core::ui::truncate_content(r, max_chars, max_lines))
     }
+
+    /// Wall-clock duration label, e.g. `"0.4s"` / `"12s"` / `"2m 03s"`.
+    pub fn duration_label(&self) -> Option<String> {
+        self.duration_ms.map(format_duration_ms)
+    }
+
+    /// A compact, human-readable description of what this call *does*,
+    /// derived from the tool name and arguments — `read src/main.rs:10–80`
+    /// rather than a raw JSON dump. Tool/argument names mirror the desktop
+    /// hint mapping in `chat_transcript.rs` so both clients describe the
+    /// same call the same way. Falls back to the tool name plus its most
+    /// informative string argument.
+    pub fn compact_action(&self) -> String {
+        let args: serde_json::Value =
+            serde_json::from_str(&self.arguments).unwrap_or(serde_json::Value::Null);
+        let s = |key: &str| args.get(key).and_then(|v| v.as_str());
+        let n = |key: &str| args.get(key).and_then(|v| v.as_u64());
+        match self.name.as_str() {
+            "read_file" => {
+                let path = s("path").unwrap_or("?");
+                match (n("start_line"), n("end_line")) {
+                    (Some(a), Some(b)) => format!("read {path}:{a}–{b}"),
+                    (Some(a), None) => format!("read {path}:{a}–"),
+                    _ => format!("read {path}"),
+                }
+            }
+            "write_file" => {
+                let path = s("path").unwrap_or("?");
+                match s("content") {
+                    Some(c) => format!("write {path} ({} lines)", c.lines().count()),
+                    None => format!("write {path}"),
+                }
+            }
+            "edit_file" | "apply_patch" => format!("edit {}", s("path").unwrap_or("?")),
+            "execute_command" => {
+                format!("$ {}", one_line(s("command").unwrap_or("?"), 60))
+            }
+            "search_files" => match s("path") {
+                Some(p) => format!(
+                    "search \"{}\" in {p}",
+                    one_line(s("pattern").unwrap_or("?"), 40)
+                ),
+                None => format!("search \"{}\"", one_line(s("pattern").unwrap_or("?"), 40)),
+            },
+            "find_files" | "list_directory" => {
+                let what = s("pattern").or_else(|| s("path")).unwrap_or("?");
+                format!("list {}", one_line(what, 50))
+            }
+            "web_search" => format!("web search \"{}\"", one_line(s("query").unwrap_or("?"), 50)),
+            "web_fetch" | "browser" => format!("fetch {}", one_line(s("url").unwrap_or("?"), 60)),
+            _ => {
+                // Generic fallback: tool name plus its most informative
+                // scalar argument, so even unknown tools say *something*.
+                let detail = args.as_object().and_then(|o| {
+                    o.values()
+                        .find_map(|v| v.as_str().filter(|t| !t.trim().is_empty()))
+                });
+                match detail {
+                    Some(d) => format!("{} {}", self.name, one_line(d, 40)),
+                    None => self.name.clone(),
+                }
+            }
+        }
+    }
+
+    /// A one-line gist of what came back: the first line of an error,
+    /// exit codes for shells, match/line counts for searches and reads.
+    /// None while the call is still running.
+    pub fn result_gist(&self) -> Option<String> {
+        let r = self.result.as_deref()?;
+        if self.is_error {
+            return Some(one_line(r.trim(), 80));
+        }
+        let gist = match self.name.as_str() {
+            "execute_command" => {
+                let exit = r.lines().rev().find_map(|line| {
+                    let t = line.trim();
+                    t.strip_prefix("Exit code: ")
+                        .or_else(|| t.strip_prefix("exit code: "))
+                        .and_then(|c| c.trim().parse::<i32>().ok())
+                });
+                match exit {
+                    Some(c) if c != 0 => format!("exit {c}"),
+                    _ => format!("{} lines", r.lines().count()),
+                }
+            }
+            "search_files" => {
+                format!(
+                    "{} matches",
+                    r.lines().filter(|l| !l.trim().is_empty()).count()
+                )
+            }
+            "read_file" => format!("{} lines", r.lines().count()),
+            _ => {
+                let lines = r.lines().count();
+                if lines > 1 {
+                    format!("{lines} lines")
+                } else {
+                    one_line(r.trim(), 60)
+                }
+            }
+        };
+        Some(gist)
+    }
+}
+
+/// Render a millisecond duration for humans: `"0.4s"`, `"12s"`, `"2m 03s"`.
+pub fn format_duration_ms(ms: u64) -> String {
+    if ms < 10_000 {
+        format!("{:.1}s", ms as f64 / 1000.0)
+    } else if ms < 120_000 {
+        format!("{}s", ms / 1000)
+    } else {
+        format!("{}m {:02}s", ms / 60_000, (ms % 60_000) / 1000)
+    }
+}
+
+/// First line of `s`, capped at `max_chars` characters, with an ellipsis
+/// when anything was cut.
+fn one_line(s: &str, max_chars: usize) -> String {
+    let first = s.lines().next().unwrap_or("").trim();
+    let mut out: String = first.chars().take(max_chars).collect();
+    if out.chars().count() < first.chars().count() || s.lines().count() > 1 {
+        out.push('…');
+    }
+    out
 }
 
 impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {
@@ -326,6 +516,7 @@ impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {
             result: tc.result.clone(),
             is_error: tc.is_error,
             collapsed: tc.collapsed,
+            duration_ms: tc.duration_ms,
         }
     }
 }

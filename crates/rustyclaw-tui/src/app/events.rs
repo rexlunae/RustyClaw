@@ -35,7 +35,8 @@ pub(crate) enum GwEvent {
     Chunk(String),
     ResponseDone,
     ThinkingStart,
-    ThinkingDelta,
+    /// A chunk of the model's reasoning text.
+    ThinkingDelta(String),
     ThinkingEnd,
     ToolCall {
         id: String,

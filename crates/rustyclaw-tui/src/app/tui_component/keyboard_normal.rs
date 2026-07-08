@@ -36,6 +36,8 @@ pub(super) fn handle_normal_key(
         mut gw_status,
         mut streaming,
         mut stream_start,
+        thinking_start: _,
+        tool_started: _,
         mut elapsed,
         mut scroll_offset,
         mut spinner_tick,
