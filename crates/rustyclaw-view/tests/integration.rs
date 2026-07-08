@@ -733,6 +733,63 @@ fn result_gist_summarises_outcomes() {
 }
 
 #[test]
+fn process_and_backgrounded_calls_read_clearly() {
+    // The `process` tool describes its background-session action.
+    let poll = ToolCallData {
+        name: "process".into(),
+        arguments: r#"{"action":"poll","sessionId":"a1b2c3d4e5f6"}"#.into(),
+        ..Default::default()
+    };
+    assert_eq!(poll.compact_action(), "process poll a1b2c3d4");
+
+    let list = ToolCallData {
+        name: "process".into(),
+        arguments: r#"{"action":"list"}"#.into(),
+        ..Default::default()
+    };
+    assert_eq!(list.compact_action(), "process list");
+
+    // A backgrounded command returns a JSON status blob — its gist reads
+    // "backgrounded <session>", not a misleading "1 lines".
+    let bg = ToolCallData {
+        name: "execute_command".into(),
+        arguments: r#"{"command":"sleep 120"}"#.into(),
+        result: Some(r#"{"status":"running","sessionId":"a1b2c3d4e5f6","message":"…"}"#.into()),
+        ..Default::default()
+    };
+    assert_eq!(bg.result_gist().as_deref(), Some("backgrounded a1b2c3d4"));
+
+    // A `process` poll reporting an exited session summarises the status.
+    let exited = ToolCallData {
+        name: "process".into(),
+        arguments: r#"{"action":"poll","sessionId":"a1b2c3d4"}"#.into(),
+        result: Some(r#"{"status":"exited (0)","sessionId":"a1b2c3d4"}"#.into()),
+        ..Default::default()
+    };
+    assert_eq!(exited.result_gist().as_deref(), Some("exited (0) a1b2c3d4"));
+
+    // A normal (non-backgrounded) command still gists to its line count.
+    let normal = ToolCallData {
+        name: "execute_command".into(),
+        arguments: r#"{"command":"ls"}"#.into(),
+        result: Some("a.txt\nb.txt\nc.txt".into()),
+        ..Default::default()
+    };
+    assert_eq!(normal.result_gist().as_deref(), Some("3 lines"));
+
+    // A command that merely emits JSON with a "status" (no sessionId) — e.g.
+    // a health check returning {"status":"ok"} — must NOT be mistaken for a
+    // backgrounded session; it gists by line count like any other output.
+    let health = ToolCallData {
+        name: "execute_command".into(),
+        arguments: r#"{"command":"curl .../health"}"#.into(),
+        result: Some(r#"{"status":"ok"}"#.into()),
+        ..Default::default()
+    };
+    assert_eq!(health.result_gist().as_deref(), Some("1 lines"));
+}
+
+#[test]
 fn format_duration_is_human() {
     use rustyclaw_view::format_duration_ms;
     assert_eq!(format_duration_ms(432), "0.4s");

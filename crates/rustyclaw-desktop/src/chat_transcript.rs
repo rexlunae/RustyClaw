@@ -178,11 +178,14 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             (None, true) => None,
         };
 
-        // Carry the measured execution time in the panel header so it
-        // reads "execute_command · 2.3s".
+        // Header label plus the measured execution time, e.g.
+        // "execute_command · 2.3s". Tools whose detail isn't carried by a
+        // structured hint (e.g. `process`, which renders generically) get an
+        // informative base label so the header isn't a bare tool name.
+        let base = tool_call_base_label(&tc.name, &arguments);
         let name = match tc.duration_ms {
-            Some(ms) => format!("{} · {}", tc.name, rustyclaw_view::format_duration_ms(ms)),
-            None => tc.name.clone(),
+            Some(ms) => format!("{} · {}", base, rustyclaw_view::format_duration_ms(ms)),
+            None => base,
         };
         transcript.push(
             ChatRole::Assistant,
@@ -330,6 +333,29 @@ fn u32_field(args: &serde_json::Value, key: &str) -> Option<u32> {
     args.get(key).and_then(|v| v.as_u64()).map(|n| n as u32)
 }
 
+/// The header label for a tool call. Most tools use their name (their
+/// arguments render on the hint line beneath), but tools that fall back to
+/// the generic `Other` hint — which carries no detail — get an informative
+/// label here so the header isn't just a bare name like "process".
+fn tool_call_base_label(name: &str, args: &serde_json::Value) -> String {
+    match name {
+        "process" => {
+            // Background-session management: "poll a1b2c3d4", "list", …
+            let action = str_field(args, "action").unwrap_or_else(|| "poll".into());
+            match str_field(args, "sessionId").or_else(|| str_field(args, "session_id")) {
+                Some(sid) => format!("process {action} {}", short_session(&sid)),
+                None => format!("process {action}"),
+            }
+        }
+        _ => name.to_string(),
+    }
+}
+
+/// A short, readable prefix of a session id (UUIDs are long and noisy).
+fn short_session(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
 fn tool_call_hint(name: &str, args: &serde_json::Value) -> ToolCallHint {
     match name {
         "read_file" => ToolCallHint::FileRead {
@@ -344,10 +370,18 @@ fn tool_call_hint(name: &str, args: &serde_json::Value) -> ToolCallHint {
         "edit_file" | "apply_patch" => ToolCallHint::FileEdit {
             path: str_field(args, "path").unwrap_or_default(),
         },
-        "execute_command" => ToolCallHint::Shell {
-            command: str_field(args, "command").unwrap_or_default(),
-            working_dir: str_field(args, "working_dir"),
-        },
+        "execute_command" => {
+            // An empty command (e.g. a backgrounded call replayed from
+            // history) would render as a dangling "execute_command · " with
+            // nothing after the separator, so fall back to the generic hint.
+            match str_field(args, "command").filter(|c| !c.trim().is_empty()) {
+                Some(command) => ToolCallHint::Shell {
+                    command,
+                    working_dir: str_field(args, "working_dir"),
+                },
+                None => ToolCallHint::Other,
+            }
+        }
         "search_files" => ToolCallHint::Search {
             pattern: str_field(args, "pattern").unwrap_or_default(),
             path: str_field(args, "path"),
@@ -525,6 +559,73 @@ mod ask_user_tests {
         match &errored.messages[1].payload {
             ChatMessagePayload::Text(text) => assert!(text.starts_with("⚠️")),
             other => panic!("expected notice text, got {other:?}"),
+        }
+    }
+
+    fn tool_call_message(name: &str, arguments: &str) -> ChatMessage {
+        let mut msg = ChatMessage::start_assistant("m1".to_string());
+        msg.is_streaming = false;
+        msg.tool_calls.push(ToolCallInfo {
+            id: "call_1".to_string(),
+            name: name.to_string(),
+            arguments: arguments.to_string(),
+            result: Some("ok".to_string()),
+            is_error: false,
+            collapsed: false,
+            duration_ms: Some(0),
+            live_status: None,
+            live_output: String::new(),
+        });
+        msg
+    }
+
+    fn first_tool_call(transcript: &ChatTranscript) -> &ToolCall {
+        transcript
+            .messages
+            .iter()
+            .find_map(|m| match &m.payload {
+                ChatMessagePayload::ToolCall(tc) => Some(tc),
+                _ => None,
+            })
+            .expect("a tool call payload")
+    }
+
+    #[test]
+    fn process_tool_gets_an_informative_header() {
+        let transcript = transcript_for(&tool_call_message(
+            "process",
+            r#"{"action":"poll","sessionId":"a1b2c3d4e5f6"}"#,
+        ));
+        let tc = first_tool_call(&transcript);
+        // Header carries the action + short session, not a bare "process".
+        assert!(
+            tc.name.starts_with("process poll a1b2c3d4"),
+            "got header {:?}",
+            tc.name
+        );
+        assert!(matches!(tc.hint, ToolCallHint::Other));
+    }
+
+    #[test]
+    fn execute_command_with_empty_command_has_no_dangling_separator() {
+        let transcript = transcript_for(&tool_call_message("execute_command", "{}"));
+        let tc = first_tool_call(&transcript);
+        // An empty command falls back to the generic hint, so the crate
+        // renders a clean "execute_command · <dur>" with no trailing " · ".
+        assert!(matches!(tc.hint, ToolCallHint::Other));
+        assert!(tc.name.starts_with("execute_command"));
+    }
+
+    #[test]
+    fn execute_command_with_command_keeps_the_shell_hint() {
+        let transcript = transcript_for(&tool_call_message(
+            "execute_command",
+            r#"{"command":"ls -la"}"#,
+        ));
+        let tc = first_tool_call(&transcript);
+        match &tc.hint {
+            ToolCallHint::Shell { command, .. } => assert_eq!(command, "ls -la"),
+            other => panic!("expected Shell hint, got {other:?}"),
         }
     }
 }

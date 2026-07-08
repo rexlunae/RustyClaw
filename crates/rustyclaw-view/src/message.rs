@@ -442,6 +442,15 @@ impl ToolCallData {
             "execute_command" => {
                 format!("$ {}", one_line(s("command").unwrap_or("?"), 60))
             }
+            "process" => {
+                // Background-session management: "poll a1b2c3d4",
+                // "list", "kill a1b2c3d4", …
+                let action = s("action").unwrap_or("poll");
+                match s("sessionId").or_else(|| s("session_id")) {
+                    Some(sid) => format!("process {action} {}", short_id(sid)),
+                    None => format!("process {action}"),
+                }
+            }
             "search_files" => match s("path") {
                 Some(p) => format!(
                     "search \"{}\" in {p}",
@@ -518,6 +527,12 @@ impl ToolCallData {
         }
         let gist = match self.name.as_str() {
             "execute_command" => {
+                // A command that yielded/backgrounded returns a JSON status
+                // blob rather than shell output — report that plainly instead
+                // of a misleading "1 lines".
+                if let Some(g) = session_status_gist(r) {
+                    return Some(g);
+                }
                 let exit = r.lines().rev().find_map(|line| {
                     let t = line.trim();
                     t.strip_prefix("Exit code: ")
@@ -529,6 +544,7 @@ impl ToolCallData {
                     _ => format!("{} lines", r.lines().count()),
                 }
             }
+            "process" => session_status_gist(r).unwrap_or_else(|| one_line(r.trim(), 60)),
             "search_files" => {
                 format!(
                     "{} matches",
@@ -572,6 +588,35 @@ pub fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{:.0} KB", b / 1024.0)
     }
+}
+
+/// A short, readable prefix of a session id (UUIDs are long and noisy).
+fn short_id(id: &str) -> String {
+    id.chars().take(8).collect()
+}
+
+/// If a tool result is a background-session JSON status blob
+/// (`{"status":"running","sessionId":"…"}` from a yielded/backgrounded
+/// command or a `process` poll), summarise it — e.g. `"backgrounded a1b2c3d4"`
+/// or `"exited (0) a1b2c3d4"`. Returns None for ordinary output.
+///
+/// A session response always carries a `sessionId`, so that field is
+/// required: this deliberately does *not* match a command that merely
+/// happens to emit JSON with a `status` (e.g. a health check returning
+/// `{"status":"ok"}`), which should still gist by its line count.
+fn session_status_gist(result: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(result.trim()).ok()?;
+    let obj = v.as_object()?;
+    let session = obj
+        .get("sessionId")
+        .or_else(|| obj.get("session_id"))
+        .and_then(|s| s.as_str())?;
+    let status = obj.get("status").and_then(|s| s.as_str())?;
+    Some(if status == "running" {
+        format!("backgrounded {}", short_id(session))
+    } else {
+        format!("{status} {}", short_id(session))
+    })
 }
 
 /// First line of `s`, capped at `max_chars` characters, with an ellipsis
