@@ -8,8 +8,8 @@
 //! `rustyclaw-view` stays framework-agnostic for the TUI.
 
 use dioxus_genai_chat::{
-    ChatMessagePayload, ChatRole, ChatTranscript, ContextItem, ContextKind, SearchMatch, ToolCall,
-    ToolCallHint, ToolCallStatus, ToolResultHint,
+    ChatMessagePayload, ChatRole, ChatTranscript, ContextItem, ContextKind, Reasoning,
+    ReasoningStep, SearchMatch, StepStatus, ToolCall, ToolCallHint, ToolCallStatus, ToolResultHint,
 };
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ChatMessage;
@@ -27,8 +27,16 @@ pub fn to_transcript(messages: &[ChatMessage], surface: &ChatSurfaceData) -> Cha
 
     // A trailing busy line, mirroring the old StreamingProgress/Thinking row:
     // thinking before any tokens arrive, then a streaming/processing status.
+    // While a live reasoning block is on screen its own "Thinking…" header
+    // is the indicator, so don't stack a typing row underneath it.
     if surface.is_thinking {
-        transcript.push(ChatRole::Assistant, ChatMessagePayload::Typing);
+        let live_reasoning = messages
+            .last()
+            .map(|m| m.role == MessageRole::Thinking && m.is_streaming)
+            .unwrap_or(false);
+        if !live_reasoning {
+            transcript.push(ChatRole::Assistant, ChatMessagePayload::Typing);
+        }
     } else if surface.is_streaming {
         let label = surface
             .progress_summary()
@@ -54,10 +62,29 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
         // Assistant turns are markdown; an empty in-flight bubble that only
         // carries tool calls contributes no text payload.  Pre-sanitise the
         // source so raw-HTML attack vectors don't survive pulldown-cmark → webview.
-        MessageRole::Assistant | MessageRole::Thinking => (
+        MessageRole::Assistant => (
             ChatRole::Assistant,
             ChatMessagePayload::Markdown(sanitize_markdown(&msg.content)),
         ),
+        // Reasoning renders as a collapsible timeline: a one-line
+        // "Thought for 4.2s" header that expands to the full trace,
+        // one step per paragraph. Steps render as plain text, so no
+        // markdown sanitisation is needed.
+        MessageRole::Thinking => {
+            let summary = match msg.duration_ms {
+                Some(ms) => format!("Thought for {}", rustyclaw_view::format_duration_ms(ms)),
+                None if msg.is_streaming => "Thinking…".to_string(),
+                None => "Thought".to_string(),
+            };
+            (
+                ChatRole::Assistant,
+                ChatMessagePayload::Reasoning(Reasoning {
+                    summary,
+                    steps: reasoning_steps(&msg.content, msg.is_streaming),
+                    collapsed: !msg.is_streaming,
+                }),
+            )
+        }
         MessageRole::Error => (
             ChatRole::Assistant,
             ChatMessagePayload::Error(msg.content.clone()),
@@ -130,15 +157,54 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
             }),
         );
         if let Some(result) = &tc.result {
+            // Carry the measured execution time in the result header so
+            // the panel reads "execute_command · 2.3s".
+            let name = match tc.duration_ms {
+                Some(ms) => format!("{} · {}", tc.name, rustyclaw_view::format_duration_ms(ms)),
+                None => tc.name.clone(),
+            };
             transcript.push(
                 ChatRole::Tool,
                 ChatMessagePayload::ToolResult {
-                    name: tc.name.clone(),
+                    name,
                     content: result.clone(),
                 },
             );
         }
     }
+}
+
+/// Split accumulated reasoning text into timeline steps, one per paragraph:
+/// the first line becomes the step title, the rest its detail. While the
+/// block is still streaming the last step is marked Active.
+fn reasoning_steps(content: &str, is_streaming: bool) -> Vec<ReasoningStep> {
+    let mut steps: Vec<ReasoningStep> = content
+        .split("\n\n")
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .map(|para| {
+            let mut lines = para.lines();
+            let first = lines.next().unwrap_or("").trim();
+            let title: String = if first.chars().count() > 100 {
+                let mut t: String = first.chars().take(100).collect();
+                t.push('…');
+                t
+            } else {
+                first.to_string()
+            };
+            let detail = lines.collect::<Vec<_>>().join("\n");
+            let step = ReasoningStep::new(title, StepStatus::Done);
+            if detail.trim().is_empty() {
+                step
+            } else {
+                step.with_detail(detail)
+            }
+        })
+        .collect();
+    if is_streaming && let Some(last) = steps.last_mut() {
+        last.status = StepStatus::Active;
+    }
+    steps
 }
 
 // ── Markdown sanitisation ────────────────────────────────────────────────────

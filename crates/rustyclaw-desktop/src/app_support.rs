@@ -152,13 +152,13 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::ThinkingStart => {
             let mut s = state.write();
             if s.stream_targets_foreground() {
-                s.is_thinking = true;
+                s.start_thinking_message();
             }
         }
         GatewayEvent::ThinkingEnd => {
             let mut s = state.write();
             if s.stream_targets_foreground() {
-                s.is_thinking = false;
+                s.end_thinking_message();
             }
         }
         GatewayEvent::Chunk { delta } => {
@@ -319,6 +319,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                                 result: None,
                                 is_error: false,
                                 collapsed: true,
+                                duration_ms: None,
                             });
                         }
                     }
@@ -329,6 +330,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                         timestamp: chrono::Utc::now(),
                         tool_calls,
                         is_streaming: false,
+                        duration_ms: None,
                     });
                 }
                 tracing::info!(
@@ -426,9 +428,13 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 format!("Model reloaded: {provider}/{model}"),
             );
         }
-        GatewayEvent::ThinkingDelta => {
-            // Keeps the thinking clock alive server-side; the desktop tracks
-            // thinking state via ThinkingStart/ThinkingEnd, so nothing to do.
+        GatewayEvent::ThinkingDelta { delta } => {
+            // Accumulate the reasoning text into the open thinking block so
+            // the transcript can show *why* the agent did what it did.
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.append_thinking(&delta);
+            }
         }
         GatewayEvent::ThreadSwitched { .. } => {
             // Thread state syncs via ThreadsUpdate/ThreadHistory.

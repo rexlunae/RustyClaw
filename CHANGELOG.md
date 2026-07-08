@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The agent explains itself: visible reasoning, compact tool activity,
+  timings.** The gateway has always streamed the model's reasoning text
+  over the wire, but the client event layer discarded it — users only
+  ever saw a spinner. `GatewayEvent::ThinkingDelta` now carries the
+  text, and both clients accumulate it into a collapsible 💭 block:
+  compact by default (a one-line gist under a "Thought for 4.2s"
+  header) and fully expandable (Ctrl+E in the TUI; the desktop renders
+  a step-per-paragraph reasoning timeline). Reasoning also folds the
+  moment answer text starts streaming instead of at stream end.
+  Tool calls in the TUI drop the raw-JSON peek for a semantic one-liner
+  (`read src/main.rs:10–80 · ✓ 0.4s · 71 lines`, `$ cargo test · ✓
+  12s`) with argument/result detail on expand, matching the desktop's
+  hint panels; both clients stamp every tool call and thinking block
+  with its client-measured wall-clock duration.
+
 - **Usage analytics and logs panels backed by real telemetry.** The
   gateway now installs a stats-collecting observer at startup (it
   previously passed `None`, so the observability layer recorded

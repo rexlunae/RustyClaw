@@ -52,7 +52,7 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         // ── Streaming ───────────────────────────────────────────────────
         E::StreamStart => GwEvent::StreamStart,
         E::ThinkingStart => GwEvent::ThinkingStart,
-        E::ThinkingDelta => GwEvent::ThinkingDelta,
+        E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(delta),
         E::ThinkingEnd => GwEvent::ThinkingEnd,
         E::Chunk { delta } => GwEvent::Chunk(delta),
         E::ResponseDone => GwEvent::ResponseDone,

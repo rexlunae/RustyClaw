@@ -22,6 +22,7 @@ fn from_chat_message_preserves_fields() {
         timestamp: chrono::Utc::now(),
         tool_calls: vec![],
         is_streaming: false,
+        duration_ms: None,
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, Some("Luthen".into()));
@@ -42,6 +43,7 @@ fn from_chat_message_handles_streaming() {
         timestamp: chrono::Utc::now(),
         tool_calls: vec![],
         is_streaming: true,
+        duration_ms: None,
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -59,6 +61,7 @@ fn from_chat_message_maps_tool_call_role_correctly() {
         timestamp: chrono::Utc::now(),
         tool_calls: vec![],
         is_streaming: false,
+        duration_ms: None,
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -76,6 +79,7 @@ fn from_tool_call_info_preserves_fields() {
         result: Some("results".into()),
         is_error: false,
         collapsed: true,
+        duration_ms: None,
     };
 
     let data = ToolCallData::from(&tc);
@@ -98,6 +102,7 @@ fn from_tool_call_info_pretty_prints_json() {
         result: None,
         is_error: false,
         collapsed: true,
+        duration_ms: None,
     };
 
     let data = ToolCallData::from(&tc);
@@ -118,6 +123,7 @@ fn from_tool_call_info_preserves_error_flag() {
         result: Some("Error: command not found".into()),
         is_error: true,
         collapsed: false,
+        duration_ms: None,
     };
 
     let data = ToolCallData::from(&tc);
@@ -183,6 +189,7 @@ fn empty_content_handled() {
         timestamp: chrono::Utc::now(),
         tool_calls: vec![],
         is_streaming: false,
+        duration_ms: None,
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -198,6 +205,7 @@ fn invalid_json_args_are_passed_through() {
         result: None,
         is_error: false,
         collapsed: false,
+        duration_ms: None,
     };
 
     let data = ToolCallData::from(&tc);
@@ -217,6 +225,7 @@ fn direct_construction_no_timestamp() {
         is_streaming: false,
         agent_name: Some("Luthen".into()),
         has_details: true,
+        duration_ms: None,
     };
 
     assert_eq!(data.role, MessageRole::Assistant);
@@ -236,6 +245,7 @@ fn from_chat_message_preserves_timestamp() {
         timestamp: now,
         tool_calls: vec![],
         is_streaming: false,
+        duration_ms: None,
     };
 
     let data = MessageBubbleData::from_chat_message(&msg, None);
@@ -629,4 +639,133 @@ fn pairing_step_labels() {
     assert_eq!(PairingStep::Complete.label(), "Pairing complete");
     assert!(PairingStep::Connecting.is_progress());
     assert!(PairingStep::Complete.is_complete());
+}
+
+// ── Agent self-explanation: compact tool summaries + reasoning ──────
+
+#[test]
+fn compact_action_describes_common_tools() {
+    let tc = |name: &str, args: &str| ToolCallData {
+        name: name.into(),
+        arguments: args.into(),
+        ..Default::default()
+    };
+    assert_eq!(
+        tc(
+            "read_file",
+            r#"{"path":"src/main.rs","start_line":10,"end_line":80}"#
+        )
+        .compact_action(),
+        "read src/main.rs:10–80"
+    );
+    assert_eq!(
+        tc("execute_command", r#"{"command":"cargo test --workspace"}"#).compact_action(),
+        "$ cargo test --workspace"
+    );
+    assert_eq!(
+        tc("search_files", r#"{"pattern":"TODO","path":"crates"}"#).compact_action(),
+        "search \"TODO\" in crates"
+    );
+    assert_eq!(
+        tc("web_search", r#"{"query":"rust iocraft"}"#).compact_action(),
+        "web search \"rust iocraft\""
+    );
+    // Unknown tool falls back to name + first string argument.
+    assert_eq!(
+        tc("custom_tool", r#"{"target":"alpha"}"#).compact_action(),
+        "custom_tool alpha"
+    );
+    // Unparseable arguments fall back to just the name.
+    assert_eq!(tc("mystery", "not json").compact_action(), "mystery");
+}
+
+#[test]
+fn compact_action_truncates_long_commands() {
+    let long = format!("{{\"command\":\"echo {}\"}}", "x".repeat(200));
+    let tc = ToolCallData {
+        name: "execute_command".into(),
+        arguments: long,
+        ..Default::default()
+    };
+    let action = tc.compact_action();
+    assert!(action.starts_with("$ echo "));
+    assert!(action.ends_with('…'));
+    assert!(action.chars().count() < 70);
+}
+
+#[test]
+fn result_gist_summarises_outcomes() {
+    let mut tc = ToolCallData {
+        name: "execute_command".into(),
+        arguments: r#"{"command":"false"}"#.into(),
+        result: Some("some output\nExit code: 2".into()),
+        ..Default::default()
+    };
+    assert_eq!(tc.result_gist().as_deref(), Some("exit 2"));
+
+    tc.name = "search_files".into();
+    tc.result = Some("a.rs:1:x\nb.rs:2:y\n".into());
+    assert_eq!(tc.result_gist().as_deref(), Some("2 matches"));
+
+    tc.name = "read_file".into();
+    tc.result = Some("l1\nl2\nl3".into());
+    assert_eq!(tc.result_gist().as_deref(), Some("3 lines"));
+
+    // Errors always gist to their first line.
+    tc.is_error = true;
+    tc.result = Some("No such file or directory\ndetails follow".into());
+    assert_eq!(
+        tc.result_gist().as_deref(),
+        Some("No such file or directory…")
+    );
+
+    // Still running → no gist.
+    tc.result = None;
+    assert!(tc.result_gist().is_none());
+}
+
+#[test]
+fn format_duration_is_human() {
+    use rustyclaw_view::format_duration_ms;
+    assert_eq!(format_duration_ms(432), "0.4s");
+    assert_eq!(format_duration_ms(9_400), "9.4s");
+    assert_eq!(format_duration_ms(42_000), "42s");
+    assert_eq!(format_duration_ms(125_000), "2m 05s");
+}
+
+#[test]
+fn thinking_bubble_collapses_to_one_line_gist() {
+    let mut data = MessageBubbleData {
+        role: MessageRole::Thinking,
+        content: "First I check the config.\nThen I look at the registry.".into(),
+        collapsed: true,
+        ..Default::default()
+    };
+    assert!(data.is_collapsible());
+    let rendered = data.content_for_render();
+    assert!(rendered.starts_with("First I check the config.…"));
+    assert!(rendered.contains("Ctrl+E"));
+
+    // Expanded → the full reasoning text, untruncated.
+    data.collapsed = false;
+    assert_eq!(
+        data.content_for_render(),
+        "First I check the config.\nThen I look at the registry."
+    );
+}
+
+#[test]
+fn thinking_summary_carries_duration() {
+    let mut data = MessageBubbleData {
+        role: MessageRole::Thinking,
+        content: "reasoning".into(),
+        ..Default::default()
+    };
+    assert_eq!(data.thinking_summary(), "Thought");
+    data.duration_ms = Some(4_200);
+    assert_eq!(data.thinking_summary(), "Thought for 4.2s");
+    assert_eq!(data.header_label(), "Thought for 4.2s");
+    data.duration_ms = None;
+    data.is_streaming = true;
+    assert_eq!(data.thinking_summary(), "Thinking…");
 }

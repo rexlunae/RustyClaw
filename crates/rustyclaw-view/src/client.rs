@@ -222,10 +222,17 @@ impl ClientState {
         }
     }
 
-    /// Set the result for a tool call.
-    pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {
+    /// Set the result for a tool call, with the client-measured execution
+    /// time (None when no timing is available).
+    pub fn set_tool_result(
+        &mut self,
+        id: &str,
+        result: String,
+        is_error: bool,
+        duration_ms: Option<u64>,
+    ) {
         for msg in self.messages.iter_mut().rev() {
-            msg.set_tool_result(id, result.clone(), is_error);
+            msg.set_tool_result(id, result.clone(), is_error, duration_ms);
         }
     }
 
@@ -324,6 +331,7 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
         timestamp: chrono::Utc::now(),
         tool_calls: Vec::<ToolCallInfo>::new(),
         is_streaming: false,
+        duration_ms: None,
     }
 }
 

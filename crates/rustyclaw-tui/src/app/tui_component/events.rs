@@ -28,6 +28,8 @@ pub(super) fn apply_gw_event(
         mut gw_status,
         mut streaming,
         mut stream_start,
+        mut thinking_start,
+        mut tool_started,
         mut elapsed,
         mut scroll_offset,
         mut spinner_tick,
@@ -325,16 +327,50 @@ pub(super) fn apply_gw_event(
             if stream_start.get().is_none() {
                 stream_start.set(Some(Instant::now()));
             }
+            thinking_start.set(Some(Instant::now()));
             let mut m = messages.read().clone();
-            m.push(DisplayMessage::thinking("Thinking…"));
+            m.push(DisplayMessage::thinking(""));
             messages.set(m);
         }
-        GwEvent::ThinkingDelta => {
-            // Thinking is ongoing — keep spinner alive
+        GwEvent::ThinkingDelta(delta) => {
+            // Accumulate the reasoning text into the open thinking block
+            // so the user can expand it later and see *why* the agent did
+            // what it did.
+            let mut m = messages.read().clone();
+            match m.last_mut() {
+                Some(last) if last.role == rustyclaw_core::types::MessageRole::Thinking => {
+                    last.append(&delta);
+                }
+                _ => {
+                    let mut msg = DisplayMessage::thinking("");
+                    msg.append(&delta);
+                    m.push(msg);
+                }
+            }
+            messages.set(m);
         }
         GwEvent::ThinkingEnd => {
-            // Thinking done, but streaming may continue
-            // with chunks. Don't clear streaming here.
+            // Thinking done, but streaming may continue with chunks.
+            // Don't clear streaming here — just close out the thinking
+            // block: stamp its duration and fold it to a one-line gist
+            // (drop it entirely if the provider sent no reasoning text).
+            let duration_ms = thinking_start.get().map(|t| t.elapsed().as_millis() as u64);
+            thinking_start.set(None);
+            let mut m = messages.read().clone();
+            // The open block is usually last, but text chunks may already
+            // have started a new assistant bubble after it — search from
+            // the rear for the newest thinking block not yet closed out.
+            if let Some(idx) = m.iter().rposition(|x| {
+                x.role == rustyclaw_core::types::MessageRole::Thinking && x.duration_ms.is_none()
+            }) {
+                if m[idx].content.trim().is_empty() {
+                    m.remove(idx);
+                } else {
+                    m[idx].duration_ms = duration_ms;
+                    m[idx].collapsed = true;
+                }
+                messages.set(m);
+            }
         }
         GwEvent::ModelReady(detail) => {
             gw_status.set(rustyclaw_core::types::GatewayStatus::ModelReady);
@@ -367,6 +403,9 @@ pub(super) fn apply_gw_event(
             name,
             arguments,
         } => {
+            let mut started = tool_started.read().clone();
+            started.insert(id.clone(), Instant::now());
+            tool_started.set(started);
             let mut m = messages.read().clone();
             if m.last()
                 .map(|x| x.role == rustyclaw_core::types::MessageRole::Assistant)
@@ -388,11 +427,14 @@ pub(super) fn apply_gw_event(
             result,
             is_error,
         } => {
+            let mut started = tool_started.read().clone();
+            let duration_ms = started.remove(&id).map(|t| t.elapsed().as_millis() as u64);
+            tool_started.set(started);
             let mut m = messages.read().clone();
             let mut matched = false;
             for msg in m.iter_mut().rev() {
                 let before = msg.tool_calls.len();
-                msg.set_tool_result(&id, result.clone(), is_error);
+                msg.set_tool_result(&id, result.clone(), is_error, duration_ms);
                 let after_match = msg
                     .tool_calls
                     .iter()
@@ -405,7 +447,12 @@ pub(super) fn apply_gw_event(
             if !matched {
                 let mut fallback = DisplayMessage::assistant("");
                 fallback.add_tool_call(id, name, "{}".to_string());
-                fallback.set_tool_result(&fallback.tool_calls[0].id.clone(), result, is_error);
+                fallback.set_tool_result(
+                    &fallback.tool_calls[0].id.clone(),
+                    result,
+                    is_error,
+                    duration_ms,
+                );
                 m.push(fallback);
             }
             messages.set(m);

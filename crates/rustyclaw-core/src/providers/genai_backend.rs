@@ -187,6 +187,15 @@ async fn consume_stream(
                     server::send_stream_start(writer).await?;
                     stream_started = true;
                 }
+                // The reasoning block is over the moment answer text starts:
+                // close it now so clients fold it (and measure its duration)
+                // at the right time instead of at stream end. Interleaved
+                // thinking simply opens a fresh block on the next
+                // ReasoningChunk.
+                if thinking_started {
+                    let _ = server::send_thinking_end(writer).await;
+                    thinking_started = false;
+                }
                 result.text.push_str(&chunk.content);
                 server::send_chunk(writer, &chunk.content).await?;
             }

@@ -64,8 +64,10 @@ pub enum GatewayEvent {
     /// Thinking started (extended thinking)
     ThinkingStart,
 
-    /// A thinking delta was received (used to keep the thinking clock alive)
-    ThinkingDelta,
+    /// A chunk of the model's reasoning text. Clients accumulate these into
+    /// a collapsible "thinking" block so the user can see *why* the agent
+    /// did what it did, not just that it paused.
+    ThinkingDelta { delta: String },
 
     /// Thinking ended
     ThinkingEnd,
@@ -1065,7 +1067,7 @@ impl GatewayEvent {
             }),
             ServerPayload::StreamStart => Some(GatewayEvent::StreamStart),
             ServerPayload::ThinkingStart => Some(GatewayEvent::ThinkingStart),
-            ServerPayload::ThinkingDelta { .. } => Some(GatewayEvent::ThinkingDelta),
+            ServerPayload::ThinkingDelta { delta } => Some(GatewayEvent::ThinkingDelta { delta }),
             ServerPayload::ThinkingEnd => Some(GatewayEvent::ThinkingEnd),
             ServerPayload::Chunk { delta } => Some(GatewayEvent::Chunk { delta }),
             ServerPayload::ResponseDone { .. } => Some(GatewayEvent::ResponseDone),

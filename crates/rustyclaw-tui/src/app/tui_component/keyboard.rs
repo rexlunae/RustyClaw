@@ -30,6 +30,8 @@ pub(super) fn apply_key_event(
         mut gw_status,
         mut streaming,
         mut stream_start,
+        thinking_start: _,
+        tool_started: _,
         mut elapsed,
         mut scroll_offset,
         mut spinner_tick,

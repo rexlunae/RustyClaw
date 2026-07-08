@@ -54,6 +54,13 @@ pub struct AppState {
     /// Current thinking state (for extended thinking models)
     pub is_thinking: bool,
 
+    /// When the current thinking block began (for "Thought for Xs").
+    pub thinking_started: Option<std::time::Instant>,
+
+    /// Start times of in-flight tool calls, by tool-call id, so results
+    /// can be stamped with a wall-clock duration.
+    pub tool_started: HashMap<String, std::time::Instant>,
+
     /// Active threads/sessions
     pub threads: Vec<ThreadInfo>,
 
@@ -252,6 +259,8 @@ impl Default for AppState {
             is_processing: false,
             is_streaming: false,
             is_thinking: false,
+            thinking_started: None,
+            tool_started: HashMap::new(),
             projects: Vec::new(),
             active_project_id: 0,
             threads: Vec::new(),
@@ -397,19 +406,68 @@ impl AppState {
         }
     }
 
-    /// Add a tool call to the current message.
+    /// Add a tool call to the current message and start its clock.
     pub fn add_tool_call(&mut self, id: String, name: String, arguments: String) {
+        self.tool_started
+            .insert(id.clone(), std::time::Instant::now());
         if let Some(msg) = self.messages.back_mut() {
             msg.add_tool_call(id, name, arguments);
         }
     }
 
-    /// Set the result for a tool call.
+    /// Set the result for a tool call, stamping the wall-clock duration
+    /// measured since the matching `add_tool_call`.
     pub fn set_tool_result(&mut self, id: &str, result: String, is_error: bool) {
+        let duration_ms = self
+            .tool_started
+            .remove(id)
+            .map(|t| t.elapsed().as_millis() as u64);
         for msg in self.messages.iter_mut().rev() {
-            msg.set_tool_result(id, result.clone(), is_error);
+            msg.set_tool_result(id, result.clone(), is_error, duration_ms);
             // If this message had the matching tool call, the set was done.
             // We only need to check if it updated, but for simplicity just scan.
+        }
+    }
+
+    /// Open a thinking block: push a streaming Thinking message that
+    /// accumulates reasoning deltas.
+    pub fn start_thinking_message(&mut self) {
+        self.is_thinking = true;
+        self.thinking_started = Some(std::time::Instant::now());
+        self.messages.push_back(ChatMessage::start_thinking());
+    }
+
+    /// Append reasoning text to the open thinking block (no-op when the
+    /// latest message isn't a streaming Thinking block).
+    pub fn append_thinking(&mut self, delta: &str) {
+        if let Some(msg) = self.messages.back_mut()
+            && msg.role == rustyclaw_core::types::MessageRole::Thinking
+        {
+            msg.content.push_str(delta);
+        }
+    }
+
+    /// Close the thinking block: stamp its duration, finish streaming,
+    /// and drop it entirely if the provider sent no reasoning text.
+    /// The open block is usually last, but answer chunks may already have
+    /// started a new assistant bubble after it — search from the rear for
+    /// the newest thinking block not yet closed out.
+    pub fn end_thinking_message(&mut self) {
+        self.is_thinking = false;
+        let duration_ms = self
+            .thinking_started
+            .take()
+            .map(|t| t.elapsed().as_millis() as u64);
+        let Some(idx) = self.messages.iter().rposition(|m| {
+            m.role == rustyclaw_core::types::MessageRole::Thinking && m.is_streaming
+        }) else {
+            return;
+        };
+        if self.messages[idx].content.trim().is_empty() {
+            self.messages.remove(idx);
+        } else if let Some(msg) = self.messages.get_mut(idx) {
+            msg.duration_ms = duration_ms;
+            msg.is_streaming = false;
         }
     }
 
@@ -516,5 +574,6 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
         timestamp: chrono::Utc::now(),
         tool_calls: Vec::new(),
         is_streaming: false,
+        duration_ms: None,
     }
 }

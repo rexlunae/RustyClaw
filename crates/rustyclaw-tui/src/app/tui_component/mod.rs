@@ -59,6 +59,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let gw_status = hooks.use_state(|| rustyclaw_core::types::GatewayStatus::Connecting);
     let streaming = hooks.use_state(|| false);
     let stream_start: State<Option<Instant>> = hooks.use_state(|| None);
+    let thinking_start: State<Option<Instant>> = hooks.use_state(|| None);
+    let tool_started: State<std::collections::HashMap<String, Instant>> =
+        hooks.use_state(std::collections::HashMap::new);
     let mut elapsed = hooks.use_state(String::new);
     let mut scroll_offset = hooks.use_state(|| 0i32);
     let mut spinner_tick = hooks.use_state(|| 0usize);
@@ -246,6 +249,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         gw_status,
         streaming,
         stream_start,
+        thinking_start,
+        tool_started,
         elapsed,
         scroll_offset,
         spinner_tick,

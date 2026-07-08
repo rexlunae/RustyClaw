@@ -21,18 +21,14 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
     let bg = theme::role_bg(role);
     let border = theme::role_border(role);
 
+    // content_for_render handles collapsed previews for every role,
+    // including the one-line gist for folded Thinking blocks (and the
+    // full reasoning text when expanded).
     let render_content = props.data.content_for_render();
     let display = if props.data.should_render_markdown() {
         markdown::render_ansi(render_content.as_ref())
     } else {
-        // display_content() handles thinking-message truncation;
-        // for uncollapsed non-markdown messages fall back to it so
-        // that behaviour is preserved.
-        if props.data.collapsed && props.data.is_collapsible() {
-            render_content.into_owned()
-        } else {
-            props.data.display_content().into_owned()
-        }
+        render_content.into_owned()
     };
 
     // Show the action bar only for assistant messages; it is not useful
@@ -63,7 +59,7 @@ pub fn MessageBubble(props: &MessageBubbleProps) -> impl Into<AnyElement<'static
             padding_right: 1,
         ) {
             Text(
-                content: format!("{} {}", props.data.icon(), props.data.display_name()),
+                content: format!("{} {}", props.data.icon(), props.data.header_label()),
                 color: border,
                 weight: Weight::Bold,
             )
