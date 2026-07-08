@@ -166,8 +166,12 @@ pub async fn exec_execute_command_streaming(
                         // Check if we should auto-background
                         if now >= yield_deadline {
                             debug!(yield_ms, "Auto-backgrounding long-running process");
-                            // Dropping the child closes the pipes; the
-                            // reader tasks end on EOF.
+                            // The accumulated buffers are unused on this
+                            // path and dropping the child closes the pipes
+                            // anyway — reap the readers now rather than
+                            // leaving them to linger until EOF.
+                            out_task.abort();
+                            err_task.abort();
                             return background_child(child, command, &cwd, timeout_deadline).await;
                         }
 
@@ -175,12 +179,18 @@ pub async fn exec_execute_command_streaming(
                         if now >= timeout_deadline {
                             warn!(timeout_secs, "Command timed out");
                             let _ = child.kill().await;
+                            out_task.abort();
+                            err_task.abort();
                             return Err(format!("Command timed out after {} seconds", timeout_secs).into());
                         }
 
                         // Continue loop
                     }
-                    Err(e) => return Err(format!("Error waiting for command: {}", e).into()),
+                    Err(e) => {
+                        out_task.abort();
+                        err_task.abort();
+                        return Err(format!("Error waiting for command: {}", e).into());
+                    }
                 }
             }
         }
