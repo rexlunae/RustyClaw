@@ -76,14 +76,19 @@ impl EnginesPanelData {
         }
     }
 
-    /// Mark an engine's install as finished (success or failure), recording
-    /// the terminal message.
+    /// Mark an engine's install as finished (success or failure).
+    ///
+    /// The terminal `message` from a streaming install is the full joined
+    /// output that was already recorded line by line, so it is only used as
+    /// a fallback when nothing streamed — e.g. an "already installed" early
+    /// return that never shelled out. Appending it otherwise would show the
+    /// whole log a second time as one blob.
     pub fn finish_install(&mut self, engine: &str, ok: bool, message: impl Into<String>) {
         let entry = self.install_output.entry(engine.to_string()).or_default();
         entry.done = true;
         entry.ok = ok;
         let message = message.into();
-        if !message.trim().is_empty() {
+        if entry.lines.is_empty() && !message.trim().is_empty() {
             entry.lines.push(message);
         }
         let overflow = entry
@@ -333,11 +338,27 @@ mod tests {
         assert!(!out.done);
         assert_eq!(out.status_line(), "installing…");
 
-        panel.finish_install("ollama", true, "Ollama installed.");
+        // The terminal message is the full joined output already streamed,
+        // so finishing must NOT re-append it (which would duplicate the log).
+        panel.finish_install("ollama", true, "downloading…\ninstalling binary");
         let out = panel.active_install_output().unwrap();
         assert!(out.done && out.ok);
         assert_eq!(out.status_line(), "install complete");
-        assert_eq!(out.lines.last().unwrap(), "Ollama installed.");
+        assert_eq!(out.lines, vec!["downloading…", "installing binary"]);
+    }
+
+    #[test]
+    fn finish_install_uses_message_only_when_nothing_streamed() {
+        let mut panel = EnginesPanelData {
+            engines: vec![engine("ollama")],
+            selected_engine: Some("ollama".into()),
+            ..Default::default()
+        };
+        // No streamed lines (e.g. an "already installed" early return).
+        panel.finish_install("ollama", true, "Ollama is already installed.");
+        let out = panel.active_install_output().unwrap();
+        assert_eq!(out.lines, vec!["Ollama is already installed."]);
+        assert!(out.done && out.ok);
     }
 
     #[test]
