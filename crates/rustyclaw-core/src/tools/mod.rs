@@ -609,18 +609,43 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "image_generate",
 ];
 
+/// A chunk of live output from a running tool, for streaming to clients
+/// while the tool is still executing.
+#[derive(Clone, Debug)]
+pub struct ToolOutputChunk {
+    pub chunk: String,
+    pub is_stderr: bool,
+}
+
+/// Sink a tool can use to stream live output while it runs. Sending is
+/// best-effort: a dropped receiver must never fail the tool.
+pub type ToolOutputSink = tokio::sync::mpsc::UnboundedSender<ToolOutputChunk>;
+
 /// Find a tool by name and execute it with the given arguments.
+pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> ToolResult {
+    execute_tool_streaming(name, args, workspace_dir, None).await
+}
+
+/// Like [`execute_tool`], but tools that produce incremental output
+/// (currently `execute_command`) stream it into `output` as it arrives.
 ///
 /// Tools with async implementations are called directly.
 /// Other tools run on a blocking thread pool to avoid blocking the async runtime.
-#[instrument(skip(args, workspace_dir), fields(tool = name))]
-pub async fn execute_tool(name: &str, args: &Value, workspace_dir: &Path) -> ToolResult {
+#[instrument(skip(args, workspace_dir, output), fields(tool = name))]
+pub async fn execute_tool_streaming(
+    name: &str,
+    args: &Value,
+    workspace_dir: &Path,
+    output: Option<ToolOutputSink>,
+) -> ToolResult {
     debug!("Executing tool");
 
     // Handle async-native tools directly
     if ASYNC_NATIVE_TOOLS.contains(&name) {
         let result = match name {
-            "execute_command" => runtime::exec_execute_command_async(args, workspace_dir).await,
+            "execute_command" => {
+                runtime::exec_execute_command_streaming(args, workspace_dir, output).await
+            }
             "process" => runtime::exec_process_async(args, workspace_dir).await,
             "web_fetch" => web::exec_web_fetch_async(args, workspace_dir).await,
             "web_search" => web::exec_web_search_async(args, workspace_dir).await,

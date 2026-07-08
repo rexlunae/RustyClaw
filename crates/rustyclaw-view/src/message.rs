@@ -304,6 +304,10 @@ pub struct ToolCallData {
     /// between the ToolCall and ToolResult events. None while running
     /// or for calls replayed from history (which carries no timings).
     pub duration_ms: Option<u64>,
+
+    /// Live output tail streamed while the tool runs (CR-overwrites
+    /// applied, ANSI stripped, bounded). Cleared when the result arrives.
+    pub live_output: String,
 }
 
 impl Default for ToolCallData {
@@ -316,11 +320,29 @@ impl Default for ToolCallData {
             is_error: false,
             collapsed: true,
             duration_ms: None,
+            live_output: String::new(),
         }
     }
 }
 
 impl ToolCallData {
+    /// Whether the call is still executing (no result yet).
+    pub fn is_running(&self) -> bool {
+        self.result.is_none()
+    }
+
+    /// The last `max_lines` lines of the live output tail, for rendering
+    /// under a running tool's header. None when nothing has streamed yet.
+    pub fn live_tail(&self, max_lines: usize) -> Option<String> {
+        let text = self.live_output.trim_end_matches(['\r', '\n']);
+        if text.trim().is_empty() {
+            return None;
+        }
+        let lines: Vec<&str> = text.lines().collect();
+        let start = lines.len().saturating_sub(max_lines);
+        Some(lines[start..].join("\n"))
+    }
+
     /// A short summary line for this tool call.
     ///
     /// e.g. `"🔧 web_search"` or `"🔧 write_file (error)"`
@@ -517,6 +539,7 @@ impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {
             is_error: tc.is_error,
             collapsed: tc.collapsed,
             duration_ms: tc.duration_ms,
+            live_output: tc.live_output.clone(),
         }
     }
 }

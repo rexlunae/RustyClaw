@@ -80,6 +80,7 @@ fn from_tool_call_info_preserves_fields() {
         is_error: false,
         collapsed: true,
         duration_ms: None,
+        live_output: String::new(),
     };
 
     let data = ToolCallData::from(&tc);
@@ -103,6 +104,7 @@ fn from_tool_call_info_pretty_prints_json() {
         is_error: false,
         collapsed: true,
         duration_ms: None,
+        live_output: String::new(),
     };
 
     let data = ToolCallData::from(&tc);
@@ -124,6 +126,7 @@ fn from_tool_call_info_preserves_error_flag() {
         is_error: true,
         collapsed: false,
         duration_ms: None,
+        live_output: String::new(),
     };
 
     let data = ToolCallData::from(&tc);
@@ -206,6 +209,7 @@ fn invalid_json_args_are_passed_through() {
         is_error: false,
         collapsed: false,
         duration_ms: None,
+        live_output: String::new(),
     };
 
     let data = ToolCallData::from(&tc);
@@ -807,6 +811,7 @@ fn conversions_propagate_duration() {
         is_error: false,
         collapsed: true,
         duration_ms: Some(400),
+        live_output: String::new(),
     };
     assert_eq!(ToolCallData::from(&tc).duration_ms, Some(400));
 }

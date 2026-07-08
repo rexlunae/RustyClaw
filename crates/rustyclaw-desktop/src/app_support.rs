@@ -186,6 +186,13 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 s.is_streaming = false;
             }
         }
+        GatewayEvent::ToolOutput { id, chunk, .. } => {
+            // Live output from a running tool: update its panel in place.
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.append_tool_output(&id, &chunk);
+            }
+        }
         GatewayEvent::ToolResult {
             id,
             name: _,
@@ -320,6 +327,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                                 is_error: false,
                                 collapsed: true,
                                 duration_ms: None,
+                                live_output: String::new(),
                             });
                         }
                     }
