@@ -38,6 +38,7 @@ pub(super) fn handle_normal_key(
         mut stream_start,
         thinking_start: _,
         tool_started: _,
+        mut active_process,
         mut elapsed,
         mut scroll_offset,
         mut spinner_tick,
@@ -611,6 +612,63 @@ pub(super) fn handle_normal_key(
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
                     let _ = tx.send(UserInput::Quit);
+                }
+            }
+        }
+        // ── Inline process controls ─────────────────────────────────
+        // Only live while a tool call is waiting on a controllable child
+        // process (the running tool panel shows these hints inline).
+        KeyCode::Char('z')
+            if modifiers.contains(KeyModifiers::CONTROL) && active_process.read().is_some() =>
+        {
+            let ap = active_process.read().clone();
+            if let Some(ap) = ap {
+                let action = if ap.paused {
+                    rustyclaw_core::exec_status::ProcessControlAction::Resume
+                } else {
+                    rustyclaw_core::exec_status::ProcessControlAction::Pause
+                };
+                if let Ok(guard) = tx_for_keys.lock() {
+                    if let Some(ref tx) = *guard {
+                        let _ = tx.send(UserInput::ProcessControl {
+                            pid: ap.pid,
+                            action,
+                        });
+                    }
+                }
+                // Flip optimistically so the inline hint switches between
+                // pause/resume immediately; the next status frame confirms.
+                active_process.set(Some(super::state::ActiveProcess {
+                    paused: !ap.paused,
+                    ..ap
+                }));
+            }
+        }
+        KeyCode::Char('t')
+            if modifiers.contains(KeyModifiers::CONTROL) && active_process.read().is_some() =>
+        {
+            if let Some(ap) = active_process.read().clone() {
+                if let Ok(guard) = tx_for_keys.lock() {
+                    if let Some(ref tx) = *guard {
+                        let _ = tx.send(UserInput::ProcessControl {
+                            pid: ap.pid,
+                            action: rustyclaw_core::exec_status::ProcessControlAction::Stop,
+                        });
+                    }
+                }
+            }
+        }
+        KeyCode::Char('k')
+            if modifiers.contains(KeyModifiers::CONTROL) && active_process.read().is_some() =>
+        {
+            if let Some(ap) = active_process.read().clone() {
+                if let Ok(guard) = tx_for_keys.lock() {
+                    if let Some(ref tx) = *guard {
+                        let _ = tx.send(UserInput::ProcessControl {
+                            pid: ap.pid,
+                            action: rustyclaw_core::exec_status::ProcessControlAction::Kill,
+                        });
+                    }
                 }
             }
         }

@@ -24,6 +24,7 @@ pub mod daemon;
 pub mod engines;
 pub mod error;
 pub mod error_details;
+pub mod exec_status;
 pub mod gateway;
 pub mod host;
 pub mod load;

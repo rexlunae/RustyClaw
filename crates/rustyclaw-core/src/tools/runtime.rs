@@ -99,15 +99,20 @@ pub async fn exec_execute_command_streaming(
 
     // For commands with yield support, use tokio::process
     #[cfg(unix)]
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(&cwd)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| ToolError::context("Failed to execute command", e))?;
+    let mut child = {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(&cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            // Lead a fresh process group so pause/stop/kill signals sent
+            // via the exec-status registry reach the shell's children too.
+            .process_group(0);
+        cmd.spawn()
+            .map_err(|e| ToolError::context("Failed to execute command", e))?
+    };
 
     #[cfg(windows)]
     let mut child = Command::new("cmd")
@@ -131,8 +136,14 @@ pub async fn exec_execute_command_streaming(
         .spawn()
         .map_err(|e| ToolError::context("Failed to execute command", e))?;
 
-    let yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
-    let timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    // Register the child for live status sampling and user control
+    // (pause/stop/kill); the guard deregisters it when the wait ends.
+    let child_pid = child.id();
+    let _exec_guard = child_pid.map(|pid| crate::exec_status::register(pid, command));
+
+    let mut yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
+    let mut timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut last_poll = Instant::now();
 
     // Read the pipes incrementally instead of buffering with
     // wait_with_output(): the readers accumulate the full output for the
@@ -162,6 +173,16 @@ pub async fn exec_execute_command_streaming(
                     Ok(None) => {
                         // Still running - check deadlines
                         let now = Instant::now();
+
+                        // While the user has the process paused, freeze both
+                        // deadlines — a paused process must not time out or
+                        // auto-background underneath them.
+                        if child_pid.is_some_and(crate::exec_status::is_paused) {
+                            let frozen = now.saturating_duration_since(last_poll);
+                            yield_deadline += frozen;
+                            timeout_deadline += frozen;
+                        }
+                        last_poll = now;
 
                         // Check if we should auto-background
                         if now >= yield_deadline {
@@ -404,24 +425,47 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
         return format_output(output, timeout_secs);
     }
 
-    let mut child = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(&cwd)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|e| ToolError::context("Failed to execute command", e))?;
+    let mut child = {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(&cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        // Lead a fresh process group so pause/stop/kill signals sent via
+        // the exec-status registry reach the shell's children too.
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
+        }
+        cmd.spawn()
+            .map_err(|e| ToolError::context("Failed to execute command", e))?
+    };
 
-    let yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
-    let timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    // Register for live status sampling and user control; the guard
+    // deregisters when the wait ends (including the backgrounding path).
+    let child_pid = child.id();
+    let _exec_guard = crate::exec_status::register(child_pid, command);
+
+    let mut yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
+    let mut timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
+    let mut last_poll = Instant::now();
 
     loop {
         match child.try_wait() {
             Ok(Some(_)) => break,
             Ok(None) => {
                 let now = Instant::now();
+
+                // Freeze deadlines while the user has the process paused.
+                if crate::exec_status::is_paused(child_pid) {
+                    let frozen = now.saturating_duration_since(last_poll);
+                    yield_deadline += frozen;
+                    timeout_deadline += frozen;
+                }
+                last_poll = now;
 
                 if now >= yield_deadline {
                     let manager = process_manager();

@@ -69,6 +69,21 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
         props.data.result_preview(2000, 40)
     };
 
+    // Live status while the call runs: elapsed time plus CPU/state/memory
+    // of the child process, with inline control hints when controllable.
+    let live_status = props.data.live_status_line().map(|line| {
+        if props.data.is_controllable() {
+            let pause_hint = if props.data.is_process_paused() {
+                "Ctrl+Z resume"
+            } else {
+                "Ctrl+Z pause"
+            };
+            format!("{line} — {pause_hint} · Ctrl+T stop · Ctrl+K kill")
+        } else {
+            line
+        }
+    });
+
     element! {
         View(
             width: 100pct,
@@ -81,6 +96,13 @@ pub fn ToolCallPanel(props: &ToolCallPanelProps) -> impl Into<AnyElement<'static
                 color,
                 weight: if collapsed { Weight::Normal } else { Weight::Bold },
             )
+            #(if let Some(status) = live_status {
+                element! {
+                    Text(content: status, color: theme::WARN, wrap: TextWrap::Wrap)
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
             #(if let Some(tail) = live_tail {
                 element! {
                     Text(content: tail, color: theme::TEXT_DIM, wrap: TextWrap::Wrap)

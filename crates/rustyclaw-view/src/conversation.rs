@@ -95,6 +95,7 @@ impl DisplayMessageData {
             is_error: false,
             collapsed: true,
             duration_ms: None,
+            live_status: None,
             live_output: String::new(),
         });
     }
@@ -125,11 +126,28 @@ impl DisplayMessageData {
                 tc.result = Some(result);
                 tc.is_error = is_error;
                 tc.duration_ms = duration_ms;
+                tc.live_status = None;
                 // The final result supersedes the live tail.
                 tc.live_output = String::new();
                 return;
             }
         }
+    }
+
+    /// Update the live status of a still-running tool call. Returns true
+    /// if a matching, unfinished call was found.
+    pub fn set_tool_live_status(
+        &mut self,
+        id: &str,
+        status: rustyclaw_core::ui::ToolLiveStatus,
+    ) -> bool {
+        for tc in &mut self.tool_calls {
+            if tc.id == id && tc.result.is_none() {
+                tc.live_status = Some(status);
+                return true;
+            }
+        }
+        false
     }
 
     pub const AUTO_COLLAPSE_LINES: usize = 40;

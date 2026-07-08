@@ -206,6 +206,31 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 s.set_tool_result(&id, result, is_error);
             }
         }
+        GatewayEvent::ToolStatus {
+            id,
+            name: _,
+            elapsed_ms,
+            pid,
+            cpu_percent,
+            memory_bytes,
+            state: proc_state,
+            message,
+        } => {
+            let mut s = state.write();
+            if s.stream_targets_foreground() {
+                s.set_tool_live_status(
+                    &id,
+                    rustyclaw_core::ui::ToolLiveStatus {
+                        elapsed_ms,
+                        pid,
+                        cpu_percent,
+                        memory_bytes,
+                        state: proc_state,
+                        message,
+                    },
+                );
+            }
+        }
         GatewayEvent::ToolApprovalRequest {
             id,
             name,
@@ -327,6 +352,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                                 is_error: false,
                                 collapsed: true,
                                 duration_ms: None,
+                                live_status: None,
                                 live_output: String::new(),
                             });
                         }

@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Live display and inline controls for long-running processes.** While
+  a tool call executes, the gateway now streams a `ToolStatus` frame
+  every second (after a 2s grace period so fast tools stay silent)
+  carrying the call's elapsed time and — when the tool is waiting on a
+  child process — that process's CPU usage, resident memory, and
+  scheduler state (running, sleeping, blocked on I/O, paused, …),
+  sampled via a new exec-status registry that every foreground
+  `execute_command` child registers with. The TUI renders this as a
+  live line inside the inline tool panel (`⏳ 12s · running · cpu 87% ·
+  mem 145 MB · pid 4242`), the desktop shows the same line under the
+  running tool call, and the CLI prints periodic status to stderr.
+  When the status carries a PID the process is controllable inline from
+  the chat — Ctrl+Z pauses/resumes (SIGSTOP/SIGCONT, with the exec
+  timeout clock frozen while paused so a paused command can't time
+  out), Ctrl+T sends SIGTERM, Ctrl+K sends SIGKILL — via a new
+  `ProcessControl` client frame that the gateway's reader task handles
+  even while the tool loop is blocked on that very process. Controls
+  are allowlisted: only PIDs the gateway itself spawned for the current
+  tool call can be signalled, and exec children now lead their own
+  process group so signals reach the whole shell pipeline.
 - **Live tool activity.** Running commands now show their output as it
   happens, inside the same panel as the tool call. `execute_command`
   reads the child's pipes incrementally and the gateway forwards each

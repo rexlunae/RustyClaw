@@ -428,6 +428,18 @@ pub(crate) async fn handle_connection(
                                 reader_tool_cancel.store(true, Ordering::Relaxed);
                                 continue;
                             }
+                            // Process control must be handled here, in the
+                            // reader task, so it works while the main loop is
+                            // blocked awaiting the very tool being controlled.
+                            if frame.frame_type == ClientFrameType::ProcessControl {
+                                if let ClientPayload::ProcessControl { pid, action } = frame.payload {
+                                    match rustyclaw_core::exec_status::control(pid, action) {
+                                        Ok(msg) => tracing::info!(pid, %action, "Process control: {msg}"),
+                                        Err(e) => tracing::warn!(pid, %action, "Process control failed: {e}"),
+                                    }
+                                    continue;
+                                }
+                            }
                             if frame.frame_type == ClientFrameType::ToolApprovalResponse {
                                 if let ClientPayload::ToolApprovalResponse { id, approved } = frame.payload {
                                     let _ = approval_tx.send((id, approved)).await;
@@ -777,12 +789,13 @@ pub(crate) async fn handle_connection(
                                     &config.engines,
                                 ).await?;
                             }
-                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } => {
+                            ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } | ClientPayload::ProcessControl { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.
                                 // UserPromptResponse handled by the reader task.
                                 // CredentialResponse handled by the reader task.
                                 // DomQueryResponse handled by the reader task.
+                                // ProcessControl handled by the reader task.
                             }
                         }
             }

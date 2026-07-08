@@ -540,6 +540,79 @@ mod serialization {
     }
 
     #[test]
+    fn test_tool_status_and_process_control_frame_values() {
+        assert_eq!(ServerFrameType::ToolStatus as u8, 81);
+        assert_eq!(ClientFrameType::ProcessControl as u8, 72);
+    }
+
+    #[test]
+    fn test_server_tool_status_bincode_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ToolStatus,
+            payload: ServerPayload::ToolStatus {
+                tool_id: "call_001".into(),
+                name: "execute_command".into(),
+                elapsed_ms: 12_500,
+                pid: Some(4242),
+                cpu_percent: Some(87.5),
+                memory_bytes: Some(145 * 1024 * 1024),
+                state: Some("running".into()),
+                message: None,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        match decoded.payload {
+            ServerPayload::ToolStatus {
+                tool_id,
+                name,
+                elapsed_ms,
+                pid,
+                cpu_percent,
+                memory_bytes,
+                state,
+                message,
+            } => {
+                assert_eq!(tool_id, "call_001");
+                assert_eq!(name, "execute_command");
+                assert_eq!(elapsed_ms, 12_500);
+                assert_eq!(pid, Some(4242));
+                assert_eq!(cpu_percent, Some(87.5));
+                assert_eq!(memory_bytes, Some(145 * 1024 * 1024));
+                assert_eq!(state.as_deref(), Some("running"));
+                assert_eq!(message, None);
+            }
+            _ => panic!("Expected ToolStatus payload"),
+        }
+    }
+
+    #[test]
+    fn test_client_process_control_bincode_roundtrip() {
+        use crate::exec_status::ProcessControlAction;
+
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::ProcessControl,
+            payload: ClientPayload::ProcessControl {
+                pid: 4242,
+                action: ProcessControlAction::Pause,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        match decoded.payload {
+            ClientPayload::ProcessControl { pid, action } => {
+                assert_eq!(pid, 4242);
+                assert_eq!(action, ProcessControlAction::Pause);
+            }
+            _ => panic!("Expected ProcessControl payload"),
+        }
+    }
+
+    #[test]
     fn test_wire_frame_round_trip_preserves_stream_id() {
         let frame = ClientFrame {
             frame_type: ClientFrameType::Chat,

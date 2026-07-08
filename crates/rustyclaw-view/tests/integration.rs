@@ -80,6 +80,7 @@ fn from_tool_call_info_preserves_fields() {
         is_error: false,
         collapsed: true,
         duration_ms: None,
+        live_status: None,
         live_output: String::new(),
     };
 
@@ -104,6 +105,7 @@ fn from_tool_call_info_pretty_prints_json() {
         is_error: false,
         collapsed: true,
         duration_ms: None,
+        live_status: None,
         live_output: String::new(),
     };
 
@@ -126,6 +128,7 @@ fn from_tool_call_info_preserves_error_flag() {
         is_error: true,
         collapsed: false,
         duration_ms: None,
+        live_status: None,
         live_output: String::new(),
     };
 
@@ -209,6 +212,7 @@ fn invalid_json_args_are_passed_through() {
         is_error: false,
         collapsed: false,
         duration_ms: None,
+        live_status: None,
         live_output: String::new(),
     };
 
@@ -811,7 +815,116 @@ fn conversions_propagate_duration() {
         is_error: false,
         collapsed: true,
         duration_ms: Some(400),
+        live_status: None,
         live_output: String::new(),
     };
     assert_eq!(ToolCallData::from(&tc).duration_ms, Some(400));
+}
+
+// ── Live process status (long-running tool display) ─────────────────
+
+#[test]
+fn live_status_line_formats_process_stats() {
+    let mut tc = ToolCallData {
+        name: "execute_command".into(),
+        arguments: r#"{"command":"cargo build"}"#.into(),
+        live_status: Some(rustyclaw_core::ui::ToolLiveStatus {
+            elapsed_ms: 12_000,
+            pid: Some(4242),
+            cpu_percent: Some(87.4),
+            memory_bytes: Some(145 * 1024 * 1024),
+            state: Some("running".into()),
+            message: None,
+        }),
+        ..Default::default()
+    };
+
+    let line = tc.live_status_line().expect("running call has a status");
+    assert_eq!(line, "⏳ 12s · running · cpu 87% · mem 145 MB · pid 4242");
+    assert!(tc.is_controllable());
+    assert!(!tc.is_process_paused());
+
+    // A paused process reads as paused and flips the control hint.
+    tc.live_status.as_mut().unwrap().state = Some("paused".into());
+    assert!(tc.is_process_paused());
+
+    // Once the result arrives the live status line disappears.
+    tc.result = Some("done".into());
+    assert_eq!(tc.live_status_line(), None);
+    assert!(!tc.is_controllable());
+}
+
+#[test]
+fn live_status_line_without_process_shows_elapsed_only() {
+    let tc = ToolCallData {
+        name: "web_search".into(),
+        live_status: Some(rustyclaw_core::ui::ToolLiveStatus {
+            elapsed_ms: 3_400,
+            pid: None,
+            cpu_percent: None,
+            memory_bytes: None,
+            state: None,
+            message: None,
+        }),
+        ..Default::default()
+    };
+    assert_eq!(tc.live_status_line().as_deref(), Some("⏳ 3.4s"));
+    // No PID → nothing to pause or kill.
+    assert!(!tc.is_controllable());
+}
+
+#[test]
+fn live_status_line_includes_tool_message() {
+    let tc = ToolCallData {
+        name: "engine_pull".into(),
+        live_status: Some(rustyclaw_core::ui::ToolLiveStatus {
+            elapsed_ms: 60_000,
+            pid: None,
+            cpu_percent: None,
+            memory_bytes: None,
+            state: None,
+            message: Some("downloading model 42%".into()),
+        }),
+        ..Default::default()
+    };
+    assert_eq!(
+        tc.live_status_line().as_deref(),
+        Some("⏳ 60s · downloading model 42%")
+    );
+}
+
+#[test]
+fn set_tool_live_status_targets_running_call_and_clears_on_result() {
+    use rustyclaw_view::DisplayMessageData;
+
+    let mut msg = DisplayMessageData::assistant("");
+    msg.add_tool_call("tc-1".into(), "execute_command".into(), "{}".into());
+
+    let status = rustyclaw_core::ui::ToolLiveStatus {
+        elapsed_ms: 2_000,
+        pid: Some(7),
+        cpu_percent: None,
+        memory_bytes: None,
+        state: Some("sleeping".into()),
+        message: None,
+    };
+    assert!(msg.set_tool_live_status("tc-1", status.clone()));
+    assert!(msg.tool_calls[0].live_status.is_some());
+
+    // Finishing the call clears the live status.
+    msg.set_tool_result("tc-1", "ok".into(), false, Some(2_100));
+    assert!(msg.tool_calls[0].live_status.is_none());
+
+    // A finished call no longer accepts status updates.
+    assert!(!msg.set_tool_live_status("tc-1", status));
+}
+
+#[test]
+fn format_bytes_is_human() {
+    assert_eq!(rustyclaw_view::format_bytes(512 * 1024), "512 KB");
+    assert_eq!(rustyclaw_view::format_bytes(145 * 1024 * 1024), "145 MB");
+    assert_eq!(
+        rustyclaw_view::format_bytes(2 * 1024 * 1024 * 1024 + 300 * 1024 * 1024),
+        "2.3 GB"
+    );
 }

@@ -49,6 +49,11 @@ pub(crate) enum GwEvent {
         result: String,
         is_error: bool,
     },
+    /// Live status for a still-running tool call (elapsed + process stats).
+    ToolStatus {
+        id: String,
+        status: rustyclaw_core::ui::ToolLiveStatus,
+    },
     /// A chunk of live stdout/stderr from a still-running tool.
     ToolOutput {
         id: String,

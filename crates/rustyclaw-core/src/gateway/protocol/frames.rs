@@ -152,6 +152,8 @@ pub enum ClientFrameType {
     EngineModelAction = 70,
     /// Set per-engine configuration.
     EngineConfigSet = 71,
+    /// Control a running exec process (pause/resume/stop/kill).
+    ProcessControl = 72,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -322,6 +324,8 @@ pub enum ServerFrameType {
     EnginePullProgress = 79,
     /// Engine action result (start/stop/install/remove/load/unload).
     EngineActionResult = 80,
+    /// Live status for a running tool call (elapsed + process stats).
+    ToolStatus = 81,
 }
 
 /// Status frame sub-types.
@@ -760,6 +764,13 @@ pub enum ClientPayload {
         engine: String,
         config: crate::engines::EngineConfig,
     },
+    /// Control a running exec process. The gateway only honours PIDs that
+    /// are registered in its exec-status registry (i.e. processes it
+    /// spawned for the current tool call), never arbitrary host PIDs.
+    ProcessControl {
+        pid: u32,
+        action: crate::exec_status::ProcessControlAction,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1165,6 +1176,27 @@ pub enum ServerPayload {
         model: Option<String>,
         ok: bool,
         message: String,
+    },
+    /// Live status for a tool call still executing: wall-clock elapsed
+    /// time plus, when the tool is waiting on a child process, that
+    /// process's CPU usage, memory, and scheduler state.
+    ToolStatus {
+        tool_id: String,
+        name: String,
+        elapsed_ms: u64,
+        /// PID of the child process the tool is waiting on, when known.
+        /// Its presence tells clients the process is controllable via
+        /// `ProcessControl`.
+        pid: Option<u32>,
+        /// CPU usage as a percentage of one core.
+        cpu_percent: Option<f32>,
+        /// Resident memory in bytes.
+        memory_bytes: Option<u64>,
+        /// Scheduler state ("running", "sleeping", "blocked on I/O",
+        /// "paused", …).
+        state: Option<String>,
+        /// Tool-provided progress message, when the tool reports one.
+        message: Option<String>,
     },
 }
 

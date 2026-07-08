@@ -443,6 +443,15 @@ impl AppState {
         }
     }
 
+    /// Update the live status of a still-running tool call.
+    pub fn set_tool_live_status(&mut self, id: &str, status: rustyclaw_core::ui::ToolLiveStatus) {
+        for msg in self.messages.iter_mut().rev() {
+            if msg.set_tool_live_status(id, status.clone()) {
+                return;
+            }
+        }
+    }
+
     /// Append live output to a still-running tool call, wherever its
     /// message sits.
     pub fn append_tool_output(&mut self, id: &str, chunk: &str) {

@@ -194,6 +194,13 @@ fn push_message(transcript: &mut ChatTranscript, msg: &ChatMessage) {
                 result_hint,
             }),
         );
+        if tc.result.is_none() {
+            // While the call runs, surface the gateway's live status
+            // (elapsed, CPU, scheduler state) as a line under the panel.
+            if let Some(line) = rustyclaw_view::ToolCallData::from(tc).live_status_line() {
+                transcript.push(ChatRole::System, ChatMessagePayload::Text(line));
+            }
+        }
     }
 }
 
@@ -464,6 +471,7 @@ mod ask_user_tests {
             is_error,
             collapsed: false,
             duration_ms: None,
+            live_status: None,
             live_output: String::new(),
         });
         msg
