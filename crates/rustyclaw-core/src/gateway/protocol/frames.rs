@@ -326,6 +326,8 @@ pub enum ServerFrameType {
     EngineActionResult = 80,
     /// Live status for a running tool call (elapsed + process stats).
     ToolStatus = 81,
+    /// Streamed output line from an engine install/start/stop action.
+    EngineActionProgress = 82,
 }
 
 /// Status frame sub-types.
@@ -1197,6 +1199,17 @@ pub enum ServerPayload {
         state: Option<String>,
         /// Tool-provided progress message, when the tool reports one.
         message: Option<String>,
+    },
+    /// A streamed output line from an in-progress engine action
+    /// (install/start/stop), so the engines dialog can show live progress.
+    /// The terminal outcome still arrives as an `EngineActionResult`.
+    EngineActionProgress {
+        engine: String,
+        /// One line of installer/action output.
+        line: String,
+        /// Progress percentage when known (0.0 when the action doesn't
+        /// report one, which is the common case for installers).
+        percent: f32,
     },
 }
 

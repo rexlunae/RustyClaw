@@ -125,10 +125,12 @@ impl LocalEngine for ExoEngine {
         }
     }
 
-    async fn install(&self, _sink: Option<ProgressSink>) -> Result<String> {
+    async fn install(&self, sink: Option<ProgressSink>) -> Result<String> {
         // Exo requires uv + git clone; delegate to the existing tool logic
-        Self::sh(
+        crate::engines::stream_shell(
             "pip install exo 2>&1 || (curl -LsSf https://astral.sh/uv/install.sh | sh && uv pip install exo 2>&1)",
+            "exo",
+            sink.as_ref(),
         )
         .await
     }

@@ -149,19 +149,20 @@ impl LocalEngine for OllamaEngine {
         }
     }
 
-    async fn install(&self, _sink: Option<ProgressSink>) -> Result<String> {
+    async fn install(&self, sink: Option<ProgressSink>) -> Result<String> {
         if Self::is_installed().await {
             return Ok("Ollama is already installed.".into());
         }
         let os = std::env::consts::OS;
-        match os {
-            "macos" => Self::sh("brew install ollama 2>&1").await,
-            "linux" => Self::sh("curl -fsSL https://ollama.com/install.sh | sh 2>&1").await,
+        let script = match os {
+            "macos" => "brew install ollama 2>&1",
+            "linux" => "curl -fsSL https://ollama.com/install.sh | sh 2>&1",
             _ => anyhow::bail!(
                 "Unsupported OS for automatic install: {}. Visit https://ollama.com/download",
                 os
             ),
-        }
+        };
+        crate::engines::stream_shell(script, "ollama", sink.as_ref()).await
     }
 
     async fn start(&self, cfg: &EngineConfig) -> Result<String> {

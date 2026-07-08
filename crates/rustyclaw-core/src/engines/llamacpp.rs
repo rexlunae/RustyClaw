@@ -141,13 +141,13 @@ impl LocalEngine for LlamaCppEngine {
         }
     }
 
-    async fn install(&self, _sink: Option<ProgressSink>) -> Result<String> {
+    async fn install(&self, sink: Option<ProgressSink>) -> Result<String> {
         if Self::is_installed().await {
             return Ok("llama-server is already installed.".into());
         }
         let os = std::env::consts::OS;
-        match os {
-            "macos" => Self::sh("brew install llama.cpp 2>&1").await,
+        let script = match os {
+            "macos" => "brew install llama.cpp 2>&1".to_string(),
             "linux" => {
                 // Download prebuilt from GitHub releases
                 let arch = std::env::consts::ARCH;
@@ -156,7 +156,7 @@ impl LocalEngine for LlamaCppEngine {
                     "aarch64" => "ubuntu-arm64",
                     _ => anyhow::bail!("Unsupported architecture: {}", arch),
                 };
-                Self::sh(&format!(
+                format!(
                     concat!(
                         "LATEST=$(curl -sL https://api.github.com/repos/ggml-org/llama.cpp/releases/latest | grep tag_name | cut -d'\"' -f4) && ",
                         "curl -L -o /tmp/llama-server.zip \"https://github.com/ggml-org/llama.cpp/releases/download/${{LATEST}}/llama-${{LATEST}}-bin-{}.zip\" && ",
@@ -167,14 +167,14 @@ impl LocalEngine for LlamaCppEngine {
                         "echo 'llama-server installed to /usr/local/bin/'"
                     ),
                     triple
-                ))
-                .await
+                )
             }
             _ => anyhow::bail!(
                 "Unsupported OS: {}. Install llama-server manually from https://github.com/ggml-org/llama.cpp",
                 os
             ),
-        }
+        };
+        crate::engines::stream_shell(&script, "llamacpp", sink.as_ref()).await
     }
 
     async fn start(&self, cfg: &EngineConfig) -> Result<String> {

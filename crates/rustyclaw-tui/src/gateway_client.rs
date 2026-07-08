@@ -429,6 +429,11 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             ok,
             message,
         },
+        E::EngineActionProgress {
+            engine,
+            line,
+            percent: _,
+        } => GwEvent::EngineActionProgress { engine, line },
 
         // ── Panels ───────────────────────────────────────────────────────
         E::CronListResult { jobs } => GwEvent::CronListResult {

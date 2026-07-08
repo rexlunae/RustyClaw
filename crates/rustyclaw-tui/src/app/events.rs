@@ -199,12 +199,16 @@ pub(crate) enum GwEvent {
     },
     /// Engine action completed.
     EngineActionResult {
-        #[allow(dead_code)]
         engine: String,
         #[allow(dead_code)]
         model: Option<String>,
         ok: bool,
         message: String,
+    },
+    /// Streamed output line from an in-progress engine action (install).
+    EngineActionProgress {
+        engine: String,
+        line: String,
     },
     /// Clear the message display (/clear).
     ClearMessages,

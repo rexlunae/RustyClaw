@@ -304,7 +304,7 @@ impl LocalEngine for JoshuaEngine {
         }
     }
 
-    async fn install(&self, _sink: Option<ProgressSink>) -> Result<String> {
+    async fn install(&self, sink: Option<ProgressSink>) -> Result<String> {
         if Self::is_installed().await {
             return Ok("joshua is already installed.".into());
         }
@@ -316,8 +316,13 @@ impl LocalEngine for JoshuaEngine {
                  https://github.com/rexlunae/joshua"
             );
         }
-        Self::sh("cargo install --git https://github.com/rexlunae/joshua joshua 2>&1 | tail -5")
-            .await
+        // Stream the full build output (the view bounds the displayed tail).
+        crate::engines::stream_shell(
+            "cargo install --git https://github.com/rexlunae/joshua joshua 2>&1",
+            "joshua",
+            sink.as_ref(),
+        )
+        .await
     }
 
     async fn start(&self, cfg: &EngineConfig) -> Result<String> {
