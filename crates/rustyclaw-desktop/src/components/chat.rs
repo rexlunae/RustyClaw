@@ -12,8 +12,10 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button};
 use dioxus_genai_chat::{ChatControls, ChatSurface, ContextEvent};
 use rustyclaw_core::ui::ChatMessage;
+use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 
 use super::composer_accessory::{ComposerAccessory, ModelSelection};
+use super::user_prompt::UserPromptCard;
 use crate::chat_transcript::{to_context_items, to_transcript};
 
 /// Props for [`Chat`].
@@ -23,8 +25,13 @@ pub struct ChatProps {
     pub surface: rustyclaw_view::ChatSurfaceData,
     pub bottom_bar: rustyclaw_view::BottomBarData,
     pub agent_name: Option<String>,
+    /// A structured question from the agent (`ask_user` tool) awaiting an
+    /// answer; rendered inline at the bottom of the chat stream.
+    pub pending_prompt: Option<UserPrompt>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
+    pub on_prompt_respond: EventHandler<(String, PromptResponseValue)>,
+    pub on_prompt_dismiss: EventHandler<String>,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
     pub on_add_file_attachment: EventHandler<()>,
@@ -70,11 +77,14 @@ pub fn Chat(props: ChatProps) -> Element {
 
     let is_processing = props.surface.is_processing;
     let has_messages = !props.messages.is_empty();
+    let prompt_pending = props.pending_prompt.is_some();
 
     // The crate renders its send/stop buttons *below* the input box, so keep
     // them off; ours live in the accessory row inside the box instead.
+    // While the agent is waiting on a structured answer the composer would be
+    // disabled anyway, so the inline question card takes its place.
     let controls = ChatControls {
-        show_input: true,
+        show_input: !prompt_pending,
         show_send_button: false,
         show_stop_button: false,
         show_retry_button: false,
@@ -141,7 +151,7 @@ pub fn Chat(props: ChatProps) -> Element {
                 }
                 ChatSurface {
                     embedded: true,
-                    transcript: to_transcript(&props.messages, &props.surface),
+                    transcript: to_transcript(&props.messages, &props.surface, prompt_pending),
                     controls,
                     input: input_ref(),
                     attachments: to_context_items(&props.bottom_bar.composer.attachments),
@@ -156,6 +166,14 @@ pub fn Chat(props: ChatProps) -> Element {
                         ContextEvent::AddDirectoryRequested => props.on_add_directory_attachment.call(()),
                         ContextEvent::Remove(id) => props.on_remove_attachment.call(id),
                     },
+                }
+                if let Some(prompt) = props.pending_prompt.clone() {
+                    UserPromptCard {
+                        key: "{prompt.id}",
+                        prompt,
+                        on_respond: props.on_prompt_respond,
+                        on_dismiss: props.on_prompt_dismiss,
+                    }
                 }
             }
         }

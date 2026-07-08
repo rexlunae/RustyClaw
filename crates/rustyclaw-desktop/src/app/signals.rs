@@ -8,7 +8,6 @@ use dioxus::prelude::*;
 use crate::app_support::connect_to_gateway;
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
-use rustyclaw_core::user_prompt_types::UserPrompt;
 use rustyclaw_view::{ConnectionDialogData, HatchingDialogData};
 
 #[derive(Clone, Copy)]
@@ -29,8 +28,6 @@ pub(super) struct AppSignals {
     pub show_tool_approval: Signal<bool>,
     pub show_vault_unlock: Signal<bool>,
     pub vault_unlock_error: Signal<Option<String>>,
-    pub show_user_prompt: Signal<bool>,
-    pub user_prompt_data: Signal<Option<UserPrompt>>,
     pub show_cred_request: Signal<bool>,
     pub cred_request_id: Signal<String>,
     pub cred_request_provider: Signal<String>,

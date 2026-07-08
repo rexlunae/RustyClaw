@@ -18,7 +18,6 @@ use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::gateway::{EngineActionKind, GatewayClient, ModelActionKind};
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
-use rustyclaw_core::user_prompt_types::{PromptResponseValue, UserPrompt};
 use rustyclaw_view::*;
 
 use super::signals::{AppSignals, do_reconnect};
@@ -42,8 +41,6 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
         mut show_tool_approval,
         mut show_vault_unlock,
         mut vault_unlock_error,
-        mut show_user_prompt,
-        mut user_prompt_data,
         mut show_cred_request,
         mut cred_request_id,
         mut cred_request_provider,
@@ -376,41 +373,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 on_cancel: move |_| show_vault_unlock.set(false),
             }
 
-            UserPromptDialog {
-                visible: *show_user_prompt.read(),
-                prompt_id: user_prompt_data
-                    .read()
-                    .as_ref()
-                    .map(|p| p.id.clone())
-                    .unwrap_or_default(),
-                data: user_prompt_data.read().clone().map(UserPromptData::from),
-                on_respond: move |(id, value): (String, PromptResponseValue)| {
-                    state.write().pending_user_prompt = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::UserPromptResponse {
-                                id,
-                                dismissed: false,
-                                value,
-                            }).await;
-                        });
-                    }
-                },
-                on_dismiss: move |id: String| {
-                    state.write().pending_user_prompt = None;
-                    let gw = gateway.read().clone();
-                    if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client.send(GatewayCommand::UserPromptResponse {
-                                id,
-                                dismissed: true,
-                                value: PromptResponseValue::Text(String::new()),
-                            }).await;
-                        });
-                    }
-                },
-            }
+            // The agent's structured questions (`ask_user` tool) render
+            // inline in the chat stream (see `components::UserPromptCard`),
+            // not as a modal.
 
             CredentialRequestDialog {
                 visible: *show_cred_request.read(),

@@ -13,7 +13,7 @@ use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::ConnectionStatus;
-use rustyclaw_core::user_prompt_types::UserPrompt;
+use rustyclaw_core::user_prompt_types::PromptResponseValue;
 
 use rustyclaw_view::{
     BannerActionKind, HatchingDialogData, PromptAttachment, build_prompt_with_attachments,
@@ -61,10 +61,6 @@ pub fn App() -> Element {
     // Vault unlock state
     let mut show_vault_unlock = use_signal(|| false);
     let vault_unlock_error = use_signal(|| None::<String>);
-
-    // User prompt state
-    let mut show_user_prompt = use_signal(|| false);
-    let mut user_prompt_data: Signal<Option<UserPrompt>> = use_signal(|| None);
 
     // Credential request state
     let mut show_cred_request = use_signal(|| false);
@@ -134,8 +130,6 @@ pub fn App() -> Element {
         show_tool_approval,
         show_vault_unlock,
         vault_unlock_error,
-        show_user_prompt,
-        user_prompt_data,
         show_cred_request,
         cred_request_id,
         cred_request_provider,
@@ -469,13 +463,6 @@ pub fn App() -> Element {
             show_vault_unlock.set(false);
         }
 
-        if let Some(prompt) = &s.pending_user_prompt {
-            user_prompt_data.set(Some(prompt.clone()));
-            show_user_prompt.set(true);
-        } else {
-            show_user_prompt.set(false);
-        }
-
         if let Some((id, provider, secret, msg)) = &s.pending_credential_request {
             cred_request_id.set(id.clone());
             cred_request_provider.set(provider.clone());
@@ -693,6 +680,39 @@ pub fn App() -> Element {
         if let Some(client) = gw {
             spawn(async move {
                 let _ = client.send(GatewayCommand::Cancel).await;
+            });
+        }
+    };
+
+    // Structured answers for the inline agent-question card (`ask_user` tool).
+    let on_prompt_respond = move |(id, value): (String, PromptResponseValue)| {
+        state.write().pending_user_prompt = None;
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::UserPromptResponse {
+                        id,
+                        dismissed: false,
+                        value,
+                    })
+                    .await;
+            });
+        }
+    };
+
+    let on_prompt_dismiss = move |id: String| {
+        state.write().pending_user_prompt = None;
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let _ = client
+                    .send(GatewayCommand::UserPromptResponse {
+                        id,
+                        dismissed: true,
+                        value: PromptResponseValue::Text(String::new()),
+                    })
+                    .await;
             });
         }
     };
@@ -1137,8 +1157,11 @@ pub fn App() -> Element {
                         },
                     },
                     agent_name: state.read().agent_name.clone(),
+                    pending_prompt: state.read().pending_user_prompt.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
+                    on_prompt_respond: on_prompt_respond,
+                    on_prompt_dismiss: on_prompt_dismiss,
                     on_model_change: move |(provider, model): (String, String)| {
                         let prov_clone = provider.clone();
                         let model_clone = model.clone();
