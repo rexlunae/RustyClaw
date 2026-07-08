@@ -229,10 +229,15 @@ fn send_signal(pid: u32, action: ProcessControlAction) -> Result<(), String> {
     // Exec children are spawned as process-group leaders, so signal the
     // whole group to reach the `sh -c` child's own children. Fall back to
     // the single PID for processes not leading a group.
+    // SAFETY: `pid` is a valid OS process ID obtained from `Child::id()`;
+    // on all supported platforms PIDs fit in `i32`. `sig` is a valid
+    // signal constant from `libc`. Negating the PID signals the process
+    // group, which is safe even if the group does not exist (returns -1).
     let group = unsafe { libc::kill(-(pid as i32), sig) };
     if group == 0 {
         return Ok(());
     }
+    // SAFETY: same invariants as above; here we signal the single process.
     let single = unsafe { libc::kill(pid as i32, sig) };
     if single == 0 {
         return Ok(());
