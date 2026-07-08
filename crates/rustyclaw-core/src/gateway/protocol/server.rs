@@ -453,6 +453,36 @@ pub async fn send_tool_result(
     send_frame(writer, &frame).await
 }
 
+/// Build and send a live tool status frame (elapsed time plus process
+/// stats while a tool call is still executing).
+#[allow(clippy::too_many_arguments)]
+pub async fn send_tool_status(
+    writer: &mut dyn TransportWriter,
+    id: &str,
+    name: &str,
+    elapsed_ms: u64,
+    pid: Option<u32>,
+    cpu_percent: Option<f32>,
+    memory_bytes: Option<u64>,
+    state: Option<String>,
+    message: Option<String>,
+) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::ToolStatus,
+        payload: ServerPayload::ToolStatus {
+            tool_id: id.into(),
+            name: name.into(),
+            elapsed_ms,
+            pid,
+            cpu_percent,
+            memory_bytes,
+            state,
+            message,
+        },
+    };
+    send_frame(writer, &frame).await
+}
+
 /// Build and send a tool approval request frame.
 pub async fn send_tool_approval_request(
     writer: &mut dyn TransportWriter,

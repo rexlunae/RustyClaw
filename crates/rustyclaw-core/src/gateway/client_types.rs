@@ -93,6 +93,21 @@ pub enum GatewayEvent {
         is_error: bool,
     },
 
+    /// Live status for a tool call that is still executing: elapsed time
+    /// plus, when the tool is waiting on a child process, that process's
+    /// CPU usage, memory, and scheduler state. A `pid` marks the process
+    /// as controllable via [`GatewayCommand::ProcessControl`].
+    ToolStatus {
+        id: String,
+        name: String,
+        elapsed_ms: u64,
+        pid: Option<u32>,
+        cpu_percent: Option<f32>,
+        memory_bytes: Option<u64>,
+        state: Option<String>,
+        message: Option<String>,
+    },
+
     /// A chunk of live stdout/stderr from a still-running tool, so the
     /// tool's panel can show progress as it happens.
     ToolOutput {
@@ -448,6 +463,13 @@ pub enum GatewayCommand {
     #[serde(rename = "cancel")]
     Cancel,
 
+    /// Control a running exec process (pause/resume/stop/kill)
+    #[serde(rename = "process_control")]
+    ProcessControl {
+        pid: u32,
+        action: crate::exec_status::ProcessControlAction,
+    },
+
     /// Switch to a different provider/model
     #[serde(rename = "model_switch")]
     ModelSwitch { provider: String, model: String },
@@ -776,6 +798,10 @@ impl GatewayCommand {
             GatewayCommand::Cancel => ClientFrame {
                 frame_type: ClientFrameType::Cancel,
                 payload: ClientPayload::Empty,
+            },
+            GatewayCommand::ProcessControl { pid, action } => ClientFrame {
+                frame_type: ClientFrameType::ProcessControl,
+                payload: ClientPayload::ProcessControl { pid, action },
             },
             GatewayCommand::ModelSwitch { provider, model } => ClientFrame {
                 frame_type: ClientFrameType::ModelSwitch,
@@ -1384,6 +1410,25 @@ impl GatewayEvent {
                 ok,
                 source,
                 lines,
+                message,
+            }),
+            ServerPayload::ToolStatus {
+                tool_id,
+                name,
+                elapsed_ms,
+                pid,
+                cpu_percent,
+                memory_bytes,
+                state,
+                message,
+            } => Some(GatewayEvent::ToolStatus {
+                id: tool_id,
+                name,
+                elapsed_ms,
+                pid,
+                cpu_percent,
+                memory_bytes,
+                state,
                 message,
             }),
             // Live stdout/stderr from a running tool. Start/End stay

@@ -52,6 +52,7 @@ pub(super) fn apply_gw_event(
         mut stream_start,
         mut thinking_start,
         mut tool_started,
+        mut active_process,
         mut elapsed,
         mut scroll_offset,
         mut spinner_tick,
@@ -193,6 +194,7 @@ pub(super) fn apply_gw_event(
         GwEvent::Disconnected(reason) => {
             gw_status.set(rustyclaw_core::types::GatewayStatus::Disconnected);
             show_auth_dialog.set(false);
+            active_process.set(None);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::warning(format!("Disconnected: {}", reason)));
             messages.set(m);
@@ -328,6 +330,7 @@ pub(super) fn apply_gw_event(
             }
             streaming.set(false);
             stream_start.set(None);
+            active_process.set(None);
             elapsed.set(String::new());
             streaming_buf.set(String::new());
             // Auto-collapse the just-completed assistant message
@@ -438,6 +441,22 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
+        GwEvent::ToolStatus { id, status } => {
+            // Track the controllable process (if any) behind the running
+            // call so the inline pause/stop/kill keys know their target.
+            active_process.set(status.pid.map(|pid| super::state::ActiveProcess {
+                tool_id: id.clone(),
+                pid,
+                paused: status.is_paused(),
+            }));
+            let mut m = messages.read().clone();
+            for msg in m.iter_mut().rev() {
+                if msg.set_tool_live_status(&id, status.clone()) {
+                    break;
+                }
+            }
+            messages.set(m);
+        }
         GwEvent::ToolOutput { id, chunk } => {
             // Live output from a running tool: fold it into that tool's
             // panel so the row updates in place while the process runs.
@@ -458,6 +477,14 @@ pub(super) fn apply_gw_event(
             let mut started = tool_started.read().clone();
             let duration_ms = started.remove(&id).map(|t| t.elapsed().as_millis() as u64);
             tool_started.set(started);
+            // The call is finished — its process is no longer controllable.
+            if active_process
+                .read()
+                .as_ref()
+                .is_some_and(|ap| ap.tool_id == id)
+            {
+                active_process.set(None);
+            }
             let mut m = messages.read().clone();
             let mut matched = false;
             for msg in m.iter_mut().rev() {

@@ -78,6 +78,26 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             result,
             is_error,
         },
+        E::ToolStatus {
+            id,
+            name: _,
+            elapsed_ms,
+            pid,
+            cpu_percent,
+            memory_bytes,
+            state,
+            message,
+        } => GwEvent::ToolStatus {
+            id,
+            status: rustyclaw_core::ui::ToolLiveStatus {
+                elapsed_ms,
+                pid,
+                cpu_percent,
+                memory_bytes,
+                state,
+                message,
+            },
+        },
         // stderr chunks merge into the same tail a terminal would show;
         // the flag isn't currently surfaced in either client.
         E::ToolOutput { id, chunk, .. } => GwEvent::ToolOutput { id, chunk },
@@ -573,6 +593,33 @@ mod tests {
                 assert_eq!(name, "read_file");
             }
             other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_status_frame_maps_to_tool_status() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ToolStatus,
+            payload: ServerPayload::ToolStatus {
+                tool_id: "call_001".into(),
+                name: "execute_command".into(),
+                elapsed_ms: 5_000,
+                pid: Some(1234),
+                cpu_percent: Some(42.0),
+                memory_bytes: Some(1024),
+                state: Some("running".into()),
+                message: None,
+            },
+        };
+        match adapt(frame) {
+            Some(GwEvent::ToolStatus { id, status }) => {
+                assert_eq!(id, "call_001");
+                assert_eq!(status.elapsed_ms, 5_000);
+                assert_eq!(status.pid, Some(1234));
+                assert_eq!(status.state.as_deref(), Some("running"));
+                assert!(!status.is_paused());
+            }
+            other => panic!("expected ToolStatus, got {other:?}"),
         }
     }
 

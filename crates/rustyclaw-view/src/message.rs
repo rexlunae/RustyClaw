@@ -305,6 +305,9 @@ pub struct ToolCallData {
     /// or for calls replayed from history (which carries no timings).
     pub duration_ms: Option<u64>,
 
+    /// Live execution status streamed by the gateway while the call is
+    /// still running (cleared when the result arrives).
+    pub live_status: Option<rustyclaw_core::ui::ToolLiveStatus>,
     /// Live output tail streamed while the tool runs (CR-overwrites
     /// applied, ANSI stripped, bounded). Cleared when the result arrives.
     pub live_output: String,
@@ -320,6 +323,7 @@ impl Default for ToolCallData {
             is_error: false,
             collapsed: true,
             duration_ms: None,
+            live_status: None,
             live_output: String::new(),
         }
     }
@@ -466,6 +470,44 @@ impl ToolCallData {
         }
     }
 
+    /// A one-line live status readout for a still-running call, e.g.
+    /// `"⏳ 12s · running · cpu 87% · mem 145 MB"`. None once the result
+    /// has arrived or when no status has been received yet.
+    pub fn live_status_line(&self) -> Option<String> {
+        if self.result.is_some() {
+            return None;
+        }
+        let st = self.live_status.as_ref()?;
+        let mut parts = vec![format!("⏳ {}", format_duration_ms(st.elapsed_ms))];
+        if let Some(msg) = st.message.as_deref().filter(|m| !m.trim().is_empty()) {
+            parts.push(msg.to_string());
+        }
+        if let Some(state) = st.state.as_deref() {
+            parts.push(state.to_string());
+        }
+        if let Some(cpu) = st.cpu_percent {
+            parts.push(format!("cpu {cpu:.0}%"));
+        }
+        if let Some(mem) = st.memory_bytes {
+            parts.push(format!("mem {}", format_bytes(mem)));
+        }
+        if let Some(pid) = st.pid {
+            parts.push(format!("pid {pid}"));
+        }
+        Some(parts.join(" · "))
+    }
+
+    /// Whether the running call is waiting on a process the user can
+    /// pause/resume/stop/kill (i.e. live status carries a PID).
+    pub fn is_controllable(&self) -> bool {
+        self.result.is_none() && self.live_status.as_ref().is_some_and(|s| s.pid.is_some())
+    }
+
+    /// Whether the user has paused the underlying process.
+    pub fn is_process_paused(&self) -> bool {
+        self.live_status.as_ref().is_some_and(|s| s.is_paused())
+    }
+
     /// A one-line gist of what came back: the first line of an error,
     /// exit codes for shells, match/line counts for searches and reads.
     /// None while the call is still running.
@@ -518,6 +560,20 @@ pub fn format_duration_ms(ms: u64) -> String {
     }
 }
 
+/// Render a byte count for humans: `"512 KB"`, `"145 MB"`, `"2.3 GB"`.
+pub fn format_bytes(bytes: u64) -> String {
+    const MB: f64 = 1024.0 * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.0} MB", b / MB)
+    } else {
+        format!("{:.0} KB", b / 1024.0)
+    }
+}
+
 /// First line of `s`, capped at `max_chars` characters, with an ellipsis
 /// when anything was cut.
 fn one_line(s: &str, max_chars: usize) -> String {
@@ -539,6 +595,7 @@ impl From<&rustyclaw_core::ui::ToolCallInfo> for ToolCallData {
             is_error: tc.is_error,
             collapsed: tc.collapsed,
             duration_ms: tc.duration_ms,
+            live_status: tc.live_status.clone(),
             live_output: tc.live_output.clone(),
         }
     }

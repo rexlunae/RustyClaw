@@ -225,6 +225,49 @@ fn test_execute_command_failure() {
     assert!(result.unwrap().contains("exit code"));
 }
 
+/// End-to-end: a foreground exec child registers itself for live status
+/// while `execute_command` waits on it, and a `Kill` control action ends
+/// the wait and removes it from the registry.
+#[cfg(unix)]
+#[tokio::test]
+async fn test_execute_command_child_is_registered_and_killable() {
+    use crate::exec_status::{self, ProcessControlAction};
+    use crate::tools::runtime::exec_execute_command_streaming;
+
+    let args = json!({ "command": "sleep 31.7", "timeout_secs": 60, "yieldMs": 50000 });
+    let workspace = ws().to_path_buf();
+    let handle: tokio::task::JoinHandle<ToolResult> =
+        tokio::spawn(async move { exec_execute_command_streaming(&args, &workspace, None).await });
+
+    // Wait for the child to show up in the exec-status registry.
+    let mut pid = None;
+    for _ in 0..200 {
+        if let Some(s) = exec_status::sample_active()
+            .into_iter()
+            .find(|s| s.command.contains("sleep 31.7"))
+        {
+            pid = Some(s.pid);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let pid = pid.expect("running exec child should be registered for status");
+
+    exec_status::control(pid, ProcessControlAction::Kill).expect("kill should be accepted");
+
+    let result = tokio::time::timeout(std::time::Duration::from_secs(10), handle)
+        .await
+        .expect("execute_command should return promptly after kill")
+        .expect("task join");
+    assert!(result.is_ok(), "killed command still returns its output");
+
+    // The guard must have removed the entry when the wait ended.
+    assert!(
+        !exec_status::sample_active().iter().any(|s| s.pid == pid),
+        "registry entry should be gone after the tool returns"
+    );
+}
+
 // ── execute_tool dispatch ───────────────────────────────────────
 
 #[tokio::test]

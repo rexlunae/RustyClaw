@@ -57,6 +57,11 @@ pub(crate) enum UserInput {
     },
     /// Cancel the active model/tool run.
     CancelCurrentRequest,
+    /// Pause/resume/stop/kill the process behind the running tool call.
+    ProcessControl {
+        pid: u32,
+        action: rustyclaw_core::exec_status::ProcessControlAction,
+    },
     /// Feed back the completed assistant response for conversation history tracking.
     AssistantResponse(String),
     /// Toggle a skill's enabled state
@@ -373,6 +378,11 @@ impl App {
                 }
                 Ok(UserInput::CancelCurrentRequest) => {
                     let _ = client.send(GatewayCommand::Cancel).await;
+                }
+                Ok(UserInput::ProcessControl { pid, action }) => {
+                    let _ = client
+                        .send(GatewayCommand::ProcessControl { pid, action })
+                        .await;
                 }
                 Ok(UserInput::AssistantResponse(text)) => {
                     let _ = text;

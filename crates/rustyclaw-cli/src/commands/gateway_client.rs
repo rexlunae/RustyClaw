@@ -495,6 +495,26 @@ pub(crate) async fn handle_ask(config: &Config, args: AskArgs) -> Result<()> {
                                 }
                             }
                         }
+                        ServerFrameType::ToolStatus => {
+                            if let ServerPayload::ToolStatus {
+                                elapsed_ms,
+                                cpu_percent,
+                                state,
+                                ..
+                            } = frame.payload
+                            {
+                                if !args.json {
+                                    let mut line = format!("  ⏳ {}s", elapsed_ms / 1000);
+                                    if let Some(s) = state {
+                                        line.push_str(&format!(" · {s}"));
+                                    }
+                                    if let Some(c) = cpu_percent {
+                                        line.push_str(&format!(" · cpu {c:.0}%"));
+                                    }
+                                    eprintln!("{line}");
+                                }
+                            }
+                        }
                         ServerFrameType::ToolResult => {
                             if let ServerPayload::ToolResult {
                                 id: _,

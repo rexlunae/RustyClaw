@@ -12,6 +12,16 @@ use iocraft::prelude::*;
 
 use crate::types::DisplayMessage;
 
+/// The controllable child process behind the currently-running tool call,
+/// tracked so the inline chat controls (pause/stop/kill) know which PID
+/// to target and whether it is paused.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ActiveProcess {
+    pub tool_id: String,
+    pub pid: u32,
+    pub paused: bool,
+}
+
 #[derive(Clone, Copy)]
 #[allow(dead_code)]
 pub(super) struct Ui {
@@ -26,6 +36,9 @@ pub(super) struct Ui {
     /// Start times of in-flight tool calls, by tool-call id, so results
     /// can be stamped with a wall-clock duration.
     pub tool_started: State<HashMap<String, Instant>>,
+    /// The controllable process behind the currently-running tool call
+    /// (None when no tool is waiting on a child process).
+    pub active_process: State<Option<ActiveProcess>>,
     pub elapsed: State<String>,
     pub scroll_offset: State<i32>,
     pub spinner_tick: State<usize>,

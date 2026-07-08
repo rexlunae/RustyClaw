@@ -25,13 +25,23 @@ use crate::{
 };
 use protocol::server::send_frame;
 
-/// Execute a tool while forwarding its live output to the client.
+/// How long a tool call must run before live status frames start flowing.
+const TOOL_STATUS_INITIAL_DELAY: std::time::Duration = std::time::Duration::from_secs(2);
+/// Interval between live status frames once they start.
+const TOOL_STATUS_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// Execute a tool while forwarding its live output and status to the client.
 ///
 /// The tool runs with a channel sink; while its future is pending, each
 /// chunk the tool pushes (stdout/stderr of a running command) is emitted
 /// as a ToolOutputDelta frame so the client's tool panel can update in
-/// place. The writer stays owned by this loop — the tool only holds the
-/// channel's sender.
+/// place. In parallel a ticker (first tick after 2s, so fast tools stay
+/// silent; then every second) emits `ToolStatus` frames carrying the
+/// call's elapsed time and — when the exec-status registry holds a child
+/// process spawned after this call started — its CPU usage, memory, and
+/// scheduler state. The PID in those frames is what lets clients
+/// pause/resume/stop/kill the process via `ProcessControl`. The writer
+/// stays owned by this loop — the tool only holds the channel's sender.
 #[allow(clippy::too_many_arguments)]
 async fn execute_tool_with_live_output(
     writer: &mut dyn transport::TransportWriter,
@@ -41,8 +51,9 @@ async fn execute_tool_with_live_output(
     workspace_dir: &std::path::Path,
     vault: &SharedVault,
     skill_mgr: &SharedSkillManager,
+    started: std::time::Instant,
 ) -> Result<(String, bool)> {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<tools::ToolOutputChunk>();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel::<tools::ToolOutputChunk>();
     let exec = tool_executor::execute_tool_by_type(
         name,
         arguments,
@@ -51,7 +62,28 @@ async fn execute_tool_with_live_output(
         skill_mgr,
         Some(tx),
     );
+    drive_tool_with_live_frames(writer, tool_id, name, started, rx, exec).await
+}
+
+/// The select loop behind [`execute_tool_with_live_output`], generic over
+/// the tool future so tests can drive it directly.
+async fn drive_tool_with_live_frames<F>(
+    writer: &mut dyn transport::TransportWriter,
+    tool_id: &str,
+    name: &str,
+    started: std::time::Instant,
+    mut rx: tokio::sync::mpsc::UnboundedReceiver<tools::ToolOutputChunk>,
+    exec: F,
+) -> Result<(String, bool)>
+where
+    F: Future<Output = (String, bool)>,
+{
     tokio::pin!(exec);
+    let mut ticker = tokio::time::interval_at(
+        tokio::time::Instant::now() + TOOL_STATUS_INITIAL_DELAY,
+        TOOL_STATUS_INTERVAL,
+    );
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut rx_open = true;
     let result = loop {
         tokio::select! {
@@ -64,6 +96,28 @@ async fn execute_tool_with_live_output(
                         .await?;
                     }
                     None => rx_open = false,
+                }
+            }
+            _ = ticker.tick() => {
+                let elapsed_ms = started.elapsed().as_millis() as u64;
+                // Attribute the newest child spawned since this call began;
+                // tool calls on this connection run sequentially, so that is
+                // the process this call is waiting on.
+                let proc = rustyclaw_core::exec_status::sample_active()
+                    .into_iter()
+                    .filter(|p| p.elapsed_ms <= elapsed_ms.saturating_add(250))
+                    .min_by_key(|p| p.elapsed_ms);
+                let (pid, cpu, mem, state) = match proc {
+                    Some(p) => (Some(p.pid), p.cpu_percent, p.memory_bytes, p.state),
+                    None => (None, None, None, None),
+                };
+                if let Err(e) = protocol::server::send_tool_status(
+                    writer, tool_id, name, elapsed_ms, pid, cpu, mem, state, None,
+                )
+                .await
+                {
+                    // Status is best-effort; never fail the tool run over it.
+                    trace!(error = %e, "Failed to send tool status frame");
                 }
             }
             res = &mut exec => break res,
@@ -945,6 +999,7 @@ pub(crate) async fn dispatch_text_message(
                                 workspace_dir,
                                 vault,
                                 skill_mgr,
+                                tool_start,
                             )
                             .await?
                         }
@@ -968,6 +1023,7 @@ pub(crate) async fn dispatch_text_message(
                             workspace_dir,
                             vault,
                             skill_mgr,
+                            tool_start,
                         )
                         .await?
                     }
@@ -1201,4 +1257,90 @@ fn collect_existing_tool_ids(
         }
     }
     ids
+}
+
+#[cfg(test)]
+mod live_status_tests {
+    use super::*;
+    use async_trait::async_trait;
+
+    /// Writer that captures every frame sent to it.
+    struct CapturingWriter {
+        frames: Vec<ServerFrame>,
+    }
+
+    #[async_trait]
+    impl transport::TransportWriter for CapturingWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
+            self.frames.push(frame.clone());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn fast_tool_emits_no_status_frames() {
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (out, is_error) = drive_tool_with_live_frames(
+            &mut writer,
+            "tc1",
+            "read_file",
+            std::time::Instant::now(),
+            rx,
+            async { ("ok".to_string(), false) },
+        )
+        .await
+        .expect("drive should succeed");
+        assert_eq!(out, "ok");
+        assert!(!is_error);
+        assert!(writer.frames.is_empty(), "fast tools should stay silent");
+    }
+
+    #[tokio::test]
+    async fn slow_tool_emits_status_frames_with_elapsed() {
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        let (_tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        let (out, is_error) = drive_tool_with_live_frames(
+            &mut writer,
+            "tc2",
+            "execute_command",
+            std::time::Instant::now(),
+            rx,
+            async {
+                tokio::time::sleep(TOOL_STATUS_INITIAL_DELAY + TOOL_STATUS_INTERVAL / 2).await;
+                ("done".to_string(), false)
+            },
+        )
+        .await
+        .expect("drive should succeed");
+        assert_eq!(out, "done");
+        assert!(!is_error);
+
+        let statuses: Vec<_> = writer
+            .frames
+            .iter()
+            .filter(|f| f.frame_type == ServerFrameType::ToolStatus)
+            .collect();
+        assert!(
+            !statuses.is_empty(),
+            "a tool running past the initial delay must emit status"
+        );
+        match &statuses[0].payload {
+            ServerPayload::ToolStatus {
+                tool_id,
+                name,
+                elapsed_ms,
+                ..
+            } => {
+                assert_eq!(tool_id, "tc2");
+                assert_eq!(name, "execute_command");
+                assert!(*elapsed_ms >= 1_900, "elapsed_ms was {elapsed_ms}");
+            }
+            other => panic!("expected ToolStatus payload, got {other:?}"),
+        }
+    }
 }

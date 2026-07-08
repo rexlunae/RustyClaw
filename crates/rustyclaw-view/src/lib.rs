@@ -109,7 +109,9 @@ pub use dialogs::{
 };
 pub use file_browser::{FileBrowserData, FileBrowserEntry};
 pub use kernel::{GpuDisplayInfo, HostInfoData, LoadStatusData};
-pub use message::{MessageBubbleData, StreamingIndicatorData, ToolCallData, format_duration_ms};
+pub use message::{
+    MessageBubbleData, StreamingIndicatorData, ToolCallData, format_bytes, format_duration_ms,
+};
 pub use services::{ServiceInfoData, ServiceListData};
 pub use sidebar::{ProjectGroupData, SidebarItemData, SidebarTree};
 pub use status::StatusBarData;

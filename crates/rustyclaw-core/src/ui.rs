@@ -51,10 +51,42 @@ pub struct ToolCallInfo {
     /// between the ToolCall and ToolResult events (None while running
     /// or when replayed from history, which carries no timings).
     pub duration_ms: Option<u64>,
+    /// Live execution status streamed by the gateway while the call is
+    /// still running (None once the result arrives).
+    pub live_status: Option<ToolLiveStatus>,
     /// Live output tail streamed while the tool runs (already processed
     /// by [`append_terminal_chunk`]: CR-overwrites applied, ANSI escapes
     /// stripped, bounded). Cleared when the final result arrives.
     pub live_output: String,
+}
+
+/// Live execution status for a tool call that is still running, streamed
+/// by the gateway roughly once a second. Where the tool is waiting on a
+/// child process the snapshot carries that process's stats; otherwise
+/// only the elapsed time (and any tool-provided message) is present.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ToolLiveStatus {
+    /// Time the tool call has been executing.
+    pub elapsed_ms: u64,
+    /// PID of the child process the tool is waiting on. Present ⇒ the
+    /// process can be paused/resumed/stopped/killed by the user.
+    pub pid: Option<u32>,
+    /// CPU usage as a percentage of one core.
+    pub cpu_percent: Option<f32>,
+    /// Resident memory in bytes.
+    pub memory_bytes: Option<u64>,
+    /// Scheduler state ("running", "sleeping", "blocked on I/O",
+    /// "paused", …).
+    pub state: Option<String>,
+    /// Tool-provided progress message, when available.
+    pub message: Option<String>,
+}
+
+impl ToolLiveStatus {
+    /// Whether the user paused the underlying process.
+    pub fn is_paused(&self) -> bool {
+        self.state.as_deref() == Some("paused")
+    }
 }
 
 /// Maximum characters kept in a live-output tail.
@@ -293,6 +325,7 @@ impl ChatMessage {
             is_error: false,
             collapsed: true,
             duration_ms: None,
+            live_status: None,
             live_output: String::new(),
         });
     }
@@ -323,11 +356,24 @@ impl ChatMessage {
                 tool.result = Some(result);
                 tool.is_error = is_error;
                 tool.duration_ms = duration_ms;
+                tool.live_status = None;
                 // The final result supersedes the live tail.
                 tool.live_output = String::new();
                 return;
             }
         }
+    }
+
+    /// Update the live status of a still-running tool call. Returns true
+    /// if a matching, unfinished call was found.
+    pub fn set_tool_live_status(&mut self, id: &str, status: ToolLiveStatus) -> bool {
+        for tool in &mut self.tool_calls {
+            if tool.id == id && tool.result.is_none() {
+                tool.live_status = Some(status);
+                return true;
+            }
+        }
+        false
     }
 }
 

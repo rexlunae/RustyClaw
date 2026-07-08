@@ -32,6 +32,7 @@ pub(super) fn apply_key_event(
         mut stream_start,
         thinking_start: _,
         tool_started: _,
+        active_process: _,
         mut elapsed,
         mut scroll_offset,
         mut spinner_tick,
