@@ -1104,9 +1104,11 @@ pub(super) fn apply_gw_event(
         } => {
             // Record the terminal outcome on the engine's install panel (so
             // the dialog shows "install complete/failed"), and also surface a
-            // one-line notice in the chat.
+            // one-line notice in the chat. Only finish an install that's
+            // actually in progress — EngineActionResult also fires for
+            // start/stop, which must not overwrite a completed install.
             let mut data = engines_data.read().clone().unwrap_or_default();
-            if data.install_output.contains_key(&engine) {
+            if data.install_output.get(&engine).is_some_and(|o| !o.done) {
                 data.finish_install(&engine, ok, message.clone());
             }
             engines_data.set(Some(data));

@@ -63,8 +63,16 @@ impl EnginesPanelData {
 
     /// Append a line of install output for an engine, bounding the tail so
     /// the log can't grow without limit.
+    ///
+    /// If the engine's previous install had already finished, this line
+    /// begins a new install run, so the stale log is cleared first rather
+    /// than appended to.
     pub fn push_install_line(&mut self, engine: &str, line: impl Into<String>) {
         let entry = self.install_output.entry(engine.to_string()).or_default();
+        if entry.done {
+            entry.lines.clear();
+            entry.ok = false;
+        }
         entry.done = false;
         entry.lines.push(line.into());
         let overflow = entry
@@ -345,6 +353,42 @@ mod tests {
         assert!(out.done && out.ok);
         assert_eq!(out.status_line(), "install complete");
         assert_eq!(out.lines, vec!["downloading…", "installing binary"]);
+    }
+
+    #[test]
+    fn new_install_run_clears_the_previous_log() {
+        let mut panel = EnginesPanelData {
+            engines: vec![engine("ollama")],
+            selected_engine: Some("ollama".into()),
+            ..Default::default()
+        };
+        panel.push_install_line("ollama", "old line 1");
+        panel.finish_install("ollama", false, "old failed");
+        assert!(panel.active_install_output().unwrap().done);
+
+        // A fresh install run starts — the stale log is cleared, not appended.
+        panel.push_install_line("ollama", "new line 1");
+        let out = panel.active_install_output().unwrap();
+        assert_eq!(out.lines, vec!["new line 1"]);
+        assert!(!out.done && !out.ok);
+    }
+
+    #[test]
+    fn finished_install_is_not_reopened_by_a_second_finish() {
+        // Guards in the client handlers skip finish_install once done, but
+        // the flag itself must also survive so the status stays correct.
+        let mut panel = EnginesPanelData {
+            engines: vec![engine("ollama")],
+            selected_engine: Some("ollama".into()),
+            ..Default::default()
+        };
+        panel.push_install_line("ollama", "installing");
+        panel.finish_install("ollama", true, "");
+        let out = panel.install_output.get("ollama").unwrap();
+        assert!(out.done && out.ok);
+        // The handler guard is `!o.done`, so a later start/stop result never
+        // reaches finish_install for this engine.
+        assert!(out.done);
     }
 
     #[test]

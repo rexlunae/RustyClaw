@@ -647,8 +647,11 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 if model.is_some() {
                     panel.pull_progress = None;
                 }
-                // Record the terminal outcome on the engine's install panel.
-                if panel.install_output.contains_key(&engine) {
+                // Record the terminal outcome on the engine's install panel,
+                // but only while an install is actually in progress —
+                // EngineActionResult also fires for start/stop, which must
+                // not overwrite a completed install's status.
+                if panel.install_output.get(&engine).is_some_and(|o| !o.done) {
                     panel.finish_install(&engine, ok, message.clone());
                 }
             }
