@@ -471,6 +471,7 @@ mod ask_user_tests {
             is_error,
             collapsed: false,
             duration_ms: None,
+            live_status: None,
             live_output: String::new(),
         });
         msg

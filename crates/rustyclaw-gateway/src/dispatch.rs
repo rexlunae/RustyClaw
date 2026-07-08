@@ -102,7 +102,11 @@ where
                 let elapsed_ms = started.elapsed().as_millis() as u64;
                 // Attribute the newest child spawned since this call began;
                 // tool calls on this connection run sequentially, so that is
-                // the process this call is waiting on.
+                // the process this call is waiting on. With multiple
+                // concurrent connections the pick is best-effort (stats
+                // could come from another connection's child) — control
+                // stays safe regardless, since the registry allowlists
+                // every PID it hands out.
                 let proc = rustyclaw_core::exec_status::sample_active()
                     .into_iter()
                     .filter(|p| p.elapsed_ms <= elapsed_ms.saturating_add(250))
