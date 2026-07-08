@@ -65,6 +65,9 @@ pub enum ToolError {
     /// Session-manager failure.
     #[error(transparent)]
     Session(#[from] crate::sessions::SessionError),
+    /// Blocking-task join failure (the worker panicked or was cancelled).
+    #[error(transparent)]
+    Join(#[from] tokio::task::JoinError),
     /// Swarm-manager failure.
     #[error(transparent)]
     Swarm(#[from] crate::swarm::SwarmError),

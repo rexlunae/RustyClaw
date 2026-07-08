@@ -264,7 +264,7 @@ pub async fn exec_search_files_async(args: &Value, workspace_dir: &Path) -> Tool
     let workspace_dir = workspace_dir.to_path_buf();
     tokio::task::spawn_blocking(move || exec_search_files_sync(&args, &workspace_dir))
         .await
-        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| ToolError::context("Task join error", e))?
 }
 
 /// Find files by name (async wrapper).
@@ -274,7 +274,7 @@ pub async fn exec_find_files_async(args: &Value, workspace_dir: &Path) -> ToolRe
     let workspace_dir = workspace_dir.to_path_buf();
     tokio::task::spawn_blocking(move || exec_find_files_sync(&args, &workspace_dir))
         .await
-        .map_err(|e| format!("Task join error: {}", e))?
+        .map_err(|e| ToolError::context("Task join error", e))?
 }
 
 // ── Helper functions ────────────────────────────────────────────────────────

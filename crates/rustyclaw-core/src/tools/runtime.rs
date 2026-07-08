@@ -92,7 +92,7 @@ pub async fn exec_execute_command_streaming(
         let cwd_clone = cwd.clone();
         let output = tokio::task::spawn_blocking(move || run_sandboxed_command(&cmd, &cwd_clone))
             .await
-            .map_err(|e| format!("Task join error: {}", e))??;
+            .map_err(|e| ToolError::context("Task join error", e))??;
 
         return format_output(output, timeout_secs);
     }
@@ -189,7 +189,7 @@ pub async fn exec_execute_command_streaming(
                     Err(e) => {
                         out_task.abort();
                         err_task.abort();
-                        return Err(format!("Error waiting for command: {}", e).into());
+                        return Err(ToolError::context("Error waiting for command", e));
                     }
                 }
             }
@@ -246,27 +246,20 @@ where
 
 /// Move a tokio child process to the sync ProcessManager for background execution.
 async fn background_child(
-    child: tokio::process::Child,
+    mut child: tokio::process::Child,
     command: &str,
     cwd: &Path,
     timeout_deadline: Instant,
 ) -> ToolResult {
-    // Convert tokio child to std child by extracting the inner handle
-    // This is a bit tricky - we need to spawn a std::process::Command instead
-    // and transfer the session concept.
-
-    // Actually, we can't easily convert tokio::Child to std::Child.
-    // Instead, let's create a new session in the ProcessManager using spawn.
-    // But we need to kill this child first to avoid orphan.
-
-    // Better approach: The ProcessManager should also support tokio children.
-    // For now, let's use a workaround: collect what output we have and return it
-    // with a message that the process was backgrounded.
-
-    // For the MVP, we'll spawn a new background process via ProcessManager
-    // and kill this async child. Not ideal but functional.
-
+    // ProcessManager can't adopt a tokio::process::Child, so backgrounding
+    // re-spawns the command under the manager and terminates the original.
+    // Wasteful (the command restarts from scratch) but functional.
     // TODO: Refactor ProcessManager to support tokio::process::Child
+
+    // Kill the original FIRST: dropping a tokio child does NOT kill it,
+    // and killing only after the re-spawn would leave two copies of the
+    // command running side by side.
+    let _ = child.kill().await;
 
     let manager = process_manager();
     let mut mgr = manager
@@ -285,10 +278,6 @@ async fn background_child(
     )?;
 
     debug!(session_id = %session_id, "Process backgrounded");
-
-    // Kill the tokio child since we spawned a new one
-    // This is wasteful but necessary until ProcessManager supports tokio
-    drop(child);
 
     Ok(json!({
         "status": "running",
@@ -470,7 +459,7 @@ fn exec_execute_command_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
 
                 std::thread::sleep(Duration::from_millis(100));
             }
-            Err(e) => return Err(format!("Error waiting for command: {}", e).into()),
+            Err(e) => return Err(ToolError::context("Error waiting for command", e)),
         }
     }
 

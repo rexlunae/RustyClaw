@@ -713,7 +713,7 @@ pub async fn execute_tool_streaming(
     // Run sync tools on blocking thread pool
     let result = tokio::task::spawn_blocking(move || execute_fn(&args, &workspace_dir))
         .await
-        .map_err(|e| format!("Task join error: {}", e))?;
+        .map_err(|e| ToolError::context("Task join error", e))?;
 
     if result.is_err() {
         warn!(error = ?result.as_ref().err(), "Tool execution failed");
