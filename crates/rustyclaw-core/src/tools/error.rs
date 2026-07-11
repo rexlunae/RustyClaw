@@ -72,13 +72,8 @@ pub enum ToolError {
     #[error(transparent)]
     Swarm(#[from] crate::swarm::SwarmError),
     /// Skill-manager failure.
-    ///
-    /// The skills/ClawHub module reports `anyhow` errors rather than a
-    /// dedicated enum; this variant carries them across the tool boundary
-    /// intact — context chain and downcasting preserved — instead of
-    /// flattening them to text.
     #[error(transparent)]
-    Skill(#[from] anyhow::Error),
+    Skill(#[from] crate::skills::SkillError),
     /// Semantic-memory failure.
     #[cfg(feature = "semantic-memory")]
     #[error(transparent)]

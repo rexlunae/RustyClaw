@@ -227,7 +227,7 @@ impl SkillManager {
     ///
     /// If the registry is unreachable, falls back to matching against
     /// locally-loaded skills so the user still gets useful results.
-    pub fn search_registry(&self, query: &str) -> Result<Vec<RegistryEntry>> {
+    pub fn search_registry(&self, query: &str) -> Result<Vec<RegistryEntry>, SkillError> {
         // ── Try remote registry first ───────────────────────────
         match self.search_registry_remote(query) {
             Ok(results) => return Ok(results),
@@ -267,7 +267,7 @@ impl SkillManager {
     }
 
     /// Internal: attempt a remote registry search.
-    fn search_registry_remote(&self, query: &str) -> Result<Vec<RegistryEntry>> {
+    fn search_registry_remote(&self, query: &str) -> Result<Vec<RegistryEntry>, SkillError> {
         // ClawHub API: /api/search?q=<query>
         let url = format!(
             "{}/api/search?q={}",
@@ -282,10 +282,11 @@ impl SkillManager {
             self.registry_token.as_deref(),
             Duration::from_secs(10),
         )
-        .context("ClawHub registry is not reachable")?;
+        .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
-        let body: RegistrySearchResponse =
-            resp.json().context("Failed to parse registry response")?;
+        let body: RegistrySearchResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse registry response", e))?;
 
         // ClawHub returns "results", legacy might return "skills"
         let entries = if !body.results.is_empty() {
@@ -299,14 +300,13 @@ impl SkillManager {
 
     /// Install a skill from the ClawHub registry into the primary
     /// skills directory.  Returns the installed `Skill`.
-    pub fn install_from_registry(&mut self, name: &str, version: Option<&str>) -> Result<Skill> {
+    pub fn install_from_registry(
+        &mut self,
+        name: &str,
+        version: Option<&str>,
+    ) -> Result<Skill, SkillError> {
         if !self.registry_reachable() {
-            anyhow::bail!(
-                "ClawHub registry ({}) is not reachable. \
-                 Check your internet connection or set a custom registry URL \
-                 with `clawhub_url` in your config.",
-                self.registry_url,
-            );
+            return Err(SkillError::Unreachable(self.registry_url.clone()));
         }
 
         // ClawHub download API: /api/v1/download?slug=<name>&version=<version>
@@ -326,24 +326,27 @@ impl SkillManager {
             self.registry_token.as_deref(),
             Duration::from_secs(30),
         )
-        .context("Failed to download skill from ClawHub")?;
+        .map_err(|e| SkillError::context("Failed to download skill from ClawHub", e))?;
 
         // Response is a zip file
-        let zip_bytes = resp.bytes().context("Failed to read zip data")?;
+        let zip_bytes = resp
+            .bytes()
+            .map_err(|e| SkillError::context("Failed to read zip data", e))?;
 
         // Use last directory (user's writable dir) for installations, not first (bundled/read-only)
         let skills_dir = self
             .skills_dirs
             .last()
             .cloned()
-            .ok_or_else(|| anyhow::anyhow!("No skills directory configured"))?;
+            .ok_or(SkillError::NoSkillsDir)?;
 
         let skill_dir = skills_dir.join(name);
         std::fs::create_dir_all(&skill_dir)?;
 
         // Extract zip to skill directory
         let cursor = std::io::Cursor::new(zip_bytes);
-        let mut archive = zip::ZipArchive::new(cursor).context("Invalid zip archive")?;
+        let mut archive = zip::ZipArchive::new(cursor)
+            .map_err(|e| SkillError::context("Invalid zip archive", e))?;
 
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
@@ -397,19 +400,19 @@ impl SkillManager {
     }
 
     /// Publish a local skill to the ClawHub registry.
-    pub fn publish_to_registry(&self, skill_name: &str) -> Result<String> {
+    pub fn publish_to_registry(&self, skill_name: &str) -> Result<String, SkillError> {
         let skill = self
             .get_skill(skill_name)
-            .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", skill_name))?;
+            .ok_or_else(|| SkillError::NotFound(skill_name.to_string()))?;
 
-        let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "ClawHub auth token required for publishing. Set clawhub_token in config."
-            )
-        })?;
+        let token = self
+            .registry_token
+            .as_ref()
+            .ok_or(SkillError::NotAuthenticated)?;
 
         // Read the skill content.
-        let content = std::fs::read_to_string(&skill.path).context("Failed to read skill file")?;
+        let content = std::fs::read_to_string(&skill.path)
+            .map_err(|e| SkillError::context("Failed to read skill file", e))?;
 
         let manifest = SkillManifest {
             name: skill.name.clone(),
@@ -428,12 +431,7 @@ impl SkillManager {
         });
 
         if !self.registry_reachable() {
-            anyhow::bail!(
-                "ClawHub registry ({}) is not reachable. \
-                 Check your internet connection or set a custom registry URL \
-                 with `clawhub_url` in your config.",
-                self.registry_url,
-            );
+            return Err(SkillError::Unreachable(self.registry_url.clone()));
         }
 
         let url = format!("{}/skills/publish", self.registry_url);
@@ -444,14 +442,14 @@ impl SkillManager {
             .json(&payload)
             .timeout(std::time::Duration::from_secs(30))
             .send()
-            .context("Failed to publish to ClawHub")?;
+            .map_err(|e| SkillError::context("Failed to publish to ClawHub", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub publish failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub publish",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
         Ok(format!(
@@ -474,7 +472,7 @@ impl SkillManager {
 
     /// Authenticate with ClawHub using a username and password.
     /// Returns the API token on success, which should be saved to config.
-    pub fn auth_login(&self, username: &str, password: &str) -> Result<AuthResponse> {
+    pub fn auth_login(&self, username: &str, password: &str) -> Result<AuthResponse, SkillError> {
         let url = format!("{}/api/v1/auth/login", self.registry_url);
         let client = reqwest::blocking::Client::new();
         let payload = serde_json::json!({
@@ -487,21 +485,25 @@ impl SkillManager {
             .json(&payload)
             .timeout(std::time::Duration::from_secs(10))
             .send()
-            .context("Failed to connect to ClawHub for authentication")?;
+            .map_err(|e| {
+                SkillError::context("Failed to connect to ClawHub for authentication", e)
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            anyhow::bail!("ClawHub auth failed (HTTP {}): {}", status, body);
+            return Err(SkillError::status("ClawHub auth", status, body));
         }
 
-        let auth: AuthResponse = resp.json().context("Failed to parse auth response")?;
+        let auth: AuthResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse auth response", e))?;
         Ok(auth)
     }
 
     /// Authenticate with ClawHub using a pre-existing API token.
     /// Validates the token and returns the profile info.
-    pub fn auth_token(&self, token: &str) -> Result<AuthResponse> {
+    pub fn auth_token(&self, token: &str) -> Result<AuthResponse, SkillError> {
         let url = format!("{}/api/v1/auth/verify", self.registry_url);
         let client = reqwest::blocking::Client::new();
 
@@ -510,24 +512,28 @@ impl SkillManager {
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(10))
             .send()
-            .context("Failed to connect to ClawHub for token verification")?;
+            .map_err(|e| {
+                SkillError::context("Failed to connect to ClawHub for token verification", e)
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            anyhow::bail!(
-                "ClawHub token verification failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub token verification",
                 status,
-                body
-            );
+                body,
+            ));
         }
 
-        let auth: AuthResponse = resp.json().context("Failed to parse auth response")?;
+        let auth: AuthResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse auth response", e))?;
         Ok(auth)
     }
 
     /// Check authentication status (whether a token is configured and valid).
-    pub fn auth_status(&self) -> Result<String> {
+    pub fn auth_status(&self) -> Result<String, SkillError> {
         match &self.registry_token {
             Some(token) => match self.auth_token(token) {
                 Ok(resp) if resp.ok => {
@@ -558,7 +564,7 @@ impl SkillManager {
         &self,
         category: Option<&str>,
         limit: Option<usize>,
-    ) -> Result<Vec<TrendingEntry>> {
+    ) -> Result<Vec<TrendingEntry>, SkillError> {
         let mut url = format!("{}/api/v1/trending", self.registry_url);
         let mut params = vec![];
         if let Some(cat) = category {
@@ -581,17 +587,19 @@ impl SkillManager {
         let resp = req
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub trending request failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub trending request",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
-        let body: TrendingResponse = resp.json().context("Failed to parse trending response")?;
+        let body: TrendingResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse trending response", e))?;
         let entries = if !body.results.is_empty() {
             body.results
         } else {
@@ -602,7 +610,7 @@ impl SkillManager {
     }
 
     /// Fetch available categories from the ClawHub registry.
-    pub fn categories(&self) -> Result<Vec<Category>> {
+    pub fn categories(&self) -> Result<Vec<Category>, SkillError> {
         let url = format!("{}/api/v1/categories", self.registry_url);
         let client = reqwest::blocking::Client::new();
         let mut req = client.get(&url);
@@ -613,28 +621,28 @@ impl SkillManager {
         let resp = req
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub categories request failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub categories request",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
-        let body: CategoriesResponse =
-            resp.json().context("Failed to parse categories response")?;
+        let body: CategoriesResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse categories response", e))?;
         Ok(body.categories)
     }
 
     /// Fetch the authenticated user's profile from ClawHub.
-    pub fn profile(&self) -> Result<ClawHubProfile> {
-        let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Not authenticated. Run `/clawhub auth login` or set clawhub_token in config."
-            )
-        })?;
+    pub fn profile(&self) -> Result<ClawHubProfile, SkillError> {
+        let token = self
+            .registry_token
+            .as_ref()
+            .ok_or(SkillError::NotAuthenticated)?;
 
         let url = format!("{}/api/v1/profile", self.registry_url);
         let client = reqwest::blocking::Client::new();
@@ -644,30 +652,33 @@ impl SkillManager {
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub profile request failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub profile request",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
-        let body: ProfileResponse = resp.json().context("Failed to parse profile response")?;
+        let body: ProfileResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse profile response", e))?;
         match body.profile {
             Some(profile) => Ok(profile),
-            None => anyhow::bail!(body.error.unwrap_or_else(|| "Profile not found".into())),
+            None => Err(SkillError::msg(
+                body.error.unwrap_or_else(|| "Profile not found".into()),
+            )),
         }
     }
 
     /// Fetch the authenticated user's starred skills from ClawHub.
-    pub fn starred(&self) -> Result<Vec<StarredEntry>> {
-        let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!(
-                "Not authenticated. Run `/clawhub auth login` or set clawhub_token in config."
-            )
-        })?;
+    pub fn starred(&self) -> Result<Vec<StarredEntry>, SkillError> {
+        let token = self
+            .registry_token
+            .as_ref()
+            .ok_or(SkillError::NotAuthenticated)?;
 
         let url = format!("{}/api/v1/starred", self.registry_url);
         let client = reqwest::blocking::Client::new();
@@ -677,25 +688,28 @@ impl SkillManager {
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub starred request failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub starred request",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
-        let body: StarredResponse = resp.json().context("Failed to parse starred response")?;
+        let body: StarredResponse = resp
+            .json()
+            .map_err(|e| SkillError::context("Failed to parse starred response", e))?;
         Ok(body.results)
     }
 
     /// Star a skill on ClawHub.
-    pub fn star(&self, skill_name: &str) -> Result<String> {
-        let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Not authenticated. Run `/clawhub auth login` first.")
-        })?;
+    pub fn star(&self, skill_name: &str) -> Result<String, SkillError> {
+        let token = self
+            .registry_token
+            .as_ref()
+            .ok_or(SkillError::NotAuthenticated)?;
 
         let url = format!(
             "{}/api/v1/skills/{}/star",
@@ -709,24 +723,25 @@ impl SkillManager {
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub star failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub star",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
         Ok(format!("Starred '{}'", skill_name))
     }
 
     /// Unstar a skill on ClawHub.
-    pub fn unstar(&self, skill_name: &str) -> Result<String> {
-        let token = self.registry_token.as_ref().ok_or_else(|| {
-            anyhow::anyhow!("Not authenticated. Run `/clawhub auth login` first.")
-        })?;
+    pub fn unstar(&self, skill_name: &str) -> Result<String, SkillError> {
+        let token = self
+            .registry_token
+            .as_ref()
+            .ok_or(SkillError::NotAuthenticated)?;
 
         let url = format!(
             "{}/api/v1/skills/{}/star",
@@ -740,21 +755,21 @@ impl SkillManager {
             .bearer_auth(token)
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub unstar failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub unstar",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
         Ok(format!("Unstarred '{}'", skill_name))
     }
 
     /// Get detailed info about a registry skill (not a locally installed one).
-    pub fn registry_info(&self, skill_name: &str) -> Result<RegistrySkillDetail> {
+    pub fn registry_info(&self, skill_name: &str) -> Result<RegistrySkillDetail, SkillError> {
         let url = format!(
             "{}/api/v1/skills/{}",
             self.registry_url,
@@ -770,19 +785,19 @@ impl SkillManager {
         let resp = req
             .timeout(std::time::Duration::from_secs(5))
             .send()
-            .context("ClawHub registry is not reachable")?;
+            .map_err(|e| SkillError::context("ClawHub registry is not reachable", e))?;
 
         if !resp.status().is_success() {
-            anyhow::bail!(
-                "ClawHub skill info failed (HTTP {}): {}",
+            return Err(SkillError::status(
+                "ClawHub skill info",
                 resp.status(),
                 resp.text().unwrap_or_default(),
-            );
+            ));
         }
 
         let detail: RegistrySkillDetail = resp
             .json()
-            .context("Failed to parse skill detail response")?;
+            .map_err(|e| SkillError::context("Failed to parse skill detail response", e))?;
         Ok(detail)
     }
 }
