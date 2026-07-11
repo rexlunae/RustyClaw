@@ -109,7 +109,7 @@ pub fn ThreadTabs(props: &ThreadTabsProps) -> impl Into<AnyElement<'static>> {
                     }
                 }.into_any()]
             })
-            View(flex_grow: 1.0)
+            View(flex_grow: 1.0_f32)
         }
     }
 }

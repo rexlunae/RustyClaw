@@ -285,7 +285,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
         ) {
             // ── Main area (flex grow) ───────────────────────────────────
             View(
-                flex_grow: 1.0,
+                flex_grow: 1.0_f32,
                 flex_direction: FlexDirection::Row,
                 width: 100pct,
             ) {
@@ -299,7 +299,7 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                 )
                 // Chat area: messages + input
                 View(
-                    flex_grow: 1.0,
+                    flex_grow: 1.0_f32,
                     flex_direction: FlexDirection::Column,
                 ) {
                     Messages(

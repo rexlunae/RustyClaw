@@ -116,7 +116,7 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 # `providers::genai_backend` (request building, tool calling, SSE streaming).
 # Lives in core so every client crate that depends on rustyclaw-core shares
 # the same instance rather than pulling a separate copy.
-genai = "0.5.3"
+genai = "0.6.5"
 
 # AST-grep — structural code search and rewrite via tree-sitter
 ast-grep-core = "0.42.3"

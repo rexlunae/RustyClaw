@@ -48,7 +48,7 @@ pub fn InputBar(props: &mut InputBarProps) -> impl Into<AnyElement<'static>> {
         ) {
             View(width: 100pct, height: 1, flex_direction: FlexDirection::Row) {
                 Text(content: "❯ ", color: theme::ACCENT_BRIGHT, weight: Weight::Bold)
-                View(flex_grow: 1.0, height: 1, background_color: theme::BG_MAIN, flex_direction: FlexDirection::Row) {
+                View(flex_grow: 1.0_f32, height: 1, background_color: theme::BG_MAIN, flex_direction: FlexDirection::Row) {
                     Text(content: before_cursor, color: theme::TEXT)
                     #(if props.has_focus {
                         element! {

@@ -237,7 +237,7 @@ pub(super) fn apply_key_event(
                         let mut m = messages.read().clone();
                         m.push(DisplayMessage::success(format!(
                             "✓ Approved: {}",
-                            &*tool_approval_name.read()
+                            *tool_approval_name.read()
                         )));
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
@@ -254,7 +254,7 @@ pub(super) fn apply_key_event(
                         let mut m = messages.read().clone();
                         m.push(DisplayMessage::warning(format!(
                             "✗ Denied: {}",
-                            &*tool_approval_name.read()
+                            *tool_approval_name.read()
                         )));
                         messages.set(m);
                         if let Ok(guard) = tx_for_keys.lock() {
@@ -274,12 +274,12 @@ pub(super) fn apply_key_event(
                         if approved {
                             m.push(DisplayMessage::success(format!(
                                 "✓ Approved: {}",
-                                &*tool_approval_name.read()
+                                *tool_approval_name.read()
                             )));
                         } else {
                             m.push(DisplayMessage::warning(format!(
                                 "✗ Denied: {}",
-                                &*tool_approval_name.read()
+                                *tool_approval_name.read()
                             )));
                         }
                         messages.set(m);

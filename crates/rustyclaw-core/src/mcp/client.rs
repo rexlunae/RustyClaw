@@ -48,7 +48,7 @@ impl McpClient {
 
         // Validate the command before spawning (reject null bytes, excessive length,
         // credential exfiltration patterns).
-        let full_cmd = format!("{} {}", &self.config.command, &self.config.args.join(" "));
+        let full_cmd = format!("{} {}", self.config.command, self.config.args.join(" "));
         if let Err(e) = crate::tools::helpers::validate_command_safe(&full_cmd) {
             warn!(server = %self.name, error = %e, "MCP server command rejected by security validation");
             return Err(anyhow::anyhow!("MCP server command rejected: {}", e));
