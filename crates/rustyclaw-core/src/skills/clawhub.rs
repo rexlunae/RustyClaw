@@ -485,7 +485,9 @@ impl SkillManager {
             .json(&payload)
             .timeout(std::time::Duration::from_secs(10))
             .send()
-            .map_err(|e| SkillError::context("Failed to connect to ClawHub for authentication", e))?;
+            .map_err(|e| {
+                SkillError::context("Failed to connect to ClawHub for authentication", e)
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
@@ -517,7 +519,11 @@ impl SkillManager {
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().unwrap_or_default();
-            return Err(SkillError::status("ClawHub token verification", status, body));
+            return Err(SkillError::status(
+                "ClawHub token verification",
+                status,
+                body,
+            ));
         }
 
         let auth: AuthResponse = resp

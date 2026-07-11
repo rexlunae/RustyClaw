@@ -29,16 +29,10 @@ pub enum SkillError {
     NotFound(String),
     /// A skill with this name already exists on disk.
     #[error("Skill already exists: {name} (at {})", path.display())]
-    AlreadyExists {
-        name: String,
-        path: PathBuf,
-    },
+    AlreadyExists { name: String, path: PathBuf },
     /// The skill name is not usable as a directory name.
     #[error("Invalid skill name '{name}': {reason}")]
-    InvalidName {
-        name: String,
-        reason: &'static str,
-    },
+    InvalidName { name: String, reason: &'static str },
     /// No writable skills directory is configured.
     #[error("No skills directory configured")]
     NoSkillsDir,
@@ -56,7 +50,9 @@ pub enum SkillError {
         body: String,
     },
     /// The operation requires ClawHub authentication.
-    #[error("Not authenticated with ClawHub. Run `/clawhub auth login` or set `clawhub_token` in config.")]
+    #[error(
+        "Not authenticated with ClawHub. Run `/clawhub auth login` or set `clawhub_token` in config."
+    )]
     NotAuthenticated,
     /// A typed error wrapped with human context.
     ///
