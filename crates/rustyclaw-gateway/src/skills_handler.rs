@@ -9,7 +9,7 @@ use super::SharedSkillManager;
 /// `tools::execute_tool` path because they need access to the shared
 /// `SkillManager` that lives in the gateway process.
 ///
-/// `SkillManager` reports `anyhow` errors; `?` carries them into
+/// `SkillManager` reports typed `SkillError`s; `?` carries them into
 /// [`ToolError::Skill`] so the typed chain survives up to the dispatch
 /// layer instead of being flattened here.
 #[instrument(skip(args, skill_mgr), fields(%name))]

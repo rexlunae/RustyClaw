@@ -1,4 +1,3 @@
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,8 +19,8 @@ fn blocking_request_with_retry(
     url: &str,
     token: Option<&str>,
     timeout: Duration,
-) -> Result<reqwest::blocking::Response> {
-    let mut last_err: Option<anyhow::Error> = None;
+) -> Result<reqwest::blocking::Response, SkillError> {
+    let mut last_err: Option<SkillError> = None;
 
     for attempt in 1..=CLAWHUB_MAX_RETRIES {
         let mut req = client.get(url);
@@ -52,28 +51,27 @@ fn blocking_request_with_retry(
                     let backoff = backoff_delay(attempt);
                     let delay = retry_after.unwrap_or(backoff);
 
-                    last_err = Some(anyhow::anyhow!("HTTP {} from ClawHub: {}", status, body,));
+                    last_err = Some(SkillError::status("ClawHub request", status, body.clone()));
 
                     if attempt < CLAWHUB_MAX_RETRIES {
                         std::thread::sleep(delay);
                         continue;
                     }
 
-                    // Final attempt — fall through to bail below.
-                    anyhow::bail!(
-                        "ClawHub request failed (HTTP {}) after {} retries: {}",
+                    // Final attempt — fall through to the error below.
+                    return Err(SkillError::status(
+                        format!("ClawHub request (after {} retries)", CLAWHUB_MAX_RETRIES),
                         status,
-                        CLAWHUB_MAX_RETRIES,
                         body,
-                    );
+                    ));
                 }
 
                 // Non-retryable error — bail immediately.
-                anyhow::bail!(
-                    "ClawHub request failed (HTTP {}): {}",
+                return Err(SkillError::status(
+                    "ClawHub request",
                     status,
                     resp.text().unwrap_or_default(),
-                );
+                ));
             }
             Err(e) => {
                 // Retry on timeout / connect errors.
@@ -88,7 +86,7 @@ fn blocking_request_with_retry(
         }
     }
 
-    Err(last_err.unwrap_or_else(|| anyhow::anyhow!("ClawHub request failed after retries")))
+    Err(last_err.unwrap_or_else(|| SkillError::msg("ClawHub request failed after retries")))
 }
 
 /// Exponential backoff: 500ms → 1s → 2s → 4s … capped at CLAWHUB_MAX_DELAY.
@@ -240,7 +238,7 @@ impl SkillManager {
 
     /// Load skills from all configured directories
     /// Later directories have higher precedence (override earlier ones by name)
-    pub fn load_skills(&mut self) -> Result<()> {
+    pub fn load_skills(&mut self) -> Result<(), SkillError> {
         self.skills.clear();
         let mut seen_names: HashMap<String, usize> = HashMap::new();
 
@@ -291,7 +289,7 @@ impl SkillManager {
     }
 
     /// Load a skill from SKILL.md format (AgentSkills compatible)
-    fn load_skill_md(&self, path: &Path) -> Result<Skill> {
+    fn load_skill_md(&self, path: &Path) -> Result<Skill, SkillError> {
         let content = std::fs::read_to_string(path)?;
         let (frontmatter, instructions) = parse_frontmatter(&content)?;
 
@@ -299,7 +297,7 @@ impl SkillManager {
         let name = frontmatter
             .get("name")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| anyhow::anyhow!("Skill missing 'name' in frontmatter"))?
+            .ok_or_else(|| SkillError::msg("Skill missing 'name' in frontmatter"))?
             .to_string();
 
         let description = frontmatter
@@ -351,14 +349,17 @@ impl SkillManager {
     }
 
     /// Load a legacy skill file (.skill/.json/.yaml)
-    fn load_skill_legacy(&self, path: &Path) -> Result<Skill> {
+    fn load_skill_legacy(&self, path: &Path) -> Result<Skill, SkillError> {
         let is_json = path
             .extension()
             .is_some_and(|e| e == "json" || e == "skill");
         let is_yaml = path.extension().is_some_and(|e| e == "yaml" || e == "yml");
 
         if !is_json && !is_yaml {
-            anyhow::bail!("Unsupported skill file format: {:?}", path);
+            return Err(SkillError::msg(format!(
+                "Unsupported skill file format: {:?}",
+                path
+            )));
         }
 
         let content = std::fs::read_to_string(path)?;
@@ -487,12 +488,12 @@ impl SkillManager {
     }
 
     /// Enable or disable a skill
-    pub fn set_skill_enabled(&mut self, name: &str, enabled: bool) -> Result<()> {
+    pub fn set_skill_enabled(&mut self, name: &str, enabled: bool) -> Result<(), SkillError> {
         if let Some(skill) = self.skills.iter_mut().find(|s| s.name == name) {
             skill.enabled = enabled;
             Ok(())
         } else {
-            anyhow::bail!("Skill not found: {}", name)
+            Err(SkillError::NotFound(name.to_string()))
         }
     }
 
@@ -637,23 +638,32 @@ impl SkillManager {
         description: &str,
         instructions: &str,
         metadata_json: Option<&str>,
-    ) -> Result<PathBuf> {
+    ) -> Result<PathBuf, SkillError> {
         // Validate name is kebab-case-ish (no slashes, no spaces, no dots-leading)
         if name.is_empty() {
-            anyhow::bail!("Skill name cannot be empty");
+            return Err(SkillError::InvalidName {
+                name: name.to_string(),
+                reason: "cannot be empty",
+            });
         }
         if name.contains('/') || name.contains('\\') || name.contains(' ') {
-            anyhow::bail!("Skill name must be a simple identifier (no slashes or spaces): {name}");
+            return Err(SkillError::InvalidName {
+                name: name.to_string(),
+                reason: "must be a simple identifier (no slashes or spaces)",
+            });
         }
 
         let skills_dir = self
             .primary_skills_dir()
-            .ok_or_else(|| anyhow::anyhow!("No skills directory configured"))?
+            .ok_or(SkillError::NoSkillsDir)?
             .to_path_buf();
 
         let skill_dir = skills_dir.join(name);
         if skill_dir.join("SKILL.md").exists() {
-            anyhow::bail!("Skill already exists: {name} (at {})", skill_dir.display());
+            return Err(SkillError::AlreadyExists {
+                name: name.to_string(),
+                path: skill_dir,
+            });
         }
 
         std::fs::create_dir_all(&skill_dir)?;
@@ -679,12 +689,12 @@ impl SkillManager {
 
     /// Link a vault credential to a skill so the skill can access it
     /// via the `SkillOnly` policy.
-    pub fn link_secret(&mut self, skill_name: &str, secret_name: &str) -> Result<()> {
+    pub fn link_secret(&mut self, skill_name: &str, secret_name: &str) -> Result<(), SkillError> {
         let skill = self
             .skills
             .iter_mut()
             .find(|s| s.name == skill_name)
-            .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", skill_name))?;
+            .ok_or_else(|| SkillError::NotFound(skill_name.to_string()))?;
 
         if !skill.linked_secrets.contains(&secret_name.to_string()) {
             skill.linked_secrets.push(secret_name.to_string());
@@ -693,12 +703,12 @@ impl SkillManager {
     }
 
     /// Unlink a vault credential from a skill.
-    pub fn unlink_secret(&mut self, skill_name: &str, secret_name: &str) -> Result<()> {
+    pub fn unlink_secret(&mut self, skill_name: &str, secret_name: &str) -> Result<(), SkillError> {
         let skill = self
             .skills
             .iter_mut()
             .find(|s| s.name == skill_name)
-            .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", skill_name))?;
+            .ok_or_else(|| SkillError::NotFound(skill_name.to_string()))?;
 
         skill.linked_secrets.retain(|s| s != secret_name);
         Ok(())
@@ -715,12 +725,12 @@ impl SkillManager {
 
     /// Remove a skill by name.  If it was installed from a registry,
     /// its directory is deleted from disk.
-    pub fn remove_skill(&mut self, name: &str) -> Result<()> {
+    pub fn remove_skill(&mut self, name: &str) -> Result<(), SkillError> {
         let idx = self
             .skills
             .iter()
             .position(|s| s.name == name)
-            .ok_or_else(|| anyhow::anyhow!("Skill not found: {}", name))?;
+            .ok_or_else(|| SkillError::NotFound(name.to_string()))?;
 
         let skill = self.skills.remove(idx);
 
@@ -789,7 +799,7 @@ impl SkillManager {
 }
 
 /// Parse YAML frontmatter from a markdown file
-fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
+fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String), SkillError> {
     let content = content.trim_start();
 
     if !content.starts_with("---") {
@@ -806,8 +816,8 @@ fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
         let frontmatter_str = &after_first[..end_idx];
         let instructions = after_first[end_idx + 4..].trim_start().to_string();
 
-        let frontmatter: serde_yaml::Value =
-            serde_yaml::from_str(frontmatter_str).context("Failed to parse YAML frontmatter")?;
+        let frontmatter: serde_yaml::Value = serde_yaml::from_str(frontmatter_str)
+            .map_err(|e| SkillError::context("Failed to parse YAML frontmatter", e))?;
 
         Ok((frontmatter, instructions))
     } else {
@@ -821,6 +831,9 @@ fn parse_frontmatter(content: &str) -> Result<(serde_yaml::Value, String)> {
 
 mod clawhub;
 pub use clawhub::*;
+
+mod error;
+pub use error::SkillError;
 
 #[cfg(test)]
 mod tests;
