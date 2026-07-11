@@ -150,12 +150,38 @@ pub async fn search_models(query: &str, gguf_only: bool, limit: usize) -> Result
         .collect())
 }
 
+/// Check that `repo` looks like a Hub repo id (`namespace/name`, each
+/// segment limited to alphanumerics plus `.`, `_`, `-`).  The id is
+/// interpolated into a URL path, so anything else (traversal sequences,
+/// URL metacharacters) is rejected rather than encoded.
+fn valid_repo_id(repo: &str) -> bool {
+    let mut parts = repo.split('/');
+    let (Some(ns), Some(name), None) = (parts.next(), parts.next(), parts.next()) else {
+        return false;
+    };
+    [ns, name].iter().all(|seg| {
+        !seg.is_empty()
+            && seg
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+            && *seg != "."
+            && *seg != ".."
+    })
+}
+
 /// List the GGUF files in a Hub repo (one per quantization, typically),
 /// largest metadata first as returned by the API.
 pub async fn list_gguf_files(repo: &str) -> Result<Vec<HubFile>> {
+    let repo = repo.trim_matches('/');
+    if !valid_repo_id(repo) {
+        return Err(anyhow!(
+            "'{}' is not a valid Hugging Face repo id (expected namespace/name)",
+            repo
+        ));
+    }
     let url = format!(
         "https://huggingface.co/api/models/{}/tree/main?recursive=true",
-        repo.trim_matches('/'),
+        repo
     );
     let resp = http_client()?
         .get(&url)
@@ -215,6 +241,23 @@ mod tests {
         assert!(line.contains("Qwen/Qwen3-4B-GGUF"));
         assert!(line.contains("1.2M downloads"));
         assert!(line.contains("gguf"));
+    }
+
+    #[test]
+    fn repo_id_validation() {
+        assert!(valid_repo_id("Qwen/Qwen3-4B-GGUF"));
+        assert!(valid_repo_id("TheBloke/Llama-2_7B.gguf"));
+        // Wrong shape.
+        assert!(!valid_repo_id("no-namespace"));
+        assert!(!valid_repo_id("a/b/c"));
+        assert!(!valid_repo_id("/name"));
+        assert!(!valid_repo_id("ns/"));
+        // Traversal and URL metacharacters.
+        assert!(!valid_repo_id("../users/me"));
+        assert!(!valid_repo_id("a/.."));
+        assert!(!valid_repo_id("a/b?x=1"));
+        assert!(!valid_repo_id("a/b#frag"));
+        assert!(!valid_repo_id("a/b c"));
     }
 
     #[test]
