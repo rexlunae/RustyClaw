@@ -1,4 +1,4 @@
-use anyhow_tracing::{Result, anyhow};
+use rustyclaw_core::tools::error::{ToolError, ToolResult, missing_param, require_str};
 use tracing::{debug, instrument, warn};
 
 use super::SharedSkillManager;
@@ -8,12 +8,16 @@ use super::SharedSkillManager;
 /// Like `execute_secrets_tool`, these tools bypass the normal
 /// `tools::execute_tool` path because they need access to the shared
 /// `SkillManager` that lives in the gateway process.
+///
+/// `SkillManager` reports `anyhow` errors; `?` carries them into
+/// [`ToolError::Skill`] so the typed chain survives up to the dispatch
+/// layer instead of being flattened here.
 #[instrument(skip(args, skill_mgr), fields(%name))]
 pub async fn execute_skill_tool(
     name: &str,
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
+) -> ToolResult {
     debug!("Executing skill tool");
     match name {
         "skill_list" => exec_gw_skill_list(args, skill_mgr).await,
@@ -25,7 +29,7 @@ pub async fn execute_skill_tool(
         "skill_create" => exec_gw_skill_create(args, skill_mgr).await,
         _ => {
             warn!("Unknown skill tool requested");
-            Err(anyhow!("Unknown skill tool: {}", name))
+            Err(format!("Unknown skill tool: {}", name).into())
         }
     }
 }
@@ -35,7 +39,7 @@ pub async fn execute_skill_tool(
 pub async fn exec_gw_skill_list(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
+) -> ToolResult {
     let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
 
     debug!(filter, "Listing skills");
@@ -127,18 +131,14 @@ pub async fn exec_gw_skill_list(
 pub async fn exec_gw_skill_search(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
-    let query = args
-        .get("query")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: query"))?;
+) -> ToolResult {
+    let query = require_str(args, "query")?;
 
     debug!(query, "Searching ClawHub registry");
 
     let mgr = skill_mgr.lock().await;
-    let results = mgr.search_registry(query).map_err(|e| {
+    let results = mgr.search_registry(query).inspect_err(|e| {
         warn!(query, error = %e, "Registry search failed");
-        anyhow!("{}", e)
     })?;
 
     if results.is_empty() {
@@ -180,11 +180,8 @@ pub async fn exec_gw_skill_search(
 pub async fn exec_gw_skill_install(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
-    let name = args
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: name"))?;
+) -> ToolResult {
+    let name = require_str(args, "name")?;
     let version = args.get("version").and_then(|v| v.as_str());
 
     debug!(
@@ -194,15 +191,13 @@ pub async fn exec_gw_skill_install(
     );
 
     let mut mgr = skill_mgr.lock().await;
-    mgr.install_from_registry(name, version).map_err(|e| {
+    mgr.install_from_registry(name, version).inspect_err(|e| {
         warn!(skill = name, error = %e, "Failed to install skill");
-        anyhow!("{}", e)
     })?;
 
     // Reload skills so the new one is available immediately.
-    mgr.load_skills().map_err(|e| {
+    mgr.load_skills().inspect_err(|e| {
         warn!(error = %e, "Failed to reload skills after install");
-        anyhow!("{}", e)
     })?;
 
     let version_note = version
@@ -220,18 +215,15 @@ pub async fn exec_gw_skill_install(
 pub async fn exec_gw_skill_info(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
-    let name = args
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: name"))?;
+) -> ToolResult {
+    let name = require_str(args, "name")?;
 
     debug!(skill = name, "Getting skill info");
 
     let mgr = skill_mgr.lock().await;
     mgr.skill_info(name).ok_or_else(|| {
         debug!(skill = name, "Skill not found");
-        anyhow!("Skill '{}' not found.", name)
+        ToolError::msg(format!("Skill '{}' not found.", name))
     })
 }
 
@@ -240,22 +232,18 @@ pub async fn exec_gw_skill_info(
 pub async fn exec_gw_skill_enable(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
-    let name = args
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: name"))?;
+) -> ToolResult {
+    let name = require_str(args, "name")?;
     let enabled = args
         .get("enabled")
         .and_then(|v| v.as_bool())
-        .ok_or_else(|| anyhow!("Missing required parameter: enabled"))?;
+        .ok_or_else(|| missing_param("enabled"))?;
 
     debug!(skill = name, enabled, "Setting skill enabled state");
 
     let mut mgr = skill_mgr.lock().await;
-    mgr.set_skill_enabled(name, enabled).map_err(|e| {
+    mgr.set_skill_enabled(name, enabled).inspect_err(|e| {
         warn!(skill = name, error = %e, "Failed to set skill enabled state");
-        anyhow!("{}", e)
     })?;
 
     let state = if enabled { "enabled" } else { "disabled" };
@@ -268,36 +256,25 @@ pub async fn exec_gw_skill_enable(
 pub async fn exec_gw_skill_link_secret(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
-    let action = args
-        .get("action")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: action"))?;
-    let skill = args
-        .get("skill")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: skill"))?;
-    let secret = args
-        .get("secret")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: secret"))?;
+) -> ToolResult {
+    let action = require_str(args, "action")?;
+    let skill = require_str(args, "skill")?;
+    let secret = require_str(args, "secret")?;
 
     debug!(action, skill, secret, "Linking/unlinking secret");
 
     let mut mgr = skill_mgr.lock().await;
     match action {
         "link" => {
-            mgr.link_secret(skill, secret).map_err(|e| {
+            mgr.link_secret(skill, secret).inspect_err(|e| {
                 warn!(skill, secret, error = %e, "Failed to link secret");
-                anyhow!("{}", e)
             })?;
             debug!(skill, secret, "Secret linked");
             Ok(format!("Secret '{}' linked to skill '{}'.", secret, skill,))
         }
         "unlink" => {
-            mgr.unlink_secret(skill, secret).map_err(|e| {
+            mgr.unlink_secret(skill, secret).inspect_err(|e| {
                 warn!(skill, secret, error = %e, "Failed to unlink secret");
-                anyhow!("{}", e)
             })?;
             debug!(skill, secret, "Secret unlinked");
             Ok(format!(
@@ -307,10 +284,7 @@ pub async fn exec_gw_skill_link_secret(
         }
         _ => {
             warn!(action, "Unknown link_secret action");
-            Err(anyhow!(
-                "Unknown action '{}'. Use 'link' or 'unlink'.",
-                action
-            ))
+            Err(format!("Unknown action '{}'. Use 'link' or 'unlink'.", action).into())
         }
     }
 }
@@ -320,19 +294,10 @@ pub async fn exec_gw_skill_link_secret(
 pub async fn exec_gw_skill_create(
     args: &serde_json::Value,
     skill_mgr: &SharedSkillManager,
-) -> Result<String> {
-    let name = args
-        .get("name")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: name"))?;
-    let description = args
-        .get("description")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: description"))?;
-    let instructions = args
-        .get("instructions")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| anyhow!("Missing required parameter: instructions"))?;
+) -> ToolResult {
+    let name = require_str(args, "name")?;
+    let description = require_str(args, "description")?;
+    let instructions = require_str(args, "instructions")?;
     let metadata = args.get("metadata").and_then(|v| v.as_str());
 
     debug!(skill = name, "Creating new skill");
@@ -340,9 +305,8 @@ pub async fn exec_gw_skill_create(
     let mut mgr = skill_mgr.lock().await;
     let path = mgr
         .create_skill(name, description, instructions, metadata)
-        .map_err(|e| {
+        .inspect_err(|e| {
             warn!(skill = name, error = %e, "Failed to create skill");
-            anyhow!("{}", e)
         })?;
 
     debug!(skill = name, path = %path.display(), "Skill created");
