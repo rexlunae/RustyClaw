@@ -5,16 +5,17 @@
 
 use rustyclaw_core::tools;
 use serde_json::Value;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::Path;
 use std::sync::Mutex;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::{SharedSkillManager, SharedVault};
 use crate::secrets_handler;
 use crate::skills_handler;
 
-// ── Rate limiting ───────────────────────────────────────────────────────────
+// ── Rate limiting ──────────────────────────────────────────────────────────
 
 /// Simple sliding-window rate limiter for tool execution.
 ///
@@ -47,7 +48,7 @@ impl ToolRateLimiter {
     /// Check whether a tool call of `name` is allowed.
     pub fn check(&mut self, name: &str) -> Result<(), RateLimitError> {
         let now = Instant::now();
-        let cutoff = now - std::time::Duration::from_millis(self.window_ms);
+        let cutoff = now - Duration::from_millis(self.window_ms);
 
         // Drop stale entries
         while let Some(front) = self.buckets.front() {
@@ -108,6 +109,125 @@ pub fn check_rate_limit(name: &str) -> Result<(), RateLimitError> {
         .and_then(|mut limiter| limiter.check(name))
 }
 
+// ── Repeated malformed-call protection ─────────────────────────────────────
+
+const MALFORMED_CALL_WINDOW: Duration = Duration::from_secs(30);
+const MALFORMED_CALL_LIMIT: usize = 3;
+
+#[derive(Clone)]
+struct MalformedCallRecord {
+    count: usize,
+    last_seen: Instant,
+    explanation: String,
+}
+
+fn malformed_call_tracker() -> &'static Mutex<HashMap<u64, MalformedCallRecord>> {
+    static TRACKER: std::sync::OnceLock<Mutex<HashMap<u64, MalformedCallRecord>>> =
+        std::sync::OnceLock::new();
+    TRACKER.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Hash a call without retaining argument values, which may contain secrets.
+fn call_fingerprint(name: &str, arguments: &Value) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    name.hash(&mut hasher);
+    arguments.to_string().hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Return the prior explanation when an identical malformed call should be suppressed.
+fn repeated_malformed_call(name: &str, arguments: &Value) -> Option<String> {
+    let fingerprint = call_fingerprint(name, arguments);
+    let now = Instant::now();
+    let mut tracker = malformed_call_tracker().lock().ok()?;
+    tracker.retain(|_, record| now.duration_since(record.last_seen) <= MALFORMED_CALL_WINDOW);
+    let record = tracker.get(&fingerprint)?;
+    if record.count < MALFORMED_CALL_LIMIT {
+        return None;
+    }
+
+    Some(format!(
+        "{}. This identical malformed call has already failed {} times in the last {} seconds, so it was suppressed without executing again. Change the arguments before retrying.",
+        record.explanation,
+        record.count,
+        MALFORMED_CALL_WINDOW.as_secs(),
+    ))
+}
+
+fn json_type(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
+}
+
+/// Describe argument names and types without exposing their values.
+fn argument_shape(arguments: &Value) -> String {
+    match arguments {
+        Value::Object(map) if map.is_empty() => "an empty object".to_string(),
+        Value::Object(map) => {
+            let mut fields: Vec<String> = map
+                .iter()
+                .map(|(name, value)| format!("{name}: {}", json_type(value)))
+                .collect();
+            fields.sort();
+            format!("fields {{{}}}", fields.join(", "))
+        }
+        other => format!("a {} value", json_type(other)),
+    }
+}
+
+fn missing_parameter(error: &str) -> Option<&str> {
+    error
+        .strip_prefix("Missing required parameter: ")
+        .map(|name| name.trim_end_matches('.'))
+}
+
+/// Turn terse validation failures into actionable model- and user-facing explanations.
+fn explain_tool_error(name: &str, arguments: &Value, error: &str) -> String {
+    let Some(parameter) = missing_parameter(error) else {
+        return format!("Tool `{name}` failed: {error}");
+    };
+
+    let expected = if name == "execute_command" && parameter == "command" {
+        "Call it with a non-empty string, for example: execute_command(command=\"pwd\")."
+            .to_string()
+    } else {
+        format!("Include `{parameter}` with the type required by the tool schema.")
+    };
+
+    format!(
+        "Tool `{name}` could not run because required parameter `{parameter}` was missing or had the wrong type. It received {}. {expected} Do not retry with the same arguments.",
+        argument_shape(arguments),
+    )
+}
+
+fn record_malformed_failure(name: &str, arguments: &Value, error: &str) -> usize {
+    if missing_parameter(error).is_none() {
+        return 1;
+    }
+
+    let fingerprint = call_fingerprint(name, arguments);
+    let explanation = explain_tool_error(name, arguments, error);
+    let now = Instant::now();
+    let Ok(mut tracker) = malformed_call_tracker().lock() else {
+        return 1;
+    };
+    tracker.retain(|_, record| now.duration_since(record.last_seen) <= MALFORMED_CALL_WINDOW);
+    let record = tracker.entry(fingerprint).or_insert(MalformedCallRecord {
+        count: 0,
+        last_seen: now,
+        explanation,
+    });
+    record.count += 1;
+    record.last_seen = now;
+    record.count
+}
+
 /// Execute a tool by name, routing to the appropriate handler.
 ///
 /// Tools that produce incremental output (currently `execute_command`)
@@ -122,27 +242,40 @@ pub async fn execute_tool_by_type(
     skill_mgr: &SharedSkillManager,
     output: Option<tools::ToolOutputSink>,
 ) -> (String, bool) {
+    if let Some(explanation) = repeated_malformed_call(name, arguments) {
+        tracing::warn!(tool = name, "Suppressing repeated malformed tool call");
+        return (explanation, true);
+    }
+
     // Apply rate limiting before executing any tool.
     if let Err(err) = check_rate_limit(name) {
         tracing::warn!(tool = name, "Rate limit hit");
         return (err.to_string(), true);
     }
 
-    if tools::is_secrets_tool(name) {
-        match secrets_handler::execute_secrets_tool(name, arguments, vault).await {
-            Ok(text) => (text, false),
-            Err(err) => (err.to_string(), true),
-        }
+    let result = if tools::is_secrets_tool(name) {
+        secrets_handler::execute_secrets_tool(name, arguments, vault).await
     } else if tools::is_skill_tool(name) {
-        match skills_handler::execute_skill_tool(name, arguments, skill_mgr).await {
-            Ok(text) => (text, false),
-            Err(err) => (err.to_string(), true),
-        }
+        skills_handler::execute_skill_tool(name, arguments, skill_mgr).await
     } else {
-        match tools::execute_tool_streaming(name, arguments, workspace_dir, output).await {
-            Ok(text) => (text, false),
-            // The single point where a ToolError becomes the model-facing string.
-            Err(err) => (err.to_string(), true),
+        tools::execute_tool_streaming(name, arguments, workspace_dir, output).await
+    };
+
+    match result {
+        Ok(text) => (text, false),
+        Err(err) => {
+            let raw_error = err.to_string();
+            let explanation = explain_tool_error(name, arguments, &raw_error);
+            let count = record_malformed_failure(name, arguments, &raw_error);
+            if missing_parameter(&raw_error).is_some() {
+                tracing::warn!(
+                    tool = name,
+                    repeated_count = count,
+                    argument_shape = %argument_shape(arguments),
+                    "Tool call rejected because a required argument was missing or invalid"
+                );
+            }
+            (explanation, true)
         }
     }
 }
@@ -228,6 +361,7 @@ pub fn is_flush_acknowledgement(response_text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_should_continue_intent_patterns() {
@@ -265,5 +399,33 @@ mod tests {
         assert!(!is_flush_acknowledgement(
             "The banner is rendered in banner.rs; here's the fix you asked for."
         ));
+    }
+
+    #[test]
+    fn missing_command_error_is_actionable_and_does_not_leak_values() {
+        let args = json!({"working_dir": "/secret/project", "timeout_secs": 10});
+        let explanation = explain_tool_error(
+            "execute_command",
+            &args,
+            "Missing required parameter: command",
+        );
+
+        assert!(explanation.contains("required parameter `command`"));
+        assert!(explanation.contains("execute_command(command=\"pwd\")"));
+        assert!(explanation.contains("working_dir: string"));
+        assert!(!explanation.contains("/secret/project"));
+    }
+
+    #[test]
+    fn non_validation_errors_gain_tool_context() {
+        let explanation = explain_tool_error("read_file", &json!({}), "File not found");
+        assert_eq!(explanation, "Tool `read_file` failed: File not found");
+    }
+
+    #[test]
+    fn argument_shape_lists_names_and_types_only() {
+        let shape = argument_shape(&json!({"command": "echo secret", "background": true}));
+        assert_eq!(shape, "fields {background: boolean, command: string}");
+        assert!(!shape.contains("secret"));
     }
 }
