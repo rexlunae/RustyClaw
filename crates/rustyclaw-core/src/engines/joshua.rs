@@ -428,11 +428,11 @@ impl LocalEngine for JoshuaEngine {
         }
 
         let result = Self::sh(&format!(
-            "{} download '{}' --include '*.gguf' --include 'tokenizer.json' \
-             --local-dir '{}' 2>&1 | tail -3",
+            "{} download {} --include '*.gguf' --include 'tokenizer.json' \
+             --local-dir {} 2>&1 | tail -3",
             hf,
-            model,
-            target.display()
+            sh_quote(model),
+            sh_quote(&target.display().to_string())
         ))
         .await;
 

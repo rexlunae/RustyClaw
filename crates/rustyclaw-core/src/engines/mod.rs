@@ -222,6 +222,15 @@ fn format_bytes(bytes: u64) -> String {
 /// Channel for streaming progress updates.
 pub type ProgressSink = tokio::sync::mpsc::Sender<PullProgress>;
 
+/// Quote a string for safe interpolation into an `sh -c` script.
+///
+/// Wraps the value in single quotes and escapes any embedded single
+/// quotes (`'` → `'\''`).  Engine model ids and paths are user input —
+/// every interpolation into a shell command must go through this.
+pub fn sh_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', r"'\''"))
+}
+
 /// Run a shell script, streaming each output line to `sink` while
 /// accumulating the full combined stdout+stderr for the return value.
 ///
@@ -610,6 +619,30 @@ fn default_port(id: &str) -> u16 {
         "lmstudio" => 1234,
         "joshua" => joshua::DEFAULT_PORT,
         _ => 8080,
+    }
+}
+
+#[cfg(test)]
+mod sh_quote_tests {
+    use super::*;
+
+    #[test]
+    fn quotes_plain_and_hostile_input() {
+        assert_eq!(sh_quote("Qwen/Qwen3-4B-GGUF"), "'Qwen/Qwen3-4B-GGUF'");
+        assert_eq!(sh_quote("a b"), "'a b'");
+        // Embedded single quote cannot break out of the quoting.
+        assert_eq!(sh_quote("a'; rm -rf /;'"), r"'a'\''; rm -rf /;'\'''");
+        // Other metacharacters are inert inside single quotes.
+        assert_eq!(sh_quote("$(boom)"), "'$(boom)'");
+    }
+
+    #[tokio::test]
+    async fn quoted_metacharacters_are_literal_in_sh() {
+        let hostile = "a'; echo pwned; '";
+        let out = stream_shell(&format!("printf %s {}", sh_quote(hostile)), "test", None)
+            .await
+            .expect("script succeeds");
+        assert_eq!(out, hostile);
     }
 }
 

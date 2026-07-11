@@ -271,8 +271,10 @@ impl LocalEngine for LlamaCppEngine {
             anyhow::bail!("{}", crate::engines::downloaders::HF_CLI_MISSING_HINT);
         };
         let result = Self::sh(&format!(
-            "{} download {} --local-dir '{}' 2>&1",
-            hf, model, models_dir
+            "{} download {} --local-dir {} 2>&1",
+            hf,
+            sh_quote(model),
+            sh_quote(&models_dir)
         ))
         .await;
 
@@ -299,7 +301,11 @@ impl LocalEngine for LlamaCppEngine {
                 .to_string_lossy()
                 .to_string()
         });
-        Self::sh(&format!("rm -f '{}/{}' 2>&1", models_dir, model)).await
+        Self::sh(&format!(
+            "rm -f {} 2>&1",
+            sh_quote(&format!("{}/{}", models_dir, model))
+        ))
+        .await
     }
 
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {

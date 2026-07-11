@@ -196,10 +196,8 @@ impl LocalEngine for HuggingFaceDownloader {
         let Some(bin) = hf_cli().await else {
             anyhow::bail!("{}", HF_CLI_MISSING_HINT);
         };
-        // Quote the repo id defensively — it is user input.
-        let repo = model.replace('\'', "");
         stream_shell(
-            &format!("{bin} download '{repo}' 2>&1"),
+            &format!("{} download {} 2>&1", bin, sh_quote(model)),
             model,
             sink.as_ref(),
         )
