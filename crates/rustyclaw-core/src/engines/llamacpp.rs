@@ -282,7 +282,11 @@ impl LocalEngine for LlamaCppEngine {
             let _ = tx
                 .send(PullProgress {
                     model: model.to_string(),
-                    status: "complete".into(),
+                    status: if result.is_ok() {
+                        "complete".into()
+                    } else {
+                        "failed".into()
+                    },
                     percent: 100.0,
                     downloaded_bytes: 0,
                     total_bytes: 0,
