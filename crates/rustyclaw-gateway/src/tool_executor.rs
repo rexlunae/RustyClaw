@@ -253,18 +253,27 @@ pub async fn execute_tool_by_type(
         return (err.to_string(), true);
     }
 
-    let result = if tools::is_secrets_tool(name) {
-        secrets_handler::execute_secrets_tool(name, arguments, vault).await
+    // Normalize the handlers' different concrete error types at the routing
+    // boundary. Secret and skill handlers return anyhow_tracing::Error while
+    // core tools return ToolError; only their safe display text crosses into
+    // the common model-facing error path below.
+    let result: Result<String, String> = if tools::is_secrets_tool(name) {
+        secrets_handler::execute_secrets_tool(name, arguments, vault)
+            .await
+            .map_err(|err| err.to_string())
     } else if tools::is_skill_tool(name) {
-        skills_handler::execute_skill_tool(name, arguments, skill_mgr).await
+        skills_handler::execute_skill_tool(name, arguments, skill_mgr)
+            .await
+            .map_err(|err| err.to_string())
     } else {
-        tools::execute_tool_streaming(name, arguments, workspace_dir, output).await
+        tools::execute_tool_streaming(name, arguments, workspace_dir, output)
+            .await
+            .map_err(|err| err.to_string())
     };
 
     match result {
         Ok(text) => (text, false),
-        Err(err) => {
-            let raw_error = err.to_string();
+        Err(raw_error) => {
             let explanation = explain_tool_error(name, arguments, &raw_error);
             let count = record_malformed_failure(name, arguments, &raw_error);
             if missing_parameter(&raw_error).is_some() {
