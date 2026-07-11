@@ -266,10 +266,13 @@ impl LocalEngine for LlamaCppEngine {
                 .await;
         }
 
-        // Use huggingface-cli if available, otherwise curl
+        // Use the Hugging Face CLI (`hf` or legacy `huggingface-cli`).
+        let Some(hf) = crate::engines::downloaders::hf_cli().await else {
+            anyhow::bail!("{}", crate::engines::downloaders::HF_CLI_MISSING_HINT);
+        };
         let result = Self::sh(&format!(
-            "huggingface-cli download {} --local-dir '{}' 2>&1 || curl -L -o '{}/{}' 'https://huggingface.co/{}/resolve/main/*.gguf' 2>&1",
-            model, models_dir, models_dir, model.replace('/', "_"), model
+            "{} download {} --local-dir '{}' 2>&1",
+            hf, model, models_dir
         ))
         .await;
 

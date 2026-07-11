@@ -307,6 +307,71 @@ pub(super) async fn handle_command_action(
                 })
                 .await;
         }
+        CommandAction::EngineModelSearch(query) => {
+            // Query the Hugging Face Hub directly — discovery is a public
+            // API call, so it doesn't need to round-trip via the gateway.
+            let gw_tx2 = gw_tx.clone();
+            tokio::spawn(async move {
+                match rustyclaw_core::engines::hub::search_models(&query, true, 20).await {
+                    Ok(models) if models.is_empty() => {
+                        let _ = gw_tx2.send(GwEvent::Info(format!(
+                            "No GGUF models found for '{}'.",
+                            query
+                        )));
+                    }
+                    Ok(models) => {
+                        let _ = gw_tx2.send(GwEvent::Info(format!(
+                            "{} GGUF models for '{}' (most downloaded first):",
+                            models.len(),
+                            query
+                        )));
+                        let lines: Vec<String> = models.iter().map(|m| m.display_line()).collect();
+                        for chunk in lines.chunks(20) {
+                            let _ = gw_tx2.send(GwEvent::Info(chunk.join("\n")));
+                        }
+                        let _ = gw_tx2.send(GwEvent::Info(
+                            "Tip: /engines files <repo> to pick a quantization, \
+                             /engines pull <engine> <repo> to download"
+                                .to_string(),
+                        ));
+                    }
+                    Err(e) => {
+                        let _ = gw_tx2.send(GwEvent::error(format!("{:#}", e)));
+                    }
+                }
+            });
+        }
+        CommandAction::EngineModelFiles(repo) => {
+            let gw_tx2 = gw_tx.clone();
+            tokio::spawn(async move {
+                match rustyclaw_core::engines::hub::list_gguf_files(&repo).await {
+                    Ok(files) if files.is_empty() => {
+                        let _ = gw_tx2.send(GwEvent::Info(format!(
+                            "No GGUF files in {} — is it a GGUF repo?",
+                            repo
+                        )));
+                    }
+                    Ok(files) => {
+                        let _ = gw_tx2.send(GwEvent::Info(format!(
+                            "{} GGUF files in {}:",
+                            files.len(),
+                            repo
+                        )));
+                        let lines: Vec<String> = files.iter().map(|f| f.display_line()).collect();
+                        for chunk in lines.chunks(20) {
+                            let _ = gw_tx2.send(GwEvent::Info(chunk.join("\n")));
+                        }
+                        let _ = gw_tx2.send(GwEvent::Info(format!(
+                            "Tip: /engines pull <engine> {} to download",
+                            repo
+                        )));
+                    }
+                    Err(e) => {
+                        let _ = gw_tx2.send(GwEvent::error(format!("{:#}", e)));
+                    }
+                }
+            });
+        }
         CommandAction::EngineModelAction(engine, model, action) => {
             let _ = client
                 .send(GatewayCommand::EngineModelAction {

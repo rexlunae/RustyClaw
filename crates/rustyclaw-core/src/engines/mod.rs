@@ -2,9 +2,13 @@
 //!
 //! Provides a common [`LocalEngine`] trait that unifies lifecycle control
 //! (detect/install/start/stop) and model management (list/pull/remove/load/unload)
-//! across Ollama, Exo, llama.cpp, and LM Studio.
+//! across Ollama, Exo, llama.cpp, LM Studio, and Joshua.  Downloader tools
+//! (the Hugging Face CLI) register here too as install-only entries, and
+//! [`hub`] provides model discovery so pulls don't require an exact repo id.
 
+pub mod downloaders;
 pub mod exo;
+pub mod hub;
 pub mod joshua;
 pub mod llamacpp;
 pub mod lmstudio;
@@ -471,6 +475,7 @@ impl EngineRegistry {
                 Box::new(llamacpp::LlamaCppEngine),
                 Box::new(lmstudio::LmStudioEngine),
                 Box::new(joshua::JoshuaEngine),
+                Box::new(downloaders::HuggingFaceDownloader),
             ],
         }
     }
