@@ -620,6 +620,7 @@ mod tests {
         // Everything OpenAI-compatible falls through to the OpenAI adapter.
         assert_eq!(adapter_for("openai"), AdapterKind::OpenAI);
         assert_eq!(adapter_for("openrouter"), AdapterKind::OpenAI);
+        assert_eq!(adapter_for("deepseek"), AdapterKind::OpenAI);
         assert_eq!(adapter_for("ollama"), AdapterKind::OpenAI);
         assert_eq!(adapter_for("github-copilot"), AdapterKind::OpenAI);
     }

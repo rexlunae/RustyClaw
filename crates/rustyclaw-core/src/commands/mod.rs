@@ -55,6 +55,10 @@ pub enum CommandAction {
     EngineModelPull(String, String),
     /// Model-level engine action: (engine, model, action)
     EngineModelAction(String, String, ModelActionKind),
+    /// Search the Hugging Face Hub for models matching a query
+    EngineModelSearch(String),
+    /// List the GGUF files (quantizations) inside a Hugging Face repo
+    EngineModelFiles(String),
     /// Show the cron panel (fetches the job list)
     ShowCron,
     /// Cron job action: (job id, action)
@@ -187,6 +191,8 @@ fn base_command_names() -> Vec<String> {
         "engines load".into(),
         "engines unload".into(),
         "engines remove".into(),
+        "engines search".into(),
+        "engines files".into(),
         "provider add".into(),
         "provider remove".into(),
         "provider list".into(),
@@ -383,6 +389,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /engines start <engine>  - Start a local engine (also: stop/install)"
                     .to_string(),
                 "  /engines pull <e> <m>    - Download a model for an engine".to_string(),
+                "  /engines search <query>  - Find models on the Hugging Face Hub".to_string(),
                 "  /engines models <engine> - List an engine's models (also: load/unload/remove)"
                     .to_string(),
                 "  /skills                  - Show loaded skills".to_string(),
@@ -858,7 +865,9 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
             "       /engines models <engine>".to_string(),
             "       /engines pull <engine> <model>".to_string(),
             "       /engines load|unload|remove <engine> <model>".to_string(),
-            "Engines: ollama, exo, llamacpp, lmstudio, joshua".to_string(),
+            "       /engines search <query> — find models on the Hugging Face Hub".to_string(),
+            "       /engines files <repo> — list a repo's GGUF files".to_string(),
+            "Engines: ollama, exo, llamacpp, lmstudio, joshua, huggingface".to_string(),
         ],
         action: CommandAction::None,
     };
@@ -881,6 +890,24 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
                 action: CommandAction::EngineModelPull(engine.to_string(), model.to_string()),
             },
             _ => usage(),
+        },
+        Some(&"search") => {
+            if args.len() > 1 {
+                let query = args[1..].join(" ");
+                CommandResponse {
+                    messages: vec![format!("Searching the Hugging Face Hub for '{}'…", query)],
+                    action: CommandAction::EngineModelSearch(query),
+                }
+            } else {
+                usage()
+            }
+        }
+        Some(&"files") => match args.get(1) {
+            Some(repo) => CommandResponse {
+                messages: vec![format!("Listing GGUF files in {}…", repo)],
+                action: CommandAction::EngineModelFiles(repo.to_string()),
+            },
+            None => usage(),
         },
         Some(&action) => {
             if let Ok(kind) = action.parse::<EngineActionKind>() {

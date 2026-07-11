@@ -84,6 +84,7 @@ Connect to any LLM provider without code changes:
 - **Google** (Gemini Pro, Ultra)
 - **GitHub Copilot** (with subscription)
 - **xAI** (Grok)
+- **DeepSeek** (deepseek-chat, deepseek-reasoner)
 - **Ollama** (local models)
 - **OpenRouter** (200+ models)
 - **Any OpenAI-compatible endpoint**

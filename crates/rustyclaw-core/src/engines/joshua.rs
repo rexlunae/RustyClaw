@@ -407,14 +407,13 @@ impl LocalEngine for JoshuaEngine {
         std::fs::create_dir_all(&dir)?;
         let target = dir.join(model.replace('/', "_"));
 
-        if Self::sh("which huggingface-cli").await.is_err() {
+        let Some(hf) = super::downloaders::hf_cli().await else {
             anyhow::bail!(
-                "Pulling models for joshua requires huggingface-cli \
-                 (pip install -U 'huggingface_hub[cli]'). Alternatively, place a \
-                 .gguf and its tokenizer.json in {} manually.",
+                "{} Alternatively, place a .gguf and its tokenizer.json in {} manually.",
+                super::downloaders::HF_CLI_MISSING_HINT,
                 dir.display()
             );
-        }
+        };
 
         if let Some(ref tx) = sink {
             let _ = tx
@@ -429,10 +428,11 @@ impl LocalEngine for JoshuaEngine {
         }
 
         let result = Self::sh(&format!(
-            "huggingface-cli download '{}' --include '*.gguf' --include 'tokenizer.json' \
-             --local-dir '{}' 2>&1 | tail -3",
-            model,
-            target.display()
+            "{} download {} --include '*.gguf' --include 'tokenizer.json' \
+             --local-dir {} 2>&1 | tail -3",
+            hf,
+            sh_quote(model),
+            sh_quote(&target.display().to_string())
         ))
         .await;
 

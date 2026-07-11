@@ -23,6 +23,17 @@ fn test_provider_by_id() {
 }
 
 #[test]
+fn test_deepseek_provider_config() {
+    let provider = provider_by_id("deepseek").unwrap();
+    assert_eq!(provider.display, "DeepSeek");
+    assert_eq!(provider.auth_method, AuthMethod::ApiKey);
+    assert_eq!(provider.secret_key, Some("DEEPSEEK_API_KEY"));
+    assert_eq!(provider.base_url, Some("https://api.deepseek.com/v1"));
+    assert!(provider.models.contains(&"deepseek-chat"));
+    assert!(provider.models.contains(&"deepseek-reasoner"));
+}
+
+#[test]
 fn test_provider_auth_methods() {
     // API key providers
     let anthropic = provider_by_id("anthropic").unwrap();

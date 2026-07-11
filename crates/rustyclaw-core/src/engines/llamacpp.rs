@@ -266,10 +266,15 @@ impl LocalEngine for LlamaCppEngine {
                 .await;
         }
 
-        // Use huggingface-cli if available, otherwise curl
+        // Use the Hugging Face CLI (`hf` or legacy `huggingface-cli`).
+        let Some(hf) = crate::engines::downloaders::hf_cli().await else {
+            anyhow::bail!("{}", crate::engines::downloaders::HF_CLI_MISSING_HINT);
+        };
         let result = Self::sh(&format!(
-            "huggingface-cli download {} --local-dir '{}' 2>&1 || curl -L -o '{}/{}' 'https://huggingface.co/{}/resolve/main/*.gguf' 2>&1",
-            model, models_dir, models_dir, model.replace('/', "_"), model
+            "{} download {} --local-dir {} 2>&1",
+            hf,
+            sh_quote(model),
+            sh_quote(&models_dir)
         ))
         .await;
 
@@ -277,7 +282,11 @@ impl LocalEngine for LlamaCppEngine {
             let _ = tx
                 .send(PullProgress {
                     model: model.to_string(),
-                    status: "complete".into(),
+                    status: if result.is_ok() {
+                        "complete".into()
+                    } else {
+                        "failed".into()
+                    },
                     percent: 100.0,
                     downloaded_bytes: 0,
                     total_bytes: 0,
@@ -296,7 +305,11 @@ impl LocalEngine for LlamaCppEngine {
                 .to_string_lossy()
                 .to_string()
         });
-        Self::sh(&format!("rm -f '{}/{}' 2>&1", models_dir, model)).await
+        Self::sh(&format!(
+            "rm -f {} 2>&1",
+            sh_quote(&format!("{}/{}", models_dir, model))
+        ))
+        .await
     }
 
     async fn load(&self, model: &str, cfg: &EngineConfig) -> Result<String> {
