@@ -520,7 +520,7 @@ impl ServiceManager {
     // ── Internal helpers ────────────────────────────────────────────
 
     async fn spawn_process(&self, def: &ServiceDef) -> Result<Child, ServiceError> {
-        let full_cmd = format!("{} {}", &def.command, &def.args.join(" "));
+        let full_cmd = format!("{} {}", def.command, def.args.join(" "));
         crate::tools::helpers::validate_command_safe(&full_cmd)
             .map_err(ServiceError::CommandRejected)?;
 
