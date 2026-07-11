@@ -510,6 +510,7 @@ pub(crate) fn run_import(args: &ImportArgs, config: &mut Config) -> Result<()> {
                     ("opencode.key", "OPENCODE_API_KEY"),
                     ("gemini.key", "GEMINI_API_KEY"),
                     ("xai.key", "XAI_API_KEY"),
+                    ("deepseek.key", "DEEPSEEK_API_KEY"),
                 ];
 
                 for (file, secret_name) in &secret_map {

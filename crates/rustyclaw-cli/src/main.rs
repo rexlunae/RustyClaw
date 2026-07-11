@@ -210,6 +210,9 @@ struct OnboardArgs {
     /// xAI API key (prefer XAI_API_KEY env var)
     #[arg(long, value_name = "KEY", env = "XAI_API_KEY", hide = true)]
     xai_api_key: Option<String>,
+    /// DeepSeek API key (prefer DEEPSEEK_API_KEY env var)
+    #[arg(long, value_name = "KEY", env = "DEEPSEEK_API_KEY", hide = true)]
+    deepseek_api_key: Option<String>,
 
     // ── Gateway flags (inline, mirrors openclaw) ────────────────
     /// Gateway port
@@ -478,6 +481,7 @@ async fn main() -> Result<()> {
                     openai_api_key: None,
                     gemini_api_key: None,
                     xai_api_key: None,
+                    deepseek_api_key: None,
                     reset: false,
                     non_interactive: args.non_interactive,
                 };
@@ -532,6 +536,7 @@ async fn main() -> Result<()> {
                 openai_api_key: args.openai_api_key.clone(),
                 gemini_api_key: args.gemini_api_key.clone(),
                 xai_api_key: args.xai_api_key.clone(),
+                deepseek_api_key: args.deepseek_api_key.clone(),
                 reset: args.reset,
                 non_interactive: args.non_interactive,
             };

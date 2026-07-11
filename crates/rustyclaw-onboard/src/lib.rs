@@ -36,6 +36,7 @@ pub struct OnboardArgs {
     pub openai_api_key: Option<String>,
     pub gemini_api_key: Option<String>,
     pub xai_api_key: Option<String>,
+    pub deepseek_api_key: Option<String>,
     pub reset: bool,
     pub non_interactive: bool,
 }
@@ -386,6 +387,13 @@ pub fn run_onboard_wizard(
                 t::icon_ok("Auto-selecting xAI provider based on --xai-api-key flag")
             );
             PROVIDERS.iter().find(|p| p.id == "xai").unwrap()
+        } else if args.deepseek_api_key.is_some() {
+            // Auto-select DeepSeek
+            println!(
+                "  {}",
+                t::icon_ok("Auto-selecting DeepSeek provider based on --deepseek-api-key flag")
+            );
+            PROVIDERS.iter().find(|p| p.id == "deepseek").unwrap()
         } else {
             // No API key provided, show interactive selection
             // (built-in providers plus any user-defined custom providers)
@@ -446,6 +454,7 @@ pub fn run_onboard_wizard(
                         "openai" => args.openai_api_key.as_ref(),
                         "google" => args.gemini_api_key.as_ref(),
                         "xai" => args.xai_api_key.as_ref(),
+                        "deepseek" => args.deepseek_api_key.as_ref(),
                         _ => None,
                     }
                 } else {

@@ -127,6 +127,17 @@ pub const PROVIDERS: &[ProviderDef] = &[
         help_text: Some("Get a key at console.x.ai"),
     },
     ProviderDef {
+        id: "deepseek",
+        display: "DeepSeek",
+        auth_method: AuthMethod::ApiKey,
+        secret_key: Some("DEEPSEEK_API_KEY"),
+        device_flow: None,
+        base_url: Some("https://api.deepseek.com/v1"),
+        models: &["deepseek-chat", "deepseek-reasoner"],
+        help_url: Some("https://platform.deepseek.com/api_keys"),
+        help_text: Some("Get a key at platform.deepseek.com → API Keys"),
+    },
+    ProviderDef {
         id: "openrouter",
         display: "OpenRouter",
         auth_method: AuthMethod::ApiKey,
