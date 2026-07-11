@@ -41,7 +41,7 @@ pub fn Messages(props: &MessagesProps) -> impl Into<AnyElement<'static>> {
     element! {
         View(
             flex_direction: FlexDirection::Column,
-            flex_grow: 1.0,
+            flex_grow: 1.0_f32,
             overflow: Overflow::Hidden,
             width: 100pct,
         ) {

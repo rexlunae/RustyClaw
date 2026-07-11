@@ -58,7 +58,7 @@ pub fn Sidebar(props: &SidebarProps) -> impl Into<AnyElement<'static>> {
             })
 
             // Spacer
-            View(flex_grow: 1.0)
+            View(flex_grow: 1.0_f32)
         }
     }
 }

@@ -182,7 +182,7 @@ pub(crate) async fn handle_pair_command(cmd: PairCommands) -> Result<()> {
                     "{}. {} {}",
                     i + 1,
                     t::info(name),
-                    t::muted(&format!("({})", &client.fingerprint))
+                    t::muted(&format!("({})", client.fingerprint))
                 );
             }
 
