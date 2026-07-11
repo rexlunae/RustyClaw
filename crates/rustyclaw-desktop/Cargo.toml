@@ -45,6 +45,14 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ammonia = "4"
 rfd = "0.15"
 
+# macOS: set the Dock icon at runtime so bare-binary launches (cargo
+# install, `rustyclaw desktop`) show the app icon without the .app bundle.
+# These crates are already in the tree via tao/muda — no new transitive deps.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSImage", "NSResponder"] }
+objc2-foundation = { version = "0.3", features = ["NSData"] }
+
 # Build-time icon generation: render logo.svg into the window icon and the
 # bundled icon set (see build.rs). Pure Rust so it works on every platform.
 [build-dependencies]

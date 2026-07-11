@@ -56,10 +56,19 @@ struct Cli {
     /// is configured. Used by the "New Connection Window" menu entry.
     #[arg(long = "pick-connection", conflicts_with = "no_dialog")]
     pick_connection: bool,
+    /// Write the embedded application icon to PATH and exit. Format follows
+    /// the extension: `.png` (256×256) everywhere, `.icns` on macOS. Used by
+    /// scripts/setup.sh to install launcher/bundle icons.
+    #[arg(long = "dump-icon", value_name = "PATH", hide = true)]
+    dump_icon: Option<std::path::PathBuf>,
 }
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+
+    if let Some(ref path) = cli.dump_icon {
+        return dump_icon(path);
+    }
 
     let mut config = Config::load(cli.common.config_path())?;
     cli.common.apply_overrides(&mut config);
@@ -90,6 +99,9 @@ fn run(gateway_url: Option<String>, no_dialog: bool, pick_connection: bool) {
 
     tracing::info!("Starting RustyClaw Desktop");
 
+    #[cfg(target_os = "macos")]
+    set_dock_icon();
+
     let window = WindowBuilder::new()
         .with_title("RustyClaw")
         .with_inner_size(LogicalSize::new(1180.0, 760.0))
@@ -111,12 +123,70 @@ fn run(gateway_url: Option<String>, no_dialog: bool, pick_connection: bool) {
 /// (`logo.svg` → `$OUT_DIR/icon-256.png`; see `build.rs` for the full set).
 const ICON_PNG: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon-256.png"));
 
+/// Full icon family for the macOS app bundle, written by `--dump-icon`.
+#[cfg(target_os = "macos")]
+const ICON_ICNS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/icon.icns"));
+
 /// Decode the embedded icon for the window/taskbar. Used on Windows and
-/// Linux; macOS takes the Dock icon from the app bundle's `icon.icns`.
+/// Linux; macOS takes the Dock icon from the app bundle's `icon.icns`
+/// (see also [`set_dock_icon`] for bare-binary launches).
 fn app_icon() -> Option<Icon> {
     let img = image::load_from_memory(ICON_PNG).ok()?.into_rgba8();
     let (width, height) = img.dimensions();
     Icon::from_rgba(img.into_raw(), width, height).ok()
+}
+
+/// Write the embedded application icon to `path` (`--dump-icon`).
+///
+/// The format follows the extension so `scripts/setup.sh` can extract
+/// launcher icons from the installed binary itself — the generated
+/// `icons/` set only exists in a source checkout, not for crates.io
+/// installs.
+fn dump_icon(path: &std::path::Path) -> Result<()> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default();
+    let bytes: &[u8] = match ext {
+        "png" => ICON_PNG,
+        #[cfg(target_os = "macos")]
+        "icns" => ICON_ICNS,
+        _ => rustyclaw_view::anyhow::bail!(
+            "--dump-icon: unsupported extension '{ext}' (expected .png{})",
+            if cfg!(target_os = "macos") {
+                " or .icns"
+            } else {
+                ""
+            }
+        ),
+    };
+    if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
+
+/// Give the Dock the application icon even when the binary is launched
+/// outside the `.app` bundle (e.g. `rustyclaw desktop` spawns the plain
+/// binary, and cargo-installed builds have no bundle at all). Harmless
+/// when the bundle already provides the icon.
+#[cfg(target_os = "macos")]
+fn set_dock_icon() {
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
+
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    let app = NSApplication::sharedApplication(mtm);
+    let data = NSData::with_bytes(ICON_PNG);
+    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
+        // SAFETY: called on the main thread with a valid NSImage; the
+        // property setter has no other preconditions.
+        unsafe { app.setApplicationIconImage(Some(&image)) };
+    }
 }
 
 pub(crate) fn configured_gateway_url() -> Option<String> {
