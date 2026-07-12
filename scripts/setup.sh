@@ -3,7 +3,8 @@
 #
 # Installs RustyClaw and optionally supporting tools:
 #   • Rust toolchain (1.85+)
-#   • RustyClaw (from local workspace or crates.io)
+#   • RustyClaw (from local workspace or crates.io), including a desktop
+#     launcher entry with the app icon (.desktop on Linux, .app on macOS)
 #   • uv (Python environment manager)
 #   • Ollama (local model server)
 #   • Node.js + npm (for exo dashboard)
@@ -126,6 +127,97 @@ case "$OS" in
 esac
 
 has() { command -v "$1" &>/dev/null; }
+
+# ── Desktop launcher integration ────────────────────────────────────────────
+# Register the desktop client with the OS application launcher, with the app
+# icon: a .desktop entry + hicolor icon on Linux, a ~/Applications/RustyClaw.app
+# bundle on macOS. The icon is extracted from the installed binary itself
+# (`rustyclaw-desktop --dump-icon`), so this works for both source and
+# crates.io installs. Best-effort: failures warn but never abort setup.
+install_desktop_launcher() {
+    has rustyclaw-desktop || return 0
+    local desktop_bin
+    desktop_bin="$(command -v rustyclaw-desktop)"
+
+    case "$PLATFORM" in
+        linux)
+            info "Registering RustyClaw in the applications menu..."
+            local icon_dir="$HOME/.local/share/icons/hicolor/256x256/apps"
+            local apps_dir="$HOME/.local/share/applications"
+            mkdir -p "$icon_dir" "$apps_dir"
+
+            if ! rustyclaw-desktop --dump-icon "$icon_dir/rustyclaw-desktop.png" 2>/dev/null; then
+                warn "Could not export the app icon (rustyclaw-desktop too old?) — the menu entry will use a generic icon"
+            fi
+
+            # StartupWMClass matches the binary name, which GTK uses as the
+            # WM_CLASS/app-id — this is what lets GNOME/KDE attach the icon
+            # to the *running* window, not just the menu entry.
+            cat > "$apps_dir/rustyclaw-desktop.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=RustyClaw
+GenericName=AI Agent Client
+Comment=Desktop client for the RustyClaw AI agent
+Exec=$desktop_bin
+Terminal=false
+Icon=rustyclaw-desktop
+Categories=Development;Utility;Network;
+Keywords=AI;agent;chat;LLM;assistant;
+StartupWMClass=rustyclaw-desktop
+StartupNotify=true
+EOF
+            has update-desktop-database && update-desktop-database "$apps_dir" 2>/dev/null || true
+            has gtk-update-icon-cache && gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null || true
+            success "Applications-menu entry installed (RustyClaw)"
+            ;;
+        macos)
+            info "Installing RustyClaw.app to ~/Applications..."
+            local app_dir="$HOME/Applications/RustyClaw.app"
+            local app_version
+            app_version="$(rustyclaw-desktop --version 2>/dev/null | awk '{print $2}')"
+            mkdir -p "$app_dir/Contents/MacOS" "$app_dir/Contents/Resources"
+
+            # Copy (not symlink) so Launch Services treats it as a real
+            # bundled app; re-running setup after an upgrade refreshes it.
+            cp -f "$desktop_bin" "$app_dir/Contents/MacOS/rustyclaw-desktop"
+
+            if ! rustyclaw-desktop --dump-icon "$app_dir/Contents/Resources/icon.icns" 2>/dev/null; then
+                warn "Could not export the app icon (rustyclaw-desktop too old?) — the Dock will use a generic icon"
+            fi
+
+            cat > "$app_dir/Contents/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleName</key>
+    <string>RustyClaw</string>
+    <key>CFBundleDisplayName</key>
+    <string>RustyClaw</string>
+    <key>CFBundleIdentifier</key>
+    <string>io.rustyclaw.desktop</string>
+    <key>CFBundleExecutable</key>
+    <string>rustyclaw-desktop</string>
+    <key>CFBundleIconFile</key>
+    <string>icon</string>
+    <key>CFBundleShortVersionString</key>
+    <string>${app_version:-0.0.0}</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
+EOF
+            # Nudge Launch Services to pick up the (new) bundle.
+            touch "$app_dir"
+            local lsregister="/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister"
+            [[ -x "$lsregister" ]] && "$lsregister" -f "$app_dir" 2>/dev/null || true
+            success "RustyClaw.app installed (Launchpad/Spotlight → RustyClaw)"
+            ;;
+    esac
+}
 
 # ── Detect installed components ─────────────────────────────────────────────
 # Using simple variables instead of associative arrays for bash 3.x compatibility
@@ -551,6 +643,7 @@ if should_install rustyclaw; then
     fi
     if has rustyclaw-desktop; then
         success "RustyClaw desktop client installed"
+        install_desktop_launcher
     else
         warn "rustyclaw-desktop not found in PATH after install — 'rustyclaw desktop' will fail (desktop also needs GTK/WebKit dev libs on Linux)"
     fi

@@ -4,6 +4,8 @@
 //! iconutil, or ImageMagick needed) into:
 //!
 //!   - `$OUT_DIR/icon-256.png` — embedded into the binary as the window icon
+//!   - `$OUT_DIR/icon.icns` — embedded on macOS so `--dump-icon` can write
+//!     the bundle icon for the `.app` created by `scripts/setup.sh`
 //!   - `icons/*.png`, `icons/icon.icns`, `icons/icon.ico` — the icon set
 //!     used by `dx bundle` (gitignored: generated, never committed; written
 //!     best-effort so a read-only source tree warns instead of failing)
@@ -70,8 +72,12 @@ fn generate_icons(embedded: &Path) -> Result<(), String> {
             .map_err(|e| format!("encode {size}px png: {e}"))
     };
 
-    // The embedded window icon is the only mandatory artifact.
+    // Mandatory artifacts: the embedded window icon plus the icns embedded
+    // (on macOS) for `--dump-icon`. Both live in OUT_DIR and are
+    // include_bytes!'d, so a failure must fail the build.
     fs::write(embedded, png_of(256)?).map_err(|e| format!("write embedded icon: {e}"))?;
+    let out_dir = embedded.parent().expect("embedded icon has a parent dir");
+    write_icns(&out_dir.join("icon.icns"), &rendered)?;
 
     // Refresh the committed icon set best-effort: a read-only source tree
     // (e.g. a vendored or published crate) must not fail the build.
