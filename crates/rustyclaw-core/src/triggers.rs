@@ -48,8 +48,10 @@ pub struct TriggerDef {
     /// environment variables and fires by POSTing
     /// `{"token": "...", "context": {...}}` to `http://<endpoint>/fire`.
     pub code: String,
-    /// Interpreter for `code` (default: `sh`). The code is written to a
-    /// script file and passed as the interpreter's first argument.
+    /// Interpreter for `code` (default: `sh`). The code is fed to the
+    /// interpreter over stdin — never written to disk — so any interpreter
+    /// that runs a program from a non-tty stdin works (`sh`, `bash`,
+    /// `python3`, `node`, `ruby`, …).
     #[serde(default)]
     pub interpreter: Option<String>,
     /// Disabled triggers stay stored but are not started.
@@ -95,8 +97,10 @@ static STORE_LOCK: Mutex<()> = Mutex::new(());
 /// - `store.vault` — securestore vault holding one `trigger:<id>` JSON
 ///   secret per trigger
 /// - `store.key`   — auto-generated master key (owner-only permissions)
-/// - `run/`        — materialized script files while the gateway runs
 /// - `runs/`       — per-trigger fire history (JSONL)
+///
+/// Trigger code is never written to disk in plaintext: the gateway feeds it
+/// to the interpreter over stdin at spawn time.
 #[derive(Debug, Clone)]
 pub struct TriggerStore {
     dir: PathBuf,
