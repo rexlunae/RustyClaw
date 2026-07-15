@@ -183,8 +183,13 @@ async fn sync(
         if let Some(rt) = running.remove(&id) {
             tokens.lock().await.remove(&rt.token);
             if rt.last_spawn.elapsed() < RESPAWN_COOLDOWN {
-                // Crash-looping — leave it stopped until the next tick.
+                // Crash-looping: keep a tombstone in `running` so the
+                // "start anything not running" loop below skips this trigger
+                // until the cooldown elapses. On a later tick the exited
+                // child is reaped again and, once `last_spawn` is older than
+                // the cooldown, dropped here so it respawns fresh.
                 debug!(trigger = %id, "Trigger crash-looping; delaying respawn");
+                running.insert(id, rt);
             }
         }
     }
@@ -222,6 +227,15 @@ async fn spawn_trigger(
     run_dir: &std::path::Path,
     endpoint: std::net::SocketAddr,
 ) -> Result<(tokio::process::Child, String)> {
+    // Validate the interpreter command through the same safety check the
+    // managed-services supervisor uses before spawning any subprocess
+    // (STYLE_GUIDE.md: shell/subprocess execution goes through the sandbox
+    // layer). This bounds *how* the trigger is launched; the trigger's own
+    // code is user-authored and runs as a supervised program, like a
+    // managed service.
+    rustyclaw_core::tools::validate_command_safe(def.interpreter())
+        .map_err(|e| anyhow::anyhow!("Trigger interpreter rejected: {}", e))?;
+
     std::fs::create_dir_all(run_dir).context("Failed to create trigger run dir")?;
     let script_path = run_dir.join(format!("{}.script", def.id));
     std::fs::write(&script_path, &def.code).context("Failed to write trigger script")?;
@@ -433,6 +447,58 @@ sleep 600
         tokio::time::timeout(Duration::from_secs(10), mgr)
             .await
             .expect("manager did not stop on cancel")??;
+        Ok(())
+    }
+
+    /// A trigger whose code exits immediately must not be respawned on every
+    /// sync tick: it stays tombstoned in `running` until the cooldown lapses.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn crash_looping_trigger_is_held_back() -> Result<()> {
+        let tmp = tempfile::tempdir()?;
+        let store = TriggerStore::open(tmp.path());
+        store.upsert(&rustyclaw_core::triggers::TriggerDef {
+            id: "crasher".into(),
+            name: "Crasher".into(),
+            description: None,
+            agent_id: "main".into(),
+            code: "exit 1".into(),
+            interpreter: Some("sh".into()),
+            enabled: true,
+            created_by: None,
+            created_at: Some(0),
+        })?;
+
+        let run_dir = tmp.path().join("triggers").join("run");
+        let endpoint: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let tokens: TokenMap = Arc::new(Mutex::new(HashMap::new()));
+        let mut running: HashMap<String, RunningTrigger> = HashMap::new();
+
+        // First sync spawns the (doomed) process.
+        sync(&store, &run_dir, endpoint, &mut running, &tokens).await;
+        assert!(running.contains_key("crasher"));
+        let first_spawn = running.get("crasher").unwrap().last_spawn;
+
+        // Give it time to exit, then sync again: it should be reaped and
+        // held back as a tombstone (still present, NOT respawned).
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        sync(&store, &run_dir, endpoint, &mut running, &tokens).await;
+        assert!(
+            running.contains_key("crasher"),
+            "crashed trigger should be tombstoned, not dropped"
+        );
+        assert_eq!(
+            running.get("crasher").unwrap().last_spawn,
+            first_spawn,
+            "trigger must not be respawned within the cooldown"
+        );
+        // Its token was withdrawn so a stale process can't fire.
+        assert!(tokens.lock().await.is_empty());
+
+        // Clean up any lingering child.
+        for (_, mut rt) in running.drain() {
+            let _ = rt.child.start_kill();
+        }
         Ok(())
     }
 
