@@ -77,13 +77,17 @@ impl AgentRegistry {
     }
 
     /// Whether an agent with this id exists (`main` always does).
+    /// Invalid ids (path separators, `..`, uppercase, …) never exist.
     pub fn exists(&self, id: &str) -> bool {
-        id == MAIN_AGENT_ID || self.manifest_path(id).exists()
+        id == MAIN_AGENT_ID || (is_valid_agent_id(id) && self.manifest_path(id).exists())
     }
 
     /// Load an agent's manifest. `main` gets a synthetic manifest when none
-    /// has been written yet.
+    /// has been written yet. Invalid ids yield `None`.
     pub fn manifest(&self, id: &str) -> Option<AgentManifest> {
+        if id != MAIN_AGENT_ID && !is_valid_agent_id(id) {
+            return None;
+        }
         let path = self.manifest_path(id);
         if let Ok(content) = std::fs::read_to_string(&path) {
             if let Ok(m) = toml::from_str::<AgentManifest>(&content) {
@@ -223,12 +227,28 @@ impl AgentRegistry {
         if id == MAIN_AGENT_ID {
             bail!("The main agent cannot be deleted");
         }
+        // Re-validate here (not just via `exists`) so the recursive delete
+        // below can never operate on a path outside `agents_root`.
+        if !is_valid_agent_id(id) {
+            bail!("Invalid agent id '{}'", id);
+        }
         if !self.exists(id) {
             bail!("Agent '{}' not found", id);
         }
         std::fs::remove_dir_all(self.agent_dir(id))?;
         Ok(())
     }
+}
+
+/// Whether a string is a well-formed agent id: non-empty, lowercase ASCII
+/// alphanumerics plus `-`/`_` only. Everything the registry does with an id
+/// ends up in a filesystem path under `agents_root`, so ids that could
+/// escape it (`..`, `/`, `\`, leading dots) are rejected wholesale.
+pub fn is_valid_agent_id(id: &str) -> bool {
+    !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
 }
 
 /// Reduce an arbitrary string to a filesystem/wire-safe agent id:
@@ -318,6 +338,29 @@ mod tests {
         );
         assert!(reg.delete("main").is_err());
         assert!(reg.delete("nonexistent").is_err());
+    }
+
+    #[test]
+    fn traversal_ids_rejected() {
+        let tmp = tempdir().unwrap();
+        // Plant a decoy manifest *outside* the agents root that a traversal
+        // id would resolve to.
+        let outside = tmp.path().join("victim");
+        std::fs::create_dir_all(&outside).unwrap();
+        std::fs::write(outside.join("agent.toml"), "name = \"victim\"\n").unwrap();
+
+        let reg = registry(&tmp.path().join("state"));
+        for id in ["../../victim", "..", "a/../b", "a\\b", ".hidden", ""] {
+            assert!(!reg.exists(id), "id {:?} must not exist", id);
+            assert!(
+                reg.manifest(id).is_none(),
+                "id {:?} must have no manifest",
+                id
+            );
+            assert!(reg.delete(id).is_err(), "id {:?} must not delete", id);
+        }
+        // The decoy survives every attempt.
+        assert!(outside.join("agent.toml").exists());
     }
 
     #[test]
