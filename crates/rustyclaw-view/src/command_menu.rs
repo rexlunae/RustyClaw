@@ -229,10 +229,8 @@ pub fn hub_completion_context(partial: &str) -> Option<HubCompletionContext> {
         (query, gguf_only)
     } else if let Some(query) = rest.strip_prefix("files ") {
         (query, true)
-    } else if let Some(query) = rest.strip_prefix("search ") {
-        (query, true)
     } else {
-        return None;
+        (rest.strip_prefix("search ")?, true)
     };
 
     // Repo ids never contain spaces; a second word means the user has
