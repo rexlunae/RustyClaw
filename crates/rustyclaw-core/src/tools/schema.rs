@@ -65,6 +65,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "sessions_history" => sessions_history_params(),
         "session_status" => session_status_params(),
         "agents_list" => agents_list_params(),
+        "agents_create" => agents_create_params(),
+        "agents_delete" => agents_delete_params(),
         "apply_patch" => apply_patch_params(),
         "secrets_list" => secrets_list_params(),
         "secrets_get" => secrets_get_params(),

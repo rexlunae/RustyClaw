@@ -107,6 +107,13 @@ pub(super) struct Ui {
     pub model_selector_models: State<Vec<String>>,
     pub model_selector_cursor: State<usize>,
     pub model_selector_loading: State<bool>,
+    pub show_agent_selector: State<bool>,
+    pub agent_selector_agents: State<Vec<rustyclaw_view::AgentItemData>>,
+    pub agent_selector_active_id: State<String>,
+    pub agent_selector_cursor: State<usize>,
+    /// Display name of the active agent (overrides the static soul name
+    /// in the header after an agent switch).
+    pub dynamic_agent_name: State<Option<String>>,
     pub threads: State<Vec<rustyclaw_view::SidebarItemData>>,
     pub projects: State<Vec<rustyclaw_core::ui::ProjectInfo>>,
     pub active_project_id: State<u64>,

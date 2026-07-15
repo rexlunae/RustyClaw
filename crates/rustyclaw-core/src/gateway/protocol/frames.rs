@@ -154,6 +154,14 @@ pub enum ClientFrameType {
     EngineConfigSet = 71,
     /// Control a running exec process (pause/resume/stop/kill).
     ProcessControl = 72,
+    /// Request the list of agents in this installation.
+    AgentListRequest = 73,
+    /// Switch the connection's active agent.
+    AgentSwitch = 74,
+    /// Create a new agent.
+    AgentCreate = 75,
+    /// Delete an agent.
+    AgentDelete = 76,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -328,6 +336,10 @@ pub enum ServerFrameType {
     ToolStatus = 81,
     /// Streamed output line from an engine install/start/stop action.
     EngineActionProgress = 82,
+    /// Agent list update (list of agents + the connection's active agent).
+    AgentsUpdate = 83,
+    /// Active agent switched for this connection.
+    AgentSwitched = 84,
 }
 
 /// Status frame sub-types.
@@ -773,6 +785,24 @@ pub enum ClientPayload {
         pid: u32,
         action: crate::exec_status::ProcessControlAction,
     },
+    // ── Agents ───────────────────────────────────────────────────────────
+    // Appended at the end — positional bincode encoding, see note above.
+    /// Request the list of agents in this installation.
+    AgentListRequest,
+    /// Switch this connection's active agent.
+    AgentSwitch {
+        agent_id: String,
+    },
+    /// Create a new agent.
+    AgentCreate {
+        name: String,
+        agent_id: Option<String>,
+        description: Option<String>,
+    },
+    /// Delete an agent ('main' is protected).
+    AgentDelete {
+        agent_id: String,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1210,6 +1240,17 @@ pub enum ServerPayload {
         /// Progress percentage when known (0.0 when the action doesn't
         /// report one, which is the common case for installers).
         percent: f32,
+    },
+    // ── Agents (appended — positional bincode encoding) ───────────────────
+    /// Agent list plus the connection's currently-active agent.
+    AgentsUpdate {
+        agents: Vec<AgentInfoDto>,
+        active_id: String,
+    },
+    /// The connection's active agent changed (response to `AgentSwitch`).
+    AgentSwitched {
+        agent_id: String,
+        name: String,
     },
 }
 

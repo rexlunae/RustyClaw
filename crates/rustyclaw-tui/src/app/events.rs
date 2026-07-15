@@ -106,6 +106,21 @@ pub(crate) enum GwEvent {
         active_id: u64,
     },
 
+    /// Agent list update (agents in this installation + the active one).
+    AgentsUpdate {
+        agents: Vec<rustyclaw_view::AgentItemData>,
+        active_id: String,
+    },
+
+    /// The connection's active agent changed.
+    AgentSwitched {
+        agent_id: String,
+        name: String,
+    },
+
+    /// Open the agent selector dialog (/agents).
+    ShowAgentSelector,
+
     /// Live message/history update for a thread.
     ThreadMessages {
         #[allow(dead_code)]

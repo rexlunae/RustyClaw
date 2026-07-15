@@ -1,3 +1,4 @@
+pub mod agent_selector_dialog;
 pub mod analytics_dialog;
 pub mod api_key_dialog;
 pub mod approvals_dialog;

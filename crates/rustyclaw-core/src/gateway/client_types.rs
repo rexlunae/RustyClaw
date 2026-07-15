@@ -160,6 +160,15 @@ pub enum GatewayEvent {
         active_id: u64,
     },
 
+    /// Agents in this installation (plus which one is active on this connection)
+    AgentsUpdate {
+        agents: Vec<AgentInfoDto>,
+        active_id: String,
+    },
+
+    /// The connection's active agent changed
+    AgentSwitched { agent_id: String, name: String },
+
     /// Authoritative, cross-session conversation history for a thread.
     ThreadHistory {
         thread_id: u64,
@@ -678,6 +687,27 @@ pub enum GatewayCommand {
     /// Request logs from a source ("gateway" | "agent" | "cron" | service name).
     #[serde(rename = "logs")]
     Logs { source: String, tail: Option<usize> },
+
+    // ── Agent commands ─────────────────────────────────────────────────
+    /// Request the list of agents in this installation
+    #[serde(rename = "agent_list")]
+    AgentList,
+
+    /// Switch this connection's active agent
+    #[serde(rename = "agent_switch")]
+    AgentSwitch { agent_id: String },
+
+    /// Create a new agent
+    #[serde(rename = "agent_create")]
+    AgentCreate {
+        name: String,
+        agent_id: Option<String>,
+        description: Option<String>,
+    },
+
+    /// Delete an agent ('main' is protected)
+    #[serde(rename = "agent_delete")]
+    AgentDelete { agent_id: String },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -1037,6 +1067,30 @@ impl GatewayCommand {
                     follow: false,
                 },
             },
+            GatewayCommand::AgentList => ClientFrame {
+                frame_type: ClientFrameType::AgentListRequest,
+                payload: ClientPayload::AgentListRequest,
+            },
+            GatewayCommand::AgentSwitch { agent_id } => ClientFrame {
+                frame_type: ClientFrameType::AgentSwitch,
+                payload: ClientPayload::AgentSwitch { agent_id },
+            },
+            GatewayCommand::AgentCreate {
+                name,
+                agent_id,
+                description,
+            } => ClientFrame {
+                frame_type: ClientFrameType::AgentCreate,
+                payload: ClientPayload::AgentCreate {
+                    name,
+                    agent_id,
+                    description,
+                },
+            },
+            GatewayCommand::AgentDelete { agent_id } => ClientFrame {
+                frame_type: ClientFrameType::AgentDelete,
+                payload: ClientPayload::AgentDelete { agent_id },
+            },
         }
     }
 }
@@ -1203,6 +1257,20 @@ impl GatewayEvent {
                     .collect(),
                 active_id,
             }),
+            ServerPayload::AgentsUpdate { agents, active_id } => Some(GatewayEvent::AgentsUpdate {
+                agents: agents
+                    .into_iter()
+                    .map(|a| AgentInfoDto {
+                        id: a.id,
+                        name: a.name,
+                        description: a.description,
+                    })
+                    .collect(),
+                active_id,
+            }),
+            ServerPayload::AgentSwitched { agent_id, name } => {
+                Some(GatewayEvent::AgentSwitched { agent_id, name })
+            }
             ServerPayload::ThreadSwitched {
                 thread_id,
                 context_summary,
@@ -1555,4 +1623,12 @@ pub struct ProjectInfoDto {
     pub id: u64,
     pub name: String,
     pub path: String,
+}
+
+/// Agent info from gateway (client-facing).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AgentInfoDto {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
 }

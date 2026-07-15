@@ -87,6 +87,14 @@ pub enum CommandAction {
     ShowAnalytics(Option<String>),
     /// Show the logs panel: (source, optional tail)
     ShowLogs(String, Option<usize>),
+    /// Show the agent selector dialog (fetches the agent list)
+    ShowAgents,
+    /// Switch the connection's active agent by id
+    AgentSwitch(String),
+    /// Create a new agent with the given display name
+    AgentNew(String),
+    /// Delete an agent by id
+    AgentDelete(String),
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +139,10 @@ fn base_command_names() -> Vec<String> {
         "skill unlink-secret".into(),
         "skill create".into(),
         "secrets".into(),
+        "agents".into(),
+        "agents new".into(),
+        "agents use".into(),
+        "agents rm".into(),
         "thread".into(),
         "thread new".into(),
         "thread list".into(),
@@ -416,6 +428,10 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     .to_string(),
                 "  /npm <action> [pkg …]    - Node.js/npm admin (setup/install/run/build/…)"
                     .to_string(),
+                "  /agents                  - Switch between agents (selector)".to_string(),
+                "  /agents new <name>       - Create a new agent".to_string(),
+                "  /agents use <id>         - Switch to an agent by id".to_string(),
+                "  /agents rm <id>          - Delete an agent".to_string(),
                 "  /thread new <label>      - Create a new chat thread".to_string(),
                 "  /thread list             - Show threads (or focus sidebar)".to_string(),
                 "  /thread close <id>       - Close a thread".to_string(),
@@ -645,6 +661,7 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
             }
         },
         "clawhub" | "hub" | "registry" => handle_clawhub_subcommand(&parts[1..], context),
+        "agents" => handle_agents_subcommand(&parts[1..]),
         "thread" => handle_thread_subcommand(&parts[1..]),
         "q" | "quit" | "exit" => CommandResponse {
             messages: Vec::new(),
@@ -1125,4 +1142,7 @@ fn handle_channels_subcommand(args: &[&str]) -> CommandResponse {
 }
 
 mod subcommands;
-use subcommands::{handle_clawhub_subcommand, handle_skill_subcommand, handle_thread_subcommand};
+use subcommands::{
+    handle_agents_subcommand, handle_clawhub_subcommand, handle_skill_subcommand,
+    handle_thread_subcommand,
+};

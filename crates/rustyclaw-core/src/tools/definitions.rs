@@ -221,9 +221,28 @@ pub static SESSION_STATUS: ToolDef = ToolDef {
 pub static AGENTS_LIST: ToolDef = ToolDef {
     name: "agents_list",
     description: "List available agent IDs that can be targeted with sessions_spawn. \
-                  Returns the configured agents based on allowlists.",
+                  Returns all agents registered in this installation.",
     parameters: vec![],
     execute: exec_agents_list,
+};
+
+pub static AGENTS_CREATE: ToolDef = ToolDef {
+    name: "agents_create",
+    description: "Create a new persistent agent in this installation. The new agent gets its \
+                  own workspace, sessions, and threads, appears in agents_list, can be targeted \
+                  with sessions_spawn, and can be switched to from any connected client. \
+                  Use this to spawn specialized long-lived agents (e.g. a researcher, a coder).",
+    parameters: vec![],
+    execute: exec_agents_create,
+};
+
+pub static AGENTS_DELETE: ToolDef = ToolDef {
+    name: "agents_delete",
+    description: "Delete a persistent agent and all of its state (sessions, threads, workspace). \
+                  The 'main' agent cannot be deleted. This is irreversible — confirm with the \
+                  user before deleting an agent they may still need.",
+    parameters: vec![],
+    execute: exec_agents_delete,
 };
 
 pub static APPLY_PATCH: ToolDef = ToolDef {

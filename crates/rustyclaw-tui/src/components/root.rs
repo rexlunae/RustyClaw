@@ -5,6 +5,7 @@
 
 use iocraft::prelude::*;
 
+use crate::components::agent_selector_dialog::AgentSelectorDialog;
 use crate::components::analytics_dialog::AnalyticsDialog;
 use crate::components::api_key_dialog::ApiKeyDialog;
 use crate::components::auth_dialog::AuthDialog;
@@ -38,9 +39,9 @@ use crate::components::vault_unlock_dialog::VaultUnlockDialog;
 use crate::theme;
 use crate::types::DisplayMessage;
 use rustyclaw_view::{
-    ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData, HatchingDialogData,
-    ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
-    SkillInfoData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
+    AgentSelectorData, ApiKeyDialogData, AuthDialogData, CredentialRequestData, DeviceFlowData,
+    HatchingDialogData, ModelSelectorData, PairingDialogData, ProviderSelectorData, SecretInfoData,
+    SecretsDialogData, SkillInfoData, ToolApprovalData, ToolPermInfoData, VaultUnlockData,
 };
 
 #[derive(Default, Props)]
@@ -159,6 +160,8 @@ pub struct RootProps {
     // model selector dialog overlay
     pub show_model_selector: bool,
     pub model_selector: ModelSelectorData,
+    pub show_agent_selector: bool,
+    pub agent_selector: AgentSelectorData,
 
     // pairing dialog overlay (SSH pairing)
     pub show_pairing: bool,
@@ -244,6 +247,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
 
     let show_model_sel = props.show_model_selector;
     let model_selector = props.model_selector.clone();
+    let show_agent_sel = props.show_agent_selector;
+    let agent_selector = props.agent_selector.clone();
 
     // Pairing dialog state
     let show_pairing = props.show_pairing;
@@ -624,6 +629,25 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         ModelSelectorDialog(
                             data: model_selector,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Agent selector dialog overlay ───────────────────────────
+            #(if show_agent_sel {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        AgentSelectorDialog(
+                            data: agent_selector,
                         )
                     }
                 }.into_any()
