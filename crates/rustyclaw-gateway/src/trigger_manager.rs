@@ -439,6 +439,7 @@ async fn respond(stream: &mut tokio::net::TcpStream, status: u16, text: &str) ->
         401 => "Unauthorized",
         404 => "Not Found",
         413 => "Payload Too Large",
+        503 => "Service Unavailable",
         _ => "OK",
     };
     let body = format!("{}\n", text);
@@ -638,12 +639,54 @@ sleep 600
 
         // Good token → 202 and a fire lands with its context.
         let resp = post(r#"{"token":"goodtoken","context":{"path":"/tmp/x"}}"#.to_string()).await;
-        assert!(resp.starts_with("HTTP/1.1 202"), "got: {resp}");
+        assert!(resp.starts_with("HTTP/1.1 202 Accepted"), "got: {resp}");
         let fire = fire_rx.recv().await.expect("expected a fire");
         assert_eq!(fire.trigger_id, "watcher");
         assert_eq!(fire.agent_id, "main");
         assert_eq!(fire.context["path"], "/tmp/x");
 
+        Ok(())
+    }
+
+    /// When the fire consumer is gone, the endpoint must return a well-formed
+    /// 503 (correct reason phrase), not a misleading `503 OK`.
+    #[tokio::test]
+    async fn fire_endpoint_reports_503_when_consumer_gone() -> Result<()> {
+        let tokens: TokenMap = Arc::new(Mutex::new(HashMap::new()));
+        tokens.lock().await.insert(
+            "goodtoken".to_string(),
+            ("watcher".to_string(), "main".to_string()),
+        );
+        // Drop the receiver so `send` fails.
+        let (fire_tx, fire_rx) = mpsc::channel::<TriggerFire>(1);
+        drop(fire_rx);
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+        let accept_tokens = tokens.clone();
+        tokio::spawn(async move {
+            if let Ok((stream, _)) = listener.accept().await {
+                let _ = handle_fire_connection(stream, accept_tokens, fire_tx).await;
+            }
+        });
+
+        let mut s = tokio::net::TcpStream::connect(addr).await?;
+        let body = r#"{"token":"goodtoken","context":{}}"#;
+        s.write_all(
+            format!(
+                "POST /fire HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .as_bytes(),
+        )
+        .await?;
+        let mut resp = String::new();
+        let _ = s.read_to_string(&mut resp).await;
+        assert!(
+            resp.starts_with("HTTP/1.1 503 Service Unavailable"),
+            "expected a well-formed 503, got: {resp}"
+        );
         Ok(())
     }
 }
