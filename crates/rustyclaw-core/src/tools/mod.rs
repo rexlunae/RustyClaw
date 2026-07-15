@@ -108,6 +108,13 @@ use sessions_tools::{
 mod agent_tools;
 use agent_tools::{exec_agents_create, exec_agents_delete};
 
+// Trigger management operations
+mod trigger_tools;
+use trigger_tools::{
+    exec_triggers_create, exec_triggers_delete, exec_triggers_list, exec_triggers_set_enabled,
+    exec_triggers_update,
+};
+
 // Patch operations
 use patch::exec_apply_patch;
 
@@ -297,6 +304,11 @@ pub fn tool_summary(name: &str) -> &'static str {
         "agents_list" => "List available agent types",
         "agents_create" => "Create a new persistent agent in this installation",
         "agents_delete" => "Delete a persistent agent and its state",
+        "triggers_create" => "Create an external trigger that fires an agent",
+        "triggers_list" => "List external triggers",
+        "triggers_update" => "Update an external trigger's code or settings",
+        "triggers_delete" => "Delete an external trigger",
+        "triggers_set_enabled" => "Enable or disable an external trigger",
         "apply_patch" => "Apply diff patches to files",
         "secrets_list" => "List vault secret names",
         "secrets_get" => "Read secrets from the vault",
@@ -444,6 +456,11 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &AGENTS_LIST,
         &AGENTS_CREATE,
         &AGENTS_DELETE,
+        &TRIGGERS_CREATE,
+        &TRIGGERS_LIST,
+        &TRIGGERS_UPDATE,
+        &TRIGGERS_DELETE,
+        &TRIGGERS_SET_ENABLED,
         &APPLY_PATCH,
         &SECRETS_LIST,
         &SECRETS_GET,

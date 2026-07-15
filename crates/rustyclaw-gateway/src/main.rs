@@ -35,6 +35,8 @@ mod task_handler;
 mod thread_handler;
 mod thread_updates;
 mod tool_executor;
+mod trigger_dispatch;
+mod trigger_manager;
 
 use std::io::IsTerminal;
 use std::sync::Arc;

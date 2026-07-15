@@ -23,6 +23,8 @@ pub struct RuntimeInfo {
     pub main_agent_name: Option<String>,
     /// Agent id the currently-dispatching conversation belongs to.
     pub active_agent: Option<String>,
+    /// Wakes the gateway's trigger manager after tool-side trigger edits.
+    pub trigger_notify: Option<std::sync::Arc<tokio::sync::Notify>>,
     /// Static host hardware profile.
     pub host: Option<SharedHostCapabilities>,
     /// Live load tracker (periodically sampled).
@@ -73,6 +75,32 @@ pub fn set_agent_registry_info(settings_dir: &std::path::Path, main_agent_name: 
     if let Ok(mut ctx) = runtime_ctx().lock() {
         ctx.settings_dir = Some(settings_dir.to_path_buf());
         ctx.main_agent_name = Some(main_agent_name.to_string());
+    }
+}
+
+/// The gateway's settings dir, when published — the root for
+/// installation-level state such as the agent registry and trigger store.
+pub fn get_settings_dir() -> Option<std::path::PathBuf> {
+    runtime_ctx()
+        .lock()
+        .ok()
+        .and_then(|ctx| ctx.settings_dir.clone())
+}
+
+/// Register the trigger manager's wake handle so trigger tools can request
+/// an immediate re-sync after editing the store.
+pub fn set_trigger_notify(notify: std::sync::Arc<tokio::sync::Notify>) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.trigger_notify = Some(notify);
+    }
+}
+
+/// Wake the trigger manager (no-op when no gateway is running).
+pub fn notify_triggers_changed() {
+    if let Ok(ctx) = runtime_ctx().lock() {
+        if let Some(notify) = &ctx.trigger_notify {
+            notify.notify_one();
+        }
     }
 }
 

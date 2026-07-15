@@ -245,6 +245,48 @@ pub static AGENTS_DELETE: ToolDef = ToolDef {
     execute: exec_agents_delete,
 };
 
+pub static TRIGGERS_CREATE: ToolDef = ToolDef {
+    name: "triggers_create",
+    description: "Create an external trigger: a small program (script) the gateway runs as a \
+                  child process for its whole lifetime. When the trigger's condition is met, \
+                  the code fires the target agent with a JSON context by POSTing \
+                  {\"token\": \"$RUSTYCLAW_TRIGGER_TOKEN\", \"context\": {...}} to \
+                  http://$RUSTYCLAW_TRIGGER_ENDPOINT/fire. Definitions are stored encrypted \
+                  and start/stop with the gateway.",
+    parameters: vec![],
+    execute: exec_triggers_create,
+};
+
+pub static TRIGGERS_LIST: ToolDef = ToolDef {
+    name: "triggers_list",
+    description: "List all external triggers with their target agent and enabled state.",
+    parameters: vec![],
+    execute: exec_triggers_list,
+};
+
+pub static TRIGGERS_UPDATE: ToolDef = ToolDef {
+    name: "triggers_update",
+    description: "Update an existing external trigger (name, description, code, interpreter, \
+                  target agent, enabled). The gateway restarts the trigger's process with the \
+                  new definition.",
+    parameters: vec![],
+    execute: exec_triggers_update,
+};
+
+pub static TRIGGERS_DELETE: ToolDef = ToolDef {
+    name: "triggers_delete",
+    description: "Delete an external trigger. Its running process is stopped by the gateway.",
+    parameters: vec![],
+    execute: exec_triggers_delete,
+};
+
+pub static TRIGGERS_SET_ENABLED: ToolDef = ToolDef {
+    name: "triggers_set_enabled",
+    description: "Enable or disable an external trigger without deleting it.",
+    parameters: vec![],
+    execute: exec_triggers_set_enabled,
+};
+
 pub static APPLY_PATCH: ToolDef = ToolDef {
     name: "apply_patch",
     description: "Apply a unified diff patch to one or more files. Supports multi-hunk patches. \

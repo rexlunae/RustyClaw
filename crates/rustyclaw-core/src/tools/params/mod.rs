@@ -984,5 +984,136 @@ pub fn agents_delete_params() -> Vec<ToolParam> {
     }]
 }
 
+pub fn triggers_create_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "name".into(),
+            description: "Display name for the trigger (required).".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "code".into(),
+            description: "The trigger program: script text run by the interpreter for the \
+                          gateway's lifetime. Fire the agent by POSTing JSON \
+                          {\"token\": \"$RUSTYCLAW_TRIGGER_TOKEN\", \"context\": {...}} to \
+                          http://$RUSTYCLAW_TRIGGER_ENDPOINT/fire (required)."
+                .into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "triggerId".into(),
+            description: "Explicit trigger id (lowercase letters, digits, '-', '_'). \
+                          Derived from the name when omitted."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "agentId".into(),
+            description: "Agent to run when the trigger fires. Defaults to the current agent."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "description".into(),
+            description: "What this trigger watches for.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "interpreter".into(),
+            description: "Interpreter for the code (default: sh). E.g. bash, python3.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "enabled".into(),
+            description: "Whether to start the trigger immediately. Default: true.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn triggers_list_params() -> Vec<ToolParam> {
+    vec![]
+}
+
+pub fn triggers_update_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "triggerId".into(),
+            description: "Id of the trigger to update (required).".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "name".into(),
+            description: "New display name.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "description".into(),
+            description: "New description.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "code".into(),
+            description: "New trigger code.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "interpreter".into(),
+            description: "New interpreter.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "agentId".into(),
+            description: "New target agent id.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "enabled".into(),
+            description: "New enabled state.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn triggers_delete_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "triggerId".into(),
+        description: "Id of the trigger to delete (required).".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
+pub fn triggers_set_enabled_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "triggerId".into(),
+            description: "Id of the trigger (required).".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "enabled".into(),
+            description: "true to enable, false to disable (required).".into(),
+            param_type: "boolean".into(),
+            required: true,
+        },
+    ]
+}
+
 mod ext;
 pub use ext::*;

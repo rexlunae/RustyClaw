@@ -316,6 +316,74 @@ pub async fn run_gateway(
         None
     };
 
+    // ── External triggers ───────────────────────────────────────────
+    //
+    // Start the trigger manager: it runs each enabled trigger's code as a
+    // child process for the gateway's lifetime and exposes the localhost
+    // fire endpoint. Fires are consumed here and dispatched as headless
+    // agent turns. (Only in standalone mode — a per-connection stdio
+    // gateway must not spawn duplicate trigger processes.)
+    {
+        let (fire_tx, mut fire_rx) =
+            tokio::sync::mpsc::channel::<crate::trigger_manager::TriggerFire>(16);
+        let trigger_notify = Arc::new(tokio::sync::Notify::new());
+        rustyclaw_core::runtime_ctx::set_trigger_notify(trigger_notify.clone());
+
+        let mgr_settings_dir = config.settings_dir.clone();
+        let mgr_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            if let Err(e) = crate::trigger_manager::run_trigger_manager(
+                mgr_settings_dir,
+                fire_tx,
+                trigger_notify,
+                mgr_cancel,
+            )
+            .await
+            {
+                error!(error = %e, "Trigger manager error");
+            }
+        });
+
+        // Fire consumer: runs the target agent for each validated fire.
+        let fire_config = shared_config.clone();
+        let fire_model_ctx = shared_model_ctx.clone();
+        let fire_copilot = shared_copilot_session.clone();
+        let fire_vault = vault.clone();
+        let fire_skills = skill_mgr.clone();
+        let fire_tasks = task_mgr.clone();
+        let fire_models = model_registry.clone();
+        let fire_cancel = cancel.child_token();
+        tokio::spawn(async move {
+            let http = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(30))
+                .build()
+                .unwrap_or_default();
+            loop {
+                tokio::select! {
+                    _ = fire_cancel.cancelled() => break,
+                    fire = fire_rx.recv() => {
+                        let Some(fire) = fire else { break };
+                        let config = fire_config.read().await.clone();
+                        let model_ctx = fire_model_ctx.read().await.clone();
+                        let copilot = fire_copilot.read().await.clone();
+                        crate::trigger_dispatch::run_trigger_fire(
+                            &http,
+                            &config,
+                            fire,
+                            model_ctx,
+                            &fire_vault,
+                            &fire_skills,
+                            &fire_tasks,
+                            &fire_models,
+                            copilot.as_deref(),
+                        )
+                        .await;
+                    }
+                }
+            }
+        });
+    }
+
     // Determine SSH listen address from CLI option or config.
     let ssh_listen = options
         .ssh_listen
