@@ -14,16 +14,39 @@
 //! trigger definitions can be loaded when the gateway boots, even while the
 //! main secrets vault is password-locked.
 
-use anyhow::{Context, Result, bail};
 use securestore::KeySource;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use thiserror::Error;
 
 use crate::agents::{is_valid_agent_id, sanitize_agent_id};
 
 /// Vault key prefix for trigger definitions.
 const KEY_PREFIX: &str = "trigger:";
+
+/// Errors from trigger-store operations.
+#[derive(Debug, Error)]
+pub enum TriggerStoreError {
+    /// Filesystem I/O failure (vault dir, run history).
+    #[error("Trigger store I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    /// JSON (de)serialization failure for a trigger definition or record.
+    #[error("Trigger store serialization error: {0}")]
+    Serde(#[from] serde_json::Error),
+    /// Encrypted-vault backend failure.
+    #[error("Trigger vault error: {0}")]
+    Vault(String),
+    /// A supplied trigger definition failed validation.
+    #[error("Invalid trigger: {0}")]
+    Invalid(String),
+    /// No trigger with the given id exists.
+    #[error("Trigger not found: {0}")]
+    NotFound(String),
+}
+
+/// Convenience result alias for the trigger store.
+pub type TriggerResult<T> = std::result::Result<T, TriggerStoreError>;
 
 /// Environment variables handed to running trigger processes.
 pub const ENV_TRIGGER_ID: &str = "RUSTYCLAW_TRIGGER_ID";
@@ -57,6 +80,13 @@ pub struct TriggerDef {
     /// Disabled triggers stay stored but are not started.
     #[serde(default = "default_true")]
     pub enabled: bool,
+    /// Run the trigger's process inside the sandbox layer (default: true).
+    /// Sandboxed triggers keep network access (so callbacks work) and their
+    /// agent's workspace, but lose access to the rest of the host. Set to
+    /// `false` for a trigger that genuinely needs broad host access (e.g.
+    /// watching a path outside the workspace or running system tools).
+    #[serde(default = "default_true")]
+    pub sandboxed: bool,
     /// Agent that created this trigger, when created via a tool.
     #[serde(default)]
     pub created_by: Option<String>,
@@ -83,6 +113,7 @@ impl TriggerDef {
         self.agent_id.hash(&mut h);
         self.code.hash(&mut h);
         self.interpreter().hash(&mut h);
+        self.sandboxed.hash(&mut h);
         h.finish()
     }
 }
@@ -135,35 +166,35 @@ impl TriggerStore {
     }
 
     /// Load the vault, creating it (and its keyfile) on first use.
-    fn load_vault(&self) -> Result<securestore::SecretsManager> {
-        std::fs::create_dir_all(&self.dir).context("Failed to create triggers directory")?;
-        if self.vault_path().exists() {
+    fn load_vault(&self) -> TriggerResult<securestore::SecretsManager> {
+        std::fs::create_dir_all(&self.dir)?;
+        let vault = if self.vault_path().exists() {
             securestore::SecretsManager::load(
                 self.vault_path(),
                 KeySource::from_file(self.key_path()),
             )
-            .context("Failed to load trigger vault")
+            .map_err(|e| TriggerStoreError::Vault(format!("load failed: {e}")))?
         } else {
             let vault = securestore::SecretsManager::new(KeySource::Csprng)
-                .context("Failed to create trigger vault")?;
+                .map_err(|e| TriggerStoreError::Vault(format!("create failed: {e}")))?;
             vault
                 .export_key(self.key_path())
-                .context("Failed to export trigger vault key")?;
-            set_owner_only(&self.key_path())
-                .context("Failed to secure trigger vault key permissions")?;
+                .map_err(|e| TriggerStoreError::Vault(format!("export key failed: {e}")))?;
+            set_owner_only(&self.key_path())?;
             vault
                 .save_as(self.vault_path())
-                .context("Failed to save trigger vault")?;
+                .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
             securestore::SecretsManager::load(
                 self.vault_path(),
                 KeySource::from_file(self.key_path()),
             )
-            .context("Failed to reload trigger vault")
-        }
+            .map_err(|e| TriggerStoreError::Vault(format!("reload failed: {e}")))?
+        };
+        Ok(vault)
     }
 
     /// List all trigger definitions, sorted by id.
-    pub fn list(&self) -> Result<Vec<TriggerDef>> {
+    pub fn list(&self) -> TriggerResult<Vec<TriggerDef>> {
         let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         if !self.vault_path().exists() {
             return Ok(Vec::new());
@@ -187,7 +218,7 @@ impl TriggerStore {
     }
 
     /// Fetch one trigger by id.
-    pub fn get(&self, id: &str) -> Result<Option<TriggerDef>> {
+    pub fn get(&self, id: &str) -> TriggerResult<Option<TriggerDef>> {
         if !is_valid_agent_id(id) {
             return Ok(None);
         }
@@ -197,64 +228,69 @@ impl TriggerStore {
         }
         let vault = self.load_vault()?;
         match vault.get(&format!("{}{}", KEY_PREFIX, id)) {
-            Ok(json) => Ok(Some(
-                serde_json::from_str(&json).context("Corrupt trigger entry")?,
-            )),
+            Ok(json) => Ok(Some(serde_json::from_str(&json)?)),
             Err(e) if e.kind() == securestore::ErrorKind::SecretNotFound => Ok(None),
-            Err(e) => Err(anyhow::anyhow!("Failed to read trigger: {}", e)),
+            Err(e) => Err(TriggerStoreError::Vault(format!("read failed: {e}"))),
         }
     }
 
     /// Insert or update a trigger definition (validates its ids first).
-    pub fn upsert(&self, def: &TriggerDef) -> Result<()> {
+    pub fn upsert(&self, def: &TriggerDef) -> TriggerResult<()> {
         if !is_valid_agent_id(&def.id) {
-            bail!(
-                "Invalid trigger id '{}': use lowercase letters, digits, '-' or '_'",
+            return Err(TriggerStoreError::Invalid(format!(
+                "id '{}': use lowercase letters, digits, '-' or '_'",
                 def.id
-            );
+            )));
         }
         if !is_valid_agent_id(&def.agent_id) {
-            bail!("Invalid agent id '{}'", def.agent_id);
+            return Err(TriggerStoreError::Invalid(format!(
+                "agent id '{}'",
+                def.agent_id
+            )));
         }
         if def.name.trim().is_empty() {
-            bail!("Trigger name must not be empty");
+            return Err(TriggerStoreError::Invalid("name must not be empty".into()));
         }
         if def.code.trim().is_empty() {
-            bail!("Trigger code must not be empty");
+            return Err(TriggerStoreError::Invalid("code must not be empty".into()));
         }
         let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let mut vault = self.load_vault()?;
-        let json = serde_json::to_string(def).context("Failed to serialize trigger")?;
+        let json = serde_json::to_string(def)?;
         vault.set(&format!("{}{}", KEY_PREFIX, def.id), json);
-        vault.save().context("Failed to save trigger vault")?;
+        vault
+            .save()
+            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
         Ok(())
     }
 
     /// Remove a trigger. Errors if it does not exist.
-    pub fn remove(&self, id: &str) -> Result<()> {
+    pub fn remove(&self, id: &str) -> TriggerResult<()> {
         if !is_valid_agent_id(id) {
-            bail!("Invalid trigger id '{}'", id);
+            return Err(TriggerStoreError::Invalid(format!("id '{}'", id)));
         }
         let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let mut vault = self.load_vault()?;
         vault
             .remove(&format!("{}{}", KEY_PREFIX, id))
-            .map_err(|_| anyhow::anyhow!("Trigger '{}' not found", id))?;
-        vault.save().context("Failed to save trigger vault")?;
+            .map_err(|_| TriggerStoreError::NotFound(id.to_string()))?;
+        vault
+            .save()
+            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
         Ok(())
     }
 
     /// Enable or disable a trigger.
-    pub fn set_enabled(&self, id: &str, enabled: bool) -> Result<()> {
+    pub fn set_enabled(&self, id: &str, enabled: bool) -> TriggerResult<()> {
         let mut def = self
             .get(id)?
-            .ok_or_else(|| anyhow::anyhow!("Trigger '{}' not found", id))?;
+            .ok_or_else(|| TriggerStoreError::NotFound(id.to_string()))?;
         def.enabled = enabled;
         self.upsert(&def)
     }
 
     /// Append one fire record to the trigger's run history.
-    pub fn record_run(&self, id: &str, record: &TriggerRunRecord) -> Result<()> {
+    pub fn record_run(&self, id: &str, record: &TriggerRunRecord) -> TriggerResult<()> {
         let path = self.runs_path(id);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -316,6 +352,7 @@ mod tests {
             code: "echo hi".to_string(),
             interpreter: None,
             enabled: true,
+            sandboxed: true,
             created_by: None,
             created_at: Some(0),
         }

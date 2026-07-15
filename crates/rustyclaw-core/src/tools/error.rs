@@ -56,6 +56,9 @@ pub enum ToolError {
     /// Cron scheduler failure.
     #[error(transparent)]
     Cron(#[from] crate::cron::CronError),
+    /// Trigger-store failure.
+    #[error(transparent)]
+    TriggerStore(#[from] crate::triggers::TriggerStoreError),
     /// Memory consolidation failure.
     #[error(transparent)]
     Consolidation(#[from] crate::memory_consolidation::ConsolidationError),

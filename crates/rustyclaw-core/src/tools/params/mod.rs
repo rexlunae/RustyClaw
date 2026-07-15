@@ -1035,6 +1035,16 @@ pub fn triggers_create_params() -> Vec<ToolParam> {
             param_type: "boolean".into(),
             required: false,
         },
+        ToolParam {
+            name: "sandboxed".into(),
+            description: "Run the trigger's process inside the sandbox (default: true). \
+                          Sandboxed triggers keep network + their agent's workspace but lose \
+                          the rest of the host. Set false only when the trigger genuinely \
+                          needs broader host access."
+                .into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
     ]
 }
 
@@ -1083,6 +1093,12 @@ pub fn triggers_update_params() -> Vec<ToolParam> {
         ToolParam {
             name: "enabled".into(),
             description: "New enabled state.".into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "sandboxed".into(),
+            description: "New sandbox setting (true = run inside the sandbox).".into(),
             param_type: "boolean".into(),
             required: false,
         },

@@ -330,10 +330,12 @@ pub async fn run_gateway(
         rustyclaw_core::runtime_ctx::set_trigger_notify(trigger_notify.clone());
 
         let mgr_settings_dir = config.settings_dir.clone();
+        let mgr_workspace = config.workspace_dir();
         let mgr_cancel = cancel.child_token();
         tokio::spawn(async move {
             if let Err(e) = crate::trigger_manager::run_trigger_manager(
                 mgr_settings_dir,
+                mgr_workspace,
                 fire_tx,
                 trigger_notify,
                 mgr_cancel,

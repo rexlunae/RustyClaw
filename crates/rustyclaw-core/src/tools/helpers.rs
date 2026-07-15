@@ -42,6 +42,35 @@ pub fn sandbox() -> Option<&'static Sandbox> {
     SANDBOX.get()
 }
 
+/// Build the sandbox-wrapped `(program, args)` for running `interpreter` as a
+/// long-lived child that reads its script from stdin, honoring the active
+/// sandbox policy with the given working directory.
+///
+/// Returns `None` when no child-wrappable sandbox is active (no sandbox
+/// configured, mode `None`/`PathValidation`, or in-process-only `Landlock`),
+/// in which case the caller should spawn the interpreter directly. Used by
+/// the gateway's trigger supervisor so sandboxed triggers run under the same
+/// isolation as tool commands while still receiving their code over stdin
+/// (never on disk, never in argv). Network and the workspace remain available
+/// under the standard policy, so trigger callbacks keep working.
+pub fn sandbox_wrap_interpreter(interpreter: &str, cwd: &Path) -> Option<(String, Vec<String>)> {
+    let sb = SANDBOX.get()?;
+    let mut policy = sb.policy.clone();
+    policy.workspace = cwd.to_path_buf();
+    match sb.effective_mode() {
+        SandboxMode::Bubblewrap | SandboxMode::LandlockBwrap => {
+            Some(crate::sandbox::wrap_with_bwrap(interpreter, &policy))
+        }
+        SandboxMode::MacOSSandbox => Some(crate::sandbox::wrap_with_macos_sandbox(
+            interpreter,
+            &policy,
+        )),
+        // None / PathValidation / Landlock(in-process) / Docker(no stdin
+        // streaming) / Auto(already resolved): spawn directly.
+        _ => None,
+    }
+}
+
 /// Run a command through the sandbox (or unsandboxed if not initialized).
 pub fn run_sandboxed_command(
     command: &str,
