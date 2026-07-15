@@ -254,11 +254,20 @@ impl LocalEngine for LlamaCppEngine {
                 .to_string()
         });
 
+        // Use the Hugging Face CLI (`hf` or legacy `huggingface-cli`).
+        let Some(hf) = crate::engines::downloaders::hf_cli().await else {
+            anyhow::bail!("{}", crate::engines::downloaders::HF_CLI_MISSING_HINT);
+        };
+
+        // Fuzzy names are resolved to a repo id by searching the Hub.
+        let (repo, note) = crate::engines::hub::resolve_for_pull(model, true).await?;
+        let model = repo.as_str();
+
         if let Some(ref tx) = sink {
             let _ = tx
                 .send(PullProgress {
                     model: model.to_string(),
-                    status: "downloading".into(),
+                    status: note.unwrap_or_else(|| "downloading".into()),
                     percent: 0.0,
                     downloaded_bytes: 0,
                     total_bytes: 0,
@@ -266,10 +275,6 @@ impl LocalEngine for LlamaCppEngine {
                 .await;
         }
 
-        // Use the Hugging Face CLI (`hf` or legacy `huggingface-cli`).
-        let Some(hf) = crate::engines::downloaders::hf_cli().await else {
-            anyhow::bail!("{}", crate::engines::downloaders::HF_CLI_MISSING_HINT);
-        };
         let result = Self::sh(&format!(
             "{} download {} --local-dir {} 2>&1",
             hf,

@@ -187,6 +187,9 @@ impl LocalEngine for HuggingFaceDownloader {
     }
 
     /// Download a Hugging Face repo into the shared cache.
+    ///
+    /// `model` doesn't have to be an exact repo id — fuzzy names are
+    /// resolved by searching the Hub first (see [`hub::resolve_for_pull`]).
     async fn pull(
         &self,
         model: &str,
@@ -196,9 +199,21 @@ impl LocalEngine for HuggingFaceDownloader {
         let Some(bin) = hf_cli().await else {
             anyhow::bail!("{}", HF_CLI_MISSING_HINT);
         };
+        let (repo, note) = super::hub::resolve_for_pull(model, false).await?;
+        if let (Some(sink), Some(note)) = (sink.as_ref(), note) {
+            let _ = sink
+                .send(PullProgress {
+                    model: repo.clone(),
+                    status: note,
+                    percent: 0.0,
+                    downloaded_bytes: 0,
+                    total_bytes: 0,
+                })
+                .await;
+        }
         stream_shell(
-            &format!("{} download {} 2>&1", bin, sh_quote(model)),
-            model,
+            &format!("{} download {} 2>&1", bin, sh_quote(&repo)),
+            &repo,
             sink.as_ref(),
         )
         .await

@@ -181,6 +181,13 @@ pub(crate) enum GwEvent {
         provider: String,
         models: Vec<String>,
     },
+    /// Hugging Face Hub repo ids loaded for model-name autocomplete
+    /// (`/engines pull|files|search …`). `query` echoes the search text
+    /// the results answer, so stale responses can be told apart.
+    HubModelCompletionsLoaded {
+        query: String,
+        models: Vec<String>,
+    },
     /// Model fetch is in progress (show loading spinner).
     FetchModelsLoading {
         provider: String,

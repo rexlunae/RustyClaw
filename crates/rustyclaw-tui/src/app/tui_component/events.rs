@@ -138,6 +138,9 @@ pub(super) fn apply_gw_event(
         mut model_completion_provider,
         mut model_completion_models,
         mut model_completion_loading,
+        mut hub_completion_query,
+        mut hub_completion_models,
+        mut hub_completion_loading,
         mut prompt_attachments,
         mut show_secrets_dialog,
         mut secrets_dialog_data,
@@ -1011,6 +1014,37 @@ pub(super) fn apply_gw_event(
                 if partial.starts_with("model") {
                     let filtered =
                         rustyclaw_view::build_slash_completions(&provider, Some(&models), partial);
+                    if filtered.is_empty() {
+                        command_completions.set(Vec::new());
+                        command_selected.set(None);
+                    } else {
+                        command_completions.set(filtered);
+                        command_selected.set(None);
+                    }
+                }
+            }
+        }
+        GwEvent::HubModelCompletionsLoaded { query, models } => {
+            hub_completion_query.set(Some(query.clone()));
+            hub_completion_models.set(models.clone());
+            if hub_completion_loading.read().as_deref() == Some(query.as_str()) {
+                hub_completion_loading.set(None);
+            }
+
+            // If the user is still typing an /engines model argument,
+            // rebuild the dropdown so the search results appear without
+            // waiting for another keystroke (same reasoning as the
+            // ModelCompletionsLoaded arm above). `entries_from_cache`
+            // narrows by substring when the input has moved past the
+            // query these results answer.
+            let current_input = input_value.read().clone();
+            if let Some(partial) = current_input.strip_prefix('/') {
+                if let Some(ctx) = rustyclaw_view::hub_completion_context(partial) {
+                    let provider = dynamic_provider_id.read().clone().unwrap_or_default();
+                    let entries = ctx.entries_from_cache(Some(query.as_str()), &models);
+                    let filtered = rustyclaw_view::build_slash_completions_with_hub(
+                        &provider, None, &entries, partial,
+                    );
                     if filtered.is_empty() {
                         command_completions.set(Vec::new());
                         command_selected.set(None);

@@ -400,7 +400,8 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                     .to_string(),
                 "  /engines start <engine>  - Start a local engine (also: stop/install)"
                     .to_string(),
-                "  /engines pull <e> <m>    - Download a model for an engine".to_string(),
+                "  /engines pull <e> <m>    - Download a model (fuzzy names are searched on the Hub)"
+                    .to_string(),
                 "  /engines search <query>  - Find models on the Hugging Face Hub".to_string(),
                 "  /engines models <engine> - List an engine's models (also: load/unload/remove)"
                     .to_string(),
@@ -880,7 +881,8 @@ fn handle_engines_subcommand(args: &[&str]) -> CommandResponse {
             "Usage: /engines — open the engines panel".to_string(),
             "       /engines start|stop|install <engine>".to_string(),
             "       /engines models <engine>".to_string(),
-            "       /engines pull <engine> <model>".to_string(),
+            "       /engines pull <engine> <model> — fuzzy names are resolved via Hub search"
+                .to_string(),
             "       /engines load|unload|remove <engine> <model>".to_string(),
             "       /engines search <query> — find models on the Hugging Face Hub".to_string(),
             "       /engines files <repo> — list a repo's GGUF files".to_string(),

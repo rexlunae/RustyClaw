@@ -126,6 +126,11 @@ pub(super) struct Ui {
     pub model_completion_provider: State<Option<String>>,
     pub model_completion_models: State<Vec<String>>,
     pub model_completion_loading: State<Option<String>>,
+    /// Hugging Face Hub autocomplete: the query the loaded repo ids
+    /// answer, the ids themselves, and the query currently being fetched.
+    pub hub_completion_query: State<Option<String>>,
+    pub hub_completion_models: State<Vec<String>>,
+    pub hub_completion_loading: State<Option<String>>,
     pub prompt_attachments: State<Vec<rustyclaw_view::PromptAttachment>>,
     pub show_secrets_dialog: State<bool>,
     pub secrets_dialog_data: State<Vec<rustyclaw_view::SecretInfoData>>,
