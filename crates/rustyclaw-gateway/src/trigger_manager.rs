@@ -284,24 +284,32 @@ async fn spawn_trigger(
 
     // Sandboxed triggers run the interpreter under the isolation wrapper
     // (bwrap / macOS seatbelt) with the code still delivered over stdin.
-    // When no child-wrappable sandbox is active, or the trigger opted out,
-    // spawn the interpreter directly.
-    let wrapped = if def.sandboxed {
-        rustyclaw_core::tools::sandbox_wrap_interpreter(def.interpreter(), &workspace)
-    } else {
-        None
-    };
-    let (program, args): (String, Vec<String>) = match wrapped {
-        Some((prog, args)) => (prog, args),
-        None => {
-            if def.sandboxed {
-                debug!(
+    // The opted-out case spawns the interpreter directly.
+    //
+    // Fail closed: if a trigger requests sandboxing but no child-wrappable
+    // sandbox is active (mode None/PathValidation/Landlock-only, or bwrap
+    // unavailable), refuse to start it rather than silently running its code
+    // with full host access under a "sandboxed" label. The operator can
+    // configure a sandbox or set the trigger `sandboxed = false` to accept
+    // unsandboxed execution explicitly.
+    let (program, args): (String, Vec<String>) = if def.sandboxed {
+        match rustyclaw_core::tools::sandbox_wrap_interpreter(def.interpreter(), &workspace) {
+            Some((prog, args)) => (prog, args),
+            None => {
+                warn!(
                     trigger = %def.id,
-                    "No child-wrappable sandbox active; running trigger unsandboxed"
+                    "Trigger requests sandboxing but no child-wrappable sandbox is active; \
+                     refusing to run it unsandboxed. Configure a sandbox or set the trigger \
+                     sandboxed=false to run without isolation."
                 );
+                return Err(anyhow::anyhow!(
+                    "trigger '{}' is sandboxed but no sandbox is available on this host",
+                    def.id
+                ));
             }
-            (def.interpreter().to_string(), Vec::new())
         }
+    } else {
+        (def.interpreter().to_string(), Vec::new())
     };
 
     let token = new_token();
