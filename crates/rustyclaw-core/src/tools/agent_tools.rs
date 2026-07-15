@@ -62,6 +62,20 @@ pub fn exec_agents_delete(args: &Value, _workspace_dir: &Path) -> ToolResult {
     tracing::Span::current().record("agent_id", agent_id);
     debug!("Deleting agent");
 
+    // Refuse to delete the agent this conversation is running as — its
+    // session state would be removed out from under the live connection.
+    // (Best-effort: see `runtime_ctx::get_active_agent` for the concurrency
+    // caveat. The gateway's own AgentDelete frame handler enforces the same
+    // rule per-connection.)
+    if crate::runtime_ctx::get_active_agent().as_deref() == Some(agent_id) {
+        return Err(format!(
+            "Cannot delete agent '{}' while it is the active agent — switch to \
+             another agent first.",
+            agent_id
+        )
+        .into());
+    }
+
     registry()?.delete(agent_id).map_err(|e| e.to_string())?;
     Ok(format!("Agent '{}' deleted.", agent_id))
 }

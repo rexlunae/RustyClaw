@@ -89,6 +89,14 @@ pub fn get_agent_registry() -> Option<crate::agents::AgentRegistry> {
 }
 
 /// Record which agent the currently-dispatching conversation belongs to.
+///
+/// NOTE: like the rest of [`RuntimeInfo`], this is a process-wide value with
+/// last-writer-wins semantics. With multiple concurrent client connections
+/// on different agents it may reflect another connection's agent, so treat
+/// it as *best-effort* context: it feeds provenance metadata
+/// (`AgentManifest::created_by`) and advisory guards, never authorization
+/// or routing decisions. Per-connection routing state lives in the
+/// gateway's `AgentSession`.
 pub fn set_active_agent(agent_id: &str) {
     if let Ok(mut ctx) = runtime_ctx().lock() {
         ctx.active_agent = Some(agent_id.to_string());
@@ -96,6 +104,7 @@ pub fn set_active_agent(agent_id: &str) {
 }
 
 /// Agent id of the currently-dispatching conversation, when known.
+/// Best-effort under concurrent connections — see [`set_active_agent`].
 pub fn get_active_agent() -> Option<String> {
     runtime_ctx()
         .lock()
