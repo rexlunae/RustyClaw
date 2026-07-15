@@ -9,6 +9,10 @@
 //! the gateway run the trigger's target agent with that context (see
 //! [`crate::trigger_dispatch`]).
 //!
+//! Trigger processes run inside the sandbox layer by default (opt out per
+//! trigger via `TriggerDef::sandboxed`); the sandbox keeps network access so
+//! callbacks work and binds the target agent's workspace.
+//!
 //! The manager re-syncs against the encrypted store when woken through
 //! [`rustyclaw_core::runtime_ctx::notify_triggers_changed`] (trigger tools
 //! call it after every edit) and on a periodic tick, so definition changes
@@ -64,6 +68,7 @@ struct RunningTrigger {
 /// gateway's standalone listen loop.
 pub async fn run_trigger_manager(
     settings_dir: PathBuf,
+    workspace_root: PathBuf,
     fire_tx: mpsc::Sender<TriggerFire>,
     notify: Arc<Notify>,
     cancel: CancellationToken,
@@ -109,7 +114,7 @@ pub async fn run_trigger_manager(
     let cooldown_interval = (RESPAWN_COOLDOWN / 2).max(Duration::from_secs(1));
 
     loop {
-        sync(endpoint, &store, &mut running, &tokens).await;
+        sync(endpoint, &workspace_root, &store, &mut running, &tokens).await;
         let interval = if running.values().any(|rt| rt.exited_at.is_some()) {
             cooldown_interval
         } else {
@@ -138,6 +143,7 @@ pub async fn run_trigger_manager(
 /// triggers, stop removed/disabled ones, respawn crashed ones (rate-limited).
 async fn sync(
     endpoint: std::net::SocketAddr,
+    workspace_root: &std::path::Path,
     store: &TriggerStore,
     running: &mut HashMap<String, RunningTrigger>,
     tokens: &TokenMap,
@@ -222,7 +228,7 @@ async fn sync(
         if running.contains_key(id) {
             continue;
         }
-        match spawn_trigger(def, endpoint).await {
+        match spawn_trigger(def, endpoint, workspace_root).await {
             Ok((child, token)) => {
                 tokens
                     .lock()
@@ -256,18 +262,51 @@ async fn sync(
 async fn spawn_trigger(
     def: &rustyclaw_core::triggers::TriggerDef,
     endpoint: std::net::SocketAddr,
+    workspace_root: &std::path::Path,
 ) -> Result<(tokio::process::Child, String)> {
     // Validate the interpreter command through the same safety check the
     // managed-services supervisor uses before spawning any subprocess
     // (STYLE_GUIDE.md: shell/subprocess execution goes through the sandbox
-    // layer). This bounds *how* the trigger is launched; the trigger's own
-    // code is user-authored and runs as a supervised program, like a
-    // managed service.
+    // layer).
     rustyclaw_core::tools::validate_command_safe(def.interpreter())
         .map_err(|e| anyhow::anyhow!("Trigger interpreter rejected: {}", e))?;
 
+    // Sandbox cwd is the target agent's workspace (mirrors Config layout:
+    // `main` uses the installation workspace, others get a private one).
+    let workspace = if def.agent_id == rustyclaw_core::agents::MAIN_AGENT_ID {
+        workspace_root.to_path_buf()
+    } else {
+        workspace_root
+            .parent()
+            .map(|p| p.join("agents").join(&def.agent_id).join("workspace"))
+            .unwrap_or_else(|| workspace_root.to_path_buf())
+    };
+
+    // Sandboxed triggers run the interpreter under the isolation wrapper
+    // (bwrap / macOS seatbelt) with the code still delivered over stdin.
+    // When no child-wrappable sandbox is active, or the trigger opted out,
+    // spawn the interpreter directly.
+    let wrapped = if def.sandboxed {
+        rustyclaw_core::tools::sandbox_wrap_interpreter(def.interpreter(), &workspace)
+    } else {
+        None
+    };
+    let (program, args): (String, Vec<String>) = match wrapped {
+        Some((prog, args)) => (prog, args),
+        None => {
+            if def.sandboxed {
+                debug!(
+                    trigger = %def.id,
+                    "No child-wrappable sandbox active; running trigger unsandboxed"
+                );
+            }
+            (def.interpreter().to_string(), Vec::new())
+        }
+    };
+
     let token = new_token();
-    let mut child = tokio::process::Command::new(def.interpreter())
+    let mut cmd = tokio::process::Command::new(&program);
+    cmd.args(&args)
         .env(ENV_TRIGGER_ID, &def.id)
         .env(ENV_TRIGGER_AGENT, &def.agent_id)
         .env(ENV_TRIGGER_ENDPOINT, endpoint.to_string())
@@ -275,14 +314,16 @@ async fn spawn_trigger(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
-        .kill_on_drop(true)
+        .kill_on_drop(true);
+    let mut child = cmd
         .spawn()
         .with_context(|| format!("Failed to spawn trigger '{}'", def.id))?;
 
     // Write the code to the child's stdin and close it (EOF), so the
-    // interpreter reads it as its script. The async write yields while the
-    // interpreter drains the pipe, so a script larger than the pipe buffer
-    // cannot deadlock.
+    // interpreter reads it as its script. Under a sandbox wrapper the code
+    // flows through the wrapper's inherited stdin to the inner interpreter.
+    // The async write yields while the interpreter drains the pipe, so a
+    // script larger than the pipe buffer cannot deadlock.
     if let Some(mut stdin) = child.stdin.take() {
         let code = def.code.clone();
         stdin
@@ -375,13 +416,19 @@ async fn handle_fire_connection(
     };
 
     debug!(trigger = %trigger_id, agent = %agent_id, "Trigger fired");
-    let _ = fire_tx
+    if fire_tx
         .send(TriggerFire {
             trigger_id,
             agent_id,
             context: req.context,
         })
-        .await;
+        .await
+        .is_err()
+    {
+        // The fire consumer is gone (e.g. gateway shutting down): tell the
+        // trigger its event was not accepted rather than falsely ack'ing it.
+        return respond(&mut stream, 503, "fire consumer unavailable").await;
+    }
     respond(&mut stream, 202, "accepted").await
 }
 
@@ -452,6 +499,7 @@ sleep 600
             .into(),
             interpreter: Some("bash".into()),
             enabled: true,
+            sandboxed: false,
             created_by: None,
             created_at: Some(0),
         })?;
@@ -461,6 +509,7 @@ sleep 600
         let cancel = CancellationToken::new();
         let mgr = tokio::spawn(run_trigger_manager(
             tmp.path().to_path_buf(),
+            tmp.path().join("workspace"),
             fire_tx,
             notify,
             cancel.clone(),
@@ -499,22 +548,24 @@ sleep 600
             code: "exit 1".into(),
             interpreter: Some("sh".into()),
             enabled: true,
+            sandboxed: false,
             created_by: None,
             created_at: Some(0),
         })?;
 
         let endpoint: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
+        let workspace = tmp.path().join("workspace");
         let tokens: TokenMap = Arc::new(Mutex::new(HashMap::new()));
         let mut running: HashMap<String, RunningTrigger> = HashMap::new();
 
         // First sync spawns the (doomed) process.
-        sync(endpoint, &store, &mut running, &tokens).await;
+        sync(endpoint, &workspace, &store, &mut running, &tokens).await;
         assert!(running.contains_key("crasher"));
 
         // Give it time to exit, then sync again: it should be reaped and
         // held back as a tombstone (still present, NOT respawned).
         tokio::time::sleep(Duration::from_millis(300)).await;
-        sync(endpoint, &store, &mut running, &tokens).await;
+        sync(endpoint, &workspace, &store, &mut running, &tokens).await;
         let rt = running
             .get("crasher")
             .expect("crashed trigger should be tombstoned, not dropped");
@@ -530,7 +581,7 @@ sleep 600
         // the respawn does NOT depend on try_wait succeeding twice.
         running.get_mut("crasher").unwrap().exited_at =
             Instant::now().checked_sub(RESPAWN_COOLDOWN + Duration::from_secs(1));
-        sync(endpoint, &store, &mut running, &tokens).await;
+        sync(endpoint, &workspace, &store, &mut running, &tokens).await;
         let rt = running
             .get("crasher")
             .expect("trigger should be respawned after cooldown");

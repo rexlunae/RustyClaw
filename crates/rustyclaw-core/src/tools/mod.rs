@@ -62,8 +62,8 @@ use swarm_tools::{
 // Re-export helpers for external use
 pub use helpers::{
     SharedVault, VAULT_ACCESS_DENIED, command_references_credentials, expand_tilde, init_sandbox,
-    is_protected_path, process_manager, run_sandboxed_command, sandbox, sanitize_tool_output,
-    set_credentials_dir, set_vault, validate_command_safe, vault,
+    is_protected_path, process_manager, run_sandboxed_command, sandbox, sandbox_wrap_interpreter,
+    sanitize_tool_output, set_credentials_dir, set_vault, validate_command_safe, vault,
 };
 
 // File operations
