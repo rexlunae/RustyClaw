@@ -44,6 +44,7 @@ pub async fn execute_secrets_tool(
         "secrets_get" => exec_secrets_get(args, vault).await,
         "secrets_store" => exec_secrets_store(args, vault).await,
         "secrets_set_policy" => exec_secrets_set_policy(args, vault).await,
+        "secrets_link_trigger" => exec_secrets_link_trigger(args, vault).await,
         _ => {
             warn!("Unknown secrets tool requested");
             Err(format!("Unknown secrets tool: {}", name).into())
@@ -96,6 +97,7 @@ pub async fn exec_secrets_get(args: &serde_json::Value, vault: &SharedVault) -> 
         user_approved: false,
         authenticated: false,
         active_skill: None,
+        active_trigger: None,
     };
 
     let mut mgr = vault.lock().await;
@@ -314,6 +316,42 @@ pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVau
 
     debug!(credential = cred_name, "Policy updated successfully");
     Ok(format!("Policy for '{}' set to '{}'.", cred_name, policy,))
+}
+
+/// Link or unlink a secret to an external trigger (manages the trigger's
+/// access to that secret in the vault).
+#[instrument(skip(args, vault))]
+pub async fn exec_secrets_link_trigger(
+    args: &serde_json::Value,
+    vault: &SharedVault,
+) -> ToolResult {
+    let cred_name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: name".to_string())?;
+    let trigger_id = args
+        .get("triggerId")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: triggerId".to_string())?;
+    let allow = args.get("allow").and_then(|v| v.as_bool()).unwrap_or(true);
+
+    let mut mgr = vault.lock().await;
+    mgr.set_credential_trigger_link(cred_name, trigger_id, allow)
+        .map_err(|e| {
+            warn!(credential = cred_name, error = %e, "Failed to link secret to trigger");
+            format!("Failed to update trigger link: {}", e)
+        })?;
+
+    Ok(format!(
+        "Secret '{}' is now {} trigger '{}'. The trigger reads it at runtime from the gateway.",
+        cred_name,
+        if allow {
+            "accessible to"
+        } else {
+            "revoked from"
+        },
+        trigger_id
+    ))
 }
 
 /// Handle a vault/secrets client frame against the shared vault.

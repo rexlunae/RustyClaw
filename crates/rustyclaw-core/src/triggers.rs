@@ -13,6 +13,12 @@
 //! uses an auto-generated keyfile (never the user's vault password) so
 //! trigger definitions can be loaded when the gateway boots, even while the
 //! main secrets vault is password-locked.
+//!
+//! **Secrets:** trigger code must not embed API keys or tokens inline.
+//! Instead, store the secret in the secrets vault, link it to the trigger
+//! (which manages the permission there), and have the trigger fetch it at
+//! runtime by POSTing `{"token", "name"}` to the gateway's `/secret`
+//! callback. See [`crate::secrets::SecretsManager::get_secret_for_trigger`].
 
 use securestore::KeySource;
 use serde::{Deserialize, Serialize};

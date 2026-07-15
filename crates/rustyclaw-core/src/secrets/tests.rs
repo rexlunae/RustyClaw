@@ -655,6 +655,50 @@ fn test_policy_skill_only() {
 }
 
 #[test]
+fn test_trigger_scoped_secret() {
+    let dir = temp_dir();
+    let mut m = SecretsManager::new(&dir);
+    let entry = SecretEntry {
+        label: "stripe".to_string(),
+        kind: SecretKind::ApiKey,
+        policy: AccessPolicy::WithApproval,
+        description: None,
+        disabled: false,
+    };
+    m.store_credential("stripe", &entry, "sk_live_ABC", None)
+        .unwrap();
+
+    // Not linked to any trigger → denied.
+    assert!(m.get_secret_for_trigger("stripe", "watcher").is_err());
+
+    // Link to "watcher" → only that trigger can read it.
+    m.set_credential_trigger_link("stripe", "watcher", true)
+        .unwrap();
+    assert_eq!(m.credential_triggers("stripe"), vec!["watcher".to_string()]);
+    assert_eq!(
+        m.get_secret_for_trigger("stripe", "watcher")
+            .unwrap()
+            .as_deref(),
+        Some("sk_live_ABC")
+    );
+    assert!(m.get_secret_for_trigger("stripe", "other").is_err());
+
+    // A missing secret returns Ok(None), not an error.
+    assert!(
+        m.get_secret_for_trigger("nope", "watcher")
+            .unwrap()
+            .is_none()
+    );
+
+    // Unlink → denied again.
+    m.set_credential_trigger_link("stripe", "watcher", false)
+        .unwrap();
+    assert!(m.get_secret_for_trigger("stripe", "watcher").is_err());
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
 fn test_delete_credential() {
     let dir = temp_dir();
     let mut m = SecretsManager::new(&dir);

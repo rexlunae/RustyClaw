@@ -335,6 +335,17 @@ pub static SECRETS_SET_POLICY: ToolDef = ToolDef {
     execute: exec_secrets_stub,
 };
 
+pub static SECRETS_LINK_TRIGGER: ToolDef = ToolDef {
+    name: "secrets_link_trigger",
+    description: "Grant or revoke an external trigger's access to a vault secret. Linking sets \
+                  the secret's policy so only the named trigger(s) can read it; the trigger \
+                  fetches the value at runtime from the gateway. Use this instead of embedding \
+                  secrets in trigger code: store the secret with secrets_store, then link it to \
+                  the trigger here.",
+    parameters: vec![],
+    execute: exec_secrets_stub,
+};
+
 pub static GATEWAY: ToolDef = ToolDef {
     name: "gateway",
     description: "Manage the gateway daemon. Actions: restart (restart gateway), \
