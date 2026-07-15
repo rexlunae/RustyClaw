@@ -55,7 +55,11 @@ pub const ENV_TRIGGER_ENDPOINT: &str = "RUSTYCLAW_TRIGGER_ENDPOINT";
 pub const ENV_TRIGGER_TOKEN: &str = "RUSTYCLAW_TRIGGER_TOKEN";
 
 /// One trigger definition.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+///
+/// `Debug` is implemented manually to redact `code`, which routinely embeds
+/// API keys / webhook secrets — a derived `Debug` would leak them into logs
+/// or panic output.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TriggerDef {
     /// Stable id (same character set as agent ids).
     pub id: String,
@@ -97,6 +101,27 @@ pub struct TriggerDef {
 
 fn default_true() -> bool {
     true
+}
+
+impl std::fmt::Debug for TriggerDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TriggerDef")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("description", &self.description)
+            .field("agent_id", &self.agent_id)
+            // Redacted: `code` may embed API keys / webhook secrets.
+            .field(
+                "code",
+                &format_args!("<{} bytes redacted>", self.code.len()),
+            )
+            .field("interpreter", &self.interpreter)
+            .field("enabled", &self.enabled)
+            .field("sandboxed", &self.sandboxed)
+            .field("created_by", &self.created_by)
+            .field("created_at", &self.created_at)
+            .finish()
+    }
 }
 
 impl TriggerDef {
@@ -465,6 +490,17 @@ mod tests {
 
         assert!(store.get("../escape").unwrap().is_none());
         assert!(store.remove("../escape").is_err());
+    }
+
+    #[test]
+    fn debug_redacts_code() {
+        let mut d = def("t");
+        d.code = "curl -H 'Authorization: Bearer SUPERSECRET' https://x".to_string();
+        let dbg = format!("{:?}", d);
+        assert!(!dbg.contains("SUPERSECRET"), "code must be redacted: {dbg}");
+        assert!(dbg.contains("redacted"));
+        // Other fields still visible for diagnostics.
+        assert!(dbg.contains("\"t\""));
     }
 
     #[test]
