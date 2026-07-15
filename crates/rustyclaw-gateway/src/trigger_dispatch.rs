@@ -168,6 +168,41 @@ async fn run_inner(
         let mut tool_results: Vec<ToolCallResult> = Vec::new();
         for tc in &model_resp.tool_calls {
             debug!(trigger = %fire.trigger_id, tool = %tc.name, "Trigger turn tool call");
+
+            // Honor the user's per-tool permission policy. A trigger-fired
+            // turn is fully autonomous — there is no user present to answer
+            // an approval prompt — so anything not outright `Allow` is
+            // refused (Ask cannot be satisfied headlessly; SkillOnly has no
+            // active skill here; Deny is Deny).
+            let permission = config
+                .tool_permissions
+                .get(&tc.name)
+                .cloned()
+                .unwrap_or_default();
+            if !matches!(permission, rustyclaw_core::tools::ToolPermission::Allow) {
+                let reason = match permission {
+                    rustyclaw_core::tools::ToolPermission::Deny => {
+                        "denied by user policy".to_string()
+                    }
+                    rustyclaw_core::tools::ToolPermission::Ask => {
+                        "requires user approval, which is unavailable in an autonomous \
+                         trigger-fired run"
+                            .to_string()
+                    }
+                    rustyclaw_core::tools::ToolPermission::SkillOnly(_) => {
+                        "restricted to skill invocations".to_string()
+                    }
+                    rustyclaw_core::tools::ToolPermission::Allow => unreachable!(),
+                };
+                tool_results.push(ToolCallResult {
+                    id: tc.id.clone(),
+                    name: tc.name.clone(),
+                    output: format!("Tool '{}' {}.", tc.name, reason),
+                    is_error: true,
+                });
+                continue;
+            }
+
             let (output, is_error) = if tools::is_secrets_tool(&tc.name) {
                 match secrets_handler::execute_secrets_tool(&tc.name, &tc.arguments, vault).await {
                     Ok(text) => (text, false),
