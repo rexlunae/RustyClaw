@@ -224,6 +224,90 @@ pub async fn list_gguf_files(repo: &str) -> Result<Vec<HubFile>> {
     Ok(files)
 }
 
+// ── Fuzzy repo resolution ───────────────────────────────────────────────────
+
+/// Outcome of resolving a possibly-fuzzy model name to a Hub repo id.
+#[derive(Debug, Clone)]
+pub enum RepoResolution {
+    /// The input was already a well-formed repo id — used as-is.
+    Exact(String),
+    /// A single confident match found by searching the Hub.
+    Resolved(HubModel),
+    /// Several plausible matches; the caller should ask the user to pick.
+    Ambiguous(Vec<HubModel>),
+    /// The search returned nothing.
+    NotFound,
+}
+
+/// Resolve a model name to a Hub repo id, searching when it isn't one.
+///
+/// A well-formed `namespace/name` id is passed through untouched (no
+/// network round-trip); anything else — a bare model name, a keyword —
+/// is looked up on the Hub, most-downloaded first.
+pub async fn resolve_repo(query: &str, gguf_only: bool) -> Result<RepoResolution> {
+    let query = query.trim().trim_matches('/');
+    if valid_repo_id(query) {
+        return Ok(RepoResolution::Exact(query.to_string()));
+    }
+    let results = search_models(query, gguf_only, 8).await?;
+    Ok(pick_resolution(query, results))
+}
+
+/// Decide what a search result set means for a fuzzy query.
+///
+/// Confident (auto-resolvable) when the repo's name segment equals the
+/// query, or when the search returned exactly one hit; otherwise the
+/// choice is surfaced to the user rather than guessed.
+fn pick_resolution(query: &str, results: Vec<HubModel>) -> RepoResolution {
+    if results.is_empty() {
+        return RepoResolution::NotFound;
+    }
+    let query_lower = query.to_lowercase();
+    if let Some(exact) = results.iter().find(|m| {
+        m.id.split('/')
+            .nth(1)
+            .is_some_and(|name| name.to_lowercase() == query_lower)
+    }) {
+        return RepoResolution::Resolved(exact.clone());
+    }
+    if results.len() == 1 {
+        return RepoResolution::Resolved(results[0].clone());
+    }
+    RepoResolution::Ambiguous(results)
+}
+
+/// Resolve a pull argument to a concrete repo id.
+///
+/// Returns the repo id plus a note when the input was resolved by search
+/// (so the UI can show what actually gets downloaded). Ambiguous or
+/// unmatched names become errors that list the candidates — a pull is a
+/// multi-gigabyte download, so a wrong guess is worse than a re-prompt.
+pub async fn resolve_for_pull(model: &str, gguf_only: bool) -> Result<(String, Option<String>)> {
+    match resolve_repo(model, gguf_only).await? {
+        RepoResolution::Exact(id) => Ok((id, None)),
+        RepoResolution::Resolved(m) => {
+            let note = format!("'{}' matched {} on the Hugging Face Hub.", model, m.id);
+            Ok((m.id, Some(note)))
+        }
+        RepoResolution::Ambiguous(matches) => {
+            let list = matches
+                .iter()
+                .map(|m| format!("  {}", m.display_line()))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Err(anyhow!(
+                "'{}' matches several Hugging Face repos — pull one by its full id:\n{}",
+                model,
+                list
+            ))
+        }
+        RepoResolution::NotFound => Err(anyhow!(
+            "No Hugging Face models found matching '{}'. Try /engines search <query>.",
+            model
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -267,6 +351,62 @@ mod tests {
             size: 2_500_000_000,
         };
         assert_eq!(f.display_line(), "model-Q4_K_M.gguf · 2.5 GB");
+    }
+
+    fn model(id: &str, downloads: u64) -> HubModel {
+        HubModel {
+            id: id.into(),
+            downloads,
+            likes: 0,
+            tags: vec!["gguf".into()],
+        }
+    }
+
+    #[test]
+    fn pick_resolution_empty_is_not_found() {
+        assert!(matches!(
+            pick_resolution("qwen", Vec::new()),
+            RepoResolution::NotFound
+        ));
+    }
+
+    #[test]
+    fn pick_resolution_prefers_exact_name_segment() {
+        let results = vec![
+            model("Other/Qwen3-4B-GGUF-imatrix", 900),
+            model("Qwen/Qwen3-4B-GGUF", 500),
+        ];
+        // Case-insensitive name-segment match wins over download order.
+        match pick_resolution("qwen3-4b-gguf", results) {
+            RepoResolution::Resolved(m) => assert_eq!(m.id, "Qwen/Qwen3-4B-GGUF"),
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pick_resolution_single_hit_is_confident() {
+        match pick_resolution("something-rare", vec![model("A/B-GGUF", 10)]) {
+            RepoResolution::Resolved(m) => assert_eq!(m.id, "A/B-GGUF"),
+            other => panic!("expected Resolved, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn pick_resolution_multiple_hits_are_ambiguous() {
+        let results = vec![model("A/qwen-a", 10), model("B/qwen-b", 5)];
+        match pick_resolution("qwen", results) {
+            RepoResolution::Ambiguous(list) => assert_eq!(list.len(), 2),
+            other => panic!("expected Ambiguous, got {:?}", other),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_repo_passes_valid_ids_through_without_searching() {
+        // No network involved for a well-formed id.
+        match resolve_repo("Qwen/Qwen3-4B-GGUF", true).await.unwrap() {
+            RepoResolution::Exact(id) => assert_eq!(id, "Qwen/Qwen3-4B-GGUF"),
+            other => panic!("expected Exact, got {:?}", other),
+        }
     }
 
     #[test]

@@ -400,12 +400,12 @@ impl LocalEngine for JoshuaEngine {
         cfg: &EngineConfig,
         sink: Option<ProgressSink>,
     ) -> Result<String> {
-        // `model` is a Hugging Face repo id (e.g. "Qwen/Qwen3-4B-GGUF").
-        // Joshua needs both the .gguf and its tokenizer.json side by side,
-        // so download the whole repo into a per-repo subdirectory.
+        // `model` names a Hugging Face repo (e.g. "Qwen/Qwen3-4B-GGUF");
+        // fuzzy names are resolved by searching the Hub. Joshua needs both
+        // the .gguf and its tokenizer.json side by side, so download the
+        // whole repo into a per-repo subdirectory.
         let dir = Self::models_dir(cfg);
         std::fs::create_dir_all(&dir)?;
-        let target = dir.join(model.replace('/', "_"));
 
         let Some(hf) = super::downloaders::hf_cli().await else {
             anyhow::bail!(
@@ -415,11 +415,15 @@ impl LocalEngine for JoshuaEngine {
             );
         };
 
+        let (repo, note) = super::hub::resolve_for_pull(model, true).await?;
+        let model = repo.as_str();
+        let target = dir.join(model.replace('/', "_"));
+
         if let Some(ref tx) = sink {
             let _ = tx
                 .send(PullProgress {
                     model: model.to_string(),
-                    status: "downloading".into(),
+                    status: note.unwrap_or_else(|| "downloading".into()),
                     percent: 0.0,
                     downloaded_bytes: 0,
                     total_bytes: 0,

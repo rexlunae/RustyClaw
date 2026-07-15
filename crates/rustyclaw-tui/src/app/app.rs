@@ -118,6 +118,12 @@ pub(crate) enum UserInput {
     FetchModelCompletions {
         provider: String,
     },
+    /// Search the Hugging Face Hub for repo ids matching a partial model
+    /// name (progressive autocomplete for `/engines pull|files|search`).
+    FetchHubModelCompletions {
+        query: String,
+        gguf_only: bool,
+    },
     /// Cancel the current provider-flow dialog
     CancelProviderFlow,
     /// Engines panel: select an engine (fetch its model list)
@@ -328,6 +334,12 @@ impl App {
         let secrets_manager = &mut self.secrets_manager;
         let skill_manager = &mut self.skill_manager;
 
+        // Monotonic sequence for Hub autocomplete requests: each keystroke
+        // bumps it, and an in-flight request only runs its search if it is
+        // still the newest after a short debounce sleep. This collapses
+        // rapid typing into one Hub API call for the final prefix.
+        let hub_fetch_seq = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+
         loop {
             // Poll user_rx (non-blocking on tokio side)
             match user_rx.try_recv() {
@@ -421,6 +433,27 @@ impl App {
                                 });
                             }
                         }
+                    });
+                }
+                Ok(UserInput::FetchHubModelCompletions { query, gguf_only }) => {
+                    use std::sync::atomic::Ordering;
+                    let seq = hub_fetch_seq.fetch_add(1, Ordering::SeqCst) + 1;
+                    let seq_ref = hub_fetch_seq.clone();
+                    let gw_tx2 = gw_tx.clone();
+                    tokio::spawn(async move {
+                        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                        if seq_ref.load(Ordering::SeqCst) != seq {
+                            // A newer keystroke superseded this request.
+                            return;
+                        }
+                        // Autocomplete is best-effort: a failed search just
+                        // means no suggestions, never an error toast.
+                        let models =
+                            rustyclaw_core::engines::hub::search_models(&query, gguf_only, 10)
+                                .await
+                                .map(|models| models.into_iter().map(|m| m.id).collect())
+                                .unwrap_or_default();
+                        let _ = gw_tx2.send(GwEvent::HubModelCompletionsLoaded { query, models });
                     });
                 }
                 Ok(UserInput::Command(cmd)) => {

@@ -91,7 +91,10 @@ pub mod voice;
 pub use app_menu::{AppMenuBar, Menu, MenuAction, MenuEntry, MenuItem, TuiMenuState};
 pub use banner::{BannerAction, BannerActionKind, BannerData, build_banners};
 pub use client::ClientState;
-pub use command_menu::{CommandMenuData, build_slash_completions};
+pub use command_menu::{
+    CommandMenuData, HubCompletionContext, build_slash_completions,
+    build_slash_completions_with_hub, hub_completion_context,
+};
 pub use composer::{
     BottomBarData, ComposerData, DirectoryOption, DirectorySelectorState, PromptAttachment,
     PromptAttachmentKind, build_prompt_with_attachments,

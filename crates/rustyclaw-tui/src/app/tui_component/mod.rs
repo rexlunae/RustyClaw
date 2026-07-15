@@ -183,6 +183,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let model_completion_provider: State<Option<String>> = hooks.use_state(|| None);
     let model_completion_models: State<Vec<String>> = hooks.use_state(Vec::new);
     let model_completion_loading: State<Option<String>> = hooks.use_state(|| None);
+    let hub_completion_query: State<Option<String>> = hooks.use_state(|| None);
+    let hub_completion_models: State<Vec<String>> = hooks.use_state(Vec::new);
+    let hub_completion_loading: State<Option<String>> = hooks.use_state(|| None);
     let prompt_attachments: State<Vec<rustyclaw_view::PromptAttachment>> =
         hooks.use_state(Vec::new);
 
@@ -345,6 +348,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         model_completion_provider,
         model_completion_models,
         model_completion_loading,
+        hub_completion_query,
+        hub_completion_models,
+        hub_completion_loading,
         prompt_attachments,
         show_secrets_dialog,
         secrets_dialog_data,

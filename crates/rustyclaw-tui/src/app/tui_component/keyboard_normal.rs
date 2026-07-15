@@ -123,6 +123,9 @@ pub(super) fn handle_normal_key(
         mut model_completion_provider,
         mut model_completion_models,
         mut model_completion_loading,
+        mut hub_completion_query,
+        mut hub_completion_models,
+        mut hub_completion_loading,
         mut prompt_attachments,
         mut show_secrets_dialog,
         mut secrets_dialog_data,
@@ -787,52 +790,20 @@ pub(super) fn handle_normal_key(
                     text.remove(remove_at);
                     input_value.set(text.clone());
                     input_cursor_offset.set(remove_at);
-                    let current_text = text;
-                    if let Some(partial) = current_text.strip_prefix('/') {
-                        let current_pid = dynamic_provider_id
-                            .read()
-                            .clone()
-                            .unwrap_or_else(|| prop_provider_id.to_string());
-                        if partial.starts_with("model") {
-                            let loaded = model_completion_provider.read().as_deref()
-                                == Some(current_pid.as_str());
-                            let loading = model_completion_loading.read().as_deref()
-                                == Some(current_pid.as_str());
-                            if !loaded && !loading {
-                                model_completion_loading.set(Some(current_pid.clone()));
-                                if let Ok(guard) = tx_for_model_completions.lock() {
-                                    if let Some(ref tx) = *guard {
-                                        let _ = tx.send(UserInput::FetchModelCompletions {
-                                            provider: current_pid.clone(),
-                                        });
-                                    }
-                                }
-                            }
-                        }
-
-                        let live_models = model_completion_models.read().clone();
-                        let live_provider_matches = model_completion_provider.read().as_deref()
-                            == Some(current_pid.as_str());
-                        let filtered = rustyclaw_view::build_slash_completions(
-                            &current_pid,
-                            if live_provider_matches {
-                                Some(live_models.as_slice())
-                            } else {
-                                None
-                            },
-                            partial,
-                        );
-                        if filtered.is_empty() {
-                            command_completions.set(Vec::new());
-                            command_selected.set(None);
-                        } else {
-                            command_completions.set(filtered);
-                            command_selected.set(None);
-                        }
-                    } else {
-                        command_completions.set(Vec::new());
-                        command_selected.set(None);
-                    }
+                    refresh_slash_completions(
+                        &text,
+                        prop_provider_id,
+                        dynamic_provider_id,
+                        model_completion_provider,
+                        model_completion_models,
+                        model_completion_loading,
+                        hub_completion_query,
+                        hub_completion_models,
+                        hub_completion_loading,
+                        command_completions,
+                        command_selected,
+                        tx_for_model_completions,
+                    );
                 }
             }
         }
@@ -842,52 +813,20 @@ pub(super) fn handle_normal_key(
             if cursor < text.len() && text.is_char_boundary(cursor) {
                 text.remove(cursor);
                 input_value.set(text.clone());
-                let current_text = text;
-                if let Some(partial) = current_text.strip_prefix('/') {
-                    let current_pid = dynamic_provider_id
-                        .read()
-                        .clone()
-                        .unwrap_or_else(|| prop_provider_id.to_string());
-                    if partial.starts_with("model") {
-                        let loaded = model_completion_provider.read().as_deref()
-                            == Some(current_pid.as_str());
-                        let loading = model_completion_loading.read().as_deref()
-                            == Some(current_pid.as_str());
-                        if !loaded && !loading {
-                            model_completion_loading.set(Some(current_pid.clone()));
-                            if let Ok(guard) = tx_for_model_completions.lock() {
-                                if let Some(ref tx) = *guard {
-                                    let _ = tx.send(UserInput::FetchModelCompletions {
-                                        provider: current_pid.clone(),
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    let live_models = model_completion_models.read().clone();
-                    let live_provider_matches =
-                        model_completion_provider.read().as_deref() == Some(current_pid.as_str());
-                    let filtered = rustyclaw_view::build_slash_completions(
-                        &current_pid,
-                        if live_provider_matches {
-                            Some(live_models.as_slice())
-                        } else {
-                            None
-                        },
-                        partial,
-                    );
-                    if filtered.is_empty() {
-                        command_completions.set(Vec::new());
-                        command_selected.set(None);
-                    } else {
-                        command_completions.set(filtered);
-                        command_selected.set(None);
-                    }
-                } else {
-                    command_completions.set(Vec::new());
-                    command_selected.set(None);
-                }
+                refresh_slash_completions(
+                    &text,
+                    prop_provider_id,
+                    dynamic_provider_id,
+                    model_completion_provider,
+                    model_completion_models,
+                    model_completion_loading,
+                    hub_completion_query,
+                    hub_completion_models,
+                    hub_completion_loading,
+                    command_completions,
+                    command_selected,
+                    tx_for_model_completions,
+                );
             }
         }
         KeyCode::Char(c)
@@ -910,51 +849,20 @@ pub(super) fn handle_normal_key(
             input_value.set(text.clone());
             input_cursor_offset.set(next_cursor);
 
-            if let Some(partial) = text.strip_prefix('/') {
-                let current_pid = dynamic_provider_id
-                    .read()
-                    .clone()
-                    .unwrap_or_else(|| prop_provider_id.to_string());
-                if partial.starts_with("model") {
-                    let loaded =
-                        model_completion_provider.read().as_deref() == Some(current_pid.as_str());
-                    let loading =
-                        model_completion_loading.read().as_deref() == Some(current_pid.as_str());
-                    if !loaded && !loading {
-                        model_completion_loading.set(Some(current_pid.clone()));
-                        if let Ok(guard) = tx_for_model_completions.lock() {
-                            if let Some(ref tx) = *guard {
-                                let _ = tx.send(UserInput::FetchModelCompletions {
-                                    provider: current_pid.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-
-                let live_models = model_completion_models.read().clone();
-                let live_provider_matches =
-                    model_completion_provider.read().as_deref() == Some(current_pid.as_str());
-                let filtered = rustyclaw_view::build_slash_completions(
-                    &current_pid,
-                    if live_provider_matches {
-                        Some(live_models.as_slice())
-                    } else {
-                        None
-                    },
-                    partial,
-                );
-                if filtered.is_empty() {
-                    command_completions.set(Vec::new());
-                    command_selected.set(None);
-                } else {
-                    command_completions.set(filtered);
-                    command_selected.set(None);
-                }
-            } else {
-                command_completions.set(Vec::new());
-                command_selected.set(None);
-            }
+            refresh_slash_completions(
+                &text,
+                prop_provider_id,
+                dynamic_provider_id,
+                model_completion_provider,
+                model_completion_models,
+                model_completion_loading,
+                hub_completion_query,
+                hub_completion_models,
+                hub_completion_loading,
+                command_completions,
+                command_selected,
+                tx_for_model_completions,
+            );
         }
         KeyCode::Enter if tab_focused.get() => {
             let thread_list = threads.read().clone();
@@ -1186,5 +1094,101 @@ pub(super) fn handle_normal_key(
             show_services_dialog.set(!show_services_dialog.get());
         }
         _ => {}
+    }
+}
+
+/// Rebuild the slash-command completion menu for the current input text,
+/// kicking off async fetches where live data applies:
+///
+/// - `/model …` — provider model ids, fetched once per provider;
+/// - `/engines pull|files|search …` — Hugging Face Hub repo ids, re-queried
+///   as the partial model name grows (progressive completion; the app loop
+///   debounces rapid keystrokes into one Hub API call).
+///
+/// Non-command text clears the menu.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn refresh_slash_completions(
+    text: &str,
+    fallback_provider_id: &str,
+    dynamic_provider_id: State<Option<String>>,
+    model_completion_provider: State<Option<String>>,
+    model_completion_models: State<Vec<String>>,
+    mut model_completion_loading: State<Option<String>>,
+    hub_completion_query: State<Option<String>>,
+    hub_completion_models: State<Vec<String>>,
+    mut hub_completion_loading: State<Option<String>>,
+    mut command_completions: State<Vec<String>>,
+    mut command_selected: State<Option<usize>>,
+    tx: &UserTx,
+) {
+    let Some(partial) = text.strip_prefix('/') else {
+        command_completions.set(Vec::new());
+        command_selected.set(None);
+        return;
+    };
+
+    let current_pid = dynamic_provider_id
+        .read()
+        .clone()
+        .unwrap_or_else(|| fallback_provider_id.to_string());
+
+    if partial.starts_with("model") {
+        let loaded = model_completion_provider.read().as_deref() == Some(current_pid.as_str());
+        let loading = model_completion_loading.read().as_deref() == Some(current_pid.as_str());
+        if !loaded && !loading {
+            model_completion_loading.set(Some(current_pid.clone()));
+            if let Ok(guard) = tx.lock() {
+                if let Some(ref tx) = *guard {
+                    let _ = tx.send(UserInput::FetchModelCompletions {
+                        provider: current_pid.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    let hub_ctx = rustyclaw_view::hub_completion_context(partial);
+    let hub_entries: Vec<String> = match &hub_ctx {
+        Some(ctx) => {
+            let loaded = hub_completion_query.read().as_deref() == Some(ctx.query.as_str());
+            let loading = hub_completion_loading.read().as_deref() == Some(ctx.query.as_str());
+            if !loaded && !loading {
+                hub_completion_loading.set(Some(ctx.query.clone()));
+                if let Ok(guard) = tx.lock() {
+                    if let Some(ref tx) = *guard {
+                        let _ = tx.send(UserInput::FetchHubModelCompletions {
+                            query: ctx.query.clone(),
+                            gguf_only: ctx.gguf_only,
+                        });
+                    }
+                }
+            }
+            ctx.entries_from_cache(
+                hub_completion_query.read().as_deref(),
+                &hub_completion_models.read(),
+            )
+        }
+        None => Vec::new(),
+    };
+
+    let live_models = model_completion_models.read().clone();
+    let live_provider_matches =
+        model_completion_provider.read().as_deref() == Some(current_pid.as_str());
+    let filtered = rustyclaw_view::build_slash_completions_with_hub(
+        &current_pid,
+        if live_provider_matches {
+            Some(live_models.as_slice())
+        } else {
+            None
+        },
+        &hub_entries,
+        partial,
+    );
+    if filtered.is_empty() {
+        command_completions.set(Vec::new());
+        command_selected.set(None);
+    } else {
+        command_completions.set(filtered);
+        command_selected.set(None);
     }
 }
