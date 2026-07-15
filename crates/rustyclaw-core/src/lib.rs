@@ -66,6 +66,7 @@ pub mod theme;
 pub mod threads;
 pub mod tool_pipeline;
 pub mod tools;
+pub mod triggers;
 pub mod types;
 pub mod ui;
 pub mod user_prompt_types;
