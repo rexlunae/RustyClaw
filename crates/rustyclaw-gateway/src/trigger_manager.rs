@@ -1,8 +1,9 @@
 //! External-trigger supervision and the fire callback endpoint.
 //!
-//! For every enabled [`TriggerDef`] the manager materializes the trigger's
-//! code to a script file and runs it as a child process for as long as the
-//! gateway runs. Each process gets a random bearer token and the address of
+//! For every enabled [`TriggerDef`] the manager runs the trigger's code as a
+//! child process (fed to the interpreter over stdin, never written to disk)
+//! for as long as the gateway runs. Each process gets a random bearer token
+//! and the address of
 //! a localhost-only HTTP endpoint via environment variables; POSTing
 //! `{"token": "...", "context": {...}}` to `http://<endpoint>/fire` makes
 //! the gateway run the trigger's target agent with that context (see
@@ -51,7 +52,12 @@ struct RunningTrigger {
     child: tokio::process::Child,
     fingerprint: u64,
     token: String,
-    last_spawn: Instant,
+    /// Set once the child is observed to have exited. A tombstoned entry
+    /// (`Some`) is retained only to hold back its respawn until the cooldown
+    /// elapses; its child status is never probed again, so this does not
+    /// depend on `try_wait` succeeding twice. Time since this instant gates
+    /// the respawn.
+    exited_at: Option<Instant>,
 }
 
 /// Run the trigger subsystem until `cancel` fires. Spawned once by the
@@ -96,19 +102,25 @@ pub async fn run_trigger_manager(
         }
     });
 
-    let run_dir = settings_dir.join("triggers").join("run");
     let mut running: HashMap<String, RunningTrigger> = HashMap::new();
-    let mut tick = tokio::time::interval(SYNC_INTERVAL);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // While any trigger is in its respawn cooldown, tick fast enough to
+    // respawn it promptly once the cooldown lapses; otherwise idle.
+    let idle_interval = SYNC_INTERVAL;
+    let cooldown_interval = (RESPAWN_COOLDOWN / 2).max(Duration::from_secs(1));
 
     loop {
-        sync(&store, &run_dir, endpoint, &mut running, &tokens).await;
+        sync(endpoint, &store, &mut running, &tokens).await;
+        let interval = if running.values().any(|rt| rt.exited_at.is_some()) {
+            cooldown_interval
+        } else {
+            idle_interval
+        };
         tokio::select! {
             _ = cancel.cancelled() => break,
             _ = notify.notified() => {
                 debug!("Trigger store changed — re-syncing");
             }
-            _ = tick.tick() => {}
+            _ = tokio::time::sleep(interval) => {}
         }
     }
 
@@ -119,16 +131,14 @@ pub async fn run_trigger_manager(
         let _ = rt.child.wait().await;
         debug!(trigger = %id, "Trigger process stopped");
     }
-    let _ = std::fs::remove_dir_all(&run_dir);
     Ok(())
 }
 
 /// Reconcile running processes against the store: start new/changed enabled
 /// triggers, stop removed/disabled ones, respawn crashed ones (rate-limited).
 async fn sync(
-    store: &TriggerStore,
-    run_dir: &std::path::Path,
     endpoint: std::net::SocketAddr,
+    store: &TriggerStore,
     running: &mut HashMap<String, RunningTrigger>,
     tokens: &TokenMap,
 ) {
@@ -168,38 +178,51 @@ async fn sync(
         }
     }
 
-    // Reap crashed processes so they respawn below (after a cooldown).
-    let crashed: Vec<String> = running
-        .iter_mut()
-        .filter_map(|(id, rt)| match rt.child.try_wait() {
-            Ok(Some(status)) => {
+    // Detect newly-exited processes exactly once. `try_wait` is only ever
+    // probed while `exited_at` is None, so we never depend on it succeeding
+    // twice for the same child (which it does not on Unix — the second
+    // `waitpid` returns ECHILD). A tombstone is left in `running` with
+    // `exited_at` set; its token is withdrawn immediately so a lingering
+    // process can no longer fire.
+    let mut newly_exited: Vec<(String, String)> = Vec::new();
+    for (id, rt) in running.iter_mut() {
+        if rt.exited_at.is_none() {
+            if let Ok(Some(status)) = rt.child.try_wait() {
                 warn!(trigger = %id, status = %status, "Trigger process exited");
-                Some(id.clone())
-            }
-            _ => None,
-        })
-        .collect();
-    for id in crashed {
-        if let Some(rt) = running.remove(&id) {
-            tokens.lock().await.remove(&rt.token);
-            if rt.last_spawn.elapsed() < RESPAWN_COOLDOWN {
-                // Crash-looping: keep a tombstone in `running` so the
-                // "start anything not running" loop below skips this trigger
-                // until the cooldown elapses. On a later tick the exited
-                // child is reaped again and, once `last_spawn` is older than
-                // the cooldown, dropped here so it respawns fresh.
-                debug!(trigger = %id, "Trigger crash-looping; delaying respawn");
-                running.insert(id, rt);
+                rt.exited_at = Some(Instant::now());
+                newly_exited.push((id.clone(), rt.token.clone()));
             }
         }
     }
+    if !newly_exited.is_empty() {
+        let mut tok = tokens.lock().await;
+        for (_, token) in &newly_exited {
+            tok.remove(token);
+        }
+    }
 
-    // Start anything enabled that isn't running.
+    // Drop tombstones whose cooldown has lapsed so the start loop respawns
+    // them fresh. Time since exit gates the respawn, not a re-probe of the
+    // (already-reaped) child.
+    let ready: Vec<String> = running
+        .iter()
+        .filter_map(|(id, rt)| {
+            rt.exited_at
+                .filter(|t| t.elapsed() >= RESPAWN_COOLDOWN)
+                .map(|_| id.clone())
+        })
+        .collect();
+    for id in ready {
+        debug!(trigger = %id, "Respawn cooldown elapsed");
+        running.remove(&id);
+    }
+
+    // Start anything enabled that isn't running (or tombstoned).
     for (id, def) in wanted {
         if running.contains_key(id) {
             continue;
         }
-        match spawn_trigger(def, run_dir, endpoint).await {
+        match spawn_trigger(def, endpoint).await {
             Ok((child, token)) => {
                 tokens
                     .lock()
@@ -211,7 +234,7 @@ async fn sync(
                         child,
                         fingerprint: def.fingerprint(),
                         token,
-                        last_spawn: Instant::now(),
+                        exited_at: None,
                     },
                 );
                 info!(trigger = %id, agent = %def.agent_id, "Trigger process started");
@@ -221,10 +244,17 @@ async fn sync(
     }
 }
 
-/// Materialize a trigger's code and spawn its process.
+/// Spawn a trigger's process, feeding its code to the interpreter over
+/// stdin.
+///
+/// The code is piped to the interpreter's standard input rather than written
+/// to a script file, so trigger code — which often embeds API keys or webhook
+/// secrets — is never materialized as plaintext on disk, and never appears in
+/// the process's argv (visible via `ps` / `/proc`). Shells (`sh`/`bash`/…),
+/// `python3`, `node`, `ruby`, `perl`, etc. all execute a program read from a
+/// non-tty stdin, which is the trigger contract.
 async fn spawn_trigger(
     def: &rustyclaw_core::triggers::TriggerDef,
-    run_dir: &std::path::Path,
     endpoint: std::net::SocketAddr,
 ) -> Result<(tokio::process::Child, String)> {
     // Validate the interpreter command through the same safety check the
@@ -236,28 +266,32 @@ async fn spawn_trigger(
     rustyclaw_core::tools::validate_command_safe(def.interpreter())
         .map_err(|e| anyhow::anyhow!("Trigger interpreter rejected: {}", e))?;
 
-    std::fs::create_dir_all(run_dir).context("Failed to create trigger run dir")?;
-    let script_path = run_dir.join(format!("{}.script", def.id));
-    std::fs::write(&script_path, &def.code).context("Failed to write trigger script")?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&script_path, std::fs::Permissions::from_mode(0o700));
-    }
-
     let token = new_token();
-    let child = tokio::process::Command::new(def.interpreter())
-        .arg(&script_path)
+    let mut child = tokio::process::Command::new(def.interpreter())
         .env(ENV_TRIGGER_ID, &def.id)
         .env(ENV_TRIGGER_AGENT, &def.agent_id)
         .env(ENV_TRIGGER_ENDPOINT, endpoint.to_string())
         .env(ENV_TRIGGER_TOKEN, &token)
-        .stdin(std::process::Stdio::null())
+        .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .with_context(|| format!("Failed to spawn trigger '{}'", def.id))?;
+
+    // Write the code to the child's stdin and close it (EOF), so the
+    // interpreter reads it as its script. The async write yields while the
+    // interpreter drains the pipe, so a script larger than the pipe buffer
+    // cannot deadlock.
+    if let Some(mut stdin) = child.stdin.take() {
+        let code = def.code.clone();
+        stdin
+            .write_all(code.as_bytes())
+            .await
+            .with_context(|| format!("Failed to send trigger '{}' code", def.id))?;
+        let _ = stdin.shutdown().await;
+    }
+
     Ok((child, token))
 }
 
@@ -469,31 +503,41 @@ sleep 600
             created_at: Some(0),
         })?;
 
-        let run_dir = tmp.path().join("triggers").join("run");
         let endpoint: std::net::SocketAddr = "127.0.0.1:1".parse().unwrap();
         let tokens: TokenMap = Arc::new(Mutex::new(HashMap::new()));
         let mut running: HashMap<String, RunningTrigger> = HashMap::new();
 
         // First sync spawns the (doomed) process.
-        sync(&store, &run_dir, endpoint, &mut running, &tokens).await;
+        sync(endpoint, &store, &mut running, &tokens).await;
         assert!(running.contains_key("crasher"));
-        let first_spawn = running.get("crasher").unwrap().last_spawn;
 
         // Give it time to exit, then sync again: it should be reaped and
         // held back as a tombstone (still present, NOT respawned).
         tokio::time::sleep(Duration::from_millis(300)).await;
-        sync(&store, &run_dir, endpoint, &mut running, &tokens).await;
+        sync(endpoint, &store, &mut running, &tokens).await;
+        let rt = running
+            .get("crasher")
+            .expect("crashed trigger should be tombstoned, not dropped");
         assert!(
-            running.contains_key("crasher"),
-            "crashed trigger should be tombstoned, not dropped"
-        );
-        assert_eq!(
-            running.get("crasher").unwrap().last_spawn,
-            first_spawn,
-            "trigger must not be respawned within the cooldown"
+            rt.exited_at.is_some(),
+            "tombstone must record the exit and hold back respawn"
         );
         // Its token was withdrawn so a stale process can't fire.
         assert!(tokens.lock().await.is_empty());
+
+        // Simulate the cooldown elapsing (avoids a real 10s wait). The next
+        // sync must drop the tombstone and respawn a fresh process — proving
+        // the respawn does NOT depend on try_wait succeeding twice.
+        running.get_mut("crasher").unwrap().exited_at =
+            Instant::now().checked_sub(RESPAWN_COOLDOWN + Duration::from_secs(1));
+        sync(endpoint, &store, &mut running, &tokens).await;
+        let rt = running
+            .get("crasher")
+            .expect("trigger should be respawned after cooldown");
+        assert!(
+            rt.exited_at.is_none(),
+            "respawned trigger must be a fresh, non-tombstoned entry"
+        );
 
         // Clean up any lingering child.
         for (_, mut rt) in running.drain() {
