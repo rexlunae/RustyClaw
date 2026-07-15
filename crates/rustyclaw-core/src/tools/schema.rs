@@ -77,6 +77,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "secrets_get" => secrets_get_params(),
         "secrets_store" => secrets_store_params(),
         "secrets_set_policy" => secrets_set_policy_params(),
+        "secrets_link_trigger" => secrets_link_trigger_params(),
         "gateway" => gateway_params(),
         "message" => message_params(),
         "tts" => tts_params(),

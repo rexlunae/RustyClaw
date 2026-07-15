@@ -331,11 +331,13 @@ pub async fn run_gateway(
 
         let mgr_settings_dir = config.settings_dir.clone();
         let mgr_workspace = config.workspace_dir();
+        let mgr_vault = vault.clone();
         let mgr_cancel = cancel.child_token();
         tokio::spawn(async move {
             if let Err(e) = crate::trigger_manager::run_trigger_manager(
                 mgr_settings_dir,
                 mgr_workspace,
+                mgr_vault,
                 fire_tx,
                 trigger_notify,
                 mgr_cancel,

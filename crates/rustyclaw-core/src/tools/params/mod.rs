@@ -501,6 +501,30 @@ pub fn secrets_set_policy_params() -> Vec<ToolParam> {
     ]
 }
 
+pub fn secrets_link_trigger_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "name".into(),
+            description: "The vault secret name to link.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "triggerId".into(),
+            description: "The trigger id to grant or revoke access for.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "allow".into(),
+            description: "true to grant the trigger access, false to revoke it. Default: true."
+                .into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
+}
+
 pub fn gateway_params() -> Vec<ToolParam> {
     vec![
         ToolParam {
@@ -997,7 +1021,11 @@ pub fn triggers_create_params() -> Vec<ToolParam> {
             description: "The trigger program: script text run by the interpreter for the \
                           gateway's lifetime. Fire the agent by POSTing JSON \
                           {\"token\": \"$RUSTYCLAW_TRIGGER_TOKEN\", \"context\": {...}} to \
-                          http://$RUSTYCLAW_TRIGGER_ENDPOINT/fire (required)."
+                          http://$RUSTYCLAW_TRIGGER_ENDPOINT/fire. Do NOT embed API keys or \
+                          tokens in the code — store them with secrets_store, link them with \
+                          secrets_link_trigger, and fetch at runtime by POSTing \
+                          {\"token\": \"$RUSTYCLAW_TRIGGER_TOKEN\", \"name\": \"<secret>\"} to \
+                          http://$RUSTYCLAW_TRIGGER_ENDPOINT/secret (required)."
                 .into(),
             param_type: "string".into(),
             required: true,

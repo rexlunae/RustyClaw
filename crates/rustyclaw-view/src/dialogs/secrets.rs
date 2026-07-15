@@ -86,6 +86,7 @@ impl SecretInfoData {
             "ASK" => Tone::Warning,
             "AUTH" => Tone::Danger,
             "SKILL" => Tone::Info,
+            "TRIGGER" => Tone::Info,
             _ => Tone::Neutral,
         }
     }

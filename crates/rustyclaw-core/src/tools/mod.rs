@@ -314,6 +314,7 @@ pub fn tool_summary(name: &str) -> &'static str {
         "secrets_get" => "Read secrets from the vault",
         "secrets_store" => "Store secrets in the vault",
         "secrets_set_policy" => "Change credential access policy",
+        "secrets_link_trigger" => "Grant/revoke a trigger's access to a secret",
         "gateway" => "Control the gateway daemon",
         "message" => "Send messages via channels",
         "tts" => "Convert text to speech",
@@ -466,6 +467,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SECRETS_GET,
         &SECRETS_STORE,
         &SECRETS_SET_POLICY,
+        &SECRETS_LINK_TRIGGER,
         &GATEWAY,
         &MESSAGE,
         &TTS,
@@ -557,7 +559,11 @@ pub use definitions::*;
 pub fn is_secrets_tool(name: &str) -> bool {
     matches!(
         name,
-        "secrets_list" | "secrets_get" | "secrets_store" | "secrets_set_policy"
+        "secrets_list"
+            | "secrets_get"
+            | "secrets_store"
+            | "secrets_set_policy"
+            | "secrets_link_trigger"
     )
 }
 

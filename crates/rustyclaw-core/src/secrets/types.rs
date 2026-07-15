@@ -188,6 +188,11 @@ pub enum AccessPolicy {
     /// the named skills.  An empty list means "no skill may access it"
     /// (effectively locked).
     SkillOnly(Vec<String>),
+    /// The secret is only available to the named external triggers (see
+    /// [`crate::triggers`]).  An empty list means "no trigger may access
+    /// it" (effectively locked).  This is how a trigger's access to a
+    /// secret is managed in the vault: link the secret to the trigger id.
+    TriggerOnly(Vec<String>),
 }
 
 impl std::fmt::Display for AccessPolicy {
@@ -203,6 +208,13 @@ impl std::fmt::Display for AccessPolicy {
                     write!(f, "skills: {}", skills.join(", "))
                 }
             }
+            Self::TriggerOnly(triggers) => {
+                if triggers.is_empty() {
+                    write!(f, "locked")
+                } else {
+                    write!(f, "triggers: {}", triggers.join(", "))
+                }
+            }
         }
     }
 }
@@ -215,30 +227,37 @@ impl AccessPolicy {
             Self::WithApproval => "ASK",
             Self::WithAuth => "AUTH",
             Self::SkillOnly(_) => "SKILL",
+            Self::TriggerOnly(_) => "TRIGGER",
         }
     }
 
     /// Parse a badge-style label (the inverse of [`Self::badge`]).
     ///
-    /// `"SKILL"` parses to an empty skill list (locked until skills are
-    /// assigned).
+    /// `"SKILL"` / `"TRIGGER"` parse to empty lists (locked until the
+    /// respective principals are assigned).
     pub fn from_badge(badge: &str) -> Option<Self> {
         match badge {
             "OPEN" => Some(Self::Always),
             "ASK" => Some(Self::WithApproval),
             "AUTH" => Some(Self::WithAuth),
             "SKILL" => Some(Self::SkillOnly(Vec::new())),
+            "TRIGGER" => Some(Self::TriggerOnly(Vec::new())),
             _ => None,
         }
     }
 
     /// The next policy in the UI rotation (OPEN → ASK → AUTH → SKILL → OPEN).
+    ///
+    /// `TriggerOnly` is not part of the interactive rotation — it is set
+    /// programmatically when a secret is linked to a trigger — so it cycles
+    /// back to `Always` if encountered.
     pub fn cycled(&self) -> Self {
         match self {
             Self::Always => Self::WithApproval,
             Self::WithApproval => Self::WithAuth,
             Self::WithAuth => Self::SkillOnly(Vec::new()),
             Self::SkillOnly(_) => Self::Always,
+            Self::TriggerOnly(_) => Self::Always,
         }
     }
 }
@@ -339,6 +358,8 @@ pub struct AccessContext {
     pub authenticated: bool,
     /// The name of the skill currently being executed, if any.
     pub active_skill: Option<String>,
+    /// The id of the external trigger requesting this secret, if any.
+    pub active_trigger: Option<String>,
 }
 
 /// Kept for backward compatibility with older code that references this type.

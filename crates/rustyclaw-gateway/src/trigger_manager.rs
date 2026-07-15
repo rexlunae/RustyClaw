@@ -69,6 +69,7 @@ struct RunningTrigger {
 pub async fn run_trigger_manager(
     settings_dir: PathBuf,
     workspace_root: PathBuf,
+    vault: crate::SharedVault,
     fire_tx: mpsc::Sender<TriggerFire>,
     notify: Arc<Notify>,
     cancel: CancellationToken,
@@ -85,10 +86,11 @@ pub async fn run_trigger_manager(
         .context("Failed to read trigger endpoint address")?;
     info!(endpoint = %endpoint, "Trigger callback endpoint listening (localhost only)");
 
-    // Accept loop for fire callbacks.
+    // Accept loop for trigger callbacks (/fire and /secret).
     let accept_tokens = tokens.clone();
     let accept_cancel = cancel.clone();
     let accept_fire_tx = fire_tx.clone();
+    let accept_vault = vault.clone();
     tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -97,8 +99,9 @@ pub async fn run_trigger_manager(
                     let Ok((stream, peer)) = accepted else { continue };
                     let tokens = accept_tokens.clone();
                     let fire_tx = accept_fire_tx.clone();
+                    let vault = accept_vault.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = handle_fire_connection(stream, tokens, fire_tx).await {
+                        if let Err(e) = handle_connection(stream, tokens, fire_tx, vault).await {
                             debug!(peer = %peer, error = %e, "Trigger callback error");
                         }
                     });
@@ -350,12 +353,16 @@ fn new_token() -> String {
     bytes.iter().map(|b| format!("{:02x}", b)).collect()
 }
 
-/// Handle one callback connection: a minimal HTTP/1.1 `POST /fire` with a
-/// JSON body `{"token": "...", "context": <any JSON>}`.
-async fn handle_fire_connection(
+/// Handle one callback connection. Minimal HTTP/1.1 with two routes, both
+/// authenticated by the per-process trigger token in the JSON body:
+/// - `POST /fire`   — `{"token", "context"}` runs the target agent.
+/// - `POST /secret` — `{"token", "name"}` returns a vault secret the trigger
+///   is permitted to read (see [`SecretsManager::get_secret_for_trigger`]).
+async fn handle_connection(
     mut stream: tokio::net::TcpStream,
     tokens: TokenMap,
     fire_tx: mpsc::Sender<TriggerFire>,
+    vault: crate::SharedVault,
 ) -> Result<()> {
     let mut buf: Vec<u8> = Vec::with_capacity(4096);
     let mut chunk = [0u8; 4096];
@@ -379,10 +386,14 @@ async fn handle_fire_connection(
     let head = String::from_utf8_lossy(&buf[..header_end]).to_string();
     let mut lines = head.lines();
     let request_line = lines.next().unwrap_or_default();
-    if !request_line.starts_with("POST /fire") {
+    let route = if request_line.starts_with("POST /fire") {
+        Route::Fire
+    } else if request_line.starts_with("POST /secret") {
+        Route::Secret
+    } else {
         respond(&mut stream, 404, "not found").await?;
         anyhow::bail!("unsupported request: {}", request_line);
-    }
+    };
     let content_length: usize = lines
         .filter_map(|l| l.split_once(':'))
         .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
@@ -403,6 +414,24 @@ async fn handle_fire_connection(
     }
     let body = &buf[header_end..header_end + content_length];
 
+    match route {
+        Route::Fire => handle_fire(&mut stream, &tokens, &fire_tx, body).await,
+        Route::Secret => handle_secret(&mut stream, &tokens, &vault, body).await,
+    }
+}
+
+enum Route {
+    Fire,
+    Secret,
+}
+
+/// `POST /fire` — validate the token and hand the context to the dispatcher.
+async fn handle_fire(
+    stream: &mut tokio::net::TcpStream,
+    tokens: &TokenMap,
+    fire_tx: &mpsc::Sender<TriggerFire>,
+    body: &[u8],
+) -> Result<()> {
     #[derive(serde::Deserialize)]
     struct FireRequest {
         token: String,
@@ -412,14 +441,14 @@ async fn handle_fire_connection(
     let req: FireRequest = match serde_json::from_slice(body) {
         Ok(r) => r,
         Err(_) => {
-            respond(&mut stream, 400, "invalid JSON").await?;
+            respond(stream, 400, "invalid JSON").await?;
             anyhow::bail!("invalid JSON body");
         }
     };
 
     let target = tokens.lock().await.get(&req.token).cloned();
     let Some((trigger_id, agent_id)) = target else {
-        respond(&mut stream, 401, "unknown token").await?;
+        respond(stream, 401, "unknown token").await?;
         anyhow::bail!("unknown trigger token");
     };
 
@@ -435,18 +464,71 @@ async fn handle_fire_connection(
     {
         // The fire consumer is gone (e.g. gateway shutting down): tell the
         // trigger its event was not accepted rather than falsely ack'ing it.
-        return respond(&mut stream, 503, "fire consumer unavailable").await;
+        return respond(stream, 503, "fire consumer unavailable").await;
     }
-    respond(&mut stream, 202, "accepted").await
+    respond(stream, 202, "accepted").await
+}
+
+/// `POST /secret` — return a vault secret the calling trigger is permitted to
+/// read. The token identifies the trigger; the vault's per-secret policy
+/// (trigger linkage) authorizes the specific secret.
+async fn handle_secret(
+    stream: &mut tokio::net::TcpStream,
+    tokens: &TokenMap,
+    vault: &crate::SharedVault,
+    body: &[u8],
+) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct SecretRequest {
+        token: String,
+        name: String,
+    }
+    let req: SecretRequest = match serde_json::from_slice(body) {
+        Ok(r) => r,
+        Err(_) => {
+            respond(stream, 400, "invalid JSON").await?;
+            anyhow::bail!("invalid JSON body");
+        }
+    };
+
+    let target = tokens.lock().await.get(&req.token).cloned();
+    let Some((trigger_id, _agent_id)) = target else {
+        respond(stream, 401, "unknown token").await?;
+        anyhow::bail!("unknown trigger token");
+    };
+
+    let mut mgr = vault.lock().await;
+    if mgr.is_locked() {
+        // The secrets vault is password-protected and not yet unlocked; the
+        // trigger should retry later. (This is why secrets are fetched on
+        // demand rather than injected at boot.)
+        return respond(stream, 423, "vault locked").await;
+    }
+    match mgr.get_secret_for_trigger(&req.name, &trigger_id) {
+        Ok(Some(value)) => {
+            debug!(trigger = %trigger_id, secret = %req.name, "Trigger read secret");
+            respond_value(stream, &value).await
+        }
+        Ok(None) => respond(stream, 404, "secret not found").await,
+        Err(_) => {
+            // Denied by policy, disabled, or unsupported kind. Do not leak
+            // which of these it was.
+            debug!(trigger = %trigger_id, secret = %req.name, "Trigger secret access denied");
+            respond(stream, 403, "access denied").await
+        }
+    }
 }
 
 async fn respond(stream: &mut tokio::net::TcpStream, status: u16, text: &str) -> Result<()> {
     let reason = match status {
+        200 => "OK",
         202 => "Accepted",
         400 => "Bad Request",
         401 => "Unauthorized",
+        403 => "Forbidden",
         404 => "Not Found",
         413 => "Payload Too Large",
+        423 => "Locked",
         503 => "Service Unavailable",
         _ => "OK",
     };
@@ -463,6 +545,19 @@ async fn respond(stream: &mut tokio::net::TcpStream, status: u16, text: &str) ->
     Ok(())
 }
 
+/// Respond `200 OK` with the exact secret value as the body — no trailing
+/// newline, so the trigger receives the value verbatim.
+async fn respond_value(stream: &mut tokio::net::TcpStream, value: &str) -> Result<()> {
+    let resp = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+        value.len(),
+        value
+    );
+    stream.write_all(resp.as_bytes()).await?;
+    let _ = stream.shutdown().await;
+    Ok(())
+}
+
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
@@ -472,6 +567,14 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A throwaway shared vault for tests that don't exercise the /secret
+    /// path (its credentials dir lives under the caller's tempdir).
+    fn test_vault(dir: &std::path::Path) -> crate::SharedVault {
+        Arc::new(Mutex::new(rustyclaw_core::secrets::SecretsManager::new(
+            dir.join("creds"),
+        )))
+    }
 
     #[test]
     fn tokens_are_long_and_unique() {
@@ -519,6 +622,7 @@ sleep 600
         let mgr = tokio::spawn(run_trigger_manager(
             tmp.path().to_path_buf(),
             tmp.path().join("workspace"),
+            test_vault(tmp.path()),
             fire_tx,
             notify,
             cancel.clone(),
@@ -618,13 +722,19 @@ sleep 600
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let addr = listener.local_addr()?;
         let accept_tokens = tokens.clone();
+        let accept_vault = test_vault(std::path::Path::new("/nonexistent"));
         tokio::spawn(async move {
             loop {
                 let Ok((stream, _)) = listener.accept().await else {
                     break;
                 };
-                let _ =
-                    handle_fire_connection(stream, accept_tokens.clone(), fire_tx.clone()).await;
+                let _ = handle_connection(
+                    stream,
+                    accept_tokens.clone(),
+                    fire_tx.clone(),
+                    accept_vault.clone(),
+                )
+                .await;
             }
         });
 
@@ -672,9 +782,10 @@ sleep 600
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
         let addr = listener.local_addr()?;
         let accept_tokens = tokens.clone();
+        let accept_vault = test_vault(std::path::Path::new("/nonexistent"));
         tokio::spawn(async move {
             if let Ok((stream, _)) = listener.accept().await {
-                let _ = handle_fire_connection(stream, accept_tokens, fire_tx).await;
+                let _ = handle_connection(stream, accept_tokens, fire_tx, accept_vault).await;
             }
         });
 
@@ -695,6 +806,95 @@ sleep 600
             resp.starts_with("HTTP/1.1 503 Service Unavailable"),
             "expected a well-formed 503, got: {resp}"
         );
+        Ok(())
+    }
+
+    /// The /secret endpoint returns a secret only to a trigger the secret is
+    /// linked to, and only with a valid token.
+    #[tokio::test]
+    async fn secret_endpoint_enforces_token_and_link() -> Result<()> {
+        use rustyclaw_core::secrets::{AccessPolicy, SecretEntry, SecretKind};
+
+        let tmp = tempfile::tempdir()?;
+        let vault: crate::SharedVault = Arc::new(Mutex::new(
+            rustyclaw_core::secrets::SecretsManager::new(tmp.path().join("creds")),
+        ));
+        // Store a secret and link it to trigger "watcher" only.
+        {
+            let mut mgr = vault.lock().await;
+            let entry = SecretEntry {
+                label: "Stripe".into(),
+                kind: SecretKind::ApiKey,
+                policy: AccessPolicy::WithApproval,
+                description: None,
+                disabled: false,
+            };
+            mgr.store_credential("stripe", &entry, "sk_live_ABC", None)
+                .unwrap();
+            mgr.set_credential_trigger_link("stripe", "watcher", true)
+                .unwrap();
+        }
+
+        let tokens: TokenMap = Arc::new(Mutex::new(HashMap::new()));
+        tokens
+            .lock()
+            .await
+            .insert("wtok".into(), ("watcher".into(), "main".into()));
+        tokens
+            .lock()
+            .await
+            .insert("otok".into(), ("other".into(), "main".into()));
+        let (fire_tx, _fire_rx) = mpsc::channel::<TriggerFire>(1);
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
+        let addr = listener.local_addr()?;
+        let accept_tokens = tokens.clone();
+        let accept_vault = vault.clone();
+        tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let _ = handle_connection(
+                    stream,
+                    accept_tokens.clone(),
+                    fire_tx.clone(),
+                    accept_vault.clone(),
+                )
+                .await;
+            }
+        });
+
+        let post = |body: String| async move {
+            let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+            let req = format!(
+                "POST /secret HTTP/1.1\r\nHost: x\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            s.write_all(req.as_bytes()).await.unwrap();
+            let mut resp = String::new();
+            let _ = s.read_to_string(&mut resp).await;
+            resp
+        };
+
+        // Linked trigger with a valid token → 200 and the exact value.
+        let resp = post(r#"{"token":"wtok","name":"stripe"}"#.into()).await;
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {resp}");
+        assert!(resp.ends_with("sk_live_ABC"), "value not returned: {resp}");
+
+        // A different (unlinked) trigger → 403.
+        let resp = post(r#"{"token":"otok","name":"stripe"}"#.into()).await;
+        assert!(resp.starts_with("HTTP/1.1 403"), "got: {resp}");
+
+        // Unknown token → 401.
+        let resp = post(r#"{"token":"nope","name":"stripe"}"#.into()).await;
+        assert!(resp.starts_with("HTTP/1.1 401"), "got: {resp}");
+
+        // Unknown secret name → 404.
+        let resp = post(r#"{"token":"wtok","name":"missing"}"#.into()).await;
+        assert!(resp.starts_with("HTTP/1.1 404"), "got: {resp}");
+
         Ok(())
     }
 }

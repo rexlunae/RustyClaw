@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
 use super::SecretsManager;
-use super::types::{AccessContext, AccessPolicy, SecretEntry, SecretKind};
+use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
 
 impl SecretsManager {
     /// Delete a typed credential and all its associated vault keys.
@@ -85,6 +85,70 @@ impl SecretsManager {
         Ok(())
     }
 
+    // ── Trigger-scoped access ───────────────────────────────────────
+
+    /// The trigger ids a secret is currently linked to (empty if the
+    /// secret has no `TriggerOnly` policy or does not exist).
+    pub fn credential_triggers(&mut self, name: &str) -> Vec<String> {
+        let meta_key = format!("cred:{}", name);
+        match self.get_secret(&meta_key, true) {
+            Ok(Some(json)) => match serde_json::from_str::<SecretEntry>(&json) {
+                Ok(entry) => match entry.policy {
+                    AccessPolicy::TriggerOnly(triggers) => triggers,
+                    _ => Vec::new(),
+                },
+                Err(_) => Vec::new(),
+            },
+            _ => Vec::new(),
+        }
+    }
+
+    /// Link or unlink a secret to an external trigger. Linking sets (or
+    /// extends) a `TriggerOnly` policy scoped to that trigger id; unlinking
+    /// removes it. This is how a trigger's permission to read a secret is
+    /// managed in the vault.
+    pub fn set_credential_trigger_link(
+        &mut self,
+        name: &str,
+        trigger_id: &str,
+        allow: bool,
+    ) -> Result<()> {
+        let mut triggers = self.credential_triggers(name);
+        if allow {
+            if !triggers.iter().any(|t| t == trigger_id) {
+                triggers.push(trigger_id.to_string());
+            }
+        } else {
+            triggers.retain(|t| t != trigger_id);
+        }
+        self.set_credential_policy(name, AccessPolicy::TriggerOnly(triggers))
+    }
+
+    /// Read a single-value secret on behalf of an external trigger, subject
+    /// to the credential's access policy with the trigger id as context.
+    ///
+    /// Returns `Ok(Some(value))` when the trigger is permitted (the secret's
+    /// policy is `Always`, or `TriggerOnly` and lists this trigger),
+    /// `Ok(None)` when the secret does not exist, and `Err` when access is
+    /// denied by policy or the secret is not a single-value kind.
+    pub fn get_secret_for_trigger(
+        &mut self,
+        name: &str,
+        trigger_id: &str,
+    ) -> Result<Option<String>> {
+        let ctx = AccessContext {
+            active_trigger: Some(trigger_id.to_string()),
+            ..Default::default()
+        };
+        match self.get_credential(name, &ctx)? {
+            Some((_entry, CredentialValue::Single(value))) => Ok(Some(value.to_string_unsecured())),
+            Some((_entry, _other)) => {
+                anyhow::bail!("Secret '{}' is not a single-value secret", name)
+            }
+            None => Ok(None),
+        }
+    }
+
     // ── SSH key generation ──────────────────────────────────────────
 
     /// Generate a new Ed25519 SSH keypair and store it in the vault
@@ -152,6 +216,13 @@ impl SecretsManager {
             AccessPolicy::SkillOnly(allowed) => {
                 if let Some(ref skill) = ctx.active_skill {
                     allowed.iter().any(|s| s == skill)
+                } else {
+                    false
+                }
+            }
+            AccessPolicy::TriggerOnly(allowed) => {
+                if let Some(ref trigger) = ctx.active_trigger {
+                    allowed.iter().any(|t| t == trigger)
                 } else {
                     false
                 }

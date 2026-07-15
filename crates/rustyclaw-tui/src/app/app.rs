@@ -511,6 +511,10 @@ impl App {
                         AccessPolicy::WithApproval => "ask",
                         AccessPolicy::WithAuth => "auth",
                         AccessPolicy::SkillOnly(_) => "skill_only",
+                        // Trigger-scoping is set via secrets_link_trigger, not
+                        // the interactive cycle (which never yields it — see
+                        // AccessPolicy::cycled); cycle it back to OPEN.
+                        AccessPolicy::TriggerOnly(_) => "always",
                     };
                     let _ = client
                         .send(GatewayCommand::SecretsSetPolicy {
