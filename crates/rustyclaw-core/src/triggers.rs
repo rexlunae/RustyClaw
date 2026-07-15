@@ -281,12 +281,31 @@ impl TriggerStore {
     }
 
     /// Enable or disable a trigger.
+    ///
+    /// The read-modify-write happens under a single `STORE_LOCK` acquisition,
+    /// so a concurrent `upsert` to the same trigger cannot be clobbered by a
+    /// stale snapshot (only the `enabled` field is changed here).
     pub fn set_enabled(&self, id: &str, enabled: bool) -> TriggerResult<()> {
-        let mut def = self
-            .get(id)?
-            .ok_or_else(|| TriggerStoreError::NotFound(id.to_string()))?;
+        if !is_valid_agent_id(id) {
+            return Err(TriggerStoreError::Invalid(format!("id '{}'", id)));
+        }
+        let _guard = STORE_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let mut vault = self.load_vault()?;
+        let key = format!("{}{}", KEY_PREFIX, id);
+        let json = match vault.get(&key) {
+            Ok(j) => j,
+            Err(e) if e.kind() == securestore::ErrorKind::SecretNotFound => {
+                return Err(TriggerStoreError::NotFound(id.to_string()));
+            }
+            Err(e) => return Err(TriggerStoreError::Vault(format!("read failed: {e}"))),
+        };
+        let mut def: TriggerDef = serde_json::from_str(&json)?;
         def.enabled = enabled;
-        self.upsert(&def)
+        vault.set(&key, serde_json::to_string(&def)?);
+        vault
+            .save()
+            .map_err(|e| TriggerStoreError::Vault(format!("save failed: {e}")))?;
+        Ok(())
     }
 
     /// Append one fire record to the trigger's run history.
@@ -404,6 +423,27 @@ mod tests {
                 .code
                 .contains("SUPERSECRETVALUE")
         );
+    }
+
+    #[test]
+    fn set_enabled_preserves_other_fields() {
+        let tmp = tempdir().unwrap();
+        let store = TriggerStore::open(tmp.path());
+        store.upsert(&def("t")).unwrap();
+
+        // A separate edit lands...
+        let mut edited = store.get("t").unwrap().unwrap();
+        edited.code = "echo updated".to_string();
+        store.upsert(&edited).unwrap();
+
+        // ...then a toggle: it reads current state and changes only `enabled`,
+        // never reverting the code (single-lock read-modify-write).
+        store.set_enabled("t", false).unwrap();
+        let got = store.get("t").unwrap().unwrap();
+        assert_eq!(got.code, "echo updated");
+        assert!(!got.enabled);
+
+        assert!(store.set_enabled("missing", true).is_err());
     }
 
     #[test]
