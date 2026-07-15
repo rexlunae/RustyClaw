@@ -1,5 +1,6 @@
 //! Gateway-event handling for the TUI root: applies each `GwEvent` to UI state.
 
+use std::collections::HashMap;
 use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
@@ -120,6 +121,11 @@ pub(super) fn apply_gw_event(
         mut model_selector_models,
         mut model_selector_cursor,
         mut model_selector_loading,
+        mut show_agent_selector,
+        mut agent_selector_agents,
+        mut agent_selector_active_id,
+        mut agent_selector_cursor,
+        mut dynamic_agent_name,
         mut threads,
         mut projects,
         mut active_project_id,
@@ -753,6 +759,38 @@ pub(super) fn apply_gw_event(
             let items = threads.read().clone();
             let tree = rustyclaw_view::SidebarTree::from_items(&projects.read(), items, active_id);
             threads.set(tree.into_flat_items());
+        }
+        GwEvent::AgentsUpdate { agents, active_id } => {
+            // Keep the cursor on the active agent when (re)opening the list.
+            let active_idx = agents.iter().position(|a| a.id == active_id).unwrap_or(0);
+            if agent_selector_cursor.get() >= agents.len() {
+                agent_selector_cursor.set(active_idx);
+            }
+            agent_selector_agents.set(agents);
+            agent_selector_active_id.set(active_id);
+        }
+        GwEvent::AgentSwitched { agent_id, name } => {
+            agent_selector_active_id.set(agent_id.clone());
+            dynamic_agent_name.set(Some(name.clone()));
+            show_agent_selector.set(false);
+            // Threads/projects belong to the new agent now — drop the old
+            // agent's scrollback cache; fresh ThreadsUpdate/ProjectsUpdate
+            // frames follow immediately.
+            thread_messages_cache.set(HashMap::new());
+            foreground_thread_id.set(None);
+            let mut m = messages.read().clone();
+            m.push(DisplayMessage::success(format!(
+                "Switched to agent '{}' ({})",
+                name, agent_id
+            )));
+            messages.set(m);
+        }
+        GwEvent::ShowAgentSelector => {
+            let agents = agent_selector_agents.read().clone();
+            let active_id = agent_selector_active_id.read().clone();
+            let active_idx = agents.iter().position(|a| a.id == active_id).unwrap_or(0);
+            agent_selector_cursor.set(active_idx);
+            show_agent_selector.set(true);
         }
         GwEvent::ThreadMessages {
             thread_id: _,

@@ -5,6 +5,7 @@
 //! [`rustyclaw_core::gateway`], which this crate builds upon.
 
 mod admin;
+mod agent_handler;
 mod auth;
 mod canvas_handler;
 mod chat;
@@ -343,6 +344,14 @@ async fn main() -> Result<()> {
         // query it.
         let stats = std::sync::Arc::new(rustyclaw_core::observability::StatsObserver::new());
         rustyclaw_core::runtime_ctx::set_stats_observer(stats.clone());
+
+        // Publish the settings dir so tools (agents_list, agents_create,
+        // sessions_spawn validation) can reach the agent registry even on
+        // flows that never touch a client connection (messengers, cron).
+        rustyclaw_core::runtime_ctx::set_agent_registry_info(
+            &config.settings_dir,
+            &config.agent_name,
+        );
         let observer: crate::SharedObserver =
             std::sync::Arc::new(rustyclaw_core::observability::CompositeObserver::new(vec![
                 std::sync::Arc::new(rustyclaw_core::observability::LogObserver::new()),

@@ -174,6 +174,18 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                 .collect(),
             active_id,
         },
+        E::AgentsUpdate { agents, active_id } => GwEvent::AgentsUpdate {
+            agents: agents
+                .into_iter()
+                .map(|a| rustyclaw_view::AgentItemData {
+                    id: a.id,
+                    name: a.name,
+                    description: a.description,
+                })
+                .collect(),
+            active_id,
+        },
+        E::AgentSwitched { agent_id, name } => GwEvent::AgentSwitched { agent_id, name },
         E::ThreadMessages {
             thread_id,
             messages,

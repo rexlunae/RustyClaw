@@ -150,6 +150,70 @@ mod serialization {
     }
 
     #[test]
+    fn test_agents_update_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::AgentsUpdate,
+            payload: ServerPayload::AgentsUpdate {
+                agents: vec![
+                    AgentInfoDto {
+                        id: "main".into(),
+                        name: "RustyClaw".into(),
+                        description: None,
+                    },
+                    AgentInfoDto {
+                        id: "researcher".into(),
+                        name: "Researcher".into(),
+                        description: Some("digs through papers".into()),
+                    },
+                ],
+                active_id: "researcher".into(),
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        match decoded.payload {
+            ServerPayload::AgentsUpdate { agents, active_id } => {
+                assert_eq!(agents.len(), 2);
+                assert_eq!(agents[0].id, "main");
+                assert_eq!(
+                    agents[1].description.as_deref(),
+                    Some("digs through papers")
+                );
+                assert_eq!(active_id, "researcher");
+            }
+            _ => panic!("Expected AgentsUpdate payload"),
+        }
+    }
+
+    #[test]
+    fn test_agent_switch_client_roundtrip() {
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::AgentSwitch,
+            payload: ClientPayload::AgentSwitch {
+                agent_id: "researcher".into(),
+            },
+        };
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ClientPayload::AgentSwitch { agent_id } => assert_eq!(agent_id, "researcher"),
+            _ => panic!("Expected AgentSwitch payload"),
+        }
+    }
+
+    #[test]
+    fn test_agent_frame_type_values() {
+        assert_eq!(ClientFrameType::AgentListRequest as u8, 73);
+        assert_eq!(ClientFrameType::AgentSwitch as u8, 74);
+        assert_eq!(ClientFrameType::AgentCreate as u8, 75);
+        assert_eq!(ClientFrameType::AgentDelete as u8, 76);
+        assert_eq!(ServerFrameType::AgentsUpdate as u8, 83);
+        assert_eq!(ServerFrameType::AgentSwitched as u8, 84);
+    }
+
+    #[test]
     fn test_status_type_values() {
         assert_eq!(StatusType::ModelConfigured as u8, 0);
         assert_eq!(StatusType::CredentialsLoaded as u8, 1);

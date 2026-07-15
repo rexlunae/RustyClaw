@@ -101,11 +101,11 @@ pub use conversation::{
     convert_history, latest_details_index, starter_prompts,
 };
 pub use dialogs::{
-    ApiKeyDialogData, AuthDialogData, ConnectionDialogData, ConnectionOption,
-    CredentialRequestData, DeviceFlowData, HatchFocus, HatchingDialogData, HatchingEvent,
-    HatchingKey, HatchingResult, ModelSelectorData, PairingDialogData, PairingField, PairingStep,
-    ProviderOptionData, ProviderSelectorData, SecretInfoData, SecretsDialogData, SkillInfoData,
-    ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
+    AgentItemData, AgentSelectorData, ApiKeyDialogData, AuthDialogData, ConnectionDialogData,
+    ConnectionOption, CredentialRequestData, DeviceFlowData, HatchFocus, HatchingDialogData,
+    HatchingEvent, HatchingKey, HatchingResult, ModelSelectorData, PairingDialogData, PairingField,
+    PairingStep, ProviderOptionData, ProviderSelectorData, SecretInfoData, SecretsDialogData,
+    SkillInfoData, ToolApprovalData, ToolPermInfoData, UserPromptData, VaultUnlockData,
 };
 pub use file_browser::{FileBrowserData, FileBrowserEntry};
 pub use kernel::{GpuDisplayInfo, HostInfoData, LoadStatusData};

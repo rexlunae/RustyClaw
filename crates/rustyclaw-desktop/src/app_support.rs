@@ -785,6 +785,16 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 _ => None,
             };
         }
+        GatewayEvent::AgentsUpdate { .. } => {
+            // The desktop has no agent-switcher surface yet; the agent list
+            // is currently only consumed by the TUI selector dialog.
+        }
+        GatewayEvent::AgentSwitched { agent_id, name } => {
+            state.write().push_notice(
+                MessageRole::Success,
+                format!("Switched to agent '{}' ({})", name, agent_id),
+            );
+        }
     }
 }
 

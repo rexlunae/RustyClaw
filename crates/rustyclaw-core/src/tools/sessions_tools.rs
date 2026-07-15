@@ -79,6 +79,19 @@ pub fn exec_sessions_spawn(args: &Value, _workspace_dir: &Path) -> ToolResult {
     tracing::Span::current().record("agent_id", agent_id);
     debug!(label = label.as_deref(), "Spawning sub-agent");
 
+    // When the installation-wide registry is available, reject unknown agent
+    // ids up front instead of silently spawning under a phantom agent.
+    if let Some(registry) = crate::runtime_ctx::get_agent_registry() {
+        if !registry.exists(agent_id) {
+            return Err(format!(
+                "Unknown agent id '{}'. Use agents_list to see registered agents \
+                 or agents_create to create one.",
+                agent_id
+            )
+            .into());
+        }
+    }
+
     let manager = session_manager();
     let mut mgr = manager
         .lock()
@@ -252,9 +265,25 @@ pub fn exec_session_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
 #[instrument(skip(_args, workspace_dir))]
 pub fn exec_agents_list(_args: &Value, workspace_dir: &Path) -> ToolResult {
     debug!("Listing available agents");
-    let mut agents = vec!["main".to_string()];
 
-    // Check for agents directory
+    // Prefer the installation-wide agent registry when the gateway has
+    // published its settings dir.
+    if let Some(registry) = crate::runtime_ctx::get_agent_registry() {
+        let mut output = String::from(
+            "Registered agents (usable with sessions_spawn agentId, agents_create to add more):\n\n",
+        );
+        for agent in registry.list() {
+            output.push_str(&format!("- {} ({})", agent.id, agent.name));
+            if let Some(desc) = &agent.description {
+                output.push_str(&format!(" — {}", desc));
+            }
+            output.push('\n');
+        }
+        return Ok(output);
+    }
+
+    // Fallback: legacy scan of `<workspace>/agents/*` directories.
+    let mut agents = vec!["main".to_string()];
     let agents_dir = workspace_dir.join("agents");
     if agents_dir.exists() && agents_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&agents_dir) {

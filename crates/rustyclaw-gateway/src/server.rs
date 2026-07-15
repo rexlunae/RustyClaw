@@ -52,29 +52,33 @@ pub(crate) async fn handle_connection(
     let mut config = shared_config.read().await.clone();
     let model_ctx = shared_model_ctx.read().await.clone();
 
-    // Thread manager for multi-task conversations.
-    // Load from persistent storage or create new with default "Main" thread.
-    let threads_path = config.sessions_dir().join("threads.json");
-    let mut thread_mgr = rustyclaw_core::threads::ThreadManager::load_or_default(&threads_path);
+    // Publish the settings dir so tools (agents_list, agents_create, …) can
+    // reach the installation-wide agent registry.
+    rustyclaw_core::runtime_ctx::set_agent_registry_info(&config.settings_dir, &config.agent_name);
 
-    // Project registry (each project is a working directory grouping threads).
-    // Migration: ensure a "Default" project exists pointing at the current
-    // workspace dir; pre-projects threads deserialize with project_id =
-    // DEFAULT_PROJECT_ID and thus land in it. Then point the workspace at the
-    // active project so tools run in the right directory from the first turn.
-    let projects_path = config.sessions_dir().join("projects.json");
-    let mut project_mgr = rustyclaw_core::projects::ProjectManager::load_or_new(&projects_path);
-    project_mgr.ensure_default(config.workspace_dir());
-    if let Some(active_path) = project_mgr.path_of(project_mgr.active_id()) {
+    // Per-agent conversation state (threads + projects). Each connection
+    // starts on the `main` agent; `AgentSwitch` frames swap this wholesale.
+    // The connection's original base system prompt is kept so switching back
+    // from an agent with a prompt override restores it.
+    let base_system_prompt = config.system_prompt.clone();
+    let mut agent_session =
+        crate::agent_handler::AgentSession::load(&config, rustyclaw_core::agents::MAIN_AGENT_ID);
+    rustyclaw_core::runtime_ctx::set_active_agent(&agent_session.agent_id);
+
+    // Point the workspace at the active project so tools run in the right
+    // directory from the first turn.
+    if let Some(active_path) = agent_session
+        .project_mgr
+        .path_of(agent_session.project_mgr.active_id())
+    {
         admin::handle_set_working_directory(&mut config, active_path.display().to_string());
     }
-    let _ = project_mgr.save_to_file(&projects_path);
 
     // Local engine registry for model management.
     let engine_registry = rustyclaw_core::engines::EngineRegistry::new();
 
     // Subscribe to thread events for push-based sidebar updates
-    let mut thread_events_rx = thread_mgr.subscribe();
+    let mut thread_events_rx = agent_session.thread_mgr.subscribe();
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -404,11 +408,19 @@ pub(crate) async fn handle_connection(
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
-    if let Err(e) = send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await {
+    if let Err(e) =
+        send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await
+    {
         warn!(error = %e, "Failed to send initial thread list");
     }
-    if let Err(e) = send_projects_update(&mut *writer, &project_mgr).await {
+    if let Err(e) = send_projects_update(&mut *writer, &agent_session.project_mgr).await {
         warn!(error = %e, "Failed to send initial project list");
+    }
+    if let Err(e) =
+        crate::agent_handler::send_agents_update(&mut *writer, &config, &agent_session.agent_id)
+            .await
+    {
+        warn!(error = %e, "Failed to send initial agent list");
     }
 
     let reader_cancel = cancel.clone();
@@ -552,8 +564,8 @@ pub(crate) async fn handle_connection(
                                     &user_prompt_rx,
                                     &credential_rx,
                                     &dom_query_rx,
-                                    &mut thread_mgr,
-                                    &threads_path,
+                                    &mut agent_session.thread_mgr,
+                                    &agent_session.threads_path,
                                 )
                                 .await?;
                             }
@@ -563,27 +575,27 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadCreate { label, project_id } => {
                                 // 0 means "the active project".
                                 let pid = if project_id == 0 {
-                                    project_mgr.active_id()
+                                    agent_session.project_mgr.active_id()
                                 } else {
                                     rustyclaw_core::projects::ProjectId(project_id)
                                 };
                                 // Creating into a different project also makes it
                                 // active and repoints the workspace dir.
-                                if pid != project_mgr.active_id() {
+                                if pid != agent_session.project_mgr.active_id() {
                                     project_handler::activate_project(
                                         &mut *writer,
                                         &mut config,
-                                        &mut project_mgr,
-                                        &projects_path,
+                                        &mut agent_session.project_mgr,
+                                        &agent_session.projects_path,
                                         pid,
                                     )
                                     .await?;
                                 }
                                 thread_handler::handle_thread_create(
                                     &mut *writer,
-                                    &mut thread_mgr,
+                                    &mut agent_session.thread_mgr,
                                     &task_mgr,
-                                    &threads_path,
+                                    &agent_session.threads_path,
                                     pid,
                                     label,
                                 )
@@ -592,9 +604,9 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 thread_handler::handle_thread_switch(
                                     &mut *writer,
-                                    &mut thread_mgr,
+                                    &mut agent_session.thread_mgr,
                                     &task_mgr,
-                                    &threads_path,
+                                    &agent_session.threads_path,
                                     &shared_model_ctx,
                                     &http,
                                     thread_id,
@@ -603,14 +615,14 @@ pub(crate) async fn handle_connection(
                                 // Repoint the workspace at the new foreground
                                 // thread's project so tools run in its directory.
                                 if let Some(pid) =
-                                    thread_mgr.foreground().map(|t| t.project_id)
+                                    agent_session.thread_mgr.foreground().map(|t| t.project_id)
                                 {
-                                    if pid != project_mgr.active_id() {
+                                    if pid != agent_session.project_mgr.active_id() {
                                         project_handler::activate_project(
                                             &mut *writer,
                                             &mut config,
-                                            &mut project_mgr,
-                                            &projects_path,
+                                            &mut agent_session.project_mgr,
+                                            &agent_session.projects_path,
                                             pid,
                                         )
                                         .await?;
@@ -618,17 +630,17 @@ pub(crate) async fn handle_connection(
                                 }
                             }
                             ClientPayload::ThreadList => {
-                                thread_handler::handle_thread_list(&mut *writer, &mut thread_mgr, &task_mgr).await?;
+                                thread_handler::handle_thread_list(&mut *writer, &mut agent_session.thread_mgr, &task_mgr).await?;
                             }
                             ClientPayload::ThreadHistoryRequest { thread_id } => {
-                                thread_handler::handle_thread_history(&mut *writer, &thread_mgr, thread_id).await?;
+                                thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 thread_handler::handle_thread_close(
                                     &mut *writer,
-                                    &mut thread_mgr,
+                                    &mut agent_session.thread_mgr,
                                     &task_mgr,
-                                    &threads_path,
+                                    &agent_session.threads_path,
                                     thread_id,
                                 )
                                 .await?;
@@ -636,9 +648,9 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadRename { thread_id, new_label } => {
                                 thread_handler::handle_thread_rename(
                                     &mut *writer,
-                                    &mut thread_mgr,
+                                    &mut agent_session.thread_mgr,
                                     &task_mgr,
-                                    &threads_path,
+                                    &agent_session.threads_path,
                                     thread_id,
                                     new_label,
                                 )
@@ -663,14 +675,14 @@ pub(crate) async fn handle_connection(
                                 admin::handle_set_working_directory(&mut config, path);
                             }
                             ClientPayload::ProjectList => {
-                                project_handler::handle_project_list(&mut *writer, &project_mgr).await?;
+                                project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;
                             }
                             ClientPayload::ProjectCreate { name, path } => {
                                 project_handler::handle_project_create(
                                     &mut *writer,
                                     &mut config,
-                                    &mut project_mgr,
-                                    &projects_path,
+                                    &mut agent_session.project_mgr,
+                                    &agent_session.projects_path,
                                     name,
                                     path,
                                 )
@@ -679,8 +691,8 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ProjectRename { project_id, new_name } => {
                                 project_handler::handle_project_rename(
                                     &mut *writer,
-                                    &mut project_mgr,
-                                    &projects_path,
+                                    &mut agent_session.project_mgr,
+                                    &agent_session.projects_path,
                                     project_id,
                                     new_name,
                                 )
@@ -691,9 +703,9 @@ pub(crate) async fn handle_connection(
                                 // so they aren't orphaned, then delete + repoint.
                                 let pid = rustyclaw_core::projects::ProjectId(project_id);
                                 let orphans: Vec<_> =
-                                    thread_mgr.threads_for(pid).iter().map(|t| t.id).collect();
+                                    agent_session.thread_mgr.threads_for(pid).iter().map(|t| t.id).collect();
                                 for tid in orphans {
-                                    thread_mgr.set_project(
+                                    agent_session.thread_mgr.set_project(
                                         tid,
                                         rustyclaw_core::projects::DEFAULT_PROJECT_ID,
                                     );
@@ -701,21 +713,65 @@ pub(crate) async fn handle_connection(
                                 project_handler::handle_project_delete(
                                     &mut *writer,
                                     &mut config,
-                                    &mut project_mgr,
-                                    &projects_path,
+                                    &mut agent_session.project_mgr,
+                                    &agent_session.projects_path,
                                     project_id,
                                 )
                                 .await?;
-                                let _ = thread_mgr.save_to_file(&threads_path);
-                                send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                                let _ = agent_session.thread_mgr.save_to_file(&agent_session.threads_path);
+                                send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                             }
                             ClientPayload::ProjectSwitch { project_id } => {
                                 project_handler::handle_project_switch(
                                     &mut *writer,
                                     &mut config,
-                                    &mut project_mgr,
-                                    &projects_path,
+                                    &mut agent_session.project_mgr,
+                                    &agent_session.projects_path,
                                     project_id,
+                                )
+                                .await?;
+                            }
+                            ClientPayload::AgentListRequest => {
+                                crate::agent_handler::handle_agent_list(
+                                    &mut *writer,
+                                    &config,
+                                    &agent_session.agent_id,
+                                )
+                                .await?;
+                            }
+                            ClientPayload::AgentSwitch { agent_id } => {
+                                let switched = crate::agent_handler::handle_agent_switch(
+                                    &mut *writer,
+                                    &mut config,
+                                    &base_system_prompt,
+                                    &mut agent_session,
+                                    &task_mgr,
+                                    agent_id,
+                                )
+                                .await?;
+                                if switched {
+                                    // The thread manager was replaced — follow
+                                    // the new one's sidebar events.
+                                    thread_events_rx = agent_session.thread_mgr.subscribe();
+                                }
+                            }
+                            ClientPayload::AgentCreate { name, agent_id, description } => {
+                                crate::agent_handler::handle_agent_create(
+                                    &mut *writer,
+                                    &config,
+                                    &agent_session.agent_id,
+                                    name,
+                                    agent_id,
+                                    description,
+                                )
+                                .await?;
+                            }
+                            ClientPayload::AgentDelete { agent_id } => {
+                                crate::agent_handler::handle_agent_delete(
+                                    &mut *writer,
+                                    &config,
+                                    &agent_session.agent_id,
+                                    agent_id,
                                 )
                                 .await?;
                             }
@@ -815,17 +871,17 @@ pub(crate) async fn handle_connection(
 
                             // Record assistant response in thread history if provided
                             if let Some(text) = response {
-                                if let Some(thread) = thread_mgr.get_mut(thread_id) {
+                                if let Some(thread) = agent_session.thread_mgr.get_mut(thread_id) {
                                     thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
                                 }
-                                send_thread_messages_update(&mut *writer, thread_id, &thread_mgr).await?;
+                                send_thread_messages_update(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
                             }
 
                             // Send updated thread list (status may have changed)
-                            send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                            send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
 
                             // Persist thread state
-                            let _ = thread_mgr.save_to_file(&threads_path);
+                            let _ = agent_session.thread_mgr.save_to_file(&agent_session.threads_path);
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, message } => {
                             // Task failed - remove from active tasks
@@ -842,7 +898,7 @@ pub(crate) async fn handle_connection(
                             send_frame(&mut *writer, &error_frame).await?;
 
                             // Send updated thread list
-                            send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                            send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                         }
                     }
                 }
@@ -852,7 +908,7 @@ pub(crate) async fn handle_connection(
                 if let Ok(event) = thread_event {
                     // Only send updates for events that affect sidebar display
                     if event.triggers_sidebar_update() {
-                        send_threads_update(&mut *writer, &thread_mgr, &task_mgr, None).await?;
+                        send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                     }
                 }
             }
@@ -863,7 +919,9 @@ pub(crate) async fn handle_connection(
     reader_handle.abort();
 
     // Persist thread state on disconnect
-    let _ = thread_mgr.save_to_file(&threads_path);
+    let _ = agent_session
+        .thread_mgr
+        .save_to_file(&agent_session.threads_path);
 
     Ok(())
 }
@@ -1041,6 +1099,113 @@ mod tests {
                 .any(|f| matches!(f.frame_type, ServerFrameType::AuthChallenge)),
             "Expected TOTP auth challenge for SSH connection when totp_enabled=true"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn agent_create_switch_and_delete_roundtrip() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+
+        let create = ClientFrame {
+            frame_type: ClientFrameType::AgentCreate,
+            payload: ClientPayload::AgentCreate {
+                name: "Researcher".into(),
+                agent_id: None,
+                description: Some("digs through papers".into()),
+            },
+        };
+        let switch = ClientFrame {
+            frame_type: ClientFrameType::AgentSwitch,
+            payload: ClientPayload::AgentSwitch {
+                agent_id: "researcher".into(),
+            },
+        };
+        let delete_active = ClientFrame {
+            frame_type: ClientFrameType::AgentDelete,
+            payload: ClientPayload::AgentDelete {
+                agent_id: "researcher".into(),
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+
+        let (mock_transport, outgoing) = MockTransport::with_frames(
+            peer,
+            vec![Some(create), Some(switch), Some(delete_active), None],
+        );
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+
+        // Create must broadcast an AgentsUpdate that includes the new agent.
+        let has_researcher_in_list = frames.iter().any(|f| {
+            matches!(
+                &f.payload,
+                ServerPayload::AgentsUpdate { agents, .. }
+                    if agents.iter().any(|a| a.id == "researcher")
+            )
+        });
+        assert!(
+            has_researcher_in_list,
+            "Expected researcher in AgentsUpdate"
+        );
+
+        // Switch must confirm with AgentSwitched and mark it active.
+        let switched = frames.iter().any(|f| {
+            matches!(
+                &f.payload,
+                ServerPayload::AgentSwitched { agent_id, name }
+                    if agent_id == "researcher" && name == "Researcher"
+            )
+        });
+        assert!(switched, "Expected AgentSwitched frame for researcher");
+        let active_after_switch = frames.iter().any(|f| {
+            matches!(
+                &f.payload,
+                ServerPayload::AgentsUpdate { active_id, .. } if active_id == "researcher"
+            )
+        });
+        assert!(
+            active_after_switch,
+            "Expected AgentsUpdate with researcher active"
+        );
+
+        // Deleting the active agent must be refused.
+        let delete_refused = frames.iter().any(|f| {
+            matches!(
+                &f.payload,
+                ServerPayload::Error { message, .. }
+                    if message.contains("active agent")
+            )
+        });
+        assert!(delete_refused, "Expected error deleting the active agent");
 
         Ok(())
     }

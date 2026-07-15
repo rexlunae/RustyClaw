@@ -157,6 +157,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let model_selector_cursor = hooks.use_state(|| 0usize);
     let model_selector_loading = hooks.use_state(|| false);
 
+    // ── Agent selector dialog state ─────────────────────────────────
+    let show_agent_selector = hooks.use_state(|| false);
+    let agent_selector_agents: State<Vec<rustyclaw_view::AgentItemData>> =
+        hooks.use_state(Vec::new);
+    let agent_selector_active_id = hooks.use_state(String::new);
+    let agent_selector_cursor = hooks.use_state(|| 0usize);
+    let dynamic_agent_name: State<Option<String>> = hooks.use_state(|| None);
+
     // ── Thread state (unified tasks + threads) ───────────────────────
     let threads: State<Vec<rustyclaw_view::SidebarItemData>> = hooks.use_state(Vec::new);
     let projects: State<Vec<rustyclaw_core::ui::ProjectInfo>> = hooks.use_state(Vec::new);
@@ -320,6 +328,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         model_selector_models,
         model_selector_cursor,
         model_selector_loading,
+        show_agent_selector,
+        agent_selector_agents,
+        agent_selector_active_id,
+        agent_selector_cursor,
+        dynamic_agent_name,
         threads,
         projects,
         active_project_id,
@@ -462,7 +475,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         Root(
             width: width,
             height: height,
-            soul_name: prop_soul_name,
+            soul_name: dynamic_agent_name.read().clone().unwrap_or_else(|| prop_soul_name.clone()),
             model_label: dynamic_model_label.read().clone().unwrap_or_else(|| prop_model_label.clone()),
             gateway_icon: gw_icon,
             gateway_label: gw_label,
@@ -496,6 +509,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 && !show_api_key_dialog.get()
                 && !show_device_flow.get()
                 && !show_model_selector.get()
+                && !show_agent_selector.get()
                 && !show_pairing.get()
                 && !show_system_info.get()
                 && !show_services_dialog.get()
@@ -621,6 +635,12 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                 cursor: model_selector_cursor.get(),
                 loading: model_selector_loading.get(),
                 spinner_tick: device_flow_tick.get(),
+            },
+            show_agent_selector: show_agent_selector.get(),
+            agent_selector: rustyclaw_view::AgentSelectorData {
+                agents: agent_selector_agents.read().clone(),
+                active_id: agent_selector_active_id.read().clone(),
+                cursor: agent_selector_cursor.get(),
             },
             show_system_info: show_system_info.get(),
             host_info: host_info.read().clone(),

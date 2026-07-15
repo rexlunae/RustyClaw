@@ -485,6 +485,26 @@ pub(super) async fn handle_command_action(
             });
             let _ = client.send(GatewayCommand::Logs { source, tail }).await;
         }
+        CommandAction::ShowAgents => {
+            // Open the selector immediately; the list arrives via AgentsUpdate.
+            let _ = gw_tx.send(GwEvent::ShowAgentSelector);
+            let _ = client.send(GatewayCommand::AgentList).await;
+        }
+        CommandAction::AgentSwitch(agent_id) => {
+            let _ = client.send(GatewayCommand::AgentSwitch { agent_id }).await;
+        }
+        CommandAction::AgentNew(name) => {
+            let _ = client
+                .send(GatewayCommand::AgentCreate {
+                    name,
+                    agent_id: None,
+                    description: None,
+                })
+                .await;
+        }
+        CommandAction::AgentDelete(agent_id) => {
+            let _ = client.send(GatewayCommand::AgentDelete { agent_id }).await;
+        }
         _ => {}
     }
     Ok(false)

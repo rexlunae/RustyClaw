@@ -100,6 +100,11 @@ pub(super) fn apply_key_event(
         mut model_selector_models,
         mut model_selector_cursor,
         mut model_selector_loading,
+        mut show_agent_selector,
+        mut agent_selector_agents,
+        mut agent_selector_active_id,
+        mut agent_selector_cursor,
+        dynamic_agent_name: _,
         mut threads,
         mut projects,
         mut active_project_id,
@@ -425,6 +430,45 @@ pub(super) fn apply_key_event(
                                     provider,
                                     model: model.clone(),
                                 });
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+
+            // ── Agent selector dialog ───────────────────────
+            if show_agent_selector.get() {
+                match code {
+                    KeyCode::Esc => {
+                        show_agent_selector.set(false);
+                    }
+                    KeyCode::Up => {
+                        let cur = agent_selector_cursor.get();
+                        if cur > 0 {
+                            agent_selector_cursor.set(cur - 1);
+                        }
+                    }
+                    KeyCode::Down => {
+                        let cur = agent_selector_cursor.get();
+                        let len = agent_selector_agents.read().len();
+                        if cur + 1 < len {
+                            agent_selector_cursor.set(cur + 1);
+                        }
+                    }
+                    KeyCode::Enter => {
+                        let cur = agent_selector_cursor.get();
+                        let agents = agent_selector_agents.read().clone();
+                        if let Some(agent) = agents.get(cur) {
+                            if *agent_selector_active_id.read() == agent.id {
+                                // Already active — nothing to do.
+                                show_agent_selector.set(false);
+                            } else if let Ok(guard) = tx_for_keys.lock()
+                                && let Some(ref tx) = *guard
+                            {
+                                // Dialog closes when AgentSwitched arrives.
+                                let _ = tx.send(UserInput::AgentSwitch(agent.id.clone()));
                             }
                         }
                     }

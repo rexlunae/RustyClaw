@@ -104,6 +104,10 @@ use sessions_tools::{
     exec_sessions_send, exec_sessions_spawn,
 };
 
+// Agent management operations
+mod agent_tools;
+use agent_tools::{exec_agents_create, exec_agents_delete};
+
 // Patch operations
 use patch::exec_apply_patch;
 
@@ -291,6 +295,8 @@ pub fn tool_summary(name: &str) -> &'static str {
         "sessions_history" => "Read session message history",
         "session_status" => "Check session status & usage",
         "agents_list" => "List available agent types",
+        "agents_create" => "Create a new persistent agent in this installation",
+        "agents_delete" => "Delete a persistent agent and its state",
         "apply_patch" => "Apply diff patches to files",
         "secrets_list" => "List vault secret names",
         "secrets_get" => "Read secrets from the vault",
@@ -436,6 +442,8 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SESSIONS_HISTORY,
         &SESSION_STATUS,
         &AGENTS_LIST,
+        &AGENTS_CREATE,
+        &AGENTS_DELETE,
         &APPLY_PATCH,
         &SECRETS_LIST,
         &SECRETS_GET,

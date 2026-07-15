@@ -166,6 +166,24 @@ pub struct ProjectInfoDto {
     pub path: String,
 }
 
+/// DTO for agent info in `AgentsUpdate`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentInfoDto {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+}
+
+impl From<crate::agents::AgentInfo> for AgentInfoDto {
+    fn from(info: crate::agents::AgentInfo) -> Self {
+        Self {
+            id: info.id,
+            name: info.name,
+            description: info.description,
+        }
+    }
+}
+
 /// DTO for secret entries in list results.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SecretEntryDto {

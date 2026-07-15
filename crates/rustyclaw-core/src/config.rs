@@ -385,15 +385,49 @@ impl Config {
             .unwrap_or_else(|| self.settings_dir.join("credentials"))
     }
 
+    /// Root directory holding one subdirectory per agent.
+    /// Default: `<settings_dir>/agents`
+    pub fn agents_root(&self) -> PathBuf {
+        self.settings_dir.join("agents")
+    }
+
     /// Default agent directory — per-agent state (sessions, etc.).
     /// Default: `<settings_dir>/agents/main`
     pub fn agent_dir(&self) -> PathBuf {
-        self.settings_dir.join("agents").join("main")
+        self.agent_dir_for(crate::agents::MAIN_AGENT_ID)
+    }
+
+    /// Directory for a specific agent's state.
+    /// `<settings_dir>/agents/<agent_id>`
+    pub fn agent_dir_for(&self, agent_id: &str) -> PathBuf {
+        self.agents_root().join(agent_id)
     }
 
     /// Sessions directory for the default agent.
     pub fn sessions_dir(&self) -> PathBuf {
-        self.agent_dir().join("sessions")
+        self.sessions_dir_for(crate::agents::MAIN_AGENT_ID)
+    }
+
+    /// Sessions directory for a specific agent.
+    pub fn sessions_dir_for(&self, agent_id: &str) -> PathBuf {
+        self.agent_dir_for(agent_id).join("sessions")
+    }
+
+    /// Workspace directory for a specific agent. The `main` agent keeps the
+    /// installation-wide workspace (`workspace_dir()`); other agents get a
+    /// private workspace inside their agent directory so each can carry its
+    /// own SOUL.md, skills, and files.
+    pub fn workspace_dir_for(&self, agent_id: &str) -> PathBuf {
+        if agent_id == crate::agents::MAIN_AGENT_ID {
+            self.workspace_dir()
+        } else {
+            self.agent_dir_for(agent_id).join("workspace")
+        }
+    }
+
+    /// Agent registry rooted at this config's settings dir.
+    pub fn agent_registry(&self) -> crate::agents::AgentRegistry {
+        crate::agents::AgentRegistry::new(&self.settings_dir, &self.agent_name)
     }
 
     /// Path to SOUL.md — inside the workspace.

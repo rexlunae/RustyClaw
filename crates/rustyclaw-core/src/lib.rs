@@ -13,6 +13,7 @@
 //! - [`skills`] — dynamic skill loading from the workspace directory
 //! - [`soul`] — agent personality definition (`SOUL.md`)
 
+pub mod agents;
 pub mod args;
 pub mod auto_fetch;
 pub mod canvas;

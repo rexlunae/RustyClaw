@@ -96,6 +96,8 @@ pub(crate) enum UserInput {
     RefreshThreads,
     /// Switch to a different thread
     ThreadSwitch(u64),
+    /// Switch the connection's active agent (from the agent selector dialog)
+    AgentSwitch(String),
     /// Request the gateway-persisted history for a thread (cross-session/client).
     RequestThreadHistory(u64),
     /// Hatching name entered - save personalised SOUL.md
@@ -552,6 +554,9 @@ impl App {
                     let _ = client
                         .send(GatewayCommand::ThreadSwitch { thread_id })
                         .await;
+                }
+                Ok(UserInput::AgentSwitch(agent_id)) => {
+                    let _ = client.send(GatewayCommand::AgentSwitch { agent_id }).await;
                 }
                 Ok(UserInput::RequestThreadHistory(thread_id)) => {
                     let _ = client

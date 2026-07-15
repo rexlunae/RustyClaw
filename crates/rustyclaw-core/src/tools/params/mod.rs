@@ -944,5 +944,45 @@ pub fn agents_list_params() -> Vec<ToolParam> {
     vec![]
 }
 
+pub fn agents_create_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "name".into(),
+            description: "Display name for the new agent (required).".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "agentId".into(),
+            description: "Explicit agent id (lowercase letters, digits, '-', '_'). \
+                          Derived from the name when omitted."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "description".into(),
+            description: "What this agent is for (shown in agent lists).".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
+            name: "systemPrompt".into(),
+            description: "Base system prompt override for the new agent.".into(),
+            param_type: "string".into(),
+            required: false,
+        },
+    ]
+}
+
+pub fn agents_delete_params() -> Vec<ToolParam> {
+    vec![ToolParam {
+        name: "agentId".into(),
+        description: "Id of the agent to delete ('main' is protected).".into(),
+        param_type: "string".into(),
+        required: true,
+    }]
+}
+
 mod ext;
 pub use ext::*;

@@ -895,7 +895,7 @@ fn tool_category(name: &str) -> &'static str {
             "memory"
         }
         "cron" => "scheduling",
-        n if n.starts_with("sessions_") || n == "session_status" || n == "agents_list" => {
+        n if n.starts_with("sessions_") || n == "session_status" || n.starts_with("agents_") => {
             "sessions"
         }
         n if n.starts_with("secrets_") => "secrets",

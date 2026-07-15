@@ -16,6 +16,13 @@ pub struct RuntimeInfo {
     pub provider: Option<String>,
     pub model: Option<String>,
     pub base_url: Option<String>,
+    /// Root state directory (`~/.rustyclaw`), so tools can reach
+    /// installation-level state such as the agent registry.
+    pub settings_dir: Option<std::path::PathBuf>,
+    /// Display name of the `main` agent (from `Config::agent_name`).
+    pub main_agent_name: Option<String>,
+    /// Agent id the currently-dispatching conversation belongs to.
+    pub active_agent: Option<String>,
     /// Static host hardware profile.
     pub host: Option<SharedHostCapabilities>,
     /// Live load tracker (periodically sampled).
@@ -58,6 +65,42 @@ pub fn get_model_info() -> Option<(String, String, String)> {
             ctx.base_url.clone()?,
         ))
     })
+}
+
+/// Store the settings dir and main-agent display name so tools can build
+/// an agent registry.
+pub fn set_agent_registry_info(settings_dir: &std::path::Path, main_agent_name: &str) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.settings_dir = Some(settings_dir.to_path_buf());
+        ctx.main_agent_name = Some(main_agent_name.to_string());
+    }
+}
+
+/// Build an agent registry from the stored settings dir, if available.
+pub fn get_agent_registry() -> Option<crate::agents::AgentRegistry> {
+    runtime_ctx().lock().ok().and_then(|ctx| {
+        let dir = ctx.settings_dir.clone()?;
+        let name = ctx
+            .main_agent_name
+            .clone()
+            .unwrap_or_else(|| "RustyClaw".to_string());
+        Some(crate::agents::AgentRegistry::new(&dir, &name))
+    })
+}
+
+/// Record which agent the currently-dispatching conversation belongs to.
+pub fn set_active_agent(agent_id: &str) {
+    if let Ok(mut ctx) = runtime_ctx().lock() {
+        ctx.active_agent = Some(agent_id.to_string());
+    }
+}
+
+/// Agent id of the currently-dispatching conversation, when known.
+pub fn get_active_agent() -> Option<String> {
+    runtime_ctx()
+        .lock()
+        .ok()
+        .and_then(|ctx| ctx.active_agent.clone())
 }
 
 /// Store the host capabilities snapshot in the runtime context.

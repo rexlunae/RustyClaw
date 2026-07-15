@@ -242,6 +242,54 @@ pub(crate) fn handle_skill_subcommand(
     }
 }
 
+pub(crate) fn handle_agents_subcommand(parts: &[&str]) -> CommandResponse {
+    match parts.first().copied() {
+        None | Some("list") => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowAgents,
+        },
+        Some("new") | Some("create") => {
+            let name = parts.get(1..).map(|p| p.join(" ")).unwrap_or_default();
+            if name.is_empty() {
+                CommandResponse {
+                    messages: vec!["Usage: /agents new <name>".to_string()],
+                    action: CommandAction::None,
+                }
+            } else {
+                CommandResponse {
+                    messages: vec![format!("Creating agent '{}'…", name)],
+                    action: CommandAction::AgentNew(name),
+                }
+            }
+        }
+        Some("use") | Some("switch") => match parts.get(1).copied() {
+            Some(id) => CommandResponse {
+                messages: vec![format!("Switching to agent '{}'…", id)],
+                action: CommandAction::AgentSwitch(id.to_string()),
+            },
+            None => CommandResponse {
+                messages: vec!["Usage: /agents use <id>".to_string()],
+                action: CommandAction::None,
+            },
+        },
+        Some("rm") | Some("remove") | Some("delete") => match parts.get(1).copied() {
+            Some(id) => CommandResponse {
+                messages: vec![format!("Deleting agent '{}'…", id)],
+                action: CommandAction::AgentDelete(id.to_string()),
+            },
+            None => CommandResponse {
+                messages: vec!["Usage: /agents rm <id>".to_string()],
+                action: CommandAction::None,
+            },
+        },
+        Some(other) => CommandResponse {
+            // Bare `/agents <id>` switches directly, matching `/provider <id>`.
+            messages: vec![format!("Switching to agent '{}'…", other)],
+            action: CommandAction::AgentSwitch(other.to_string()),
+        },
+    }
+}
+
 pub(crate) fn handle_thread_subcommand(parts: &[&str]) -> CommandResponse {
     match parts.first().copied() {
         Some("new") => {

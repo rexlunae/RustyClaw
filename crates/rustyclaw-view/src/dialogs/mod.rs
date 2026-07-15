@@ -362,6 +362,38 @@ impl ApiKeyDialogData {
     }
 }
 
+// ── Agent selection ──────────────────────────────────────────────────────────
+
+/// One agent entry in the agent selector dialog.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct AgentItemData {
+    /// Agent id used when submitting the switch.
+    pub id: String,
+    /// Human-readable agent name.
+    pub name: String,
+    /// Optional description of the agent's purpose.
+    pub description: Option<String>,
+}
+
+/// Data for the agent selector dialog (switch between agents in this
+/// installation).
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct AgentSelectorData {
+    /// All agents in the installation.
+    pub agents: Vec<AgentItemData>,
+    /// Id of the agent currently active on this connection.
+    pub active_id: String,
+    /// Currently highlighted index.
+    pub cursor: usize,
+}
+
+impl AgentSelectorData {
+    /// The currently highlighted agent, if any.
+    pub fn selected(&self) -> Option<&AgentItemData> {
+        self.agents.get(self.cursor)
+    }
+}
+
 // ── Model selection ──────────────────────────────────────────────────────────
 
 /// Data for the model selector dialog.
