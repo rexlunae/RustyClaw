@@ -55,8 +55,8 @@ mod params;
 
 // Swarm tools
 use swarm_tools::{
-    exec_swarm_create, exec_swarm_list, exec_swarm_send, exec_swarm_status, exec_swarm_stop,
-    exec_swarm_templates,
+    exec_swarm_create, exec_swarm_delete, exec_swarm_list, exec_swarm_send, exec_swarm_status,
+    exec_swarm_stop, exec_swarm_templates,
 };
 
 // Re-export helpers for external use
@@ -375,11 +375,12 @@ pub fn tool_summary(name: &str) -> &'static str {
         "npm_manage" => "Manage Node.js packages & scripts via npm",
         "agent_setup" => "Set up local model infrastructure",
         "pdf" => "Analyze PDF files (extract text, metadata, page counts)",
-        "swarm_create" => "Create and start a multi-agent swarm",
-        "swarm_list" => "List all swarms and their status",
+        "swarm_create" => "Create a swarm of persistent registered agents",
+        "swarm_list" => "List all swarms and their health",
         "swarm_status" => "Get detailed status for a swarm",
-        "swarm_send" => "Send a task to a swarm agent",
-        "swarm_stop" => "Stop a running swarm",
+        "swarm_send" => "Send a task to a swarm member",
+        "swarm_stop" => "Complete a swarm's active sessions",
+        "swarm_delete" => "Delete a swarm and the agents it created",
         "swarm_templates" => "List available swarm templates",
         "todo" => "Plan and track multi-step tasks with a checklist",
         "skill_curator" => "Auto-propose, grade, merge, and prune skills",
@@ -540,6 +541,7 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &SWARM_STATUS,
         &SWARM_SEND,
         &SWARM_STOP,
+        &SWARM_DELETE,
         &SWARM_TEMPLATES,
         &TODO,
         &SKILL_CURATOR,

@@ -142,6 +142,7 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "swarm_status" => swarm_status_params(),
         "swarm_send" => swarm_send_params(),
         "swarm_stop" => swarm_stop_params(),
+        "swarm_delete" => swarm_delete_params(),
         "swarm_templates" => swarm_templates_params(),
         "host_info" => kernel_tools::host_info_params(),
         "load_status" => kernel_tools::load_status_params(),

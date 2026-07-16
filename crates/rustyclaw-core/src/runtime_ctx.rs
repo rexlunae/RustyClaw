@@ -44,6 +44,12 @@ pub type SharedRuntimeCtx = Arc<Mutex<RuntimeInfo>>;
 /// Global runtime context instance.
 static RUNTIME_CTX: OnceLock<SharedRuntimeCtx> = OnceLock::new();
 
+/// Serializes tests that mutate the process-wide runtime context (e.g. the
+/// published settings dir): without it, parallel tests would repoint each
+/// other's registries mid-flight.
+#[cfg(test)]
+pub(crate) static TEST_CTX_LOCK: Mutex<()> = Mutex::new(());
+
 /// Get the global runtime context.
 pub fn runtime_ctx() -> &'static SharedRuntimeCtx {
     RUNTIME_CTX.get_or_init(|| Arc::new(Mutex::new(RuntimeInfo::default())))
@@ -102,6 +108,11 @@ pub fn notify_triggers_changed() {
             notify.notify_one();
         }
     }
+}
+
+/// Build a swarm store from the stored settings dir, if available.
+pub fn get_swarm_store() -> Option<crate::swarm::SwarmStore> {
+    get_settings_dir().map(|dir| crate::swarm::SwarmStore::new(&dir))
 }
 
 /// Build an agent registry from the stored settings dir, if available.

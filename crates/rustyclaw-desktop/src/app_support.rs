@@ -993,68 +993,87 @@ pub(crate) fn build_directory_options(base_path: &str) -> Vec<rustyclaw_view::Di
 
 // ── Swarm helpers ───────────────────────────────────────────────────────────
 
-/// Build the current list of swarm infos from the global swarm manager.
-pub(crate) fn get_swarm_infos() -> Vec<SwarmData> {
-    use rustyclaw_core::swarm::swarm_manager;
+/// The swarm store and agent registry rooted at this installation's
+/// settings dir. Swarms are persistent groups of registered agents, so the
+/// desktop shares state with the gateway, CLI, and model tools.
+fn swarm_context() -> anyhow::Result<(
+    rustyclaw_core::swarm::SwarmStore,
+    rustyclaw_core::agents::AgentRegistry,
+)> {
+    let config = rustyclaw_core::config::Config::load(None)?;
+    Ok((
+        rustyclaw_core::swarm::SwarmStore::new(&config.settings_dir),
+        rustyclaw_core::agents::AgentRegistry::new(&config.settings_dir, &config.agent_name),
+    ))
+}
 
-    let mgr = match swarm_manager().lock() {
-        Ok(m) => m,
-        Err(_) => return Vec::new(),
+/// Build the current list of swarm infos from the on-disk store.
+pub(crate) fn get_swarm_infos() -> Vec<SwarmData> {
+    use rustyclaw_core::swarm::member_statuses;
+
+    let Ok((store, registry)) = swarm_context() else {
+        return Vec::new();
     };
 
-    mgr.list()
+    store
+        .list()
         .into_iter()
-        .map(|inst| SwarmData {
-            name: inst.config.name.clone(),
-            status: inst.status.to_string(),
-            description: inst.config.description.clone(),
-            tasks_routed: inst.tasks_routed,
-            uptime_secs: inst.runtime_secs(),
-            agents: inst
-                .config
-                .agents
-                .iter()
-                .map(|a| SwarmAgentData {
-                    id: a.id.clone(),
-                    name: a.name.clone(),
-                    role: a.role.to_string(),
-                    description: a.description.clone(),
-                    has_session: inst.agent_sessions.contains_key(&a.id),
-                })
-                .collect(),
+        .map(|record| {
+            let statuses = member_statuses(&record, &registry);
+            let registered = statuses.iter().filter(|s| s.registered).count();
+            SwarmData {
+                name: record.config.name.clone(),
+                status: if registered == statuses.len() {
+                    "ready".to_string()
+                } else {
+                    "degraded".to_string()
+                },
+                description: record.config.description.clone(),
+                active_sessions: statuses.iter().filter(|s| s.session_active).count() as u64,
+                age_secs: record.age_secs(),
+                agents: statuses
+                    .iter()
+                    .map(|s| SwarmAgentData {
+                        id: s.agent_id.clone(),
+                        name: s.name.clone(),
+                        role: s.role.to_string(),
+                        description: s.description.clone(),
+                        has_session: s.session_active,
+                    })
+                    .collect(),
+            }
         })
         .collect()
 }
 
-/// Create a swarm from a built-in template.
+/// Create a swarm from a built-in template, materializing its members as
+/// registered agents.
 pub(crate) fn create_swarm_from_template(template: &str) -> anyhow::Result<()> {
-    use rustyclaw_core::swarm::{builtin_templates, swarm_manager};
+    use rustyclaw_core::swarm::{builtin_templates, create_swarm};
 
-    let templates = builtin_templates();
-    let cfg = templates
+    let cfg = builtin_templates()
         .into_iter()
         .find(|t| t.name == template)
         .ok_or_else(|| anyhow::anyhow!("Unknown template: {}", template))?;
 
-    let name = cfg.name.clone();
-    let mgr = swarm_manager();
-    let mut m = mgr
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Swarm manager lock poisoned"))?;
-    m.create(cfg)?;
-    m.start(&name)?;
+    let (store, registry) = swarm_context()?;
+    create_swarm(&store, &registry, cfg)?;
     Ok(())
 }
 
-/// Stop a running swarm.
+/// Complete a swarm's active sessions (the swarm and its agents remain).
 pub(crate) fn stop_swarm(name: &str) -> anyhow::Result<()> {
-    use rustyclaw_core::swarm::swarm_manager;
+    use rustyclaw_core::swarm::stop_swarm_sessions;
 
-    let mgr = swarm_manager();
-    let mut m = mgr
-        .lock()
-        .map_err(|_| anyhow::anyhow!("Swarm manager lock poisoned"))?;
-    m.stop(name)?;
+    let (store, _registry) = swarm_context()?;
+    stop_swarm_sessions(&store, name)?;
+    Ok(())
+}
+
+/// Delete a swarm and the registered agents it created.
+pub(crate) fn delete_swarm(name: &str) -> anyhow::Result<()> {
+    let (store, registry) = swarm_context()?;
+    rustyclaw_core::swarm::delete_swarm(&store, &registry, name, false)?;
     Ok(())
 }
 

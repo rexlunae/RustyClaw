@@ -23,6 +23,7 @@ pub struct SwarmPanelProps {
     /// Callbacks
     pub on_create: EventHandler<String>,
     pub on_stop: EventHandler<String>,
+    pub on_delete: EventHandler<String>,
     pub on_close: EventHandler<()>,
     pub visible: bool,
 }
@@ -77,6 +78,10 @@ pub fn SwarmPanel(props: SwarmPanelProps) -> Element {
                         let name = swarm.name.clone();
                         move |_| props.on_stop.call(name.clone())
                     },
+                    on_delete: {
+                        let name = swarm.name.clone();
+                        move |_| props.on_delete.call(name.clone())
+                    },
                 }
             }
 
@@ -106,6 +111,7 @@ pub fn SwarmPanel(props: SwarmPanelProps) -> Element {
 struct SwarmCardProps {
     info: SwarmData,
     on_stop: EventHandler<()>,
+    on_delete: EventHandler<()>,
 }
 
 /// Renders a single swarm with its agents and controls.
@@ -130,9 +136,9 @@ fn SwarmCard(props: SwarmCardProps) -> Element {
             CardContent {
                 Tags { class: "swarm-card-meta",
                     Tag { rounded: true, class: "rc-chip", "🤖 {info.agents.len()} agents" }
-                    Tag { rounded: true, class: "rc-chip", "📋 {info.tasks_routed} tasks" }
-                    if info.uptime_secs > 0 {
-                        Tag { rounded: true, class: "rc-chip", "⏱ {info.uptime_secs}s" }
+                    Tag { rounded: true, class: "rc-chip", "🔄 {info.active_sessions} active" }
+                    if info.age_secs > 0 {
+                        Tag { rounded: true, class: "rc-chip", "⏱ {info.age_secs}s" }
                     }
                 }
 
@@ -156,16 +162,23 @@ fn SwarmCard(props: SwarmCardProps) -> Element {
                 }
             }
 
-            if info.is_stoppable() {
-                CardFooter { class: "swarm-card-footer",
-                    Buttons { alignment: dioxus_bulma::prelude::ButtonsAlignment::Right,
+            CardFooter { class: "swarm-card-footer",
+                Buttons { alignment: dioxus_bulma::prelude::ButtonsAlignment::Right,
+                    if info.is_stoppable() {
                         Button {
-                            color: BulmaColor::Danger,
+                            color: BulmaColor::Warning,
                             size: BulmaSize::Small,
                             outlined: true,
                             onclick: move |_| props.on_stop.call(()),
-                            "⏹ Stop"
+                            "⏹ Stop sessions"
                         }
+                    }
+                    Button {
+                        color: BulmaColor::Danger,
+                        size: BulmaSize::Small,
+                        outlined: true,
+                        onclick: move |_| props.on_delete.call(()),
+                        "🗑 Delete"
                     }
                 }
             }

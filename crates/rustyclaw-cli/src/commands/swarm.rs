@@ -1,7 +1,14 @@
 //! `swarm` command: create and drive multi-agent swarms.
+//!
+//! Swarms are persistent groups of registered agents recorded under
+//! `<settings_dir>/swarms/`, so this command shares state with the gateway
+//! and model tools instead of operating on process-local memory.
 
 use anyhow::Result;
 use clap::Subcommand;
+use rustyclaw_core::agents::AgentRegistry;
+use rustyclaw_core::config::Config;
+use rustyclaw_core::swarm::SwarmStore;
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum SwarmCommands {
@@ -10,6 +17,9 @@ pub(crate) enum SwarmCommands {
         /// Template name (default: 'swarm')
         #[arg(value_name = "TEMPLATE", default_value = "swarm")]
         template: String,
+        /// Name for the new swarm (defaults to the template's name)
+        #[arg(long, short, value_name = "NAME")]
+        name: Option<String>,
     },
     /// List all swarms
     List,
@@ -19,7 +29,7 @@ pub(crate) enum SwarmCommands {
         #[arg(value_name = "NAME")]
         name: String,
     },
-    /// Send a message/task to a swarm agent
+    /// Send a message/task to a swarm member
     Send {
         /// Swarm name
         #[arg(value_name = "SWARM")]
@@ -27,29 +37,50 @@ pub(crate) enum SwarmCommands {
         /// Message to send
         #[arg(value_name = "MESSAGE", trailing_var_arg = true)]
         message: Vec<String>,
-        /// Target agent ID (default: orchestrator)
+        /// Target member ID (default: the orchestrator)
         #[arg(long, short, value_name = "AGENT")]
         agent: Option<String>,
     },
-    /// Stop a running swarm
+    /// Complete a swarm's active sessions (agents remain)
     Stop {
         /// Swarm name
         #[arg(value_name = "NAME")]
         name: String,
     },
+    /// Delete a swarm and the agents it created
+    Delete {
+        /// Swarm name
+        #[arg(value_name = "NAME")]
+        name: String,
+        /// Keep the member agents in the registry
+        #[arg(long)]
+        keep_agents: bool,
+    },
     /// List available swarm templates
     Templates,
 }
 
+/// The store and registry rooted at this installation's settings dir.
+fn swarm_context(config: &Config) -> (SwarmStore, AgentRegistry) {
+    (
+        SwarmStore::new(&config.settings_dir),
+        AgentRegistry::new(&config.settings_dir, &config.agent_name),
+    )
+}
+
 /// Run a `swarm` subcommand.
-pub(crate) fn run(sub: SwarmCommands) -> Result<()> {
-    use rustyclaw_core::swarm::{builtin_templates, swarm_manager};
+pub(crate) fn run(sub: SwarmCommands, config: &Config) -> Result<()> {
+    use rustyclaw_core::swarm::{
+        builtin_templates, create_swarm, delete_swarm, member_statuses, send_to_member,
+        stop_swarm_sessions,
+    };
     use rustyclaw_core::theme as t;
 
+    let (store, registry) = swarm_context(config);
+
     match sub {
-        SwarmCommands::Create { template } => {
-            let templates = builtin_templates();
-            let cfg = templates
+        SwarmCommands::Create { template, name } => {
+            let mut cfg = builtin_templates()
                 .into_iter()
                 .find(|t| t.name == template)
                 .ok_or_else(|| {
@@ -58,79 +89,90 @@ pub(crate) fn run(sub: SwarmCommands) -> Result<()> {
                         template
                     )
                 })?;
-            let name = cfg.name.clone();
-            let agent_count = cfg.agents.len();
-            let mgr = swarm_manager();
-            let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            m.create(cfg)?;
-            m.start(&name)?;
+            if let Some(name) = name {
+                cfg.name = name;
+            }
+            let record = create_swarm(&store, &registry, cfg)?;
             println!(
                 "{}",
                 t::icon_ok(&format!(
-                    "Swarm '{}' created and started with {} agents",
-                    name, agent_count
+                    "Swarm '{}' created — {} members registered as agents",
+                    record.config.name,
+                    record.members.len()
                 ))
             );
-
-            let inst = m.get(&name).expect("just created");
-            for agent in &inst.config.agents {
-                println!("  • {} ({})", t::accent_bright(&agent.name), agent.role);
+            for member in &record.config.agents {
+                println!(
+                    "  • {} ({}) → {}",
+                    t::accent_bright(&member.name),
+                    member.role,
+                    record.agent_id_for(&member.id).unwrap_or("?"),
+                );
             }
         }
         SwarmCommands::List => {
-            let mgr = swarm_manager();
-            let m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            let swarms = m.list();
+            let swarms = store.list();
             if swarms.is_empty() {
                 println!(
                     "{}",
                     t::muted("No swarms defined. Use `rustyclaw swarm create` to create one.")
                 );
             } else {
-                for inst in swarms {
-                    let status = match inst.status {
-                        rustyclaw_core::swarm::SwarmStatus::Running => t::icon_ok("Running"),
-                        rustyclaw_core::swarm::SwarmStatus::Idle => t::info("Idle"),
-                        rustyclaw_core::swarm::SwarmStatus::Paused => t::info("Paused"),
-                        rustyclaw_core::swarm::SwarmStatus::Stopped => t::muted("Stopped"),
-                        rustyclaw_core::swarm::SwarmStatus::Error => t::icon_fail("Error"),
+                for record in swarms {
+                    let statuses = member_statuses(&record, &registry);
+                    let registered = statuses.iter().filter(|s| s.registered).count();
+                    let active = statuses.iter().filter(|s| s.session_active).count();
+                    let health = if registered == statuses.len() {
+                        t::icon_ok("ready")
+                    } else {
+                        t::icon_fail("degraded")
                     };
                     println!(
-                        "  {} {} — {} agents, {} tasks",
-                        status,
-                        t::accent_bright(&inst.config.name),
-                        inst.config.agents.len(),
-                        inst.tasks_routed,
+                        "  {} {} — {} agents ({} registered, {} active sessions)",
+                        health,
+                        t::accent_bright(&record.config.name),
+                        statuses.len(),
+                        registered,
+                        active,
                     );
                 }
             }
         }
         SwarmCommands::Status { name } => {
-            let mgr = swarm_manager();
-            let m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            let inst = m
+            let record = store
                 .get(&name)
                 .ok_or_else(|| anyhow::anyhow!("Swarm '{}' not found", name))?;
+            let statuses = member_statuses(&record, &registry);
+            let registered = statuses.iter().filter(|s| s.registered).count();
+            let health = if registered == statuses.len() {
+                "ready".to_string()
+            } else {
+                format!(
+                    "degraded ({}/{} agents present)",
+                    registered,
+                    statuses.len()
+                )
+            };
             println!(
-                "{} — {} ({}s uptime, {} tasks)",
-                t::accent_bright(&inst.config.name),
-                inst.status,
-                inst.runtime_secs(),
-                inst.tasks_routed,
+                "{} — {} ({}s old)",
+                t::accent_bright(&record.config.name),
+                health,
+                record.age_secs(),
             );
             println!();
-            println!("{}", t::info("Agents:"));
-            for agent in &inst.config.agents {
-                let session = inst
-                    .agent_sessions
-                    .get(&agent.id)
-                    .map(|s| format!(" [{}]", s))
-                    .unwrap_or_default();
+            println!("{}", t::info("Members:"));
+            for s in &statuses {
                 println!(
-                    "  • {} ({}){}",
-                    t::accent_bright(&agent.name),
-                    agent.role,
-                    session
+                    "  • {} ({}) → {}{}{}",
+                    t::accent_bright(&s.name),
+                    s.role,
+                    s.agent_id,
+                    if s.registered { "" } else { " [missing]" },
+                    if s.session_active {
+                        " [session active]"
+                    } else {
+                        ""
+                    },
                 );
             }
         }
@@ -143,80 +185,41 @@ pub(crate) fn run(sub: SwarmCommands) -> Result<()> {
             if msg.trim().is_empty() {
                 anyhow::bail!("Message cannot be empty");
             }
-            let mgr = swarm_manager();
-            let target = agent.as_deref().unwrap_or("orchestrator");
-
-            // Phase 1: validate swarm/agent and extract info.
-            let (agent_name, agent_instructions, existing_session) = {
-                let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-                let inst = m
-                    .get_mut(&swarm)
-                    .ok_or_else(|| anyhow::anyhow!("Swarm '{}' not found", swarm))?;
-                if inst.status != rustyclaw_core::swarm::SwarmStatus::Running {
-                    anyhow::bail!("Swarm '{}' is not running", swarm);
-                }
-                let a = inst
-                    .config
-                    .agents
-                    .iter()
-                    .find(|a| a.id == target)
-                    .ok_or_else(|| {
-                        let ids: Vec<&str> =
-                            inst.config.agents.iter().map(|a| a.id.as_str()).collect();
-                        anyhow::anyhow!(
-                            "Agent '{}' not found in swarm '{}'. Available: {}",
-                            target,
-                            swarm,
-                            ids.join(", ")
-                        )
-                    })?;
-                let name = a.name.clone();
-                let instructions = a.instructions.clone();
-                let existing = inst.agent_sessions.get(target).cloned();
-                inst.record_task();
-                (name, instructions, existing)
-            };
-
-            // Phase 2: route via session manager (no swarm lock held).
-            let session_mgr = rustyclaw_core::sessions::session_manager();
-            let mut sess_mgr = session_mgr
-                .lock()
-                .map_err(|_| anyhow::anyhow!("Session manager lock error"))?;
-
-            let session_key = if let Some(existing) = existing_session {
-                sess_mgr.send_message(&existing, &msg)?;
-                existing
-            } else {
-                let label = format!("swarm:{}:{}", swarm, target);
-                let task = format!(
-                    "[Swarm: {} | Agent: {}]\n\n{}\n\nSystem Instructions:\n{}",
-                    swarm, agent_name, msg, agent_instructions
-                );
-                let key = sess_mgr.spawn_subagent(target, &task, Some(label), None);
-                drop(sess_mgr);
-
-                // Phase 3: store session key back.
-                let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-                if let Some(inst) = m.get_mut(&swarm) {
-                    inst.agent_sessions.insert(target.to_string(), key.clone());
-                }
-                key
-            };
-
+            let route = send_to_member(&store, &registry, &swarm, agent.as_deref(), &msg)?;
             println!(
                 "{}",
                 t::icon_ok(&format!(
-                    "Task routed to {} ({}) in swarm '{}' — session: {}",
-                    agent_name, target, swarm, session_key
+                    "Task routed to {} ({}) in swarm '{}' — {} session {}",
+                    route.member_name,
+                    route.agent_id,
+                    swarm,
+                    if route.reused { "existing" } else { "new" },
+                    route.session_key,
                 ))
             );
             println!("  Message: {}", t::muted(&msg));
         }
         SwarmCommands::Stop { name } => {
-            let mgr = swarm_manager();
-            let mut m = mgr.lock().map_err(|_| anyhow::anyhow!("Lock error"))?;
-            m.stop(&name)?;
-            println!("{}", t::icon_ok(&format!("Swarm '{}' stopped", name)));
+            let completed = stop_swarm_sessions(&store, &name)?;
+            println!(
+                "{}",
+                t::icon_ok(&format!(
+                    "Swarm '{}': {} active session(s) completed (agents remain)",
+                    name, completed
+                ))
+            );
+        }
+        SwarmCommands::Delete { name, keep_agents } => {
+            let report = delete_swarm(&store, &registry, &name, keep_agents)?;
+            println!(
+                "{}",
+                t::icon_ok(&format!(
+                    "Swarm '{}' deleted — {} agent(s) removed, {} kept",
+                    name,
+                    report.agents_deleted.len(),
+                    report.agents_kept.len(),
+                ))
+            );
         }
         SwarmCommands::Templates => {
             let templates = builtin_templates();

@@ -818,7 +818,7 @@ async fn main() -> Result<()> {
         Commands::ClawHub(args) => commands::clawhub::run(args, &mut config)?,
 
         // ── Swarm sub-commands ──────────────────────────────────
-        Commands::Swarm(sub) => commands::swarm::run(sub)?,
+        Commands::Swarm(sub) => commands::swarm::run(sub, &config)?,
     }
 
     Ok(())
