@@ -71,9 +71,6 @@ pub enum ToolError {
     /// Blocking-task join failure (the worker panicked or was cancelled).
     #[error(transparent)]
     Join(#[from] tokio::task::JoinError),
-    /// Swarm-manager failure.
-    #[error(transparent)]
-    Swarm(#[from] crate::swarm::SwarmError),
     /// Skill-manager failure.
     #[error(transparent)]
     Skill(#[from] crate::skills::SkillError),

@@ -10,7 +10,7 @@ use dioxus_bulma::prelude::{
 use rustyclaw_view::tracing;
 
 use crate::app_support::{
-    connect_to_gateway, create_swarm_from_template, get_swarm_infos, stop_swarm,
+    connect_to_gateway, create_swarm_from_template, delete_swarm, get_swarm_infos, stop_swarm,
 };
 use crate::components::*;
 use crate::state::{AppState, Theme};
@@ -321,6 +321,14 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         state.write().push_notice(
                             MessageRole::Error,
                             format!("Failed to stop swarm: {}", e),
+                        );
+                    }
+                },
+                on_delete: move |name: String| {
+                    if let Err(e) = delete_swarm(&name) {
+                        state.write().push_notice(
+                            MessageRole::Error,
+                            format!("Failed to delete swarm: {}", e),
                         );
                     }
                 },

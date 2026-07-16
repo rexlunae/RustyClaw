@@ -103,6 +103,9 @@ mod tests {
 
     #[test]
     fn create_and_delete_roundtrip() {
+        let _guard = crate::runtime_ctx::TEST_CTX_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
         crate::runtime_ctx::set_agent_registry_info(tmp.path(), "RustyClaw");
 

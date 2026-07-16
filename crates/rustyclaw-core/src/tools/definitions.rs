@@ -1026,43 +1026,55 @@ pub static PDF: ToolDef = ToolDef {
 
 pub static SWARM_CREATE: ToolDef = ToolDef {
     name: "swarm_create",
-    description: "Create and start a multi-agent swarm from a built-in template or custom config. \
-                  Templates: 'swarm' (8 agents: orchestrator + 7 specialists covering research, \
-                  data analysis, slides, docs, images, video, and assistant tasks). \
-                  Use swarm_templates to see available templates.",
+    description: "Create a persistent multi-agent swarm from a built-in template or custom \
+                  config. Every member is materialized as a registered agent (visible in \
+                  agents_list, targetable with sessions_spawn) whose system prompt carries \
+                  its role instructions and the swarm roster. Templates: 'swarm' (8 agents: \
+                  orchestrator + 7 specialists). Use swarm_templates to see templates.",
     parameters: vec![],
     execute: exec_swarm_create,
 };
 
 pub static SWARM_LIST: ToolDef = ToolDef {
     name: "swarm_list",
-    description: "List all swarms and their current status (running, idle, stopped).",
+    description: "List all swarms with derived health (ready/degraded), member counts, and \
+                  active session counts.",
     parameters: vec![],
     execute: exec_swarm_list,
 };
 
 pub static SWARM_STATUS: ToolDef = ToolDef {
     name: "swarm_status",
-    description: "Get detailed status for a named swarm including agents, communication flows, \
-                  session mappings, and task routing statistics.",
+    description: "Get detailed status for a named swarm: each member's registry agent id, \
+                  whether its agent still exists, active sessions, and communication flows.",
     parameters: vec![],
     execute: exec_swarm_status,
 };
 
 pub static SWARM_SEND: ToolDef = ToolDef {
     name: "swarm_send",
-    description: "Send a task or message to a specific agent within a running swarm. \
-                  If no agent is specified, the message is routed to the orchestrator. \
-                  The orchestrator can then delegate to the appropriate specialist(s).",
+    description: "Send a task or message to a swarm member. If no agent is specified, the \
+                  message is routed to the orchestrator, which can delegate to the right \
+                  specialist(s). Repeated sends to the same member reuse its active session.",
     parameters: vec![],
     execute: exec_swarm_send,
 };
 
 pub static SWARM_STOP: ToolDef = ToolDef {
     name: "swarm_stop",
-    description: "Stop a running swarm and clean up all its agent sessions.",
+    description: "Complete a swarm's active sessions. The swarm and its registered agents \
+                  remain; use swarm_delete to remove them entirely.",
     parameters: vec![],
     execute: exec_swarm_stop,
+};
+
+pub static SWARM_DELETE: ToolDef = ToolDef {
+    name: "swarm_delete",
+    description: "Delete a swarm: complete its sessions, remove the registered agents it \
+                  created (agents made or replaced by hand are kept), and drop the swarm \
+                  record. Set keepAgents to keep all member agents in the registry.",
+    parameters: vec![],
+    execute: exec_swarm_delete,
 };
 
 pub static SWARM_TEMPLATES: ToolDef = ToolDef {

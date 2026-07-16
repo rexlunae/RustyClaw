@@ -1,30 +1,71 @@
 //! Swarm management tools.
 //!
-//! Provides agent-callable tools for creating, listing, inspecting, messaging,
-//! and stopping swarms.
+//! Agent-callable tools for creating, listing, inspecting, messaging,
+//! stopping, and deleting swarms. Swarms are persistent groups of
+//! registered agents (see [`crate::swarm`]): `swarm_create` materializes
+//! every member as a real agent in the registry, and `swarm_send` routes
+//! tasks into sub-agent sessions under those agents.
 
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, instrument};
 
-use crate::swarm::{SwarmConfig, SwarmStatus, builtin_templates, swarm_manager};
+use crate::agents::AgentRegistry;
+use crate::swarm::{
+    FlowKind, SwarmConfig, SwarmRecord, SwarmStore, builtin_templates, create_swarm, delete_swarm,
+    member_statuses, send_to_member, stop_swarm_sessions,
+};
+
+/// The store and registry every swarm tool operates on. Both are
+/// filesystem-backed off the gateway's settings dir, so tools, the CLI,
+/// and the gateway always see the same swarms and agents.
+fn swarm_context() -> Result<(SwarmStore, AgentRegistry), ToolError> {
+    let store = crate::runtime_ctx::get_swarm_store();
+    let registry = crate::runtime_ctx::get_agent_registry();
+    match (store, registry) {
+        (Some(store), Some(registry)) => Ok((store, registry)),
+        _ => Err(ToolError::from(
+            "Swarm store unavailable: the gateway has not published its settings directory",
+        )),
+    }
+}
+
+fn summarize(record: &SwarmRecord, registry: &AgentRegistry) -> String {
+    let statuses = member_statuses(record, registry);
+    let registered = statuses.iter().filter(|s| s.registered).count();
+    let active = statuses.iter().filter(|s| s.session_active).count();
+    let health = if registered == statuses.len() {
+        "ready"
+    } else {
+        "degraded"
+    };
+    format!(
+        "{} — {} agents ({} registered, {} active sessions) [{}]\n   {}",
+        record.config.name,
+        statuses.len(),
+        registered,
+        active,
+        health,
+        record.config.description,
+    )
+}
 
 // ── swarm_create ────────────────────────────────────────────────────────────
 
-/// Create a new swarm from a built-in template or inline JSON config.
+/// Create a swarm from a built-in template or inline JSON config,
+/// materializing every member as a persistent registered agent.
 #[instrument(skip(args, _workspace_dir))]
 pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let template_name = args.get("template").and_then(|v| v.as_str());
     let custom_config = args.get("config");
 
-    let config: SwarmConfig = if let Some(cfg_val) = custom_config {
+    let mut config: SwarmConfig = if let Some(cfg_val) = custom_config {
         serde_json::from_value(cfg_val.clone())
             .map_err(|e| ToolError::context("Invalid swarm config", e))?
     } else {
         let tpl_name = template_name.unwrap_or("swarm");
-        let templates = builtin_templates();
-        templates
+        builtin_templates()
             .into_iter()
             .find(|t| t.name == tpl_name)
             .ok_or_else(|| {
@@ -36,71 +77,58 @@ pub fn exec_swarm_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
                 )
             })?
     };
+    // An explicit name renames a template instantiation (so one template
+    // can back several swarms).
+    if let Some(name) = args.get("name").and_then(|v| v.as_str()) {
+        config.name = name.to_string();
+    }
 
-    let name = config.name.clone();
-    debug!(swarm = %name, agents = config.agents.len(), "Creating swarm");
+    debug!(swarm = %config.name, agents = config.agents.len(), "Creating swarm");
 
-    let manager = swarm_manager();
-    let mut mgr = manager
-        .lock()
-        .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
+    let (store, registry) = swarm_context()?;
+    let record = create_swarm(&store, &registry, config).map_err(|e| format!("{e:#}"))?;
 
-    mgr.create(config)?;
-    mgr.start(&name)?;
-
-    let inst = mgr.get(&name).ok_or("Swarm vanished after creation")?;
-
-    let agent_list: Vec<String> = inst
+    let agent_list: Vec<String> = record
         .config
         .agents
         .iter()
-        .map(|a| format!("  - {} ({})", a.name, a.role))
+        .map(|a| {
+            format!(
+                "  - {} ({}) → agent id: {}",
+                a.name,
+                a.role,
+                record.agent_id_for(&a.id).unwrap_or("?"),
+            )
+        })
         .collect();
 
     Ok(format!(
-        "Swarm '{}' created and started with {} agents:\n{}",
-        name,
-        inst.config.agents.len(),
+        "Swarm '{}' created. Each member is now a registered agent:\n{}\n\n\
+         Route tasks with swarm_send, or target members directly with \
+         sessions_spawn using the agent ids above.",
+        record.config.name,
         agent_list.join("\n")
     ))
 }
 
 // ── swarm_list ──────────────────────────────────────────────────────────────
 
-/// List all swarms and their status.
+/// List all swarms with derived health.
 #[instrument(skip(args, _workspace_dir))]
 pub fn exec_swarm_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let _ = args; // no parameters needed
-    let manager = swarm_manager();
-    let mgr = manager
-        .lock()
-        .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
+    let (store, registry) = swarm_context()?;
 
-    let swarms = mgr.list();
+    let swarms = store.list();
     if swarms.is_empty() {
         return Ok("No swarms defined. Use swarm_create to create one (template: 'swarm').".into());
     }
 
     let mut output = String::from("Swarms:\n\n");
-    for inst in swarms {
-        let status_icon = match inst.status {
-            SwarmStatus::Running => "🔄",
-            SwarmStatus::Idle => "⏸",
-            SwarmStatus::Paused => "⏯",
-            SwarmStatus::Stopped => "⏹",
-            SwarmStatus::Error => "❌",
-        };
-        output.push_str(&format!(
-            "{} {} — {} agents, {} tasks, {}s uptime\n   {}\n",
-            status_icon,
-            inst.config.name,
-            inst.config.agents.len(),
-            inst.tasks_routed,
-            inst.runtime_secs(),
-            inst.config.description,
-        ));
+    for record in &swarms {
+        output.push_str(&summarize(record, &registry));
+        output.push('\n');
     }
-
     Ok(output)
 }
 
@@ -114,49 +142,58 @@ pub fn exec_swarm_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
 
-    let manager = swarm_manager();
-    let mgr = manager
-        .lock()
-        .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
-
-    let inst = mgr
+    let (store, registry) = swarm_context()?;
+    let record = store
         .get(name)
         .ok_or_else(|| format!("Swarm '{name}' not found"))?;
 
-    let mut output = format!(
-        "Swarm: {}\nStatus: {}\nDescription: {}\nAgents: {}\nTasks Routed: {}\nUptime: {}s\n\n",
-        inst.config.name,
-        inst.status,
-        inst.config.description,
-        inst.config.agents.len(),
-        inst.tasks_routed,
-        inst.runtime_secs(),
-    );
+    let statuses = member_statuses(&record, &registry);
+    let registered = statuses.iter().filter(|s| s.registered).count();
+    let health = if registered == statuses.len() {
+        "ready"
+    } else {
+        "degraded (missing agents — recreate the swarm)"
+    };
 
-    output.push_str("Agents:\n");
-    for agent in &inst.config.agents {
-        let session_status = inst
-            .agent_sessions
-            .get(&agent.id)
-            .map(|s| format!(" [session: {s}]"))
-            .unwrap_or_default();
+    let mut output = format!(
+        "Swarm: {}\nHealth: {}\nDescription: {}\nAgents: {}\nAge: {}s\n\nMembers:\n",
+        record.config.name,
+        health,
+        record.config.description,
+        statuses.len(),
+        record.age_secs(),
+    );
+    for s in &statuses {
         output.push_str(&format!(
-            "  {} ({}) — {}{}\n",
-            agent.name, agent.role, agent.description, session_status
+            "  {} {} ({}) → {} — {}{}\n",
+            if s.registered {
+                "✅"
+            } else {
+                "⚠️ missing"
+            },
+            s.name,
+            s.role,
+            s.agent_id,
+            s.description,
+            if s.session_active {
+                " [session active]"
+            } else {
+                ""
+            },
         ));
     }
 
     output.push_str("\nCommunication Flows:\n");
-    for flow in &inst.config.flows {
-        if flow.kind == crate::swarm::FlowKind::SendMessage {
+    for flow in &record.config.flows {
+        if flow.kind == FlowKind::SendMessage {
             output.push_str(&format!("  {} → {} [{}]\n", flow.from, flow.to, flow.kind));
         }
     }
-    let handoff_count = inst
+    let handoff_count = record
         .config
         .flows
         .iter()
-        .filter(|f| f.kind == crate::swarm::FlowKind::Handoff)
+        .filter(|f| f.kind == FlowKind::Handoff)
         .count();
     output.push_str(&format!(
         "  + {} bidirectional Handoff flows\n",
@@ -168,111 +205,43 @@ pub fn exec_swarm_status(args: &Value, _workspace_dir: &Path) -> ToolResult {
 
 // ── swarm_send ──────────────────────────────────────────────────────────────
 
-/// Send a task/message to a specific agent within a swarm.
+/// Send a task/message to a swarm member (default: the orchestrator).
 #[instrument(skip(args, _workspace_dir))]
 pub fn exec_swarm_send(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let swarm_name = args
         .get("swarm")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: swarm".to_string())?;
-
-    let agent_id = args.get("agent").and_then(|v| v.as_str());
-
+    let agent = args.get("agent").and_then(|v| v.as_str());
     let message = args
         .get("message")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: message".to_string())?;
 
-    // Default to orchestrator if no agent specified
-    let target = agent_id.unwrap_or("orchestrator");
-
-    let manager = swarm_manager();
-
-    // Phase 1: validate and extract info while holding the swarm lock.
-    let (agent_name, agent_instructions, existing_session) = {
-        let mut mgr = manager
-            .lock()
-            .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
-
-        let inst = mgr
-            .get_mut(swarm_name)
-            .ok_or_else(|| format!("Swarm '{swarm_name}' not found"))?;
-
-        if inst.status != SwarmStatus::Running {
-            return Err(format!(
-                "Swarm '{swarm_name}' is not running (status: {})",
-                inst.status
-            )
-            .into());
-        }
-
-        let agent = inst
-            .config
-            .agents
-            .iter()
-            .find(|a| a.id == target)
-            .ok_or_else(|| {
-                let ids: Vec<&str> = inst.config.agents.iter().map(|a| a.id.as_str()).collect();
-                format!(
-                    "Agent '{target}' not found in swarm '{swarm_name}'. Available: {}",
-                    ids.join(", ")
-                )
-            })?;
-
-        let name = agent.name.clone();
-        let instructions = agent.instructions.clone();
-        let existing = inst.agent_sessions.get(target).cloned();
-
-        inst.record_task();
-
-        (name, instructions, existing)
-    };
-    // Swarm lock released here.
-
     debug!(
         swarm = %swarm_name,
-        agent = %target,
+        agent,
         message_len = message.len(),
-        "Routing message to swarm agent"
+        "Routing message to swarm member"
     );
 
-    // Phase 2: interact with the session manager (no swarm lock held).
-    let session_mgr = crate::sessions::session_manager();
-    let mut sess_mgr = session_mgr
-        .lock()
-        .map_err(|_| "Failed to acquire session manager lock".to_string())?;
-
-    let session_key = if let Some(existing) = existing_session {
-        sess_mgr.send_message(&existing, message)?;
-        existing
-    } else {
-        let label = format!("swarm:{}:{}", swarm_name, target);
-        let task = format!(
-            "[Swarm: {} | Agent: {}]\n\n{}\n\nSystem Instructions:\n{}",
-            swarm_name, agent_name, message, agent_instructions
-        );
-        let key = sess_mgr.spawn_subagent(target, &task, Some(label), None);
-        drop(sess_mgr);
-
-        // Phase 3: store session key back in the swarm manager.
-        let mut mgr = manager
-            .lock()
-            .map_err(|_| "Failed to re-acquire swarm manager lock".to_string())?;
-        if let Some(inst) = mgr.get_mut(swarm_name) {
-            inst.agent_sessions.insert(target.to_string(), key.clone());
-        }
-        key
-    };
+    let (store, registry) = swarm_context()?;
+    let route = send_to_member(&store, &registry, swarm_name, agent, message)
+        .map_err(|e| format!("{e:#}"))?;
 
     Ok(format!(
-        "Message routed to {} ({}) in swarm '{}'. Session: {}",
-        agent_name, target, swarm_name, session_key
+        "Message routed to {} ({}) in swarm '{}' — {} session {}",
+        route.member_name,
+        route.agent_id,
+        swarm_name,
+        if route.reused { "existing" } else { "new" },
+        route.session_key,
     ))
 }
 
 // ── swarm_stop ──────────────────────────────────────────────────────────────
 
-/// Stop a running swarm and clean up its agent sessions.
+/// Complete a swarm's active sessions; the swarm and its agents remain.
 #[instrument(skip(args, _workspace_dir))]
 pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> ToolResult {
     let name = args
@@ -280,39 +249,52 @@ pub fn exec_swarm_stop(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
 
-    debug!(swarm = %name, "Stopping swarm");
-
-    let manager = swarm_manager();
-
-    // Phase 1: extract session keys while holding the swarm lock.
-    let session_keys: Vec<String> = {
-        let mgr = manager
-            .lock()
-            .map_err(|_| "Failed to acquire swarm manager lock".to_string())?;
-        mgr.get(name)
-            .map(|inst| inst.agent_sessions.values().cloned().collect())
-            .unwrap_or_default()
-    };
-
-    // Phase 2: complete sessions (no swarm lock held).
-    let session_mgr = crate::sessions::session_manager();
-    if let Ok(mut sess_mgr) = session_mgr.lock() {
-        for key in &session_keys {
-            let _ = sess_mgr.complete_session(key);
-        }
-    }
-
-    // Phase 3: re-acquire swarm lock and stop.
-    let mut mgr = manager
-        .lock()
-        .map_err(|_| "Failed to re-acquire swarm manager lock".to_string())?;
-    mgr.stop(name)?;
+    debug!(swarm = %name, "Stopping swarm sessions");
+    let (store, _registry) = swarm_context()?;
+    let completed = stop_swarm_sessions(&store, name).map_err(|e| format!("{e:#}"))?;
 
     Ok(format!(
-        "Swarm '{}' stopped. {} agent sessions completed.",
-        name,
-        session_keys.len()
+        "Swarm '{}': {} active session(s) completed. The swarm and its \
+         agents remain — use swarm_delete to remove them.",
+        name, completed
     ))
+}
+
+// ── swarm_delete ────────────────────────────────────────────────────────────
+
+/// Delete a swarm: complete its sessions, remove the member agents it
+/// created, and drop the record.
+#[instrument(skip(args, _workspace_dir))]
+pub fn exec_swarm_delete(args: &Value, _workspace_dir: &Path) -> ToolResult {
+    let name = args
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "Missing required parameter: name".to_string())?;
+    let keep_agents = args
+        .get("keepAgents")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+
+    debug!(swarm = %name, keep_agents, "Deleting swarm");
+    let (store, registry) = swarm_context()?;
+    let report =
+        delete_swarm(&store, &registry, name, keep_agents).map_err(|e| format!("{e:#}"))?;
+
+    let mut output = format!(
+        "Swarm '{}' deleted. {} session(s) completed, {} agent(s) removed",
+        name,
+        report.sessions_completed,
+        report.agents_deleted.len(),
+    );
+    if !report.agents_kept.is_empty() {
+        output.push_str(&format!(
+            ", {} kept ({})",
+            report.agents_kept.len(),
+            report.agents_kept.join(", ")
+        ));
+    }
+    output.push('.');
+    Ok(output)
 }
 
 // ── swarm_templates ─────────────────────────────────────────────────────────
@@ -338,4 +320,67 @@ pub fn exec_swarm_templates(args: &Value, _workspace_dir: &Path) -> ToolResult {
     }
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn ws() -> &'static Path {
+        Path::new("/tmp")
+    }
+
+    /// End-to-end tool flow over a temp settings dir published via
+    /// runtime_ctx (the same wiring the gateway performs at startup).
+    #[test]
+    fn swarm_tool_lifecycle() {
+        let _guard = crate::runtime_ctx::TEST_CTX_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        crate::runtime_ctx::set_agent_registry_info(tmp.path(), "RustyClaw");
+
+        let out = exec_swarm_create(&json!({"name": "tool-crew"}), ws()).unwrap();
+        assert!(out.contains("tool-crew"));
+        assert!(out.contains("tool-crew-orchestrator"));
+
+        let out = exec_swarm_list(&json!({}), ws()).unwrap();
+        assert!(out.contains("tool-crew"));
+        assert!(out.contains("[ready]"));
+
+        let out = exec_swarm_send(&json!({"swarm": "tool-crew", "message": "go"}), ws()).unwrap();
+        assert!(out.contains("new session"));
+
+        let out = exec_swarm_status(&json!({"name": "tool-crew"}), ws()).unwrap();
+        assert!(out.contains("Health: ready"));
+        assert!(out.contains("[session active]"));
+
+        let out = exec_swarm_stop(&json!({"name": "tool-crew"}), ws()).unwrap();
+        assert!(out.contains("1 active session(s) completed"));
+
+        let out = exec_swarm_delete(&json!({"name": "tool-crew"}), ws()).unwrap();
+        assert!(out.contains("deleted"));
+        assert!(
+            exec_swarm_status(&json!({"name": "tool-crew"}), ws()).is_err(),
+            "deleted swarm must not have status"
+        );
+    }
+
+    #[test]
+    fn create_requires_known_template() {
+        let _guard = crate::runtime_ctx::TEST_CTX_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        crate::runtime_ctx::set_agent_registry_info(tmp.path(), "RustyClaw");
+        assert!(exec_swarm_create(&json!({"template": "nope"}), ws()).is_err());
+    }
+
+    #[test]
+    fn send_and_delete_require_name_params() {
+        assert!(exec_swarm_send(&json!({"message": "x"}), ws()).is_err());
+        assert!(exec_swarm_send(&json!({"swarm": "s"}), ws()).is_err());
+        assert!(exec_swarm_delete(&json!({}), ws()).is_err());
+    }
 }

@@ -889,6 +889,15 @@ pub fn swarm_create_params() -> Vec<ToolParam> {
             required: false,
         },
         ToolParam {
+            name: "name".into(),
+            description: "Name for the new swarm (lowercase letters, digits, '-', '_'). \
+                          Overrides the template's name so one template can back several \
+                          swarms. Becomes the prefix of every member's agent id."
+                .into(),
+            param_type: "string".into(),
+            required: false,
+        },
+        ToolParam {
             name: "config".into(),
             description: "Full swarm configuration as a JSON object. \
                           Overrides the template parameter. Must include \
@@ -941,10 +950,29 @@ pub fn swarm_send_params() -> Vec<ToolParam> {
 pub fn swarm_stop_params() -> Vec<ToolParam> {
     vec![ToolParam {
         name: "name".into(),
-        description: "Name of the swarm to stop.".into(),
+        description: "Name of the swarm whose active sessions to complete.".into(),
         param_type: "string".into(),
         required: true,
     }]
+}
+
+pub fn swarm_delete_params() -> Vec<ToolParam> {
+    vec![
+        ToolParam {
+            name: "name".into(),
+            description: "Name of the swarm to delete.".into(),
+            param_type: "string".into(),
+            required: true,
+        },
+        ToolParam {
+            name: "keepAgents".into(),
+            description: "Keep the member agents in the registry instead of deleting \
+                          the ones this swarm created (default false)."
+                .into(),
+            param_type: "boolean".into(),
+            required: false,
+        },
+    ]
 }
 
 pub fn swarm_templates_params() -> Vec<ToolParam> {
