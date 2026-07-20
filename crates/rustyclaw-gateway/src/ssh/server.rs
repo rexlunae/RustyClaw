@@ -5,6 +5,24 @@
 //! [`Transport`] abstraction.
 
 use super::*;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+/// Maximum failed auth attempts per IP before temporary ban.
+const MAX_AUTH_ATTEMPTS: u32 = 10;
+
+/// Duration of temporary ban after exceeding auth attempts.
+const BAN_DURATION: Duration = Duration::from_secs(60);
+
+/// Rate limit state keyed by peer IP address.
+struct AuthRateLimit {
+    /// Count of failed auth attempts.
+    failures: u32,
+    /// Time of the first failure in the current window.
+    window_start: Instant,
+    /// Time when a temporary ban ends (None if not banned).
+    banned_until: Option<Instant>,
+}
 
 /// SSH server that accepts connections and creates transports.
 pub struct SshServer {
@@ -130,6 +148,7 @@ impl SshServer {
                 authenticated_username: None,
                 connection_tx: tx,
                 sessions: Arc::new(Mutex::new(HashMap::new())),
+                rate_limiter: Arc::new(Mutex::new(HashMap::new())),
             };
 
             // Use Server trait's run_on_address method
@@ -177,6 +196,8 @@ struct SshHandler {
     authenticated_username: Option<String>,
     connection_tx: mpsc::Sender<SshTransport>,
     sessions: Arc<Mutex<HashMap<ChannelId, ClientSession>>>,
+    /// Per-IP rate limiter for auth attempts (shared across clones via Arc).
+    rate_limiter: Arc<Mutex<HashMap<String, AuthRateLimit>>>,
 }
 
 impl Clone for SshHandler {
@@ -189,6 +210,7 @@ impl Clone for SshHandler {
             authenticated_username: self.authenticated_username.clone(),
             connection_tx: self.connection_tx.clone(),
             sessions: self.sessions.clone(),
+            rate_limiter: self.rate_limiter.clone(),
         }
     }
 }
@@ -274,6 +296,57 @@ impl Handler for SshHandler {
         let fingerprint = key_fingerprint(public_key);
         debug!(user = user, fingerprint = %fingerprint, "Public key auth attempt");
 
+        // Rate limit: track failed attempts per IP
+        if let Some(addr) = self.peer_addr {
+            let ip = addr.ip().to_string();
+            let mut limiter = self.rate_limiter.lock().await;
+            let now = Instant::now();
+
+            // Garbage-collect stale entries
+            limiter.retain(|_, rl| {
+                // Remove entries that are neither banned nor have recent failures
+                if let Some(banned_until) = rl.banned_until {
+                    now < banned_until
+                } else {
+                    now.duration_since(rl.window_start) < BAN_DURATION
+                }
+            });
+
+            let state = limiter.entry(ip.clone()).or_insert(AuthRateLimit {
+                failures: 0,
+                window_start: now,
+                banned_until: None,
+            });
+
+            // Check if currently banned
+            if let Some(banned_until) = state.banned_until {
+                if now < banned_until {
+                    warn!(
+                        ip = %ip,
+                        user = user,
+                        fingerprint = %fingerprint,
+                        remaining_secs = banned_until.saturating_duration_since(now).as_secs(),
+                        "SSH auth rate limited (temporary ban active)"
+                    );
+                    return Ok(Auth::reject());
+                } else {
+                    // Ban expired — reset
+                    state.failures = 0;
+                    state.window_start = now;
+                    state.banned_until = None;
+                }
+            }
+
+            // Reset window if it has expired
+            if now.duration_since(state.window_start) >= BAN_DURATION {
+                state.failures = 0;
+                state.window_start = now;
+            }
+
+            // Check if we should apply a ban for future attempts
+            // (We increment the failure counter only after the auth result is known)
+        }
+
         let mut clients = self.authorized_clients.lock().await;
 
         // Bootstrap mode: first connecting key is persisted and trusted.
@@ -333,6 +406,26 @@ impl Handler for SshHandler {
             self.authenticated_username = Some(user.to_string());
             return Ok(Auth::Accept);
         }
+
+        // Record failed auth attempt for rate limiting
+        if let Some(addr) = self.peer_addr {
+            let ip = addr.ip().to_string();
+            let mut limiter = self.rate_limiter.lock().await;
+            if let Some(state) = limiter.get_mut(&ip) {
+                state.failures += 1;
+                if state.failures >= MAX_AUTH_ATTEMPTS {
+                    state.banned_until = Some(Instant::now() + BAN_DURATION);
+                    warn!(
+                        ip = %ip,
+                        user = user,
+                        fingerprint = %fingerprint,
+                        failures = state.failures,
+                        "SSH auth rate limit triggered — temporarily banning IP"
+                    );
+                }
+            }
+        }
+
         Ok(Auth::reject())
     }
 
