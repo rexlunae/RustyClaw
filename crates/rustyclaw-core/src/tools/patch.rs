@@ -49,10 +49,10 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
         // Read current content using TOCTOU-safe open
         let content = if full_path.exists() {
             let (mut file, _canonical) = open_file_read_safe(&full_path)
-                .map_err(|e| ToolError::context("Failed to open file", e))?;
+                .map_err(|e| format!("Failed to open {}: {}", file_path, e))?;
             let mut buf = String::new();
             file.read_to_string(&mut buf)
-                .map_err(|e| ToolError::context("Failed to read file", e))?;
+                .map_err(|e| format!("Failed to read {}: {}", file_path, e))?;
             buf
         } else {
             String::new()
@@ -88,9 +88,13 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
 
             // Write via TOCTOU-safe open (O_NOFOLLOW + fd verification).
             let (mut file, _canonical) = open_file_write_safe(&full_path)
-                .map_err(|e| ToolError::context("Failed to open file", e))?;
+                .map_err(|e| format!("Failed to open {}: {}", file_path, e))?;
             file.write_all(new_content.as_bytes())
-                .map_err(|e| ToolError::context("Failed to write file", e))?;
+                .map_err(|e| format!("Failed to write {}: {}", file_path, e))?;
+            file.flush()
+                .map_err(|e| format!("Failed to flush {}: {}", file_path, e))?;
+            file.sync_all()
+                .map_err(|e| format!("Failed to sync {}: {}", file_path, e))?;
 
             debug!(file = %file_path, hunks = file_hunks.len(), "Patch applied");
             results.push(format!(

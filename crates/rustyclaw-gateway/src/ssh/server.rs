@@ -215,6 +215,19 @@ impl Clone for SshHandler {
     }
 }
 
+impl SshHandler {
+    /// Clear any accumulated rate-limit state for the peer IP after a
+    /// successful authentication, so earlier failed attempts in the window
+    /// don't count toward a future ban for a legitimate client.
+    async fn reset_rate_limit(&self) {
+        if let Some(addr) = self.peer_addr {
+            let ip = addr.ip().to_string();
+            let mut limiter = self.rate_limiter.lock().await;
+            limiter.remove(&ip);
+        }
+    }
+}
+
 impl Server for SshHandler {
     type Handler = Self;
 
@@ -380,6 +393,7 @@ impl Handler for SshHandler {
 
             self.authenticated_username = Some(user.to_string());
 
+            self.reset_rate_limit().await;
             return Ok(Auth::Accept);
         }
 
@@ -392,6 +406,7 @@ impl Handler for SshHandler {
                     "SSH key authenticated"
                 );
                 self.authenticated_username = Some(user.to_string());
+                self.reset_rate_limit().await;
                 return Ok(Auth::Accept);
             }
         }
@@ -404,6 +419,7 @@ impl Handler for SshHandler {
                 "Allowing unknown SSH key because TOTP is enabled"
             );
             self.authenticated_username = Some(user.to_string());
+            self.reset_rate_limit().await;
             return Ok(Auth::Accept);
         }
 
