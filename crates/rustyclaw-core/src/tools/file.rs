@@ -132,14 +132,19 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> ToolRe
     }
 
     // Open with TOCTOU protection: double-canonicalize + O_NOFOLLOW + fd verification
-    let (_file, canonical_path) = open_file_write_safe(&path)
-        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+    let (mut file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| ToolError::context("Failed to open file", e))?;
 
-    // Write synchronously through the verified fd
-    std::fs::write(&canonical_path, content)
-        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+    // Write through the already-verified fd — no re-open by path
+    use std::io::Write;
+    file.write_all(content.as_bytes())
+        .map_err(|e| ToolError::context("Failed to write file", e))?;
+    file.flush()
+        .map_err(|e| ToolError::context("Failed to flush file", e))?;
+    file.sync_all()
+        .map_err(|e| ToolError::context("Failed to sync file", e))?;
 
-    debug!(path = %canonical_path.display(), "File written successfully");
+    debug!(path = %canonical_path.display(), bytes = content.len(), "File written successfully");
     Ok(format!(
         "Successfully wrote {} bytes to {}",
         content.len(),
@@ -198,11 +203,16 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> ToolRes
 
     let new_content = content.replacen(old_string, new_string, 1);
 
-    // Use safe open for write (TOCTOU protection)
-    let (_file, canonical_path) = open_file_write_safe(&path)
-        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
-    std::fs::write(&canonical_path, &new_content)
-        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+    // Use safe open for write (TOCTOU protection), write through the fd
+    let (mut file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| ToolError::context("Failed to open file", e))?;
+    use std::io::Write;
+    file.write_all(new_content.as_bytes())
+        .map_err(|e| ToolError::context("Failed to write file", e))?;
+    file.flush()
+        .map_err(|e| ToolError::context("Failed to flush file", e))?;
+    file.sync_all()
+        .map_err(|e| ToolError::context("Failed to sync file", e))?;
 
     debug!(path = %canonical_path.display(), "File edited successfully");
     Ok(format!("Successfully edited {}", canonical_path.display()))
@@ -476,17 +486,18 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     }
 
     // Safe open validates path and uses O_NOFOLLOW on Linux
-    let (_file, canonical_path) = open_file_write_safe(&path)
-        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
+    let (mut file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| ToolError::context("Failed to open file", e))?;
 
-    std::fs::write(&canonical_path, content)
-        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+    use std::io::Write;
+    file.write_all(content.as_bytes())
+        .map_err(|e| ToolError::context("Failed to write file", e))?;
+    file.flush()
+        .map_err(|e| ToolError::context("Failed to flush file", e))?;
+    file.sync_all()
+        .map_err(|e| ToolError::context("Failed to sync file", e))?;
 
-    Ok(format!(
-        "Successfully wrote {} bytes to {}",
-        content.len(),
-        canonical_path.display()
-    ))
+    Ok(format!("Successfully wrote {} bytes to {}", content.len(), canonical_path.display()))
 }
 
 fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
@@ -533,11 +544,16 @@ fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
 
     let new_content = content.replacen(old_string, new_string, 1);
 
-    // Safe open for write
-    let (_file, canonical_path) = open_file_write_safe(&path)
-        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
-    std::fs::write(&canonical_path, &new_content)
-        .map_err(|e| format!("Failed to write file '{}': {}", canonical_path.display(), e))?;
+    // Safe open for write, write through the verified fd
+    let (mut file, canonical_path) = open_file_write_safe(&path)
+        .map_err(|e| ToolError::context("Failed to open file", e))?;
+    use std::io::Write;
+    file.write_all(new_content.as_bytes())
+        .map_err(|e| ToolError::context("Failed to write file", e))?;
+    file.flush()
+        .map_err(|e| ToolError::context("Failed to flush file", e))?;
+    file.sync_all()
+        .map_err(|e| ToolError::context("Failed to sync file", e))?;
 
     Ok(format!("Successfully edited {}", canonical_path.display()))
 }

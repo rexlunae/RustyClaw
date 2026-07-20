@@ -1,8 +1,9 @@
 //! Patch tool: apply unified diff patches.
 
-use super::helpers::resolve_path;
+use super::helpers::{open_file_read_safe, open_file_write_safe, resolve_path};
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
+use std::io::Read;
 use std::path::Path;
 use tracing::{debug, instrument, warn};
 
@@ -45,10 +46,14 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
     for (file_path, file_hunks) in files {
         let full_path = resolve_path(workspace_dir, &file_path);
 
-        // Read current content
+        // Read current content using TOCTOU-safe open
         let content = if full_path.exists() {
-            std::fs::read_to_string(&full_path)
-                .map_err(|e| format!("Failed to read {}: {}", file_path, e))?
+            let (mut file, _canonical) = open_file_read_safe(&full_path)
+                .map_err(|e| ToolError::context("Failed to open file", e))?;
+            let mut buf = String::new();
+            file.read_to_string(&mut buf)
+                .map_err(|e| ToolError::context("Failed to read file", e))?;
+            buf
         } else {
             String::new()
         };
@@ -79,8 +84,13 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
                     .map_err(|e| ToolError::context("Failed to create directory", e))?;
             }
 
-            std::fs::write(&full_path, new_content)
-                .map_err(|e| format!("Failed to write {}: {}", file_path, e))?;
+            use std::io::Write;
+
+            // Write via TOCTOU-safe open (O_NOFOLLOW + fd verification).
+            let (mut file, _canonical) = open_file_write_safe(&full_path)
+                .map_err(|e| ToolError::context("Failed to open file", e))?;
+            file.write_all(new_content.as_bytes())
+                .map_err(|e| ToolError::context("Failed to write file", e))?;
 
             debug!(file = %file_path, hunks = file_hunks.len(), "Patch applied");
             results.push(format!(
