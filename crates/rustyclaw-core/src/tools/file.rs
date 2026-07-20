@@ -8,7 +8,7 @@ use super::helpers::{
 };
 use crate::tools::error::{ToolError, ToolResult};
 use serde_json::Value;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use tracing::{debug, instrument, warn};
 
@@ -131,18 +131,25 @@ pub async fn exec_write_file_async(args: &Value, workspace_dir: &Path) -> ToolRe
         })?;
     }
 
-    // Open with TOCTOU protection: double-canonicalize + O_NOFOLLOW + fd verification
-    let (mut file, canonical_path) = open_file_write_safe(&path)
-        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
-
-    // Write through the already-verified fd — no re-open by path
-    use std::io::Write;
-    file.write_all(content.as_bytes())
-        .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
-    file.flush()
-        .map_err(|e| format!("Failed to flush file '{}': {}", path.display(), e))?;
-    file.sync_all()
-        .map_err(|e| format!("Failed to sync file '{}': {}", path.display(), e))?;
+    // Open with TOCTOU protection and write through the verified fd. The
+    // blocking open + write + fsync sequence is offloaded to a blocking thread
+    // so the async runtime worker isn't stalled during disk I/O.
+    let path_for_write = path.clone();
+    let content_owned = content.to_string();
+    let canonical_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+        use std::io::Write;
+        let (mut file, canonical_path) = open_file_write_safe(&path_for_write)
+            .map_err(|e| format!("Failed to open file '{}': {}", path_for_write.display(), e))?;
+        file.write_all(content_owned.as_bytes())
+            .map_err(|e| format!("Failed to write file '{}': {}", path_for_write.display(), e))?;
+        file.flush()
+            .map_err(|e| format!("Failed to flush file '{}': {}", path_for_write.display(), e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync file '{}': {}", path_for_write.display(), e))?;
+        Ok(canonical_path)
+    })
+    .await
+    .map_err(|e| format!("Write task failed for '{}': {}", path.display(), e))??;
 
     debug!(path = %canonical_path.display(), bytes = content.len(), "File written successfully");
     Ok(format!(
@@ -203,16 +210,24 @@ pub async fn exec_edit_file_async(args: &Value, workspace_dir: &Path) -> ToolRes
 
     let new_content = content.replacen(old_string, new_string, 1);
 
-    // Use safe open for write (TOCTOU protection), write through the fd
-    let (mut file, canonical_path) = open_file_write_safe(&path)
-        .map_err(|e| format!("Failed to open file '{}': {}", path.display(), e))?;
-    use std::io::Write;
-    file.write_all(new_content.as_bytes())
-        .map_err(|e| format!("Failed to write file '{}': {}", path.display(), e))?;
-    file.flush()
-        .map_err(|e| format!("Failed to flush file '{}': {}", path.display(), e))?;
-    file.sync_all()
-        .map_err(|e| format!("Failed to sync file '{}': {}", path.display(), e))?;
+    // Use safe open for write (TOCTOU protection), write through the fd. The
+    // blocking open + write + fsync sequence is offloaded to a blocking thread
+    // so the async runtime worker isn't stalled during disk I/O.
+    let path_for_write = path.clone();
+    let canonical_path = tokio::task::spawn_blocking(move || -> Result<PathBuf, String> {
+        use std::io::Write;
+        let (mut file, canonical_path) = open_file_write_safe(&path_for_write)
+            .map_err(|e| format!("Failed to open file '{}': {}", path_for_write.display(), e))?;
+        file.write_all(new_content.as_bytes())
+            .map_err(|e| format!("Failed to write file '{}': {}", path_for_write.display(), e))?;
+        file.flush()
+            .map_err(|e| format!("Failed to flush file '{}': {}", path_for_write.display(), e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to sync file '{}': {}", path_for_write.display(), e))?;
+        Ok(canonical_path)
+    })
+    .await
+    .map_err(|e| format!("Write task failed for '{}': {}", path.display(), e))??;
 
     debug!(path = %canonical_path.display(), "File edited successfully");
     Ok(format!("Successfully edited {}", canonical_path.display()))
@@ -497,7 +512,11 @@ fn exec_write_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
     file.sync_all()
         .map_err(|e| format!("Failed to sync file '{}': {}", path.display(), e))?;
 
-    Ok(format!("Successfully wrote {} bytes to {}", content.len(), canonical_path.display()))
+    Ok(format!(
+        "Successfully wrote {} bytes to {}",
+        content.len(),
+        canonical_path.display()
+    ))
 }
 
 fn exec_edit_file_sync(args: &Value, workspace_dir: &Path) -> ToolResult {
