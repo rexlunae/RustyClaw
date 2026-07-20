@@ -556,11 +556,24 @@ body,
     flex-direction: column;
 }
 
-/* Centre + pad the embedded ChatSurface to a readable column. */
+/* Centre + pad the embedded ChatSurface to a readable column.
+   Must fill the available height so the input box can be pinned to the
+   bottom via flex + margin-top: auto (the crate's messages + input-box
+   are siblings inside this container). */
 .gc-embedded {
     max-width: var(--rc-content-max-w);
     margin: 0 auto;
     padding: 18px 20px 12px;
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+}
+
+/* Push the input box to the bottom of the flex column when the chat is
+   short (few messages). When content overflows, the container scrolls
+   and the input box's sticky positioning keeps it visible. */
+.gc-embedded .gc-input-box {
+    margin-top: auto;
 }
 
 /* ── Empty state ────────────────────────────────────────────────────────── */
