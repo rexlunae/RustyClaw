@@ -7,6 +7,7 @@
 use crate::tools::error::{ToolError, ToolResult};
 use ast_grep_core::matcher::Pattern;
 use ast_grep_language::{LanguageExt, SupportLang};
+use rayon::prelude::*;
 use serde_json::Value;
 use std::path::Path;
 use tracing::instrument;
@@ -109,7 +110,6 @@ fn do_search(args: &Value, workspace_dir: &Path) -> ToolResult {
     let context = args.get("context").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     let lang: SupportLang = parse_lang(lang_ext)?;
-    let mut results: Vec<serde_json::Value> = Vec::new();
 
     // Resolve files using glob
     let files: Vec<std::path::PathBuf> = resolve_files(paths_str, workspace_dir)?;
@@ -118,56 +118,67 @@ fn do_search(args: &Value, workspace_dir: &Path) -> ToolResult {
     }
 
     let pattern = Pattern::new(pattern_str, lang);
-    let mut total_matches = 0u64;
 
-    for file_path in &files {
-        let source = match std::fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                results.push(serde_json::json!({
+    // Parse and match files in parallel — tree-sitter parsing dominates the
+    // cost per file. Collecting preserves file order, so output stays
+    // deterministic.
+    let per_file: Vec<Vec<serde_json::Value>> = files
+        .par_iter()
+        .map(|file_path| {
+            let source = match std::fs::read_to_string(file_path) {
+                Ok(s) => s,
+                Err(e) => {
+                    return vec![serde_json::json!({
+                        "file": file_path.display().to_string(),
+                        "error": format!("cannot read: {}", e),
+                    })];
+                }
+            };
+
+            let root = lang.ast_grep(&source);
+            let matches: Vec<_> = root.root().find_all(&pattern).collect();
+            let mut file_results = Vec::with_capacity(matches.len());
+
+            for node_match in &matches {
+                let start_pos = node_match.start_pos();
+                let end_pos = node_match.end_pos();
+                let range = node_match.range();
+                let text = node_match.text().to_string();
+                let (line, col) = start_pos.byte_point();
+
+                let mut result = serde_json::json!({
                     "file": file_path.display().to_string(),
-                    "error": format!("cannot read: {}", e),
-                }));
-                continue;
-            }
-        };
+                    "line": line + 1,
+                    "column": col + 1,
+                    "end_line": end_pos.byte_point().0 + 1,
+                    "end_column": end_pos.byte_point().1 + 1,
+                    "text": text,
+                });
 
-        let root = lang.ast_grep(&source);
-        let matches: Vec<_> = root.root().find_all(&pattern).collect();
+                if context > 0 {
+                    let lines: Vec<&str> = source.lines().collect();
+                    let start_line = start_pos.line().saturating_sub(context);
+                    let end_line = (end_pos.line() + context).min(lines.len().saturating_sub(1));
+                    let ctx: Vec<&str> = lines[start_line..=end_line].to_vec();
+                    result["context"] = serde_json::json!(ctx.join("\n"));
+                }
 
-        if matches.is_empty() {
-            continue;
-        }
-
-        for node_match in &matches {
-            let start_pos = node_match.start_pos();
-            let end_pos = node_match.end_pos();
-            let range = node_match.range();
-            let text = node_match.text().to_string();
-            let (line, col) = start_pos.byte_point();
-
-            let mut result = serde_json::json!({
-                "file": file_path.display().to_string(),
-                "line": line + 1,
-                "column": col + 1,
-                "end_line": end_pos.byte_point().0 + 1,
-                "end_column": end_pos.byte_point().1 + 1,
-                "text": text,
-            });
-
-            if context > 0 {
-                let lines: Vec<&str> = source.lines().collect();
-                let start_line = start_pos.line().saturating_sub(context);
-                let end_line = (end_pos.line() + context).min(lines.len().saturating_sub(1));
-                let ctx: Vec<&str> = lines[start_line..=end_line].to_vec();
-                result["context"] = serde_json::json!(ctx.join("\n"));
+                result["range"] = serde_json::json!([range.start, range.end]);
+                file_results.push(result);
             }
 
-            result["range"] = serde_json::json!([range.start, range.end]);
-            total_matches += 1;
+            file_results
+        })
+        .collect();
 
-            results.push(result);
-        }
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut total_matches = 0u64;
+    for file_results in per_file {
+        total_matches += file_results
+            .iter()
+            .filter(|r| r.get("error").is_none())
+            .count() as u64;
+        results.extend(file_results);
     }
 
     let output = serde_json::json!({
@@ -201,51 +212,61 @@ fn do_rewrite(args: &Value, workspace_dir: &Path) -> ToolResult {
     }
 
     let pattern = Pattern::new(pattern_str, lang);
+
+    // Read, parse, and compute rewrites in parallel; a read failure on any
+    // file aborts before anything is written back.
+    let rewrites: Vec<Option<(String, usize)>> = files
+        .par_iter()
+        .map(|file_path| -> Result<Option<(String, usize)>, ToolError> {
+            let source = std::fs::read_to_string(file_path)
+                .map_err(|e| format!("Cannot read {}: {}", file_path.display(), e))?;
+
+            let root = lang.ast_grep(&source);
+            let matches: Vec<_> = root.root().find_all(&pattern).collect();
+
+            if matches.is_empty() {
+                return Ok(None);
+            }
+
+            // Use replace_all for each match — collect ranges to avoid borrow issues
+            let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+            for node_match in &matches {
+                let range = node_match.range();
+                // Build the replacement text with metavar substitution
+                let _env = node_match.get_env();
+                // For simple patterns, rewrite_str is used directly.
+                // Metavariables like $$MATCH_NAME get substituted by ast-grep internally
+                // when using the library's replacer feature. For direct text replacement
+                // we just use the range + rewrite_str as-is.
+                replacements.push((range.start, range.end, rewrite_str.to_string()));
+            }
+
+            // Apply replacements from end to start (preserving offsets)
+            let mut new_source = source;
+            for (start, end, text) in replacements.iter().rev() {
+                new_source.replace_range(*start..*end, text);
+            }
+
+            Ok(Some((new_source, replacements.len())))
+        })
+        .collect::<Result<_, _>>()?;
+
     let mut total_replacements = 0u64;
     let mut modified_files = Vec::new();
 
-    for file_path in &files {
-        let source = match std::fs::read_to_string(file_path) {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(format!("Cannot read {}: {}", file_path.display(), e).into());
-            }
+    for (file_path, rewrite) in files.iter().zip(rewrites) {
+        let Some((new_source, replacement_count)) = rewrite else {
+            continue;
         };
 
-        let root = lang.ast_grep(&source);
-        let matches: Vec<_> = root.root().find_all(&pattern).collect();
-
-        if matches.is_empty() {
-            continue;
-        }
-
-        // Use replace_all for each match — collect ranges to avoid borrow issues
-        let mut replacements: Vec<(usize, usize, String)> = Vec::new();
-        for node_match in &matches {
-            let range = node_match.range();
-            // Build the replacement text with metavar substitution
-            let _env = node_match.get_env();
-            // For simple patterns, rewrite_str is used directly.
-            // Metavariables like $$MATCH_NAME get substituted by ast-grep internally
-            // when using the library's replacer feature. For direct text replacement
-            // we just use the range + rewrite_str as-is.
-            replacements.push((range.start, range.end, rewrite_str.to_string()));
-        }
-
-        total_replacements += replacements.len() as u64;
-
-        // Apply replacements from end to start (preserving offsets)
-        let mut new_source = source.clone();
-        for (start, end, text) in replacements.iter().rev() {
-            new_source.replace_range(*start..*end, text);
-        }
+        total_replacements += replacement_count as u64;
 
         std::fs::write(file_path, &new_source)
             .map_err(|e| format!("Cannot write {}: {}", file_path.display(), e))?;
 
         modified_files.push(serde_json::json!({
             "file": file_path.display().to_string(),
-            "replacements": replacements.len(),
+            "replacements": replacement_count,
         }));
     }
 

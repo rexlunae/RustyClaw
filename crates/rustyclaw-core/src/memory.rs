@@ -5,6 +5,7 @@
 //! for recency weighting. Embeddings can be added later for true semantic search.
 
 use chrono::{NaiveDate, Utc};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -66,6 +67,12 @@ pub struct MemoryIndex {
     doc_freq: HashMap<String, usize>,
     /// Total number of chunks.
     total_docs: usize,
+    /// Per-chunk term frequencies, precomputed at index time.
+    chunk_term_freqs: Vec<HashMap<String, usize>>,
+    /// Per-chunk token counts, precomputed at index time.
+    chunk_lens: Vec<usize>,
+    /// Average chunk token count, precomputed at index time.
+    avg_doc_len: f64,
 }
 
 impl MemoryIndex {
@@ -76,6 +83,9 @@ impl MemoryIndex {
             term_index: HashMap::new(),
             doc_freq: HashMap::new(),
             total_docs: 0,
+            chunk_term_freqs: Vec::new(),
+            chunk_lens: Vec::new(),
+            avg_doc_len: 0.0,
         }
     }
 
@@ -198,17 +208,37 @@ impl MemoryIndex {
         self.term_index.clear();
         self.doc_freq.clear();
         self.total_docs = self.chunks.len();
+        self.chunk_term_freqs.clear();
+        self.chunk_lens.clear();
 
-        for (idx, chunk) in self.chunks.iter().enumerate() {
-            let terms = tokenize(&chunk.text);
-            let unique_terms: std::collections::HashSet<_> = terms.iter().collect();
+        // Tokenize each chunk exactly once (in parallel); the per-chunk term
+        // frequencies, token counts, and corpus-average document length are
+        // all derived from this single pass so scoring never re-tokenizes.
+        let per_chunk_freqs: Vec<HashMap<String, usize>> = self
+            .chunks
+            .par_iter()
+            .map(|chunk| {
+                let mut freqs: HashMap<String, usize> = HashMap::new();
+                for term in tokenize(&chunk.text) {
+                    *freqs.entry(term).or_insert(0) += 1;
+                }
+                freqs
+            })
+            .collect();
 
-            for term in unique_terms {
+        for (idx, freqs) in per_chunk_freqs.iter().enumerate() {
+            self.chunk_lens.push(freqs.values().sum());
+
+            for term in freqs.keys() {
                 self.term_index.entry(term.clone()).or_default().push(idx);
 
                 *self.doc_freq.entry(term.clone()).or_insert(0) += 1;
             }
         }
+
+        self.chunk_term_freqs = per_chunk_freqs;
+        self.avg_doc_len =
+            self.chunk_lens.iter().sum::<usize>() as f64 / self.total_docs.max(1) as f64;
     }
 
     /// Search the index using BM25-style scoring.
@@ -219,15 +249,14 @@ impl MemoryIndex {
             return Vec::new();
         }
 
-        // Score each chunk
-        let mut scores: Vec<(usize, f64)> = Vec::new();
-
-        for (idx, _chunk) in self.chunks.iter().enumerate() {
-            let score = self.bm25_score(idx, &query_terms);
-            if score > 0.0 {
-                scores.push((idx, score));
-            }
-        }
+        // Score chunks in parallel (each chunk's score is independent)
+        let mut scores: Vec<(usize, f64)> = (0..self.chunks.len())
+            .into_par_iter()
+            .filter_map(|idx| {
+                let score = self.bm25_score(idx, &query_terms);
+                (score > 0.0).then_some((idx, score))
+            })
+            .collect();
 
         // Sort by score descending
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
@@ -243,27 +272,19 @@ impl MemoryIndex {
             .collect()
     }
 
-    /// Calculate BM25 score for a chunk.
+    /// Calculate BM25 score for a chunk using statistics precomputed by
+    /// [`Self::build_inverted_index`].
     fn bm25_score(&self, chunk_idx: usize, query_terms: &[String]) -> f64 {
         const K1: f64 = 1.2;
         const B: f64 = 0.75;
 
-        let chunk = &self.chunks[chunk_idx];
-        let chunk_terms = tokenize(&chunk.text);
-        let doc_len = chunk_terms.len() as f64;
-
-        // Calculate average document length
-        let avg_doc_len = self
-            .chunks
-            .iter()
-            .map(|c| tokenize(&c.text).len())
-            .sum::<usize>() as f64
-            / self.total_docs.max(1) as f64;
+        let term_freqs = &self.chunk_term_freqs[chunk_idx];
+        let doc_len = self.chunk_lens[chunk_idx] as f64;
 
         let mut score = 0.0;
 
         for term in query_terms {
-            let tf = chunk_terms.iter().filter(|t| *t == term).count() as f64;
+            let tf = term_freqs.get(term).copied().unwrap_or(0) as f64;
             let df = *self.doc_freq.get(term).unwrap_or(&0) as f64;
 
             if tf > 0.0 && df > 0.0 {
@@ -272,7 +293,7 @@ impl MemoryIndex {
 
                 // TF component with length normalization
                 let tf_norm =
-                    (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * (doc_len / avg_doc_len)));
+                    (tf * (K1 + 1.0)) / (tf + K1 * (1.0 - B + B * (doc_len / self.avg_doc_len)));
 
                 score += idf * tf_norm;
             }
@@ -306,23 +327,28 @@ impl MemoryIndex {
         let today = Utc::now().date_naive();
         let decay_lambda = (2.0_f64).ln() / half_life_days;
 
-        let mut scores: Vec<(usize, f64)> = Vec::new();
+        let mut scores: Vec<(usize, f64)> = self
+            .chunks
+            .par_iter()
+            .enumerate()
+            .filter_map(|(idx, chunk)| {
+                let base_score = self.bm25_score(idx, &query_terms);
 
-        for (idx, chunk) in self.chunks.iter().enumerate() {
-            let base_score = self.bm25_score(idx, &query_terms);
+                if base_score > 0.0 {
+                    let decayed_score = if Self::is_evergreen(&chunk.path) {
+                        base_score // No decay for evergreen files
+                    } else {
+                        let age_days = Self::extract_age_days(&chunk.path, today);
+                        let decay = (-decay_lambda * age_days as f64).exp();
+                        base_score * decay
+                    };
 
-            if base_score > 0.0 {
-                let decayed_score = if Self::is_evergreen(&chunk.path) {
-                    base_score // No decay for evergreen files
+                    Some((idx, decayed_score))
                 } else {
-                    let age_days = Self::extract_age_days(&chunk.path, today);
-                    let decay = (-decay_lambda * age_days as f64).exp();
-                    base_score * decay
-                };
-
-                scores.push((idx, decayed_score));
-            }
-        }
+                    None
+                }
+            })
+            .collect();
 
         scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 

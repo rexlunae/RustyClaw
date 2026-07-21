@@ -52,6 +52,7 @@ pub mod secrets;
 pub mod security;
 pub mod services;
 pub mod sessions;
+pub mod skill_audit;
 pub mod skills;
 pub mod soul;
 #[cfg(feature = "semantic-memory")]
