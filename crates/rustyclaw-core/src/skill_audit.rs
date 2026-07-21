@@ -9,7 +9,13 @@
 //!
 //! Can be used to audit skills at load time or on-demand.
 
-use oxidized_agentic_audit::{config::Config, finding::ScanReport, output, scan::{self, ScanMode}};
+use oxidized_agentic_audit::{
+    config::Config,
+    finding::ScanReport,
+    output,
+    scan::{self, ScanMode},
+};
+use rayon::prelude::*;
 use std::path::Path;
 use tracing::{debug, warn};
 
@@ -166,9 +172,14 @@ impl SkillAuditor {
     }
 
     /// Audit multiple skill directories.
-    pub fn audit_skills(&self, skills: &[(impl AsRef<Path>, &str)]) -> Vec<SkillAuditResult> {
+    ///
+    /// Each skill is scanned independently, so the audits run in parallel.
+    pub fn audit_skills(
+        &self,
+        skills: &[(impl AsRef<Path> + Sync, &str)],
+    ) -> Vec<SkillAuditResult> {
         skills
-            .iter()
+            .par_iter()
             .map(|(path, name)| self.audit_skill(path.as_ref(), name))
             .collect()
     }
