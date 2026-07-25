@@ -413,7 +413,11 @@ fn json_merge(target: &mut Value, patch: &Value) {
             for (k, v) in p {
                 match (t.get_mut(k), v) {
                     (Some(Value::Object(_)), Value::Object(_)) => {
-                        json_merge(t.get_mut(k).expect("key present: matched Some in guard above"), v);
+                        json_merge(
+                            t.get_mut(k)
+                                .expect("key present: matched Some in guard above"),
+                            v,
+                        );
                     }
                     _ => {
                         t.insert(k.clone(), v.clone());
