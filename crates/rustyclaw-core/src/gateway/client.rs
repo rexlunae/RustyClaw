@@ -33,11 +33,21 @@ pub struct GatewayClient {
 }
 
 impl GatewayClient {
-    /// Connect to a gateway at the given URL, establishing the SSH transport.
+    /// Connect to a gateway at the given URL, establishing the SSH transport
+    /// and waiting for the gateway's first frame.
+    ///
+    /// Spawning the SSH subprocess alone proves nothing — it succeeds even
+    /// when the host is unreachable or no gateway is running.  The handshake
+    /// wait turns those cases into an `Err` here instead of a phantom
+    /// "connected" state that never produces events.
     pub async fn connect(url: &str) -> Result<Self> {
-        let (connection, writer, reader) = SshConnection::connect(url)
+        let (connection, writer, mut reader) = SshConnection::connect(url)
             .await
             .context("Failed to establish SSH transport")?;
+        reader
+            .wait_first_frame(crate::gateway::HANDSHAKE_TIMEOUT)
+            .await
+            .with_context(|| format!("Gateway at {} is not responding", url))?;
         Ok(Self::from_transport(connection, writer, reader, Some(url)))
     }
 
@@ -164,28 +174,7 @@ impl GatewayClient {
                     Ok(None) => {
                         // EOF — drain stderr for diagnostic info.
                         let ssh_err = reader.drain_stderr().await;
-                        let reason = ssh_err
-                            .lines()
-                            .map(str::trim)
-                            .filter(|line| !line.is_empty())
-                            .find(|line| {
-                                line.contains("Permission denied")
-                                    || line.contains("Host key verification failed")
-                                    || line.contains("Connection refused")
-                                    || line.contains("Connection timed out")
-                                    || line.contains("No route to host")
-                                    || line.contains("Could not resolve hostname")
-                                    || line.contains("kex_exchange_identification")
-                            })
-                            .map(str::to_string)
-                            .or_else(|| {
-                                ssh_err
-                                    .lines()
-                                    .map(str::trim)
-                                    .rfind(|line| !line.is_empty())
-                                    .map(str::to_string)
-                            })
-                            .unwrap_or_else(|| "SSH connection closed".to_string());
+                        let reason = crate::gateway::parse_ssh_error(&ssh_err);
                         let _ = event_tx
                             .send(GatewayEvent::Disconnected {
                                 reason: Some(reason),

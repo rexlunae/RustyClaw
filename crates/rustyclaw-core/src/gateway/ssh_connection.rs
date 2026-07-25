@@ -13,6 +13,13 @@ use super::protocol::{ServerFrame, WireFrame, deserialize_wire_frame, serialize_
 
 // ── SshReader / SshWriter (split halves) ──────────────────────────────────
 
+/// How long to wait for the gateway's first frame before concluding the
+/// connection is dead.  Spawning `ssh` succeeds even when the host is
+/// unreachable or the gateway isn't running, so the first frame (`Hello`,
+/// or `AuthChallenge` on TOTP-protected gateways) is the earliest proof
+/// that a live gateway is on the other end.
+pub const HANDSHAKE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
+
 /// Read half of an SSH gateway transport.
 ///
 /// Owns the child's stdout and stderr. Designed to be moved into a dedicated
@@ -20,6 +27,9 @@ use super::protocol::{ServerFrame, WireFrame, deserialize_wire_frame, serialize_
 pub struct SshReader {
     stdout: tokio::process::ChildStdout,
     stderr: tokio::process::ChildStderr,
+    /// Frame consumed by [`Self::wait_first_frame`], handed back by the
+    /// next `recv_wire()` call so the handshake doesn't eat it.
+    peeked: Option<WireFrame<ServerFrame>>,
 }
 
 impl SshReader {
@@ -27,6 +37,13 @@ impl SshReader {
     ///
     /// Returns `Ok(None)` when the connection is closed (EOF).
     pub async fn recv_wire(&mut self) -> Result<Option<WireFrame<ServerFrame>>> {
+        if let Some(frame) = self.peeked.take() {
+            return Ok(Some(frame));
+        }
+        self.recv_wire_inner().await
+    }
+
+    async fn recv_wire_inner(&mut self) -> Result<Option<WireFrame<ServerFrame>>> {
         let mut len_buf = [0u8; 4];
         match self.stdout.read_exact(&mut len_buf).await {
             Ok(_) => {}
@@ -53,12 +70,76 @@ impl SshReader {
         Ok(Some(wire))
     }
 
+    /// Wait for the gateway's first frame, verifying that a live gateway is
+    /// actually on the other end of the transport.
+    ///
+    /// Spawning the `ssh` subprocess succeeds regardless of whether the
+    /// remote host is reachable, auth works, or the gateway binary exists —
+    /// those failures surface later inside the subprocess.  Callers should
+    /// invoke this before reporting a connection as established.  The frame
+    /// is buffered and delivered by the next `recv_wire()` call.
+    ///
+    /// Errors distinguish the three failure shapes:
+    /// - ssh exited (EOF): the most useful stderr line (e.g. "Connection
+    ///   refused", "Permission denied") becomes the error message
+    /// - protocol error: passed through
+    /// - no response within `timeout`: unreachable host / hung connection
+    pub async fn wait_first_frame(&mut self, timeout: std::time::Duration) -> Result<()> {
+        if self.peeked.is_some() {
+            return Ok(());
+        }
+        match tokio::time::timeout(timeout, self.recv_wire_inner()).await {
+            Ok(Ok(Some(frame))) => {
+                self.peeked = Some(frame);
+                Ok(())
+            }
+            Ok(Ok(None)) => {
+                let stderr = self.drain_stderr().await;
+                Err(anyhow!("{}", parse_ssh_error(&stderr)))
+            }
+            Ok(Err(e)) => Err(e),
+            Err(_) => Err(anyhow!(
+                "Gateway did not respond within {}s — host unreachable or gateway not running",
+                timeout.as_secs()
+            )),
+        }
+    }
+
     /// Drain stderr and return any error text.
     pub async fn drain_stderr(&mut self) -> String {
         let mut buf = Vec::new();
         let _ = self.stderr.read_to_end(&mut buf).await;
         String::from_utf8_lossy(&buf).to_string()
     }
+}
+
+/// Extract the most useful diagnostic line from ssh stderr output.
+///
+/// Prefers well-known connection-failure messages; falls back to the last
+/// non-empty line, then to a generic message.
+pub fn parse_ssh_error(stderr: &str) -> String {
+    stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .find(|line| {
+            line.contains("Permission denied")
+                || line.contains("Host key verification failed")
+                || line.contains("Connection refused")
+                || line.contains("Connection timed out")
+                || line.contains("No route to host")
+                || line.contains("Could not resolve hostname")
+                || line.contains("kex_exchange_identification")
+        })
+        .map(str::to_string)
+        .or_else(|| {
+            stderr
+                .lines()
+                .map(str::trim)
+                .rfind(|line| !line.is_empty())
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "SSH connection closed".to_string())
 }
 
 /// Write half of an SSH gateway transport.
@@ -169,6 +250,9 @@ impl SshConnection {
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::piped());
         cmd.stderr(std::process::Stdio::piped());
+        // Reap the ssh subprocess when the connection is dropped (e.g. a
+        // failed handshake) instead of leaking it.
+        cmd.kill_on_drop(true);
 
         let mut child = cmd.spawn().context("Failed to spawn ssh")?;
 
@@ -188,7 +272,11 @@ impl SshConnection {
         Ok((
             Self { child },
             SshWriter { stdin },
-            SshReader { stdout, stderr },
+            SshReader {
+                stdout,
+                stderr,
+                peeked: None,
+            },
         ))
     }
 
@@ -207,4 +295,35 @@ fn bare_to_wire_frame(
     let frame: ServerFrame =
         bincode::serde::decode_from_slice(data, bincode::config::standard()).map(|(f, _)| f)?;
     Ok(WireFrame::control(frame))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_ssh_error_prefers_known_diagnostics() {
+        let stderr = "Warning: Permanently added 'host' to the list of known hosts.\n\
+                      ssh: connect to host 10.0.0.99 port 2222: Connection refused\n";
+        assert_eq!(
+            parse_ssh_error(stderr),
+            "ssh: connect to host 10.0.0.99 port 2222: Connection refused"
+        );
+
+        let stderr = "banner line\nuser@host: Permission denied (publickey).\n";
+        assert_eq!(
+            parse_ssh_error(stderr),
+            "user@host: Permission denied (publickey)."
+        );
+    }
+
+    #[test]
+    fn parse_ssh_error_falls_back_to_last_line_then_generic() {
+        assert_eq!(
+            parse_ssh_error("something unusual happened\n"),
+            "something unusual happened"
+        );
+        assert_eq!(parse_ssh_error("  \n\n"), "SSH connection closed");
+        assert_eq!(parse_ssh_error(""), "SSH connection closed");
+    }
 }
