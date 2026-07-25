@@ -396,6 +396,10 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                 })
                 .collect(),
         },
+        // The TUI runs beside the vault and fetches provider models locally
+        // (`CommandAction::FetchModels`), so gateway-fetched lists are not
+        // surfaced here — they exist for remote clients like the desktop app.
+        E::ProviderModelListResult { .. } => return None,
         E::EngineModelListResult { engine, models } => GwEvent::EngineModelListResult {
             engine: engine.clone(),
             models: models

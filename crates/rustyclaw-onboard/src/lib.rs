@@ -705,7 +705,16 @@ pub fn run_onboard_wizard(
                 );
                 models
             }
-            Err(_) => Vec::new(),
+            Err(e) => {
+                println!(
+                    "  {}",
+                    t::warn(&format!(
+                        "Could not fetch models from {} API: {:#}",
+                        provider.display, e
+                    ))
+                );
+                Vec::new()
+            }
         }
     };
 
@@ -713,6 +722,12 @@ pub fn run_onboard_wizard(
     let available_models: Vec<String> = if !fetched_models.is_empty() {
         fetched_models
     } else {
+        if !provider.models.is_empty() {
+            println!(
+                "  {}",
+                t::warn("Falling back to the built-in model list, which may be outdated.")
+            );
+        }
         provider.models.iter().map(|s| s.to_string()).collect()
     };
 

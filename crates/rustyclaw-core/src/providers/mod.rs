@@ -133,7 +133,9 @@ pub const PROVIDERS: &[ProviderDef] = &[
         secret_key: Some("DEEPSEEK_API_KEY"),
         device_flow: None,
         base_url: Some("https://api.deepseek.com/v1"),
-        models: &["deepseek-chat", "deepseek-reasoner"],
+        // Fallback only — the live list comes from GET /models. DeepSeek
+        // retired the old `deepseek-chat` / `deepseek-reasoner` aliases.
+        models: &["deepseek-v4-pro", "deepseek-v4-flash"],
         help_url: Some("https://platform.deepseek.com/api_keys"),
         help_text: Some("Get a key at platform.deepseek.com → API Keys"),
     },

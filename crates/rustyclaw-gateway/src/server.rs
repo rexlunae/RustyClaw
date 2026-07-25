@@ -845,6 +845,9 @@ pub(crate) async fn handle_connection(
                                     &config.engines,
                                 ).await?;
                             }
+                            ClientPayload::ProviderModelList { provider } => {
+                                handle_provider_model_list(&mut *writer, &provider, &config, &vault).await?;
+                            }
                             ClientPayload::Empty | ClientPayload::AuthChallenge { .. } | ClientPayload::AuthResponse { .. } | ClientPayload::ToolApprovalResponse { .. } | ClientPayload::UserPromptResponse { .. } | ClientPayload::CredentialResponse { .. } | ClientPayload::DomQueryResponse { .. } | ClientPayload::ProcessControl { .. } => {
                                 // AuthChallenge/AuthResponse handled in auth phase.
                                 // ToolApprovalResponse handled by the reader task.
@@ -924,6 +927,58 @@ pub(crate) async fn handle_connection(
         .save_to_file(&agent_session.threads_path);
 
     Ok(())
+}
+
+/// Handle a `ProviderModelList` request: fetch the live model list for a
+/// cloud provider using the gateway's vault-held API key (falling back to
+/// the provider's env var), replying with a `ProviderModelListResult`
+/// frame that carries either the model ids or an error string.
+async fn handle_provider_model_list(
+    writer: &mut dyn rustyclaw_core::gateway::TransportWriter,
+    provider: &str,
+    config: &rustyclaw_core::config::Config,
+    vault: &SharedVault,
+) -> Result<()> {
+    // API key: vault first (where onboarding stores it), then env var.
+    let api_key = match crate_providers::secret_key_for_provider(provider) {
+        Some(key_name) => {
+            let from_vault = vault.lock().await.get_secret(key_name, true).ok().flatten();
+            from_vault.or_else(|| std::env::var(key_name).ok())
+        }
+        None => None,
+    };
+
+    // Respect a base-URL override when the request targets the currently
+    // configured provider.
+    let base_url = config
+        .model
+        .as_ref()
+        .filter(|m| m.provider == provider)
+        .and_then(|m| m.base_url.clone());
+
+    let (models, error) = match crate_providers::fetch_models(
+        provider,
+        api_key.as_deref(),
+        base_url.as_deref(),
+    )
+    .await
+    {
+        Ok(models) => (models, None),
+        Err(e) => (Vec::new(), Some(format!("{:#}", e))),
+    };
+
+    send_frame(
+        writer,
+        &ServerFrame {
+            frame_type: ServerFrameType::ProviderModelListResult,
+            payload: ServerPayload::ProviderModelListResult {
+                provider: provider.to_string(),
+                models,
+                error,
+            },
+        },
+    )
+    .await
 }
 
 #[cfg(test)]

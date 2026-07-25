@@ -28,6 +28,9 @@ pub struct ChatProps {
     /// A structured question from the agent (`ask_user` tool) awaiting an
     /// answer; rendered inline at the bottom of the chat stream.
     pub pending_prompt: Option<UserPrompt>,
+    /// Live model lists fetched from provider APIs, keyed by provider id.
+    /// The model picker prefers these over the static catalogue.
+    pub provider_models: std::collections::HashMap<String, Vec<String>>,
     pub on_submit: EventHandler<String>,
     pub on_cancel: EventHandler<()>,
     pub on_prompt_respond: EventHandler<(String, PromptResponseValue)>,
@@ -112,6 +115,7 @@ pub fn Chat(props: ChatProps) -> Element {
         ComposerAccessory {
             current_provider: props.bottom_bar.composer.current_provider.clone(),
             current_model: props.bottom_bar.composer.current_model.clone(),
+            provider_models: props.provider_models.clone(),
             directory_selector: props.bottom_bar.directory_selector.clone(),
             on_model_change: props.on_model_change,
             on_add_provider: props.on_add_provider,

@@ -178,6 +178,46 @@ pub fn App() -> Element {
         }
     });
 
+    // Ask the gateway for the active provider's live model list so the
+    // model picker reflects the provider API instead of the static
+    // catalogue.  Re-runs on provider switches; the `requested` set keeps
+    // it to one in-flight request per provider (cleared on fetch failure
+    // so the next switch retries).
+    use_effect(move || {
+        let (provider, connected, already_requested) = {
+            let s = state.read();
+            let provider = s.provider.clone();
+            let connected = matches!(
+                s.connection,
+                ConnectionStatus::Connected | ConnectionStatus::Authenticated
+            );
+            let requested = provider
+                .as_deref()
+                .map(|p| s.provider_models_requested.contains(p))
+                .unwrap_or(true);
+            (provider, connected, requested)
+        };
+        let Some(provider) = provider else { return };
+        if !connected || already_requested {
+            return;
+        }
+        let Some(client) = gateway.read().clone() else {
+            return;
+        };
+        state
+            .write()
+            .provider_models_requested
+            .insert(provider.clone());
+        spawn(async move {
+            if let Err(e) = client
+                .send(GatewayCommand::ProviderModelList { provider })
+                .await
+            {
+                tracing::warn!("Failed to request provider model list: {}", e);
+            }
+        });
+    });
+
     use_effect(move || {
         if *did_init_directories.read() {
             return;
@@ -1158,6 +1198,7 @@ pub fn App() -> Element {
                     },
                     agent_name: state.read().agent_name.clone(),
                     pending_prompt: state.read().pending_user_prompt.clone(),
+                    provider_models: state.read().provider_models.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
                     on_prompt_respond: on_prompt_respond,

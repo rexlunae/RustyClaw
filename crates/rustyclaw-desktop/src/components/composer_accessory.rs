@@ -6,6 +6,7 @@
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Help, Select};
 use rustyclaw_core::providers;
+use std::collections::HashMap;
 
 /// (provider_id, model_id) pair emitted when the user changes model.
 pub type ModelSelection = (String, String);
@@ -18,6 +19,8 @@ pub const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 pub struct ComposerAccessoryProps {
     pub current_provider: Option<String>,
     pub current_model: Option<String>,
+    /// Live model lists fetched from provider APIs, keyed by provider id.
+    pub provider_models: HashMap<String, Vec<String>>,
     pub directory_selector: rustyclaw_view::DirectorySelectorState,
     pub on_model_change: EventHandler<ModelSelection>,
     pub on_add_provider: EventHandler<()>,
@@ -31,6 +34,7 @@ pub fn ComposerAccessory(props: ComposerAccessoryProps) -> Element {
         ModelBar {
             current_provider: props.current_provider.clone(),
             current_model: props.current_model.clone(),
+            provider_models: props.provider_models.clone(),
             on_model_change: props.on_model_change,
             on_add_provider: props.on_add_provider,
         }
@@ -91,8 +95,22 @@ const ADD_PROVIDER_SENTINEL: &str = "__add_provider__";
 struct ModelBarProps {
     current_provider: Option<String>,
     current_model: Option<String>,
+    /// Live model lists fetched from provider APIs, keyed by provider id.
+    provider_models: HashMap<String, Vec<String>>,
     on_model_change: EventHandler<ModelSelection>,
     on_add_provider: EventHandler<()>,
+}
+
+/// Resolve the model list for a provider: prefer the live list fetched from
+/// the provider API, falling back to the static catalogue entry.
+fn resolve_models(provider_models: &HashMap<String, Vec<String>>, provider: &str) -> Vec<String> {
+    match provider_models.get(provider) {
+        Some(live) if !live.is_empty() => live.clone(),
+        _ => providers::models_for_provider(provider)
+            .iter()
+            .map(|m| (*m).to_string())
+            .collect(),
+    }
 }
 
 fn normalize_provider_id(id: &str) -> &str {
@@ -115,24 +133,18 @@ fn ModelBar(props: ModelBarProps) -> Element {
     } else {
         current_provider.clone()
     };
-    let models_for_provider = providers::models_for_provider(&provider_for_models);
-    let current_model = props.current_model.clone().unwrap_or_else(|| {
-        models_for_provider
-            .first()
-            .copied()
-            .unwrap_or("")
-            .to_string()
-    });
+    let models_for_provider = resolve_models(&props.provider_models, &provider_for_models);
+    let current_model = props
+        .current_model
+        .clone()
+        .unwrap_or_else(|| models_for_provider.first().cloned().unwrap_or_default());
 
     let mut provider_options: Vec<String> =
         provider_list.iter().map(|p| (*p).to_string()).collect();
     if !current_provider.is_empty() && !provider_options.iter().any(|p| p == &current_provider) {
         provider_options.insert(0, current_provider.clone());
     }
-    let mut model_options: Vec<String> = models_for_provider
-        .iter()
-        .map(|m| (*m).to_string())
-        .collect();
+    let mut model_options: Vec<String> = models_for_provider.clone();
     if !current_model.is_empty() && !model_options.iter().any(|m| m == &current_model) {
         model_options.insert(0, current_model.clone());
     }
@@ -147,19 +159,20 @@ fn ModelBar(props: ModelBarProps) -> Element {
                     let on_model_change = props.on_model_change;
                     let on_add_provider = props.on_add_provider;
                     let selected_model = current_model.clone();
+                    let provider_models = props.provider_models.clone();
                     move |evt: FormEvent| {
                         let prov = evt.value();
                         if prov == ADD_PROVIDER_SENTINEL {
                             on_add_provider.call(());
                             return;
                         }
-                        let models = providers::models_for_provider(&prov);
+                        let models = resolve_models(&provider_models, &prov);
                         let next_model = if !selected_model.is_empty()
-                            && models.contains(&selected_model.as_str())
+                            && models.iter().any(|m| m == &selected_model)
                         {
                             selected_model.clone()
                         } else {
-                            models.first().copied().unwrap_or("").to_string()
+                            models.first().cloned().unwrap_or_default()
                         };
                         if !prov.is_empty() {
                             on_model_change.call((prov, next_model));
