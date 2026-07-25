@@ -4,6 +4,11 @@
 //! the conversation in a native window. Launched directly or spawned by the
 //! `rustyclaw` CLI's `desktop` subcommand.
 
+// Dioxus rsx! macro generates `format!("{}", var)` for `"{var}"` text
+// interpolation, which clippy flags as useless_format. The macro requires
+// the format call to produce VText nodes — these are false positives.
+#![allow(clippy::useless_format)]
+
 use std::sync::OnceLock;
 
 use clap::Parser;

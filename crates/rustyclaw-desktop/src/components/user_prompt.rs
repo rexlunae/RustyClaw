@@ -174,11 +174,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                         for (i, opt) in options.iter().enumerate() {
                             label {
                                 key: "{i}",
-                                class: if *selected_index.read() == i {
-                                    "rc-select-option is-selected"
-                                } else {
-                                    "rc-select-option"
-                                },
+                                class: if *selected_index.read() == i { "rc-select-option is-selected" } else { "rc-select-option" },
                                 input {
                                     r#type: "radio",
                                     name: "rc-prompt-{prompt.id}",
@@ -198,11 +194,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                         for (i, opt) in options.iter().enumerate() {
                             label {
                                 key: "{i}",
-                                class: if checked.read().get(i).copied().unwrap_or(false) {
-                                    "rc-select-option is-selected"
-                                } else {
-                                    "rc-select-option"
-                                },
+                                class: if checked.read().get(i).copied().unwrap_or(false) { "rc-select-option is-selected" } else { "rc-select-option" },
                                 input {
                                     r#type: "checkbox",
                                     checked: checked.read().get(i).copied().unwrap_or(false),

@@ -1349,22 +1349,14 @@ pub fn App() -> Element {
                                 let tab = state.read().right_sidebar_tab;
                                 rsx! {
                                     button {
-                                        class: if tab == RightSidebarTab::Files {
-                                            "sidebar-right-tab active"
-                                        } else {
-                                            "sidebar-right-tab"
-                                        },
+                                        class: if tab == RightSidebarTab::Files { "sidebar-right-tab active" } else { "sidebar-right-tab" },
                                         onclick: move |_| {
                                             state.write().right_sidebar_tab = RightSidebarTab::Files;
                                         },
                                         "📁 Files"
                                     }
                                     button {
-                                        class: if tab == RightSidebarTab::Plugins {
-                                            "sidebar-right-tab active"
-                                        } else {
-                                            "sidebar-right-tab"
-                                        },
+                                        class: if tab == RightSidebarTab::Plugins { "sidebar-right-tab active" } else { "sidebar-right-tab" },
                                         onclick: move |_| {
                                             state.write().right_sidebar_tab = RightSidebarTab::Plugins;
                                         },

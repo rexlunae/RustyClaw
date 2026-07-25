@@ -6,6 +6,7 @@
 //! which locally-managed models the host can run.
 
 use serde::{Deserialize, Serialize};
+#[cfg(target_os = "linux")]
 use std::path::Path;
 use sysinfo::System;
 use tracing::debug;
