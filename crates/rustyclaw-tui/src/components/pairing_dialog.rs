@@ -112,7 +112,7 @@ fn render_show_key(props: &PairingDialogProps) -> impl Into<AnyElement<'static>>
                 padding_right: 1,
             ) {
                 Text(
-                    content: format!(" Public Key "),
+                    content: " Public Key ".to_string(),
                     color: theme::MUTED,
                 )
             }

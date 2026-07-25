@@ -73,21 +73,17 @@ pub fn SecretsDialog(props: &SecretsDialogProps) -> impl Into<AnyElement<'static
         .collect();
 
     // Add-step display
-    let add_label;
-    let add_input;
     let add_is_active = d.add_step > 0;
-    if add_is_active {
+    let (add_label, add_input) = if add_is_active {
         let (label, input_text) = if d.add_step == 1 {
             ("Name: ", d.add_name.as_str())
         } else {
             ("Value: ", d.add_value.as_str())
         };
-        add_label = label.to_string();
-        add_input = input_text.to_string();
+        (label.to_string(), input_text.to_string())
     } else {
-        add_label = String::new();
-        add_input = String::new();
-    }
+        (String::new(), String::new())
+    };
 
     element! {
         View(
