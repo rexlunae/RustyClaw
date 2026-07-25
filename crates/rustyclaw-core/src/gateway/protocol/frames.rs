@@ -162,6 +162,8 @@ pub enum ClientFrameType {
     AgentCreate = 75,
     /// Delete an agent.
     AgentDelete = 76,
+    /// Request the live model list for a cloud provider.
+    ProviderModelList = 77,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -340,6 +342,8 @@ pub enum ServerFrameType {
     AgentsUpdate = 83,
     /// Active agent switched for this connection.
     AgentSwitched = 84,
+    /// Live provider model list result.
+    ProviderModelListResult = 85,
 }
 
 /// Status frame sub-types.
@@ -803,6 +807,12 @@ pub enum ClientPayload {
     AgentDelete {
         agent_id: String,
     },
+    /// Request the live model list for a cloud provider (the gateway holds
+    /// the API keys, so clients ask it to fetch rather than fetching
+    /// themselves).
+    ProviderModelList {
+        provider: String,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1251,6 +1261,13 @@ pub enum ServerPayload {
     AgentSwitched {
         agent_id: String,
         name: String,
+    },
+    /// Live model list for a cloud provider (response to
+    /// `ProviderModelList`).  `models` is empty when `error` is set.
+    ProviderModelListResult {
+        provider: String,
+        models: Vec<String>,
+        error: Option<String>,
     },
 }
 

@@ -35,20 +35,43 @@ pub async fn fetch_models_detailed(
         );
     }
 
-    // Anthropic has no public models endpoint — return the static list.
+    // Anthropic uses its own models endpoint (`GET /v1/models` with
+    // `x-api-key` + `anthropic-version` headers).  Fall back to the static
+    // list when the live fetch fails so offline setups still get a picker.
     if provider_id == "anthropic" {
-        let static_models: Vec<ModelInfo> = def
-            .models
-            .iter()
-            .map(|id| ModelInfo {
-                id: id.to_string(),
-                name: None,
-                context_length: None,
-                pricing_prompt: None,
-                pricing_completion: None,
-            })
-            .collect();
-        return Ok(static_models);
+        let result: Result<Vec<ModelInfo>> =
+            match fetch_anthropic_models_detailed(base, api_key).await {
+                Ok(models) if !models.is_empty() => Ok(models),
+                other => {
+                    let static_models: Vec<ModelInfo> = def
+                        .models
+                        .iter()
+                        .map(|id| ModelInfo {
+                            id: id.to_string(),
+                            name: None,
+                            context_length: None,
+                            pricing_prompt: None,
+                            pricing_completion: None,
+                        })
+                        .collect();
+                    if let Err(e) = other {
+                        tracing::warn!(
+                            provider = provider_id,
+                            error = %format!("{:#}", e),
+                            "Live model fetch failed — using configured static list"
+                        );
+                    }
+                    Ok(static_models)
+                }
+            };
+        return match result {
+            Ok(models) if models.is_empty() => Err(anyhow!(
+                "The {} API returned an empty model list.",
+                def.display
+            )),
+            Ok(models) => Ok(models),
+            Err(e) => Err(e.context(format!("Failed to fetch models from {}", def.display))),
+        };
     }
 
     // Custom providers: dispatch on the configured API format.  Anthropic-
@@ -385,6 +408,150 @@ async fn fetch_openai_compatible_models_detailed(
     };
 
     Ok(parse_models_response(&body))
+}
+
+/// Fetch from Anthropic's `GET /v1/models` endpoint.
+///
+/// Anthropic authenticates with an `x-api-key` header (not a bearer token)
+/// and requires an `anthropic-version` header.  Responses are paginated
+/// (`has_more` / `last_id`), so we follow `after_id` until exhausted, with
+/// a small safety cap on page count.
+async fn fetch_anthropic_models_detailed(
+    base_url: &str,
+    api_key: Option<&str>,
+) -> Result<Vec<ModelInfo>> {
+    let key = match api_key {
+        Some(k) => k,
+        // No key — return empty so the caller falls back to the static list.
+        None => return Ok(Vec::new()),
+    };
+
+    // The catalogue base URL is "https://api.anthropic.com" (no /v1 suffix),
+    // but custom overrides may already include it.
+    let base = base_url.trim_end_matches('/');
+    let models_base = if base.ends_with("/v1") {
+        format!("{}/models", base)
+    } else {
+        format!("{}/v1/models", base)
+    };
+
+    let mut models: Vec<ModelInfo> = Vec::new();
+    let mut after_id: Option<String> = None;
+
+    // One page of 1000 covers the whole catalogue today; the cap only
+    // guards against a misbehaving endpoint that always reports has_more.
+    for _page in 0..5 {
+        let url = match &after_id {
+            Some(id) => format!("{}?limit=1000&after_id={}", models_base, id),
+            None => format!("{}?limit=1000", models_base),
+        };
+
+        let mut details = RequestDetails::new("anthropic.models", "GET", url.clone())
+            .with_provider("anthropic")
+            .with_request_headers([
+                ("Accept", "application/json"),
+                ("anthropic-version", "2023-06-01"),
+            ])
+            .with_bearer(Some(key));
+
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(10))
+            .build()
+            .with_context(|| format!("failed to build HTTP client for GET {}", url))
+            .map_err(|e| details.clone().emit_warning(e))?;
+
+        let resp = match client
+            .get(&url)
+            .header("x-api-key", key)
+            .header("anthropic-version", "2023-06-01")
+            .header("Accept", "application/json")
+            .send()
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                let err = wrap_err(e).context(format!("GET {} failed to send", url));
+                return Err(details.emit_warning(err));
+            }
+        };
+
+        let status = resp.status();
+        let response_headers = resp.headers().clone();
+        details = details.with_response(status.as_u16(), &response_headers);
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            details = details.with_body(&body);
+            let err = anyhow!(
+                "GET {} returned HTTP {} — body: {}",
+                url,
+                status,
+                truncate_for_error(&body)
+            );
+            return Err(details.emit_warning(err));
+        }
+
+        let body_text = match resp.text().await {
+            Ok(t) => t,
+            Err(e) => {
+                let err = wrap_err(e).context(format!("GET {}: failed to read response body", url));
+                return Err(details.emit_warning(err));
+            }
+        };
+        details = details.with_body(&body_text);
+
+        let body: serde_json::Value = match serde_json::from_str(&body_text) {
+            Ok(v) => v,
+            Err(e) => {
+                let err =
+                    wrap_err(e).context(format!("GET {}: failed to parse JSON response", url));
+                return Err(details.emit_warning(err));
+            }
+        };
+
+        models.extend(parse_anthropic_models_page(&body));
+
+        let has_more = body
+            .get("has_more")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        after_id = body
+            .get("last_id")
+            .and_then(|v| v.as_str())
+            .map(String::from);
+        if !has_more || after_id.is_none() {
+            break;
+        }
+    }
+
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    Ok(models)
+}
+
+/// Parse one page of Anthropic's models response
+/// (`{"data": [{"id": …, "display_name": …}], "has_more": …, "last_id": …}`).
+pub(crate) fn parse_anthropic_models_page(body: &serde_json::Value) -> Vec<ModelInfo> {
+    body.get("data")
+        .and_then(|d| d.as_array())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id = m.get("id").and_then(|v| v.as_str())?.to_string();
+                    let name = m
+                        .get("display_name")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    Some(ModelInfo {
+                        id,
+                        name,
+                        context_length: None,
+                        pricing_prompt: None,
+                        pricing_completion: None,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Fetch from GitHub Copilot's model list API.

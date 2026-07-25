@@ -29,8 +29,8 @@ fn test_deepseek_provider_config() {
     assert_eq!(provider.auth_method, AuthMethod::ApiKey);
     assert_eq!(provider.secret_key, Some("DEEPSEEK_API_KEY"));
     assert_eq!(provider.base_url, Some("https://api.deepseek.com/v1"));
-    assert!(provider.models.contains(&"deepseek-chat"));
-    assert!(provider.models.contains(&"deepseek-reasoner"));
+    assert!(provider.models.contains(&"deepseek-v4-pro"));
+    assert!(provider.models.contains(&"deepseek-v4-flash"));
 }
 
 #[test]
@@ -293,6 +293,36 @@ fn test_parse_copilot_models_response_filters_non_chat_models() {
     assert_eq!(models.len(), 1);
     assert_eq!(models[0].id, "gpt-5.2");
     assert_eq!(models[0].name.as_deref(), Some("GPT 5.2"));
+}
+
+#[test]
+fn test_parse_anthropic_models_page() {
+    let body = serde_json::json!({
+        "data": [
+            {
+                "type": "model",
+                "id": "claude-opus-4-20250514",
+                "display_name": "Claude Opus 4",
+                "created_at": "2025-05-14T00:00:00Z"
+            },
+            {
+                "type": "model",
+                "id": "claude-sonnet-4-20250514",
+                "display_name": "Claude Sonnet 4",
+                "created_at": "2025-05-14T00:00:00Z"
+            }
+        ],
+        "has_more": false,
+        "first_id": "claude-opus-4-20250514",
+        "last_id": "claude-sonnet-4-20250514"
+    });
+
+    let models = super::models::parse_anthropic_models_page(&body);
+
+    assert_eq!(models.len(), 2);
+    assert_eq!(models[0].id, "claude-opus-4-20250514");
+    assert_eq!(models[0].name.as_deref(), Some("Claude Opus 4"));
+    assert_eq!(models[1].id, "claude-sonnet-4-20250514");
 }
 
 /// Sanity check: a realistic Copilot `/models` response (mixed

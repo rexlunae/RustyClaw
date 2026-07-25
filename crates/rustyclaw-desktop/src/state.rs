@@ -5,7 +5,7 @@
 //! adds desktop-specific wrappers: the Dioxus-friendly `AppState` struct
 //! and the `Theme` enum.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use rustyclaw_core::gateway::protocol;
 use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
@@ -226,6 +226,14 @@ pub struct AppState {
     pub show_logs_dialog: bool,
     /// Log lines for the logs dialog.
     pub logs_data: Option<rustyclaw_view::LogsPanelData>,
+
+    /// Live model lists fetched from provider APIs (via the gateway),
+    /// keyed by provider id.  The model picker prefers these over the
+    /// static catalogue fallback.
+    pub provider_models: HashMap<String, Vec<String>>,
+    /// Providers whose live model list has already been requested this
+    /// session (guards against duplicate in-flight requests).
+    pub provider_models_requested: HashSet<String>,
 }
 
 impl Default for AppState {
@@ -324,6 +332,8 @@ impl Default for AppState {
             analytics_data: None,
             show_logs_dialog: false,
             logs_data: None,
+            provider_models: HashMap::new(),
+            provider_models_requested: HashSet::new(),
         }
     }
 }

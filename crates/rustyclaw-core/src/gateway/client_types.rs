@@ -301,6 +301,12 @@ pub enum GatewayEvent {
         engine: String,
         models: Vec<EngineModelDto>,
     },
+    /// Live provider model list result.
+    ProviderModelListResult {
+        provider: String,
+        models: Vec<String>,
+        error: Option<String>,
+    },
     /// Engine pull progress (streaming).
     EnginePullProgress {
         engine: String,
@@ -580,6 +586,10 @@ pub enum GatewayCommand {
     /// List models for a specific engine.
     #[serde(rename = "engine_model_list")]
     EngineModelList { engine: String },
+
+    /// Request the live model list for a cloud provider.
+    #[serde(rename = "provider_model_list")]
+    ProviderModelList { provider: String },
 
     /// Pull/download a model.
     #[serde(rename = "engine_model_pull")]
@@ -939,6 +949,10 @@ impl GatewayCommand {
             GatewayCommand::EngineModelList { engine } => ClientFrame {
                 frame_type: ClientFrameType::EngineModelList,
                 payload: ClientPayload::EngineModelList { engine },
+            },
+            GatewayCommand::ProviderModelList { provider } => ClientFrame {
+                frame_type: ClientFrameType::ProviderModelList,
+                payload: ClientPayload::ProviderModelList { provider },
             },
             GatewayCommand::EngineModelPull {
                 engine,
@@ -1536,6 +1550,15 @@ impl GatewayEvent {
             ServerPayload::EngineModelListResult { engine, models } => {
                 Some(GatewayEvent::EngineModelListResult { engine, models })
             }
+            ServerPayload::ProviderModelListResult {
+                provider,
+                models,
+                error,
+            } => Some(GatewayEvent::ProviderModelListResult {
+                provider,
+                models,
+                error,
+            }),
             ServerPayload::EnginePullProgress {
                 engine,
                 model,

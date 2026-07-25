@@ -602,6 +602,20 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 .collect();
             panel.selected_engine = Some(engine);
         }
+        GatewayEvent::ProviderModelListResult {
+            provider,
+            models,
+            error,
+        } => {
+            if let Some(err) = error {
+                // Keep the static fallback in the picker; allow a retry on
+                // the next provider switch.
+                tracing::warn!(provider = %provider, error = %err, "Live provider model fetch failed");
+                state.write().provider_models_requested.remove(&provider);
+            } else {
+                state.write().provider_models.insert(provider, models);
+            }
+        }
         GatewayEvent::EnginePullProgress {
             engine,
             model,
