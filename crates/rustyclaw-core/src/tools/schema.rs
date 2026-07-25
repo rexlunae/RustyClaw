@@ -151,6 +151,8 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "service_stop" => service_tools::service_stop_params(),
         "service_restart" => service_tools::service_restart_params(),
         "service_logs" => service_tools::service_logs_params(),
+        #[cfg(feature = "image-gen")]
+        "image_generate" => image_generate_params(),
         _ => vec![],
     }
 }

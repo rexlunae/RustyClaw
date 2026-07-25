@@ -13,11 +13,13 @@ rust-version.workspace = true
 workspace = true
 
 [features]
-default = ["semantic-memory"]
+default = ["semantic-memory", "image-gen"]
 # Semantic vector memory (auto-ingest + recall via steel-memory). On by
 # default for the gateway; disable for targets where ONNX Runtime is
 # unavailable (e.g. 32-bit ARM).
 semantic-memory = ["rustyclaw-core/semantic-memory"]
+# Text-to-image generation (OpenAI DALL-E, Google Imagen).
+image-gen = ["rustyclaw-core/image-gen"]
 mcp = ["rustyclaw-core/mcp"]
 matrix = ["rustyclaw-core/matrix", "chat-system/matrix"]
 whatsapp = ["rustyclaw-core/whatsapp", "chat-system/whatsapp"]
