@@ -21,7 +21,7 @@ pub use client::GatewayClient;
 pub use client_types::{GatewayCommand, GatewayEvent, ThreadInfoDto};
 
 // Re-export SSH connection transport (client-side)
-pub use ssh_connection::{SshConnection, SshReader, SshWriter};
+pub use ssh_connection::{HANDSHAKE_TIMEOUT, SshConnection, SshReader, SshWriter, parse_ssh_error};
 
 // Re-export protocol types
 pub use protocol::{

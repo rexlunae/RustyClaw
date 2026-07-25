@@ -64,15 +64,28 @@ pub async fn prompt_and_connect(
         for url in direct_urls {
             let pb = t::spinner(&format!("Connecting to {}…", url));
             match SshConnection::connect(&url).await {
-                Ok((connection, writer, reader)) => {
-                    t::spinner_ok(&pb, &format!("Connected to {}", url));
-                    save_gateway_url(&url);
-                    return Ok(Some(ConnectionResult {
-                        connection,
-                        writer,
-                        reader,
-                        url,
-                    }));
+                Ok((connection, writer, mut reader)) => {
+                    // Spawning ssh proves nothing — wait for the gateway's
+                    // first frame before declaring (and saving) success.
+                    match reader
+                        .wait_first_frame(rustyclaw_core::gateway::HANDSHAKE_TIMEOUT)
+                        .await
+                    {
+                        Ok(()) => {
+                            t::spinner_ok(&pb, &format!("Connected to {}", url));
+                            save_gateway_url(&url);
+                            return Ok(Some(ConnectionResult {
+                                connection,
+                                writer,
+                                reader,
+                                url,
+                            }));
+                        }
+                        Err(e) => {
+                            t::spinner_fail(&pb, &format!("Connection failed: {}", e));
+                            last_error = Some(e.to_string());
+                        }
+                    }
                 }
                 Err(e) => {
                     t::spinner_fail(&pb, &format!("SSH connection failed: {}", e));
@@ -139,15 +152,31 @@ pub async fn prompt_and_connect(
 
         let pb = t::spinner(&format!("Connecting to {}…", current));
         match SshConnection::connect(&current).await {
-            Ok((connection, writer, reader)) => {
-                t::spinner_ok(&pb, &format!("Connected to {}", current));
-                save_gateway_url(&current);
-                return Ok(Some(ConnectionResult {
-                    connection,
-                    writer,
-                    reader,
-                    url: current,
-                }));
+            Ok((connection, writer, mut reader)) => {
+                // Spawning ssh proves nothing — wait for the gateway's
+                // first frame before declaring (and saving) success.
+                match reader
+                    .wait_first_frame(rustyclaw_core::gateway::HANDSHAKE_TIMEOUT)
+                    .await
+                {
+                    Ok(()) => {
+                        t::spinner_ok(&pb, &format!("Connected to {}", current));
+                        save_gateway_url(&current);
+                        return Ok(Some(ConnectionResult {
+                            connection,
+                            writer,
+                            reader,
+                            url: current,
+                        }));
+                    }
+                    Err(e) => {
+                        t::spinner_fail(&pb, &format!("Connection failed: {}", e));
+                        println!(
+                            "  {}",
+                            t::muted("Edit the URL and try again, or type 'cancel' to abort.")
+                        );
+                    }
+                }
             }
             Err(e) => {
                 t::spinner_fail(&pb, &format!("SSH connection failed: {}", e));
