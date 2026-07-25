@@ -267,9 +267,18 @@ impl PluginManager {
         if name.is_empty() {
             return Err(PluginError::Invalid("name cannot be empty".into()));
         }
-        if name.contains('/') || name.contains(' ') {
+        if name.contains('/')
+            || name.contains(' ')
+            || name.contains('\\')
+            || name == "."
+            || name == ".."
+            || name.starts_with("./")
+            || name.starts_with("../")
+            || name.contains("/../")
+            || name.contains("/./")
+        {
             return Err(PluginError::Invalid(
-                "name must be a simple identifier (no slashes or spaces)".into(),
+                "name must be a simple identifier (no slashes, spaces, or path segments)".into(),
             ));
         }
 
@@ -382,12 +391,18 @@ pub fn default_plugins_dir(workspace: &Path) -> PathBuf {
     workspace.join("plugins")
 }
 
-/// Truncate a string for prompt context display.
+/// Truncate a string for prompt context display, respecting UTF-8 code point boundaries.
 fn truncate_for_prompt(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        // Walk back to the nearest code point boundary to avoid panicking on
+        // multi-byte characters (emoji, CJK, accented text).
+        let mut end = max;
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &s[..end])
     }
 }
 
@@ -409,5 +424,36 @@ fn json_merge(target: &mut Value, patch: &Value) {
         (t, p) => {
             *t = p.clone();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_prompt_ascii() {
+        assert_eq!(truncate_for_prompt("hello", 5), "hello");
+        assert_eq!(truncate_for_prompt("hello world", 5), "hello…");
+    }
+
+    #[test]
+    fn truncate_prompt_emoji_safe() {
+        // 😀 is 4 bytes — truncating at byte 3 falls inside the emoji
+        // and must walk back to boundary 0, yielding just the ellipsis.
+        assert_eq!(truncate_for_prompt("😀🎉", 4), "😀…");
+        assert_eq!(truncate_for_prompt("😀🎉", 3), "…");
+    }
+
+    #[test]
+    fn truncate_prompt_multibyte_boundary() {
+        // é is 2 bytes — "café" = 5 bytes, boundaries at 0,1,2,5
+        assert_eq!(truncate_for_prompt("café", 3), "caf…");
+        assert_eq!(truncate_for_prompt("café", 2), "ca…");
+    }
+
+    #[test]
+    fn truncate_prompt_no_truncation() {
+        assert_eq!(truncate_for_prompt("abc", 10), "abc");
     }
 }
