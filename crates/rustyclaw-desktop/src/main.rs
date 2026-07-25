@@ -172,20 +172,30 @@ fn dump_icon(path: &std::path::Path) -> Result<()> {
 /// binary, and cargo-installed builds have no bundle at all). Harmless
 /// when the bundle already provides the icon.
 #[cfg(target_os = "macos")]
-fn set_dock_icon() {
+pub(crate) fn set_dock_icon() {
     use objc2::{AnyThread, MainThreadMarker};
     use objc2_app_kit::{NSApplication, NSImage};
     use objc2_foundation::NSData;
 
     let Some(mtm) = MainThreadMarker::new() else {
+        tracing::warn!("set_dock_icon: not on main thread, skipping");
         return;
     };
     let app = NSApplication::sharedApplication(mtm);
     let data = NSData::with_bytes(ICON_PNG);
-    if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
-        // SAFETY: called on the main thread with a valid NSImage; the
-        // property setter has no other preconditions.
-        unsafe { app.setApplicationIconImage(Some(&image)) };
+    match NSImage::initWithData(NSImage::alloc(), &data) {
+        Some(image) => {
+            // SAFETY: called on the main thread with a valid NSImage; the
+            // property setter has no other preconditions.
+            unsafe { app.setApplicationIconImage(Some(&image)) };
+            tracing::info!("Dock icon set from embedded PNG ({} bytes)", ICON_PNG.len());
+        }
+        None => {
+            tracing::warn!(
+                "set_dock_icon: NSImage::initWithData failed ({} bytes of PNG data)",
+                ICON_PNG.len()
+            );
+        }
     }
 }
 

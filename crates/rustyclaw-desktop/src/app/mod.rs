@@ -165,6 +165,14 @@ pub fn App() -> Element {
         });
     });
 
+    // Set the macOS Dock icon once tao/NSApplication is running.
+    // The main.rs call is a best-effort early attempt; this one runs
+    // inside the Dioxus event loop so NSApplication is fully initialized.
+    #[cfg(target_os = "macos")]
+    use_effect(move || {
+        crate::set_dock_icon();
+    });
+
     // Close the connection dialog automatically once we've successfully
     // connected (or authenticated, for gateways that require auth).
     use_effect(move || {
