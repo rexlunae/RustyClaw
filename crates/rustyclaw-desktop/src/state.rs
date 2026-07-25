@@ -588,10 +588,30 @@ impl AppState {
     /// history from the gateway. If the thread is currently in the
     /// foreground, also refresh the live view.
     pub fn apply_thread_history(&mut self, thread_id: u64, messages: VecDeque<ChatMessage>) {
+        tracing::info!(
+            thread_id,
+            msg_count = messages.len(),
+            foreground = ?self.foreground_thread_id,
+            in_flight = self.foreground_request_in_flight(),
+            "apply_thread_history called"
+        );
         self.thread_messages.insert(thread_id, messages.clone());
         if self.foreground_thread_id == Some(thread_id) && !self.foreground_request_in_flight() {
+            tracing::info!(
+                thread_id,
+                msg_count = messages.len(),
+                "apply_thread_history: APPLYING messages to view"
+            );
             self.messages = messages;
             self.reset_streaming_indicators();
+        } else {
+            tracing::warn!(
+                thread_id,
+                msg_count = messages.len(),
+                foreground = ?self.foreground_thread_id,
+                in_flight = self.foreground_request_in_flight(),
+                "apply_thread_history: NOT applying (foreground mismatch or in-flight)"
+            );
         }
     }
 
