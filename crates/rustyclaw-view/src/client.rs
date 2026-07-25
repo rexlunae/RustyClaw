@@ -269,8 +269,25 @@ impl ClientState {
         thread_id: u64,
         messages: Vec<protocol::types::ChatMessage>,
     ) {
-        let hydrated: VecDeque<ChatMessage> =
-            messages.into_iter().map(ui_message_from_gateway).collect();
+        let mut hydrated: VecDeque<ChatMessage> = VecDeque::with_capacity(messages.len());
+        for m in messages.into_iter() {
+            // Tool result: fold into the previous assistant turn's
+            // matching tool call rather than emit a standalone bubble.
+            if m.role == "tool"
+                && let Some(call_id) = m.tool_call_id.as_deref()
+                && let Some(prev) = hydrated.iter_mut().rev().find(|c| {
+                    c.role == MessageRole::Assistant
+                        && c.tool_calls.iter().any(|tc| tc.id == call_id)
+                })
+            {
+                if let Some(tc) = prev.tool_calls.iter_mut().find(|tc| tc.id == call_id) {
+                    tc.result = Some(m.content.clone());
+                    tc.is_error = false;
+                }
+                continue;
+            }
+            hydrated.push_back(ui_message_from_gateway(m));
+        }
         self.thread_messages.insert(thread_id, hydrated.clone());
         if (self.foreground_thread_id == Some(thread_id) || thread_id == 0)
             && !self.foreground_request_in_flight()
@@ -324,12 +341,40 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
         _ => MessageRole::Info,
     };
 
+    let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
+    if let Some(tcs) = message.tool_calls.as_ref().and_then(|v| v.as_array()) {
+        for tc in tcs {
+            tool_calls.push(ToolCallInfo {
+                id: tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                name: tc
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                arguments: tc
+                    .get("arguments")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                result: None,
+                is_error: false,
+                collapsed: true,
+                duration_ms: None,
+                live_status: None,
+                live_output: String::new(),
+            });
+        }
+    }
+
     ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         role,
         content: message.display_content(),
         timestamp: chrono::Utc::now(),
-        tool_calls: Vec::<ToolCallInfo>::new(),
+        tool_calls,
         is_streaming: false,
         duration_ms: None,
     }
