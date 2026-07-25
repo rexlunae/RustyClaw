@@ -192,7 +192,13 @@ pub(crate) fn thread_history_messages(
                 rustyclaw_core::threads::MessageRole::System => "system",
                 rustyclaw_core::threads::MessageRole::Tool => "tool",
             };
-            protocol::types::ChatMessage::text(role, &message.content)
+            protocol::types::ChatMessage {
+                role: role.to_string(),
+                content: message.content.clone(),
+                tool_calls: message.tool_calls.clone(),
+                tool_call_id: message.tool_call_id.clone(),
+                media: None,
+            }
         })
         .collect()
 }

@@ -40,6 +40,7 @@ pub mod messengers;
 pub mod models;
 pub mod observability;
 pub mod pairing;
+pub mod plugins;
 pub mod process_manager;
 pub mod projects;
 pub mod protocols;

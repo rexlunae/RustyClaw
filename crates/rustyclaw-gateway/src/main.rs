@@ -340,6 +340,9 @@ async fn main() -> Result<()> {
         let shared_skills: crate::SharedSkillManager =
             std::sync::Arc::new(tokio::sync::Mutex::new(sm));
 
+        // Initialize plugin manager (dynamic UI panels).
+        rustyclaw_core::tools::init_plugin_manager(&config.workspace_dir());
+
         // Telemetry: aggregate usage stats and keep a log ring for the
         // analytics/logs panels, plus tracing output for operators. The
         // stats handle is registered globally so the panel handler can

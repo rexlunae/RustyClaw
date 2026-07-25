@@ -1129,6 +1129,7 @@ mod tests {
         let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
         let skill_mgr: SharedSkillManager =
             Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
         let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let model_registry = rustyclaw_core::models::create_model_registry();
 
@@ -1199,6 +1200,7 @@ mod tests {
         let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
         let skill_mgr: SharedSkillManager =
             Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
         let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let model_registry = rustyclaw_core::models::create_model_registry();
 
@@ -1289,6 +1291,7 @@ mod tests {
         let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
         let skill_mgr: SharedSkillManager =
             Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
         let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let model_registry = rustyclaw_core::models::create_model_registry();
 

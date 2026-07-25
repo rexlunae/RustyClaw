@@ -5,10 +5,10 @@ use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification
 use rustyclaw_view::{tokio, tracing};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::components::{Chat, NewProjectDialog, Sidebar};
+use crate::components::{Chat, NewProjectDialog, PluginActionEvent, Sidebar};
 
 use crate::app_support::*;
-use crate::state::AppState;
+use crate::state::{AppState, RightSidebarTab};
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
@@ -1343,10 +1343,69 @@ pub fn App() -> Element {
 
                 if state.read().right_sidebar_visible {
                     aside { class: "sidebar sidebar-right",
-                        crate::components::FileBrowser {
-                            data: state.read().file_browser.clone(),
-                            on_toggle: on_file_browser_toggle,
-                            on_select: on_file_browser_select,
+                        // Tab bar
+                        div { class: "sidebar-right-tabs",
+                            {
+                                let tab = state.read().right_sidebar_tab;
+                                rsx! {
+                                    button {
+                                        class: if tab == RightSidebarTab::Files {
+                                            "sidebar-right-tab active"
+                                        } else {
+                                            "sidebar-right-tab"
+                                        },
+                                        onclick: move |_| {
+                                            state.write().right_sidebar_tab = RightSidebarTab::Files;
+                                        },
+                                        "📁 Files"
+                                    }
+                                    button {
+                                        class: if tab == RightSidebarTab::Plugins {
+                                            "sidebar-right-tab active"
+                                        } else {
+                                            "sidebar-right-tab"
+                                        },
+                                        onclick: move |_| {
+                                            state.write().right_sidebar_tab = RightSidebarTab::Plugins;
+                                        },
+                                        "🔌 Plugins"
+                                    }
+                                }
+                            }
+                        }
+                        // Panel content
+                        {
+                            let tab = state.read().right_sidebar_tab;
+                            match tab {
+                                RightSidebarTab::Files => rsx! {
+                                    crate::components::FileBrowser {
+                                        data: state.read().file_browser.clone(),
+                                        on_toggle: on_file_browser_toggle,
+                                        on_select: on_file_browser_select,
+                                    }
+                                },
+                                RightSidebarTab::Plugins => rsx! {
+                                    crate::components::PluginPanel {
+                                        plugins: state.read().plugins.clone(),
+                                        active_plugin: state.read().active_plugin.clone(),
+                                        on_select_plugin: move |name: String| {
+                                            state.write().active_plugin = Some(name);
+                                        },
+                                        on_action: move |event: PluginActionEvent| {
+                                            // TODO: send action to gateway
+                                            tracing::info!(
+                                                "Plugin action: {} / {}",
+                                                event.plugin_name,
+                                                event.action_name
+                                            );
+                                        },
+                                        on_refresh: move |name: String| {
+                                            // TODO: request plugin state refresh from gateway
+                                            tracing::info!("Plugin refresh: {name}");
+                                        },
+                                    }
+                                },
+                            }
                         }
                     }
                 }

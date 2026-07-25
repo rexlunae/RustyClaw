@@ -1138,5 +1138,48 @@ pub static IMAGE_GENERATE: ToolDef = ToolDef {
 // Re-export parameter functions from params module
 pub use params::*;
 
+// ── Plugin tools ───────────────────────────────────────────────────────────
+
+pub static PLUGIN_LIST: ToolDef = ToolDef {
+    name: "plugin_list",
+    description: "List all loaded plugins and their current state. Plugins are dynamic UI \
+                  panels the agent can create and control — they render beside the chat.",
+    parameters: vec![],
+    execute: exec_plugin_list,
+};
+
+pub static PLUGIN_STATE_GET: ToolDef = ToolDef {
+    name: "plugin_state_get",
+    description: "Read the current state of a plugin by name.",
+    parameters: vec![],
+    execute: exec_plugin_state_get,
+};
+
+pub static PLUGIN_STATE_SET: ToolDef = ToolDef {
+    name: "plugin_state_set",
+    description: "Set the full state of a plugin (replaces existing state). The plugin's \
+                  panel in the sidebar will update to reflect the new state.",
+    parameters: vec![],
+    execute: exec_plugin_state_set,
+};
+
+pub static PLUGIN_STATE_PATCH: ToolDef = ToolDef {
+    name: "plugin_state_patch",
+    description: "Merge a partial update into a plugin's state (JSON Merge Patch). Only the \
+                  keys you provide are changed — all other keys stay as-is.",
+    parameters: vec![],
+    execute: exec_plugin_state_patch,
+};
+
+pub static PLUGIN_CREATE: ToolDef = ToolDef {
+    name: "plugin_create",
+    description: "Create a new plugin that renders an interactive panel beside the chat. \
+                  Plugins combine agent instructions, JSON state, and UI rendering — ideal \
+                  for charts, dashboards, live data, and interactive widgets. \
+                  After creation, use plugin_state_set to populate its data.",
+    parameters: vec![],
+    execute: exec_plugin_create,
+};
+
 // Re-export provider-specific tool-schema formatters.
 pub use schema::{tools_anthropic, tools_google, tools_openai};
