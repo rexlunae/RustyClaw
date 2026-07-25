@@ -53,10 +53,10 @@ pub fn PluginPanel(props: PluginPanelProps) -> Element {
 
     // Find active plugin data (if any) before entering rsx.
     let active_plugin_data: Option<(
-        String, // emoji
-        String, // name
-        String, // description
-        Value,  // state
+        String,                // emoji
+        String,                // name
+        String,                // description
+        Value,                 // state
         Vec<PluginActionInfo>, // actions
     )> = plugins
         .iter()
@@ -88,7 +88,7 @@ pub fn PluginPanel(props: PluginPanelProps) -> Element {
                 div { class: "plugin-panel-tabs",
                     for plugin in plugins.iter() {
                         {
-                            let is_active = active_name.as_ref().map_or(false, |n| n == &plugin.name);
+                            let is_active = active_name.as_ref().is_some_and(|n| n == &plugin.name);
                             let cls = if is_active { "plugin-tab active" } else { "plugin-tab" };
                             let plugin_name = plugin.name.clone();
                             let emoji = plugin.emoji.clone().unwrap_or_else(|| "📦".into());
@@ -163,7 +163,6 @@ fn ActivePluginContent(props: ActivePluginContentProps) -> Element {
                             let plugin_name = plugin_name.clone();
                             let action_name = action.name.clone();
                             let desc = action.description.clone();
-                            let on_action = on_action;
                             rsx! {
                                 button {
                                     key: "{action.name}",

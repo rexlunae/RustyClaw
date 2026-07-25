@@ -199,8 +199,7 @@ impl PluginManager {
             let state_file = plugin.path.join("state.json");
             let raw = serde_json::to_string_pretty(&state)
                 .map_err(|e| PluginError::Serialize(e, plugin_name.to_string()))?;
-            std::fs::write(&state_file, raw)
-                .map_err(|e| PluginError::Io(e, state_file))?;
+            std::fs::write(&state_file, raw).map_err(|e| PluginError::Io(e, state_file))?;
         }
         Ok(())
     }
@@ -279,8 +278,7 @@ impl PluginManager {
             return Err(PluginError::AlreadyExists(name.to_string()));
         }
 
-        std::fs::create_dir_all(&plugin_dir)
-            .map_err(|e| PluginError::Io(e, plugin_dir.clone()))?;
+        std::fs::create_dir_all(&plugin_dir).map_err(|e| PluginError::Io(e, plugin_dir.clone()))?;
 
         let plugin = Plugin {
             name: name.to_string(),
@@ -340,18 +338,19 @@ impl PluginManager {
         ctx.push_str("- `plugin_state_get(plugin_name)` — read a plugin's state\n");
         ctx.push_str("- `plugin_state_set(plugin_name, state)` — update a plugin's state (full replacement)\n");
         ctx.push_str("- `plugin_state_patch(plugin_name, patch)` — merge partial state update\n");
-        ctx.push_str(
-            "- `plugin_create(...)` — create a new plugin from scratch\n\n",
-        );
+        ctx.push_str("- `plugin_create(...)` — create a new plugin from scratch\n\n");
 
         ctx.push_str("<available_plugins>\n");
         for p in plugins {
-            ctx.push_str(&format!("  <plugin>\n"));
+            ctx.push_str("  <plugin>\n");
             ctx.push_str(&format!("    <name>{}</name>\n", p.name));
             if let Some(ref emoji) = p.emoji {
                 ctx.push_str(&format!("    <emoji>{}</emoji>\n", emoji));
             }
-            ctx.push_str(&format!("    <description>{}</description>\n", p.description));
+            ctx.push_str(&format!(
+                "    <description>{}</description>\n",
+                p.description
+            ));
             if let Some(ref state) = self.states.get(&p.name) {
                 let compact = serde_json::to_string(state).unwrap_or_default();
                 ctx.push_str(&format!(
@@ -362,7 +361,10 @@ impl PluginManager {
             if !p.actions.is_empty() {
                 ctx.push_str("    <actions>\n");
                 for a in &p.actions {
-                    ctx.push_str(&format!("      <action name=\"{}\" description=\"{}\"/>\n", a.name, a.description));
+                    ctx.push_str(&format!(
+                        "      <action name=\"{}\" description=\"{}\"/>\n",
+                        a.name, a.description
+                    ));
                 }
                 ctx.push_str("    </actions>\n");
             }

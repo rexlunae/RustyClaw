@@ -8,8 +8,8 @@
 //!   - `plugin_create`    — create a new plugin from scratch
 
 use crate::plugins::{PluginAction, PluginManager};
-use crate::tools::error::ToolResult;
 use crate::tools::ToolParam;
+use crate::tools::error::ToolResult;
 use serde_json::{Value, json};
 use std::path::Path;
 use std::sync::Mutex;
@@ -69,7 +69,7 @@ pub fn exec_plugin_list(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .and_then(|v| v.as_bool())
         .unwrap_or(true);
 
-    let mgr = manager_lock().map_err(|e| format!("{e}"))?;
+    let mgr = manager_lock().map_err(|e| e.to_string())?;
     let plugins = mgr.plugins();
     let mut items = Vec::new();
     for p in plugins {
@@ -104,8 +104,8 @@ pub fn exec_plugin_state_get(args: &Value, _workspace_dir: &Path) -> ToolResult 
         .or_else(|| args.get("name").and_then(|v| v.as_str()))
         .ok_or_else(|| "Missing required parameter: plugin_name".to_string())?;
 
-    let mgr = manager_lock().map_err(|e| format!("{e}"))?;
-    let state = mgr.get_state(name).map_err(|e| format!("{e}"))?;
+    let mgr = manager_lock().map_err(|e| e.to_string())?;
+    let state = mgr.get_state(name).map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&json!({
         "plugin_name": name,
         "state": state,
@@ -125,8 +125,9 @@ pub fn exec_plugin_state_set(args: &Value, _workspace_dir: &Path) -> ToolResult 
         .get("state")
         .ok_or_else(|| "Missing required parameter: state".to_string())?;
 
-    let mut mgr = manager_lock().map_err(|e| format!("{e}"))?;
-    mgr.set_state(name, state.clone()).map_err(|e| format!("{e}"))?;
+    let mut mgr = manager_lock().map_err(|e| e.to_string())?;
+    mgr.set_state(name, state.clone())
+        .map_err(|e| e.to_string())?;
     Ok("ok".to_string())
 }
 
@@ -142,8 +143,8 @@ pub fn exec_plugin_state_patch(args: &Value, _workspace_dir: &Path) -> ToolResul
         .get("patch")
         .ok_or_else(|| "Missing required parameter: patch".to_string())?;
 
-    let mut mgr = manager_lock().map_err(|e| format!("{e}"))?;
-    let new_state = mgr.patch_state(name, patch).map_err(|e| format!("{e}"))?;
+    let mut mgr = manager_lock().map_err(|e| e.to_string())?;
+    let new_state = mgr.patch_state(name, patch).map_err(|e| e.to_string())?;
     Ok(serde_json::to_string_pretty(&json!({
         "plugin_name": name,
         "state": new_state,
@@ -177,7 +178,7 @@ pub fn exec_plugin_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
         .get("actions")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
-    let mut mgr = manager_lock().map_err(|e| format!("{e}"))?;
+    let mut mgr = manager_lock().map_err(|e| e.to_string())?;
     let plugin = mgr
         .create(
             name,
@@ -189,7 +190,7 @@ pub fn exec_plugin_create(args: &Value, _workspace_dir: &Path) -> ToolResult {
             actions,
             html_template,
         )
-        .map_err(|e| format!("{e}"))?;
+        .map_err(|e| e.to_string())?;
 
     Ok(serde_json::to_string_pretty(&json!({
         "created": true,
