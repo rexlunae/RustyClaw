@@ -181,8 +181,10 @@ pub fn App() -> Element {
     // Ask the gateway for the active provider's live model list so the
     // model picker reflects the provider API instead of the static
     // catalogue.  Re-runs on provider switches; the `requested` set keeps
-    // it to one in-flight request per provider (cleared on fetch failure
-    // so the next switch retries).
+    // it to one request per provider.  Failed fetches leave the guard in
+    // place (clearing it here would loop, since this effect observes the
+    // same state); `on_model_change` clears it on an explicit provider
+    // switch so the user can retry.
     use_effect(move || {
         let (provider, connected, already_requested) = {
             let s = state.read();
@@ -1217,8 +1219,15 @@ pub fn App() -> Element {
                                 }
                             });
                         }
-                        state.write().provider = Some(provider);
-                        state.write().model = Some(model);
+                        let mut s = state.write();
+                        // Re-arm the live model fetch for this provider if
+                        // no list is cached yet (e.g. an earlier fetch
+                        // failed) — an explicit switch is the retry point.
+                        if !s.provider_models.contains_key(&provider) {
+                            s.provider_models_requested.remove(&provider);
+                        }
+                        s.provider = Some(provider);
+                        s.model = Some(model);
                     },
                     on_add_provider: move |_| show_settings.set(true),
                     on_add_file_attachment: on_add_file_attachment,

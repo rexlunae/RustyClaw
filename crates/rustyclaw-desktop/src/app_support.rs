@@ -608,10 +608,15 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             error,
         } => {
             if let Some(err) = error {
-                // Keep the static fallback in the picker; allow a retry on
-                // the next provider switch.
+                // Keep the static fallback in the picker.  The provider
+                // deliberately stays in `provider_models_requested`:
+                // removing it here would re-trigger the request effect
+                // (which observes this same state signal) and spin an
+                // unthrottled retry loop.  The guard is instead cleared
+                // when the user explicitly switches to this provider
+                // (`on_model_change` in app/mod.rs), so retries are
+                // user-driven and bounded.
                 tracing::warn!(provider = %provider, error = %err, "Live provider model fetch failed");
-                state.write().provider_models_requested.remove(&provider);
             } else {
                 state.write().provider_models.insert(provider, models);
             }
