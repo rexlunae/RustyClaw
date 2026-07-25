@@ -95,6 +95,14 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         }
     }
 
+    // Add plugins context (dynamic UI panels)
+    {
+        let plugins_context = rustyclaw_core::tools::plugin_prompt_context();
+        if !plugins_context.is_empty() {
+            parts.push(plugins_context);
+        }
+    }
+
     // Add active tasks section if any
     if let Some(session_key) = ctx.session_key {
         if let Some(task_section) =

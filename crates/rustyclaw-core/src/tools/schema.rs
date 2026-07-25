@@ -7,7 +7,8 @@ use serde_json::{Value, json};
 
 use super::params::*;
 use super::{
-    ToolDef, ToolParam, all_tools, kernel_tools, mcp_tools, model_tools, service_tools, task_tools,
+    ToolDef, ToolParam, all_tools, kernel_tools, mcp_tools, model_tools, plugin, service_tools,
+    task_tools,
 };
 
 // ── Provider-specific formatters ────────────────────────────────────────────
@@ -153,6 +154,11 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "service_logs" => service_tools::service_logs_params(),
         #[cfg(feature = "image-gen")]
         "image_generate" => image_generate_params(),
+        "plugin_list" => plugin::plugin_list_params(),
+        "plugin_state_get" => plugin::plugin_state_get_params(),
+        "plugin_state_set" => plugin::plugin_state_set_params(),
+        "plugin_state_patch" => plugin::plugin_state_patch_params(),
+        "plugin_create" => plugin::plugin_create_params(),
         _ => vec![],
     }
 }

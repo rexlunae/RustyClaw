@@ -118,6 +118,14 @@ use trigger_tools::{
 // Patch operations
 use patch::exec_apply_patch;
 
+// Plugin operations
+mod plugin;
+use plugin::{
+    exec_plugin_create, exec_plugin_list, exec_plugin_state_get, exec_plugin_state_patch,
+    exec_plugin_state_set,
+};
+pub use plugin::{init_plugin_manager, plugin_prompt_context, reload_plugins};
+
 // Gateway operations
 use gateway_tools::{exec_gateway, exec_image, exec_message, exec_tts};
 
@@ -386,6 +394,11 @@ pub fn tool_summary(name: &str) -> &'static str {
         "skill_curator" => "Auto-propose, grade, merge, and prune skills",
         "web_extract" => "Extract clean readable content from web pages",
         "image_generate" => "Generate images from text prompts",
+        "plugin_list" => "List loaded plugins and their current state",
+        "plugin_state_get" => "Read a plugin's state",
+        "plugin_state_set" => "Set a plugin's full state (replaces existing)",
+        "plugin_state_patch" => "Merge partial update into a plugin's state",
+        "plugin_create" => "Create a new plugin panel (charts, dashboards, widgets)",
         _ => "Unknown tool",
     }
 }
@@ -548,6 +561,11 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &WEB_EXTRACT,
         #[cfg(feature = "image-gen")]
         &IMAGE_GENERATE,
+        &PLUGIN_LIST,
+        &PLUGIN_STATE_GET,
+        &PLUGIN_STATE_SET,
+        &PLUGIN_STATE_PATCH,
+        &PLUGIN_CREATE,
     ]
 }
 

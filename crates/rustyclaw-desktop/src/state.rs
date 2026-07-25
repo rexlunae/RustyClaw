@@ -13,6 +13,14 @@ use rustyclaw_core::user_prompt_types::UserPrompt;
 use rustyclaw_view::{PromptAttachment, SecretsDialogData};
 use rustyclaw_view::{chrono, uuid};
 
+/// Right sidebar panel selection.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RightSidebarTab {
+    #[default]
+    Files,
+    Plugins,
+}
+
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Theme {
@@ -147,6 +155,15 @@ pub struct AppState {
 
     /// File browser data for the right sidebar.
     pub file_browser: rustyclaw_view::FileBrowserData,
+
+    /// Right sidebar active tab.
+    pub right_sidebar_tab: RightSidebarTab,
+
+    /// Plugin snapshots for the plugin panel.
+    pub plugins: Vec<crate::components::PluginSnapshot>,
+
+    /// Active plugin name in the plugin panel.
+    pub active_plugin: Option<String>,
 
     /// Gateway host hardware capabilities.
     pub host_info: Option<rustyclaw_view::HostInfoData>,
@@ -300,6 +317,9 @@ impl Default for AppState {
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
                 .unwrap_or_default(),
+            right_sidebar_tab: RightSidebarTab::default(),
+            plugins: Vec::new(),
+            active_plugin: None,
             host_info: None,
             load_status: None,
             show_system_info: false,
@@ -581,8 +601,25 @@ impl AppState {
         thread_id: u64,
         messages: Vec<protocol::types::ChatMessage>,
     ) {
-        let hydrated: VecDeque<ChatMessage> =
-            messages.into_iter().map(ui_message_from_gateway).collect();
+        let mut hydrated: VecDeque<ChatMessage> = VecDeque::with_capacity(messages.len());
+        for m in messages.into_iter() {
+            // Tool result: fold into the previous assistant turn's
+            // matching tool call rather than emit a standalone bubble.
+            if m.role == "tool"
+                && let Some(call_id) = m.tool_call_id.as_deref()
+                && let Some(prev) = hydrated.iter_mut().rev().find(|c| {
+                    c.role == rustyclaw_core::types::MessageRole::Assistant
+                        && c.tool_calls.iter().any(|tc| tc.id == call_id)
+                })
+            {
+                if let Some(tc) = prev.tool_calls.iter_mut().find(|tc| tc.id == call_id) {
+                    tc.result = Some(m.content.clone());
+                    tc.is_error = false;
+                }
+                continue;
+            }
+            hydrated.push_back(ui_message_from_gateway(m));
+        }
         self.thread_messages.insert(thread_id, hydrated.clone());
         if (self.foreground_thread_id == Some(thread_id) || thread_id == 0)
             && !self.foreground_request_in_flight()
@@ -603,7 +640,10 @@ impl AppState {
                 .insert(current_id, self.messages.clone());
         }
 
-        // Restore target thread's messages (or start empty)
+        // Restore target thread's messages (or start empty).
+        // The gateway will shortly send authoritative history via
+        // ThreadMessages or ThreadHistoryReply — the local cache is
+        // a stopgap so the sidebar highlight moves instantly.
         self.messages = self
             .thread_messages
             .get(&target_id)
@@ -615,11 +655,16 @@ impl AppState {
         // matched against this id, and the sidebar highlight moves at once.
         self.foreground_thread_id = Some(target_id);
 
-        self.reset_streaming_indicators();
-        // Switching back to the thread whose response is still running:
-        // surface the busy indicator again (the streamed bubble was lost
-        // with the view; the full text arrives in the completion snapshot).
-        self.is_processing = self.streaming_thread_id == Some(target_id);
+        // Reset ALL indicators so the foreground_request_in_flight() guard
+        // in hydrate_thread_messages / apply_thread_history won't block the
+        // authoritative history snapshot from the gateway. The streaming
+        // bubble from the previous view was already lost when we swapped
+        // self.messages above; the full text arrives via the snapshot.
+        self.is_processing = false;
+        self.is_streaming = false;
+        self.is_thinking = false;
+        self.streaming_chunks = 0;
+        self.streaming_bytes = 0;
     }
 
     /// Reset the processing/streaming indicators to idle. Does not release
@@ -635,6 +680,8 @@ impl AppState {
 }
 
 fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage {
+    use rustyclaw_core::ui::ToolCallInfo;
+
     let role = match message.role.as_str() {
         "user" => rustyclaw_core::types::MessageRole::User,
         "assistant" => rustyclaw_core::types::MessageRole::Assistant,
@@ -643,12 +690,40 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
         _ => rustyclaw_core::types::MessageRole::Info,
     };
 
+    let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
+    if let Some(tcs) = message.tool_calls.as_ref().and_then(|v| v.as_array()) {
+        for tc in tcs {
+            tool_calls.push(ToolCallInfo {
+                id: tc
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                name: tc
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                arguments: tc
+                    .get("arguments")
+                    .map(|v| v.to_string())
+                    .unwrap_or_default(),
+                result: None,
+                is_error: false,
+                collapsed: true,
+                duration_ms: None,
+                live_status: None,
+                live_output: String::new(),
+            });
+        }
+    }
+
     ChatMessage {
         id: uuid::Uuid::new_v4().to_string(),
         role,
         content: message.display_content(),
         timestamp: chrono::Utc::now(),
-        tool_calls: Vec::new(),
+        tool_calls,
         is_streaming: false,
         duration_ms: None,
     }

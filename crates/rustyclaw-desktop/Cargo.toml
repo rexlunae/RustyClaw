@@ -23,6 +23,8 @@ path = "src/main.rs"
 rustyclaw-core = { path = "../rustyclaw-core", version = "0.4.0", default-features = false }
 rustyclaw-view.workspace = true
 anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 # Dioxus framework
 # Note: "desktop" feature requires GTK dev libraries (libgtk-3-dev on Debian/Ubuntu)
