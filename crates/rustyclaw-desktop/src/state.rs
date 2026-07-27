@@ -11,7 +11,7 @@ use rustyclaw_core::gateway::protocol;
 use rustyclaw_core::ui::{ChatMessage, ConnectionStatus, ThreadInfo};
 use rustyclaw_core::user_prompt_types::UserPrompt;
 use rustyclaw_view::{PromptAttachment, SecretsDialogData};
-use rustyclaw_view::{chrono, uuid};
+use rustyclaw_view::{chrono, tracing, uuid};
 
 /// Right sidebar panel selection.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
