@@ -127,7 +127,12 @@ ast-grep-language = "0.42.3"
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_System_Pipes", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Pipes",
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 landlock = "0.4"
