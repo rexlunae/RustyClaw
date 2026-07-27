@@ -305,6 +305,35 @@ impl ThreadManager {
         self.foreground_id = None;
     }
 
+    /// Ensure *some* thread holds the foreground, electing the most recently
+    /// active interactive thread when the current one is missing or dangling.
+    /// Returns the foreground id, or `None` when there are no threads at all.
+    ///
+    /// A manager with threads but no foreground is a dead end for clients: the
+    /// thread list they receive carries `foreground_id: None`, so they have no
+    /// thread to request history for and render an empty transcript even
+    /// though every thread's messages are sitting right here. That state is
+    /// reachable — closing the foreground thread, or the "background the
+    /// current thread" sentinel — and it is persisted, so it survives
+    /// restarts. Electing a replacement keeps the invariant.
+    pub fn ensure_foreground(&mut self) -> Option<ThreadId> {
+        if let Some(id) = self.foreground_id
+            && self.threads.contains_key(&id)
+        {
+            return Some(id);
+        }
+        // Prefer interactive (chat) threads; among those, the one the user
+        // touched last. Fall back to any thread so a manager holding only
+        // sub-agent/task threads still has a foreground.
+        let elected = self
+            .threads
+            .values()
+            .max_by_key(|t| (t.kind.is_interactive(), t.last_activity))
+            .map(|t| t.id)?;
+        self.switch_foreground(elected);
+        Some(elected)
+    }
+
     /// Rename a thread.
     pub fn rename(&mut self, id: ThreadId, new_label: impl Into<String>) -> bool {
         if let Some(thread) = self.threads.get_mut(&id) {
@@ -399,11 +428,15 @@ impl ThreadManager {
     // ── Thread Removal ──────────────────────────────────────────────────────
 
     /// Remove a thread.
+    ///
+    /// Removing the foreground thread hands the foreground to another one
+    /// rather than leaving the manager with none — see [`Self::ensure_foreground`].
     pub fn remove(&mut self, id: ThreadId) -> Option<AgentThread> {
         let thread = self.threads.remove(&id);
         if thread.is_some() {
             if self.foreground_id == Some(id) {
                 self.foreground_id = None;
+                self.ensure_foreground();
             }
             self.emit(ThreadEvent::Removed { thread_id: id });
         }
@@ -506,8 +539,18 @@ impl ThreadManager {
         };
 
         for thread in state.threads {
+            // Restored ids were minted by a previous process, whose counter
+            // died with it. Reserve above them or the next `create_chat` will
+            // mint an id that is already taken and overwrite that thread.
+            ThreadId::reserve_above(thread.id.0);
             mgr.threads.insert(thread.id, thread);
         }
+
+        // A persisted `foreground_id` can be null (the "background the current
+        // thread" sentinel) or point at a thread that was since closed. Either
+        // way clients would get `foreground_id: None` and never ask for any
+        // history, so re-elect one here.
+        mgr.ensure_foreground();
 
         Ok(mgr)
     }
@@ -667,5 +710,88 @@ mod tests {
 
         let info = mgr.list_info();
         assert_eq!(info.len(), 2);
+    }
+
+    /// Save a manager to a temp file and read it back, the way a restarted
+    /// gateway does.
+    fn round_trip(mgr: &ThreadManager, name: &str) -> ThreadManager {
+        let path = std::env::temp_dir().join(format!(
+            "rustyclaw-threads-{}-{name}.json",
+            std::process::id()
+        ));
+        mgr.save_to_file(&path).expect("save threads");
+        let loaded = ThreadManager::load_from_file(&path).expect("load threads");
+        let _ = std::fs::remove_file(&path);
+        loaded
+    }
+
+    /// Regression: thread ids outlive the process that minted them. A
+    /// restarted gateway must not hand a restored thread's id to a new
+    /// thread — doing so overwrites the restored thread and loses its
+    /// entire message history.
+    #[test]
+    fn new_threads_never_collide_with_restored_ids() {
+        let mut mgr = ThreadManager::new();
+        let kept = mgr.create_chat("Has history");
+        mgr.add_message(kept, MessageRole::User, "hello");
+        mgr.add_message(kept, MessageRole::Assistant, "hi there");
+
+        let mut restored = round_trip(&mgr, "id-collision");
+        let fresh = restored.create_chat("Brand new");
+
+        assert_ne!(fresh, kept, "a new thread reused a restored thread's id");
+        assert_eq!(restored.list().len(), 2);
+        assert_eq!(
+            restored.get(kept).map(|t| t.messages.len()),
+            Some(2),
+            "the restored thread's history was overwritten"
+        );
+    }
+
+    /// Regression: a manager that holds threads must always name a
+    /// foreground. Clients drive history loading off `foreground_id`, so a
+    /// `None` persisted by "background the current thread" leaves every
+    /// client with an empty transcript on the next start.
+    #[test]
+    fn loading_reelects_a_foreground_when_none_was_persisted() {
+        let mut mgr = ThreadManager::new();
+        let chat = mgr.create_chat("Only chat");
+        mgr.add_message(chat, MessageRole::User, "hello");
+        mgr.clear_foreground();
+        assert_eq!(mgr.foreground_id(), None);
+
+        let restored = round_trip(&mgr, "no-foreground");
+        assert_eq!(restored.foreground_id(), Some(chat));
+        assert_eq!(restored.foreground().map(|t| t.messages.len()), Some(1));
+    }
+
+    /// The elected foreground is an interactive thread, not a sub-agent or
+    /// task thread that happens to have been active more recently.
+    #[test]
+    fn foreground_election_prefers_chat_threads() {
+        let mut mgr = ThreadManager::new();
+        let chat = mgr.create_chat("Chat");
+        mgr.create_subagent("Worker", "gpt-4", "task", Some(chat));
+        mgr.clear_foreground();
+
+        assert_eq!(mgr.ensure_foreground(), Some(chat));
+    }
+
+    /// Closing the foreground thread hands the foreground to another thread
+    /// rather than leaving the manager (and every client) with none.
+    #[test]
+    fn removing_the_foreground_elects_a_replacement() {
+        let mut mgr = ThreadManager::new();
+        let first = mgr.create_chat("First");
+        let second = mgr.create_chat("Second");
+        assert_eq!(mgr.foreground_id(), Some(second));
+
+        mgr.remove(second);
+        assert_eq!(mgr.foreground_id(), Some(first));
+        assert!(mgr.get(first).unwrap().is_foreground);
+
+        // The last thread going away is the one case with nothing to elect.
+        mgr.remove(first);
+        assert_eq!(mgr.foreground_id(), None);
     }
 }

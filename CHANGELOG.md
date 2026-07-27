@@ -145,6 +145,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Thread history that never made it onto the screen.** Opening the
+  desktop client could show nothing but system notices while the sidebar
+  correctly reported each thread's message count — the messages were on
+  disk and on the wire, but no client ever displayed them. Clients drive
+  history loading off the thread list's `foreground_id`, and the gateway
+  could report `None` for it indefinitely: closing the foreground thread
+  left the manager with no foreground, as did the "background the current
+  thread" sentinel, and both states are persisted to `threads.json`. With
+  no foreground, the client had no thread to request history for, the
+  gateway skipped its unprompted history push, and the guard in
+  `apply_thread_history` rejected any snapshot that did arrive.
+  `ThreadManager` now keeps the invariant that a manager holding threads
+  always names a foreground — electing the most recently active chat
+  thread on load and when the foreground thread is closed — and closing a
+  thread now pushes the new foreground's history so the transcript follows
+  the sidebar. The desktop no longer discards authoritative history: a
+  snapshot arriving before the client knows its foreground thread is
+  displayed rather than cached and forgotten, and a thread list that names
+  a foreground shows the snapshot that already arrived for it.
+- **New threads overwriting old ones after a restart.** Thread ids are
+  minted from a process-global counter that starts at 1, but they are
+  persisted and restored on the next run. A restarted gateway therefore
+  handed the first new thread an id that a restored thread already owned,
+  replacing it in the map — silently destroying that thread's entire
+  message history. Loading now reserves the counter above every restored
+  id.
+- **Two copies of the wire→transcript conversion in the desktop client**
+  had drifted apart, mapping unrecognised message roles differently
+  (`ThreadMessages` rendered them as inline `ℹ️` notices,
+  `ThreadHistoryReply` as neutral system lines). Both history frames now
+  share one conversion.
 - **TUI commands that printed success and did nothing.** `/clear` now
   actually clears the display (and says thread history is unaffected
   rather than claiming memory was cleared); `/gateway` reports the real

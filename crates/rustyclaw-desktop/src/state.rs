@@ -584,34 +584,74 @@ impl AppState {
             && self.stream_targets_foreground()
     }
 
+    /// The gateway's sentinel thread id for "no thread is focused"; carries
+    /// an empty message list to clear the view.
+    const NO_THREAD: u64 = 0;
+
+    /// Whether a history snapshot for `thread_id` should replace what is on
+    /// screen.
+    ///
+    /// Yes when it belongs to the thread being viewed, and also when this
+    /// client doesn't know its foreground thread yet: history replies can
+    /// arrive before the `ThreadsUpdate` that names the foreground, and a
+    /// snapshot the gateway sent unprompted is better than an empty
+    /// transcript. In both cases an in-flight request wins — replacing the
+    /// view mid-response would drop the streaming bubble.
+    fn history_should_take_the_view(&self, thread_id: u64) -> bool {
+        let targets_view = self.foreground_thread_id == Some(thread_id)
+            || (self.foreground_thread_id.is_none() && thread_id != Self::NO_THREAD);
+        targets_view && !self.foreground_request_in_flight()
+    }
+
     /// Replace the cached messages for a thread with an authoritative
-    /// history from the gateway. If the thread is currently in the
-    /// foreground, also refresh the live view.
+    /// history from the gateway. If the thread is the one on screen, also
+    /// refresh the live view.
     pub fn apply_thread_history(&mut self, thread_id: u64, messages: VecDeque<ChatMessage>) {
-        tracing::info!(
-            thread_id,
-            msg_count = messages.len(),
-            foreground = ?self.foreground_thread_id,
-            in_flight = self.foreground_request_in_flight(),
-            "apply_thread_history called"
-        );
         self.thread_messages.insert(thread_id, messages.clone());
-        if self.foreground_thread_id == Some(thread_id) && !self.foreground_request_in_flight() {
-            tracing::info!(
+        if self.history_should_take_the_view(thread_id) {
+            tracing::debug!(
                 thread_id,
                 msg_count = messages.len(),
-                "apply_thread_history: APPLYING messages to view"
+                "applying thread history to the view"
             );
             self.messages = messages;
+            self.foreground_thread_id = Some(thread_id);
             self.reset_streaming_indicators();
         } else {
-            tracing::warn!(
+            tracing::debug!(
                 thread_id,
                 msg_count = messages.len(),
                 foreground = ?self.foreground_thread_id,
                 in_flight = self.foreground_request_in_flight(),
-                "apply_thread_history: NOT applying (foreground mismatch or in-flight)"
+                "caching thread history for a thread that is not on screen"
             );
+        }
+    }
+
+    /// Point the view at the gateway's foreground thread.
+    ///
+    /// Called when a `ThreadsUpdate` names the foreground. If a history
+    /// snapshot for that thread already arrived — the gateway sends one
+    /// unprompted on connect, and it can land before the thread list — show
+    /// it now rather than waiting for another round trip that may never come.
+    pub fn set_foreground_thread(&mut self, thread_id: Option<u64>) {
+        if self.foreground_thread_id == thread_id {
+            return;
+        }
+        if let Some(outgoing) = self.foreground_thread_id
+            && !self.messages.is_empty()
+        {
+            self.thread_messages.insert(outgoing, self.messages.clone());
+        }
+        self.foreground_thread_id = thread_id;
+        if self.foreground_request_in_flight() {
+            return;
+        }
+        if let Some(id) = thread_id
+            && let Some(cached) = self.thread_messages.get(&id)
+        {
+            self.messages = cached.clone();
+            self.reset_streaming_indicators();
         }
     }
 
@@ -621,30 +661,21 @@ impl AppState {
         thread_id: u64,
         messages: Vec<protocol::types::ChatMessage>,
     ) {
-        let mut hydrated: VecDeque<ChatMessage> = VecDeque::with_capacity(messages.len());
-        for m in messages.into_iter() {
-            // Tool result: fold into the previous assistant turn's
-            // matching tool call rather than emit a standalone bubble.
-            if m.role == "tool"
-                && let Some(call_id) = m.tool_call_id.as_deref()
-                && let Some(prev) = hydrated.iter_mut().rev().find(|c| {
-                    c.role == rustyclaw_core::types::MessageRole::Assistant
-                        && c.tool_calls.iter().any(|tc| tc.id == call_id)
-                })
-            {
-                if let Some(tc) = prev.tool_calls.iter_mut().find(|tc| tc.id == call_id) {
-                    tc.result = Some(m.content.clone());
-                    tc.is_error = false;
-                }
-                continue;
+        let hydrated = ui_history_from_gateway(messages);
+        // `thread_id == 0` is the gateway's "nothing is focused" sentinel: it
+        // carries an empty list to clear the view, and must not be cached or
+        // adopted as a real thread.
+        if thread_id == Self::NO_THREAD {
+            if !self.foreground_request_in_flight() {
+                self.messages.clear();
+                self.reset_streaming_indicators();
             }
-            hydrated.push_back(ui_message_from_gateway(m));
+            return;
         }
         self.thread_messages.insert(thread_id, hydrated.clone());
-        if (self.foreground_thread_id == Some(thread_id) || thread_id == 0)
-            && !self.foreground_request_in_flight()
-        {
+        if self.history_should_take_the_view(thread_id) {
             self.messages = hydrated;
+            self.foreground_thread_id = Some(thread_id);
             self.reset_streaming_indicators();
         }
     }
@@ -699,6 +730,38 @@ impl AppState {
     }
 }
 
+/// Convert a thread's persisted history, as it arrives on the wire, into the
+/// transcript the chat surface renders.
+///
+/// Tool results (`role == "tool"`) are folded into the matching tool call on
+/// the assistant turn that issued them rather than emitted as standalone
+/// bubbles, so replayed history looks like the live stream did. This is the
+/// single conversion for both history frames the gateway sends —
+/// `ThreadMessages` and `ThreadHistoryReply` — which previously had separate
+/// copies that had already drifted apart on role mapping.
+pub(crate) fn ui_history_from_gateway(
+    messages: Vec<protocol::types::ChatMessage>,
+) -> VecDeque<ChatMessage> {
+    let mut out: VecDeque<ChatMessage> = VecDeque::with_capacity(messages.len());
+    for m in messages.into_iter() {
+        if m.role == "tool"
+            && let Some(call_id) = m.tool_call_id.as_deref()
+            && let Some(prev) = out.iter_mut().rev().find(|c| {
+                c.role == rustyclaw_core::types::MessageRole::Assistant
+                    && c.tool_calls.iter().any(|tc| tc.id == call_id)
+            })
+        {
+            if let Some(tc) = prev.tool_calls.iter_mut().find(|tc| tc.id == call_id) {
+                tc.result = Some(m.content.clone());
+                tc.is_error = false;
+            }
+            continue;
+        }
+        out.push_back(ui_message_from_gateway(m));
+    }
+    out
+}
+
 fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage {
     use rustyclaw_core::ui::ToolCallInfo;
 
@@ -707,7 +770,9 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
         "assistant" => rustyclaw_core::types::MessageRole::Assistant,
         "system" => rustyclaw_core::types::MessageRole::System,
         "tool" => rustyclaw_core::types::MessageRole::ToolResult,
-        _ => rustyclaw_core::types::MessageRole::Info,
+        // Roles this build doesn't know still belong on screen; a neutral
+        // system line is the honest rendering.
+        _ => rustyclaw_core::types::MessageRole::System,
     };
 
     let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
@@ -815,5 +880,116 @@ mod tests {
         let roles: Vec<MessageRole> = s.messages.iter().map(|m| m.role).collect();
         assert_eq!(roles, vec![MessageRole::Assistant]);
         assert_eq!(s.messages[0].content, "answer");
+    }
+
+    // ── Thread history loading ──────────────────────────────────────────
+
+    fn wire(role: &str, content: &str) -> protocol::types::ChatMessage {
+        protocol::types::ChatMessage::text(role, content)
+    }
+
+    /// A two-turn conversation as the gateway persists and replays it.
+    fn wire_history() -> Vec<protocol::types::ChatMessage> {
+        vec![wire("user", "what is it"), wire("assistant", "this is it")]
+    }
+
+    fn idle_state() -> AppState {
+        let mut s = AppState::default();
+        s.messages.clear();
+        s
+    }
+
+    /// Persisted history keeps its roles: a replayed conversation renders as
+    /// user and assistant turns, not as a wall of neutral system lines.
+    #[test]
+    fn replayed_history_keeps_user_and_assistant_roles() {
+        let converted = ui_history_from_gateway(wire_history());
+        let roles: Vec<MessageRole> = converted.iter().map(|m| m.role).collect();
+        assert_eq!(roles, vec![MessageRole::User, MessageRole::Assistant]);
+    }
+
+    /// Regression: a history snapshot that arrives before the client knows
+    /// which thread is in the foreground used to be cached and never shown,
+    /// leaving the transcript empty apart from local notices while the
+    /// sidebar happily displayed the thread's message count.
+    #[test]
+    fn history_arriving_before_the_thread_list_still_renders() {
+        let mut s = idle_state();
+        assert_eq!(s.foreground_thread_id, None);
+
+        s.hydrate_thread_messages(7, wire_history());
+
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.foreground_thread_id, Some(7));
+    }
+
+    /// The same, for the reply to an explicit history request.
+    #[test]
+    fn history_reply_before_the_thread_list_still_renders() {
+        let mut s = idle_state();
+
+        s.apply_thread_history(7, ui_history_from_gateway(wire_history()));
+
+        assert_eq!(s.messages.len(), 2);
+        assert_eq!(s.foreground_thread_id, Some(7));
+    }
+
+    /// And the other ordering: history for a thread arrives first and is
+    /// cached, then the thread list names that thread as the foreground.
+    /// The cached snapshot must go on screen rather than wait for another
+    /// round trip that the client has no reason to make.
+    #[test]
+    fn thread_list_shows_history_that_already_arrived() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.apply_thread_history(7, ui_history_from_gateway(wire_history()));
+        assert!(s.messages.is_empty(), "thread 7 is not on screen yet");
+
+        s.set_foreground_thread(Some(7));
+
+        assert_eq!(s.messages.len(), 2);
+    }
+
+    /// A snapshot for a backgrounded thread is cached, never displayed.
+    #[test]
+    fn history_for_another_thread_does_not_take_the_view() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+
+        s.hydrate_thread_messages(2, wire_history());
+
+        assert!(s.messages.is_empty());
+        assert_eq!(s.foreground_thread_id, Some(1));
+        assert_eq!(s.thread_messages.get(&2).map(VecDeque::len), Some(2));
+    }
+
+    /// The gateway's "nothing is focused" sentinel clears the view without
+    /// being mistaken for a thread of its own.
+    #[test]
+    fn the_no_thread_sentinel_clears_without_being_adopted() {
+        let mut s = idle_state();
+        s.hydrate_thread_messages(7, wire_history());
+        assert_eq!(s.messages.len(), 2);
+
+        s.hydrate_thread_messages(0, Vec::new());
+
+        assert!(s.messages.is_empty());
+        assert_eq!(s.foreground_thread_id, Some(7));
+        assert!(!s.thread_messages.contains_key(&0));
+    }
+
+    /// A snapshot must not replace the live view while the on-screen thread
+    /// is mid-response — that would drop the streaming bubble.
+    #[test]
+    fn history_waits_while_the_foreground_request_is_in_flight() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(7);
+        s.mark_request_started();
+
+        s.hydrate_thread_messages(7, wire_history());
+
+        assert!(s.messages.is_empty());
+        assert!(s.is_processing);
+        assert_eq!(s.thread_messages.get(&7).map(VecDeque::len), Some(2));
     }
 }

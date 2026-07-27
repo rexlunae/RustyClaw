@@ -288,6 +288,12 @@ pub(crate) async fn handle_thread_close(
     thread_mgr.remove(task_id);
     // Send updated thread list
     send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+    // Closing the foreground thread hands the foreground to another one, so
+    // follow up with that thread's history — otherwise the client's sidebar
+    // highlight moves while its transcript still shows the closed thread.
+    if let Some(fg) = thread_mgr.foreground().map(|t| t.id) {
+        send_thread_messages_update(writer, fg, thread_mgr).await?;
+    }
     // Persist thread state
     let _ = thread_mgr.save_to_file(threads_path);
     Ok(())

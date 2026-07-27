@@ -9,12 +9,28 @@ use std::time::SystemTime;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ThreadId(pub u64);
 
+/// Source of freshly-minted thread ids. Process-global, so it has to be
+/// reconciled with ids restored from disk — see [`ThreadId::reserve_above`].
+static THREAD_ID_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
 impl ThreadId {
     /// Generate a new unique thread ID.
     pub fn new() -> Self {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(1);
-        Self(COUNTER.fetch_add(1, Ordering::SeqCst))
+        use std::sync::atomic::Ordering;
+        Self(THREAD_ID_COUNTER.fetch_add(1, Ordering::SeqCst))
+    }
+
+    /// Guarantee that every id minted from here on is greater than `id`.
+    ///
+    /// The counter lives in the process, but thread ids outlive it: they are
+    /// persisted to `threads.json` and restored on the next run. Without this
+    /// a restarted gateway hands out `1, 2, 3…` all over again, and the first
+    /// thread the user creates silently *replaces* the restored thread that
+    /// already owns that id — taking its whole message history with it.
+    /// Loaders must call this with the highest id they restored.
+    pub fn reserve_above(id: u64) {
+        use std::sync::atomic::Ordering;
+        THREAD_ID_COUNTER.fetch_max(id.saturating_add(1), Ordering::SeqCst);
     }
 }
 
