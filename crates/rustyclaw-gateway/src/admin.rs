@@ -163,7 +163,7 @@ pub(crate) async fn handle_model_switch(
             model: Some(model.clone()),
             base_url: base,
         });
-        let _ = cfg.save(None);
+        crate::helpers::persist_config(&cfg);
     }
 
     let display = crate_providers::display_name_for_provider(&provider);
@@ -183,7 +183,7 @@ pub(crate) async fn handle_set_agent_name(
     {
         let mut cfg = shared_config.write().await;
         cfg.agent_name = name.clone();
-        let _ = cfg.save(None);
+        crate::helpers::persist_config(&cfg);
     }
     config.agent_name = name;
 }

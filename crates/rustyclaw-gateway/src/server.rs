@@ -837,7 +837,7 @@ pub(crate) async fn handle_connection(
                             ClientPayload::EngineConfigSet { engine, config: new_cfg } => {
                                 // Persist engine config change, then ack.
                                 config.engines.insert(engine.clone(), new_cfg.clone());
-                                let _ = config.save(None);
+                                crate::helpers::persist_config(&config);
                                 crate::engine_handler::handle_engine_request(
                                     &mut *writer,
                                     ClientPayload::EngineConfigSet { engine, config: new_cfg },
@@ -921,10 +921,10 @@ pub(crate) async fn handle_connection(
     // Clean up reader task
     reader_handle.abort();
 
-    // Persist thread state on disconnect
-    let _ = agent_session
-        .thread_mgr
-        .save_to_file(&agent_session.threads_path);
+    // Persist thread state on disconnect. This is the last write of the
+    // session and carries everything said during it, so a failure here is
+    // the most expensive one to lose silently.
+    crate::helpers::persist_threads(&agent_session.thread_mgr, &agent_session.threads_path);
 
     Ok(())
 }

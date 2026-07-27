@@ -80,3 +80,13 @@ pub fn persist_projects(
         );
     }
 }
+
+/// Persist the gateway config, logging rather than discarding a failure.
+///
+/// A silently dropped config save means a setting the user just changed
+/// (model, working directory, engine config) quietly reverts on restart.
+pub fn persist_config(config: &rustyclaw_core::config::Config) {
+    if let Err(e) = config.save(None) {
+        tracing::error!(error = %e, "Failed to persist config — recent settings changes will be lost on restart");
+    }
+}
