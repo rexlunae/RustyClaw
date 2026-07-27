@@ -304,6 +304,48 @@ mod tests {
         assert_eq!(config.workspace_dir(), std::path::PathBuf::from("/srv/api"));
     }
 
+    /// A pin survives a restart.
+    ///
+    /// Connection setup used to read the active *project's* path directly,
+    /// which silently dropped a restored thread's override until some later
+    /// event happened to repoint — so the agent's first tool calls after a
+    /// gateway restart ran in the wrong directory. This walks the real
+    /// restore path: persist, reload from disk, derive the workspace.
+    #[test]
+    fn a_restored_pin_survives_reconnecting() {
+        let tmp = tempfile::tempdir().unwrap();
+        let threads_path = tmp.path().join("threads.json");
+        let projects_path = tmp.path().join("projects.json");
+
+        {
+            let mut projects = ProjectManager::new();
+            let api = projects.create("Api", "/srv/api");
+            projects.set_active(api);
+
+            let mut threads = ThreadManager::new();
+            let pinned = threads.create_chat("pinned");
+            threads.set_project(pinned, api);
+            threads.set_working_dir(pinned, Some("/tmp/worktree".into()));
+            assert_eq!(threads.foreground_id(), Some(pinned));
+
+            projects.save_to_file(&projects_path).unwrap();
+            threads.save_to_file(&threads_path).unwrap();
+        }
+
+        // A fresh connection: reload both managers, then derive the workspace
+        // exactly as `handle_connection` does.
+        let projects = ProjectManager::load_or_new(&projects_path);
+        let threads = ThreadManager::load_or_default(&threads_path);
+        let mut config = Config::default();
+        repoint_workspace(&mut config, &projects, &threads);
+
+        assert_eq!(
+            config.workspace_dir(),
+            std::path::PathBuf::from("/tmp/worktree"),
+            "the restored thread's pin must survive the reconnect"
+        );
+    }
+
     /// With no foreground thread there is nothing to inherit from, so the
     /// active project's directory is the answer.
     #[test]
