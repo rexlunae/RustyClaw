@@ -65,14 +65,17 @@ pub(crate) async fn handle_connection(
         crate::agent_handler::AgentSession::load(&config, rustyclaw_core::agents::MAIN_AGENT_ID);
     rustyclaw_core::runtime_ctx::set_active_agent(&agent_session.agent_id);
 
-    // Point the workspace at the active project so tools run in the right
-    // directory from the first turn.
-    if let Some(active_path) = agent_session
-        .project_mgr
-        .path_of(agent_session.project_mgr.active_id())
-    {
-        admin::handle_set_working_directory(&mut config, active_path);
-    }
+    // Point the workspace at the restored foreground thread's effective
+    // directory — its own override, else its project's — so tools run in the
+    // right place from the first turn. Reading the active project's path
+    // directly here would drop a restored thread's pin until something else
+    // happened to repoint, which is exactly what `repoint_workspace` exists
+    // to prevent.
+    project_handler::repoint_workspace(
+        &mut config,
+        &agent_session.project_mgr,
+        &agent_session.thread_mgr,
+    );
 
     // Local engine registry for model management.
     let engine_registry = rustyclaw_core::engines::EngineRegistry::new();
