@@ -151,6 +151,7 @@ fn from_thread_info_preserves_fields() {
         status: "active".into(),
         is_foreground: true,
         message_count: 128,
+        working_dir: Some("/tmp/worktree".into()),
     };
 
     let data = SidebarItemData::from(&ti);
@@ -162,6 +163,7 @@ fn from_thread_info_preserves_fields() {
     assert_eq!(data.status, "active");
     assert!(data.is_foreground);
     assert_eq!(data.message_count, 128);
+    assert_eq!(data.working_dir.as_deref(), Some("/tmp/worktree"));
 }
 
 #[test]
@@ -174,6 +176,7 @@ fn from_thread_info_no_label() {
         status: "idle".into(),
         is_foreground: false,
         message_count: 0,
+        working_dir: None,
     };
 
     let data = SidebarItemData::from(&ti);

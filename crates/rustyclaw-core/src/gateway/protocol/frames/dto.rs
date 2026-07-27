@@ -156,6 +156,10 @@ pub struct ThreadInfoDto {
     /// encoding); 0 / absent maps to the Default project.
     #[serde(default)]
     pub project_id: u64,
+    /// Working-directory override, or `None` when the thread inherits its
+    /// project's directory. Appended last, as above.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// DTO for project info in `ProjectsUpdate`.

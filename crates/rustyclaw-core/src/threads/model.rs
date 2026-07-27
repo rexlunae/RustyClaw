@@ -3,6 +3,7 @@
 use crate::projects::ProjectId;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
 /// Unique identifier for a thread.
@@ -254,6 +255,16 @@ pub struct AgentThread {
     /// Compacted summary of older messages
     pub compact_summary: Option<String>,
 
+    /// Working directory override for this thread.
+    ///
+    /// `None` — the common case — means the thread inherits its project's
+    /// directory, so moving a project moves all of its threads with it. A
+    /// `Some` value pins this one thread elsewhere. Appended with
+    /// `serde(default)` so threads persisted before overrides existed load
+    /// as inheriting.
+    #[serde(default)]
+    pub working_dir: Option<PathBuf>,
+
     /// Result value (for task/sub-agent threads)
     pub result: Option<String>,
 
@@ -290,6 +301,7 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            working_dir: None,
             result: None,
             share_context: true,
             memory_flushed: false,
@@ -323,6 +335,7 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            working_dir: None,
             result: None,
             share_context: true,
             memory_flushed: false,
@@ -354,6 +367,7 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            working_dir: None,
             result: None,
             share_context: false,
             memory_flushed: false,
@@ -385,6 +399,7 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            working_dir: None,
             result: None,
             share_context: true,
             memory_flushed: false,
@@ -552,6 +567,7 @@ impl From<&AgentThread> for ThreadInfo {
             message_count: t.messages.len(),
             has_summary: t.compact_summary.is_some(),
             has_result: t.result.is_some(),
+            working_dir: t.working_dir.clone(),
         }
     }
 }
@@ -573,4 +589,8 @@ pub struct ThreadInfo {
     pub message_count: usize,
     pub has_summary: bool,
     pub has_result: bool,
+    /// Working-directory override, or `None` when the thread inherits its
+    /// project's directory.
+    #[serde(default)]
+    pub working_dir: Option<PathBuf>,
 }

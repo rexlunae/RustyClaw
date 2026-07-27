@@ -1,10 +1,12 @@
-//! Project client-frame handlers (list / create / rename / delete / switch).
+//! Project client-frame handlers (list / create / rename / update / delete /
+//! switch).
 //!
-//! A project is a named working directory that groups threads. The *active*
-//! project's [`path`](rustyclaw_core::projects::Project::path) is the agent's
-//! working directory: whenever the active project changes (here, or via a
-//! thread switch in [`crate::thread_handler`]), [`activate_project`] repoints
-//! `config.workspace_dir` so tool execution runs in that directory.
+//! A project is a named working directory that groups threads, and its threads
+//! run in that directory unless they pin one of their own. [`repoint_workspace`]
+//! is the single place that rule reaches `config.workspace_dir`: every path
+//! that can change the effective directory — a project switch, a thread switch,
+//! a project or thread edit — goes through it, so an override is never quietly
+//! overwritten.
 
 use anyhow::Result;
 use std::path::Path;
@@ -14,23 +16,45 @@ use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, transport};
 use rustyclaw_core::projects::{ProjectId, ProjectManager};
+use rustyclaw_core::threads::ThreadManager;
 
 use crate::admin;
 use crate::thread_updates::send_projects_update;
 
+/// Point `config.workspace_dir` at the directory the agent should actually run
+/// in: the foreground thread's own override when it has one, otherwise that
+/// thread's project directory, otherwise the active project's directory.
+///
+/// This is the only place the workspace is derived from project/thread state,
+/// so a thread override cannot be silently clobbered by a project switch.
+pub(crate) fn repoint_workspace(
+    config: &mut Config,
+    project_mgr: &ProjectManager,
+    thread_mgr: &ThreadManager,
+) {
+    let dir = thread_mgr
+        .foreground()
+        .and_then(|t| project_mgr.effective_dir_for(t))
+        .or_else(|| project_mgr.path_of(project_mgr.active_id()));
+    if let Some(dir) = dir {
+        admin::handle_set_working_directory(config, dir.display().to_string());
+    }
+}
+
 /// Make `project_id` the active project: repoint the workspace dir (so tools
-/// run in the project's directory), persist, and broadcast `ProjectsUpdate`.
+/// run in the right directory), persist, and broadcast `ProjectsUpdate`.
 /// No-op if the project doesn't exist.
 pub(crate) async fn activate_project(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
+    thread_mgr: &ThreadManager,
     projects_path: &Path,
     project_id: ProjectId,
 ) -> Result<()> {
-    if let Some(path) = project_mgr.path_of(project_id) {
+    if project_mgr.contains(project_id) {
         project_mgr.set_active(project_id);
-        admin::handle_set_working_directory(config, path.display().to_string());
+        repoint_workspace(config, project_mgr, thread_mgr);
         crate::helpers::persist_projects(project_mgr, projects_path);
         send_projects_update(writer, project_mgr).await?;
     }
@@ -51,6 +75,7 @@ pub(crate) async fn handle_project_create(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
+    thread_mgr: &ThreadManager,
     projects_path: &Path,
     name: String,
     path: String,
@@ -67,7 +92,7 @@ pub(crate) async fn handle_project_create(
         return send_frame(writer, &frame).await;
     }
     let id = project_mgr.create(name, path);
-    activate_project(writer, config, project_mgr, projects_path, id).await
+    activate_project(writer, config, project_mgr, thread_mgr, projects_path, id).await
 }
 
 /// Handle a `ProjectRename`.
@@ -84,6 +109,86 @@ pub(crate) async fn handle_project_rename(
     send_projects_update(writer, project_mgr).await
 }
 
+/// Handle a `ProjectUpdate`: set a project's name and working directory.
+///
+/// The directory is created if missing, matching `ProjectCreate` — a project
+/// is defined by its directory, so pointing one at a path that does not exist
+/// yet is a reasonable thing to do. When the edited project is the active one
+/// the agent's workspace is repointed immediately, so the change takes effect
+/// without a thread switch.
+pub(crate) async fn handle_project_update(
+    writer: &mut dyn transport::TransportWriter,
+    config: &mut Config,
+    project_mgr: &mut ProjectManager,
+    thread_mgr: &ThreadManager,
+    projects_path: &Path,
+    project_id: u64,
+    name: String,
+    path: String,
+) -> Result<()> {
+    debug!(
+        "Project update request: {} -> {} @ {}",
+        project_id, name, path
+    );
+    let id = ProjectId(project_id);
+
+    if !project_mgr.contains(id) {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: format!("Cannot edit project {project_id}: not found"),
+            },
+        };
+        return send_frame(writer, &frame).await;
+    }
+
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: "Project name cannot be empty".to_string(),
+            },
+        };
+        return send_frame(writer, &frame).await;
+    }
+
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: "Project working directory cannot be empty".to_string(),
+            },
+        };
+        return send_frame(writer, &frame).await;
+    }
+
+    if let Err(e) = std::fs::create_dir_all(&path) {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error {
+                ok: false,
+                message: format!("Could not use '{path}' as the project directory: {e}"),
+            },
+        };
+        return send_frame(writer, &frame).await;
+    }
+
+    project_mgr.rename(id, name);
+    project_mgr.set_path(id, &path);
+    crate::helpers::persist_projects(project_mgr, projects_path);
+
+    // Moving a project moves the threads that inherit from it, so re-derive
+    // the workspace. `repoint_workspace` keeps a thread override in place.
+    repoint_workspace(config, project_mgr, thread_mgr);
+
+    send_projects_update(writer, project_mgr).await
+}
+
 /// Handle a `ProjectDelete`. Refuses to delete the Default or last project
 /// (enforced by [`ProjectManager::remove`]). If the active project was
 /// deleted, falls back to Default and repoints the workspace.
@@ -91,6 +196,7 @@ pub(crate) async fn handle_project_delete(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
+    thread_mgr: &ThreadManager,
     projects_path: &Path,
     project_id: u64,
 ) -> Result<()> {
@@ -98,7 +204,15 @@ pub(crate) async fn handle_project_delete(
         crate::helpers::persist_projects(project_mgr, projects_path);
         // `remove` may have changed the active project; re-point the workspace.
         let active = project_mgr.active_id();
-        return activate_project(writer, config, project_mgr, projects_path, active).await;
+        return activate_project(
+            writer,
+            config,
+            project_mgr,
+            thread_mgr,
+            projects_path,
+            active,
+        )
+        .await;
     }
     let frame = ServerFrame {
         frame_type: ServerFrameType::Error,
@@ -115,6 +229,7 @@ pub(crate) async fn handle_project_switch(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
+    thread_mgr: &ThreadManager,
     projects_path: &Path,
     project_id: u64,
 ) -> Result<()> {
@@ -122,8 +237,58 @@ pub(crate) async fn handle_project_switch(
         writer,
         config,
         project_mgr,
+        thread_mgr,
         projects_path,
         ProjectId(project_id),
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustyclaw_core::threads::ThreadManager;
+
+    /// The workspace follows the foreground thread's *effective* directory,
+    /// not the active project's path. Before `effective_dir_for` existed the
+    /// two were the same thing, and a thread override would have been
+    /// overwritten by the next project switch without anything reporting it.
+    #[test]
+    fn workspace_follows_the_foreground_thread_override() {
+        let mut config = Config::default();
+        let mut projects = ProjectManager::new();
+        let api = projects.create("Api", "/srv/api");
+        projects.set_active(api);
+
+        let mut threads = ThreadManager::new();
+        let pinned = threads.create_chat("pinned");
+        threads.set_project(pinned, api);
+        threads.set_working_dir(pinned, Some("/tmp/worktree".into()));
+
+        repoint_workspace(&mut config, &projects, &threads);
+        assert_eq!(
+            config.workspace_dir(),
+            std::path::PathBuf::from("/tmp/worktree"),
+            "the thread's override wins over its project's directory"
+        );
+
+        // Clearing the override hands the thread back to the project.
+        threads.set_working_dir(pinned, None);
+        repoint_workspace(&mut config, &projects, &threads);
+        assert_eq!(config.workspace_dir(), std::path::PathBuf::from("/srv/api"));
+    }
+
+    /// With no foreground thread there is nothing to inherit from, so the
+    /// active project's directory is the answer.
+    #[test]
+    fn workspace_falls_back_to_the_active_project() {
+        let mut config = Config::default();
+        let mut projects = ProjectManager::new();
+        let api = projects.create("Api", "/srv/api");
+        projects.set_active(api);
+        let threads = ThreadManager::new();
+
+        repoint_workspace(&mut config, &projects, &threads);
+        assert_eq!(config.workspace_dir(), std::path::PathBuf::from("/srv/api"));
+    }
 }

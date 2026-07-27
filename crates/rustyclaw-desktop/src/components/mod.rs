@@ -32,6 +32,7 @@ mod connection;
 mod credential_request;
 mod cron;
 mod device_flow;
+mod edit_dialogs;
 mod engines;
 mod file_browser;
 mod hatching;
@@ -62,6 +63,7 @@ pub use connection::ConnectionDialog;
 pub use credential_request::CredentialRequestDialog;
 pub use cron::CronDialog;
 pub use device_flow::DeviceFlowDialog;
+pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};
 #[allow(unused_imports)]
 pub use engines::EnginesDialog;
 pub use file_browser::FileBrowser;

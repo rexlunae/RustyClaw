@@ -1,7 +1,7 @@
 //! Thread/task client-frame handlers.
 //!
 //! Each function handles one `ClientPayload` variant in the thread family
-//! (create / switch / list / history / close / rename) plus `TasksRequest`,
+//! (create / switch / list / history / close / rename / update) plus `TasksRequest`,
 //! operating on the connection's [`ThreadManager`](rustyclaw_core::threads::ThreadManager)
 //! and streaming the resulting frames back to the client.
 
@@ -299,6 +299,81 @@ pub(crate) async fn handle_thread_close(
     Ok(())
 }
 
+/// Handle a `ThreadUpdate`: set a thread's caption and working-directory
+/// override in one edit.
+///
+/// `working_dir: None` clears the override, so the thread falls back to its
+/// project's directory. An override directory is created if missing, matching
+/// project creation — you may well want to point a thread at a directory you
+/// are about to populate.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn handle_thread_update(
+    writer: &mut dyn transport::TransportWriter,
+    config: &mut rustyclaw_core::config::Config,
+    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    project_mgr: &rustyclaw_core::projects::ProjectManager,
+    task_mgr: &SharedTaskManager,
+    threads_path: &std::path::Path,
+    thread_id: u64,
+    label: String,
+    working_dir: Option<String>,
+) -> Result<()> {
+    debug!(
+        thread_id,
+        label = %label,
+        working_dir = ?working_dir,
+        "Thread update request"
+    );
+    let id = ThreadId(thread_id);
+
+    if thread_mgr.get(id).is_none() {
+        return send_error(writer, format!("Cannot edit thread {thread_id}: not found")).await;
+    }
+
+    let label = label.trim().to_string();
+    if label.is_empty() {
+        return send_error(writer, "Thread caption cannot be empty".to_string()).await;
+    }
+
+    // An all-whitespace directory is an empty override, not a directory named
+    // " " — treat it as "inherit from the project".
+    let working_dir = working_dir
+        .map(|d| d.trim().to_string())
+        .filter(|d| !d.is_empty());
+
+    if let Some(ref dir) = working_dir {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            return send_error(
+                writer,
+                format!("Could not use '{dir}' as the thread's working directory: {e}"),
+            )
+            .await;
+        }
+    }
+
+    thread_mgr.rename(id, &label);
+    thread_mgr.set_working_dir(id, working_dir.map(std::path::PathBuf::from));
+    crate::helpers::persist_threads(thread_mgr, threads_path);
+
+    // Editing the foreground thread's directory has to take effect right away,
+    // otherwise the next tool call still runs in the old one.
+    if thread_mgr.foreground_id() == Some(id) {
+        crate::project_handler::repoint_workspace(config, project_mgr, thread_mgr);
+    }
+
+    send_threads_update(writer, thread_mgr, task_mgr, None).await
+}
+
+/// Send an `Error` frame. Edits fail loudly: the client shows the reason
+/// rather than silently reverting the dialog.
+async fn send_error(writer: &mut dyn transport::TransportWriter, message: String) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::Error,
+        payload: ServerPayload::Error { ok: false, message },
+    };
+    send_frame(writer, &frame).await
+}
+
 /// Handle a `ThreadRename`: relabel a thread and broadcast the new list.
 pub(crate) async fn handle_thread_rename(
     writer: &mut dyn transport::TransportWriter,
@@ -326,4 +401,193 @@ pub(crate) async fn handle_thread_rename(
         send_frame(writer, &frame).await?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+    use async_trait::async_trait;
+    use rustyclaw_core::config::Config;
+    use rustyclaw_core::projects::ProjectManager;
+    use rustyclaw_core::threads::ThreadManager;
+
+    struct CapturingWriter {
+        frames: Vec<ServerFrame>,
+    }
+
+    #[async_trait]
+    impl transport::TransportWriter for CapturingWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
+            self.frames.push(frame.clone());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturingWriter {
+        fn errors(&self) -> Vec<String> {
+            self.frames
+                .iter()
+                .filter_map(|f| match &f.payload {
+                    ServerPayload::Error { message, .. } => Some(message.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    /// Fixture: one project with one foreground thread in it.
+    fn fixture(tmp: &std::path::Path) -> (Config, ProjectManager, ThreadManager, ThreadId) {
+        let config = Config {
+            settings_dir: tmp.join("state"),
+            ..Config::default()
+        };
+
+        let mut projects = ProjectManager::new();
+        let api = projects.create("Api", tmp.join("api"));
+        projects.set_active(api);
+
+        let mut threads = ThreadManager::new();
+        let id = threads.create_chat("Original");
+        threads.set_project(id, api);
+
+        (config, projects, threads, id)
+    }
+
+    #[tokio::test]
+    async fn thread_update_sets_the_caption_and_override_and_repoints() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+        let override_dir = tmp.path().join("worktree");
+        let mut writer = CapturingWriter { frames: Vec::new() };
+
+        handle_thread_update(
+            &mut writer,
+            &mut config,
+            &mut threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            "  Renamed  ".to_string(),
+            Some(override_dir.display().to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert_eq!(threads.get(id).unwrap().label, "Renamed", "caption trimmed");
+        assert_eq!(
+            threads.get(id).unwrap().working_dir,
+            Some(override_dir.clone())
+        );
+        assert!(override_dir.is_dir(), "the override directory is created");
+        // The edited thread is the foreground one, so tools run there now.
+        assert_eq!(config.workspace_dir(), override_dir);
+        assert!(threads_path.is_file(), "the edit is persisted");
+
+        // Clearing the override hands the thread back to its project.
+        handle_thread_update(
+            &mut writer,
+            &mut config,
+            &mut threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            "Renamed".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(threads.get(id).unwrap().working_dir, None);
+        assert_eq!(config.workspace_dir(), tmp.path().join("api"));
+    }
+
+    /// A whitespace-only directory is an empty override, not a directory whose
+    /// name is a space.
+    #[tokio::test]
+    async fn blank_override_means_inherit() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+        let mut writer = CapturingWriter { frames: Vec::new() };
+
+        handle_thread_update(
+            &mut writer,
+            &mut config,
+            &mut threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            "Keep".to_string(),
+            Some("   ".to_string()),
+        )
+        .await
+        .unwrap();
+
+        assert!(writer.errors().is_empty());
+        assert_eq!(threads.get(id).unwrap().working_dir, None);
+    }
+
+    /// Rejections are reported, not swallowed: a bad edit has to come back as
+    /// an error frame or the dialog silently reverts with no explanation.
+    #[tokio::test]
+    async fn invalid_edits_send_error_frames() {
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_update(
+            &mut writer,
+            &mut config,
+            &mut threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            9_999,
+            "Ghost".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(writer.errors().len(), 1);
+        assert!(
+            writer.errors()[0].contains("not found"),
+            "{:?}",
+            writer.errors()
+        );
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_update(
+            &mut writer,
+            &mut config,
+            &mut threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            "   ".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(writer.errors().len(), 1);
+        assert!(writer.errors()[0].contains("cannot be empty"));
+        assert_eq!(
+            threads.get(id).unwrap().label,
+            "Original",
+            "a rejected edit changes nothing"
+        );
+    }
 }

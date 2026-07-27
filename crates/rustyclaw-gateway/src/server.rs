@@ -586,6 +586,7 @@ pub(crate) async fn handle_connection(
                                         &mut *writer,
                                         &mut config,
                                         &mut agent_session.project_mgr,
+                                        &agent_session.thread_mgr,
                                         &agent_session.projects_path,
                                         pid,
                                     )
@@ -613,7 +614,10 @@ pub(crate) async fn handle_connection(
                                 )
                                 .await?;
                                 // Repoint the workspace at the new foreground
-                                // thread's project so tools run in its directory.
+                                // thread's effective directory: its own override
+                                // when it has one, else its project's directory.
+                                // Threads in the active project still need this —
+                                // an override differs from the project dir.
                                 if let Some(pid) =
                                     agent_session.thread_mgr.foreground().map(|t| t.project_id)
                                 {
@@ -622,10 +626,17 @@ pub(crate) async fn handle_connection(
                                             &mut *writer,
                                             &mut config,
                                             &mut agent_session.project_mgr,
+                                            &agent_session.thread_mgr,
                                             &agent_session.projects_path,
                                             pid,
                                         )
                                         .await?;
+                                    } else {
+                                        project_handler::repoint_workspace(
+                                            &mut config,
+                                            &agent_session.project_mgr,
+                                            &agent_session.thread_mgr,
+                                        );
                                     }
                                 }
                             }
@@ -656,6 +667,20 @@ pub(crate) async fn handle_connection(
                                 )
                                 .await?;
                             }
+                            ClientPayload::ThreadUpdate { thread_id, label, working_dir } => {
+                                thread_handler::handle_thread_update(
+                                    &mut *writer,
+                                    &mut config,
+                                    &mut agent_session.thread_mgr,
+                                    &agent_session.project_mgr,
+                                    &task_mgr,
+                                    &agent_session.threads_path,
+                                    thread_id,
+                                    label,
+                                    working_dir,
+                                )
+                                .await?;
+                            }
                             ClientPayload::ModelSwitch { provider, model } => {
                                 admin::handle_model_switch(
                                     &mut *writer,
@@ -682,6 +707,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     name,
                                     path,
@@ -695,6 +721,19 @@ pub(crate) async fn handle_connection(
                                     &agent_session.projects_path,
                                     project_id,
                                     new_name,
+                                )
+                                .await?;
+                            }
+                            ClientPayload::ProjectUpdate { project_id, name, path } => {
+                                project_handler::handle_project_update(
+                                    &mut *writer,
+                                    &mut config,
+                                    &mut agent_session.project_mgr,
+                                    &agent_session.thread_mgr,
+                                    &agent_session.projects_path,
+                                    project_id,
+                                    name,
+                                    path,
                                 )
                                 .await?;
                             }
@@ -714,6 +753,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
                                 )
@@ -726,6 +766,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
                                 )

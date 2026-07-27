@@ -130,6 +130,20 @@ impl ThreadManager {
         }
     }
 
+    /// Set (or with `None`, clear) a thread's working-directory override.
+    ///
+    /// Clearing it makes the thread inherit its project's directory again —
+    /// see [`ProjectManager::effective_dir_for`](crate::projects::ProjectManager::effective_dir_for).
+    /// Returns false if the thread is unknown.
+    pub fn set_working_dir(&mut self, id: ThreadId, dir: Option<std::path::PathBuf>) -> bool {
+        if let Some(t) = self.threads.get_mut(&id) {
+            t.working_dir = dir;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Create a sub-agent thread.
     pub fn create_subagent(
         &mut self,
@@ -857,5 +871,41 @@ mod tests {
         // The last thread going away is the one case with nothing to elect.
         mgr.remove(first);
         assert_eq!(mgr.foreground_id(), None);
+    }
+
+    /// A working-directory override survives a save/load round trip, and
+    /// clearing it really clears it rather than leaving the old path behind.
+    #[test]
+    fn working_dir_override_round_trips_and_clears() {
+        let dir = std::env::temp_dir().join(format!(
+            "rustyclaw-threads-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("threads.json");
+
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Pinned");
+        assert!(mgr.set_working_dir(id, Some("/tmp/worktree".into())));
+        mgr.save_to_file(&path).unwrap();
+
+        let reloaded = ThreadManager::load_from_file(&path).unwrap();
+        assert_eq!(
+            reloaded.get(id).unwrap().working_dir,
+            Some(std::path::PathBuf::from("/tmp/worktree"))
+        );
+
+        let mut mgr = reloaded;
+        assert!(mgr.set_working_dir(id, None));
+        mgr.save_to_file(&path).unwrap();
+        let reloaded = ThreadManager::load_from_file(&path).unwrap();
+        assert_eq!(reloaded.get(id).unwrap().working_dir, None);
+
+        // Unknown threads report failure rather than silently doing nothing.
+        let mut mgr = reloaded;
+        assert!(!mgr.set_working_dir(ThreadId(9_999), Some("/tmp/x".into())));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

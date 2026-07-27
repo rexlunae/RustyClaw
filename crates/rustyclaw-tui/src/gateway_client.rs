@@ -156,6 +156,7 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
                     message_count: t.message_count,
                     has_summary: false,
                     project_id: t.project_id,
+                    working_dir: t.working_dir,
                 })
                 .collect(),
             foreground_id,
