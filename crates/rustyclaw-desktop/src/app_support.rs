@@ -282,21 +282,37 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             error,
         } => {
             if !ok {
-                if let Some(err) = error {
-                    tracing::warn!(
-                        thread_id,
-                        error = %err,
-                        "ThreadHistory request failed"
-                    );
-                }
+                // A failed history load used to be a `warn!` and nothing else,
+                // so the user just got a blank transcript with no indication
+                // anything had gone wrong — indistinguishable from an empty
+                // thread. Say so on screen.
+                let err = error.unwrap_or_else(|| "unknown error".to_string());
+                tracing::warn!(thread_id, error = %err, "ThreadHistory request failed");
+                state.write().push_notice(
+                    MessageRole::Error,
+                    format!("Could not load history for thread {thread_id}: {err}"),
+                );
             } else {
-                tracing::debug!(
+                // INFO, not DEBUG: the matching "requesting thread history"
+                // line is INFO, and a request with no visible reply is
+                // precisely the symptom worth diagnosing from a normal log.
+                tracing::info!(
                     thread_id,
                     incoming_messages = messages.len(),
-                    "thread history reply received"
+                    "Desktop received thread history reply"
                 );
                 let converted = crate::state::ui_history_from_gateway(messages);
+                let shown = converted.len();
                 state.write().apply_thread_history(thread_id, converted);
+                // An empty transcript for a thread the sidebar says has
+                // messages is a bug, not a normal state — make it visible
+                // rather than rendering a blank pane.
+                if shown == 0 {
+                    tracing::warn!(
+                        thread_id,
+                        "thread history reply contained no displayable messages"
+                    );
+                }
             }
         }
         GatewayEvent::ThreadMessages {

@@ -31,7 +31,7 @@ pub(crate) async fn activate_project(
     if let Some(path) = project_mgr.path_of(project_id) {
         project_mgr.set_active(project_id);
         admin::handle_set_working_directory(config, path.display().to_string());
-        let _ = project_mgr.save_to_file(projects_path);
+        crate::helpers::persist_projects(project_mgr, projects_path);
         send_projects_update(writer, project_mgr).await?;
     }
     Ok(())
@@ -79,7 +79,7 @@ pub(crate) async fn handle_project_rename(
     new_name: String,
 ) -> Result<()> {
     if project_mgr.rename(ProjectId(project_id), new_name) {
-        let _ = project_mgr.save_to_file(projects_path);
+        crate::helpers::persist_projects(project_mgr, projects_path);
     }
     send_projects_update(writer, project_mgr).await
 }
@@ -95,7 +95,7 @@ pub(crate) async fn handle_project_delete(
     project_id: u64,
 ) -> Result<()> {
     if project_mgr.remove(ProjectId(project_id)).is_some() {
-        let _ = project_mgr.save_to_file(projects_path);
+        crate::helpers::persist_projects(project_mgr, projects_path);
         // `remove` may have changed the active project; re-point the workspace.
         let active = project_mgr.active_id();
         return activate_project(writer, config, project_mgr, projects_path, active).await;

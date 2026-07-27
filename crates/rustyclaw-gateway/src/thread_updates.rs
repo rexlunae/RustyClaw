@@ -208,10 +208,29 @@ pub(crate) async fn send_thread_messages_update(
     thread_id: rustyclaw_core::threads::ThreadId,
     thread_mgr: &rustyclaw_core::threads::ThreadManager,
 ) -> Result<()> {
-    let messages = thread_mgr
-        .get(thread_id)
-        .map(thread_history_messages)
-        .unwrap_or_default();
+    // `unwrap_or_default()` here used to make "this thread does not exist"
+    // indistinguishable from "this thread has no messages": both sent an
+    // empty list, and `ThreadMessages` carries no status field, so the client
+    // rendered a blank transcript either way with nothing to report. The
+    // lookup failure is at least logged now — it means the client is showing
+    // a thread this session's ThreadManager has never heard of.
+    let messages = match thread_mgr.get(thread_id) {
+        Some(thread) => thread_history_messages(thread),
+        None => {
+            tracing::error!(
+                thread_id = thread_id.0,
+                "Thread history requested for a thread this session does not have; \
+                 sending an empty transcript"
+            );
+            Vec::new()
+        }
+    };
+    if messages.is_empty() {
+        tracing::info!(
+            thread_id = thread_id.0,
+            "Sending empty thread history to client"
+        );
+    }
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThreadMessages,
         payload: ServerPayload::ThreadMessages {

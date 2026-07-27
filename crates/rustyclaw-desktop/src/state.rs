@@ -618,13 +618,32 @@ impl AppState {
             self.foreground_thread_id = Some(thread_id);
             self.reset_streaming_indicators();
         } else {
-            tracing::debug!(
-                thread_id,
-                msg_count = messages.len(),
-                foreground = ?self.foreground_thread_id,
-                in_flight = self.foreground_request_in_flight(),
-                "caching thread history for a thread that is not on screen"
-            );
+            // History arriving for the thread the user is *looking at* and
+            // still not being shown is the shape of a bug, not routine
+            // caching, so it is logged loudly enough to appear in a normal
+            // run. The usual cause is a stale in-flight flag, which parks the
+            // snapshot in the cache and leaves the pane blank.
+            let targets_view = self.foreground_thread_id == Some(thread_id);
+            let level_msg = "thread history arrived but was not displayed";
+            if targets_view {
+                tracing::warn!(
+                    thread_id,
+                    msg_count = messages.len(),
+                    in_flight = self.foreground_request_in_flight(),
+                    is_processing = self.is_processing,
+                    is_streaming = self.is_streaming,
+                    is_thinking = self.is_thinking,
+                    streaming_thread = ?self.streaming_thread_id,
+                    "{level_msg}"
+                );
+            } else {
+                tracing::debug!(
+                    thread_id,
+                    msg_count = messages.len(),
+                    foreground = ?self.foreground_thread_id,
+                    "caching thread history for a thread that is not on screen"
+                );
+            }
         }
     }
 

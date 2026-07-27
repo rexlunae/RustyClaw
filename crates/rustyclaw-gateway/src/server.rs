@@ -718,7 +718,7 @@ pub(crate) async fn handle_connection(
                                     project_id,
                                 )
                                 .await?;
-                                let _ = agent_session.thread_mgr.save_to_file(&agent_session.threads_path);
+                                crate::helpers::persist_threads(&agent_session.thread_mgr, &agent_session.threads_path);
                                 send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                             }
                             ClientPayload::ProjectSwitch { project_id } => {
@@ -884,7 +884,7 @@ pub(crate) async fn handle_connection(
                             send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
 
                             // Persist thread state
-                            let _ = agent_session.thread_mgr.save_to_file(&agent_session.threads_path);
+                            crate::helpers::persist_threads(&agent_session.thread_mgr, &agent_session.threads_path);
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, message } => {
                             // Task failed - remove from active tasks
