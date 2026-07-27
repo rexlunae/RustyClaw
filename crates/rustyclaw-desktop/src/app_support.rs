@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use dioxus::prelude::*;
-use rustyclaw_view::{chrono, serde_json, tracing, uuid};
+use rustyclaw_view::{serde_json, tracing};
 
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
@@ -242,15 +242,9 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             threads,
             foreground_id,
         } => {
-            let count = threads.len();
-            let captions = threads
-                .iter()
-                .map(|t| format!("{}:{}", t.id, t.label.as_deref().unwrap_or("")))
-                .collect::<Vec<_>>();
-            tracing::info!(
-                count,
+            tracing::debug!(
+                count = threads.len(),
                 foreground_id = ?foreground_id,
-                captions = ?captions,
                 "ThreadsUpdate received"
             );
             state.write().threads = threads
@@ -265,7 +259,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                     message_count: t.message_count,
                 })
                 .collect();
-            state.write().foreground_thread_id = foreground_id;
+            state.write().set_foreground_thread(foreground_id);
         }
         GatewayEvent::ProjectsUpdate {
             projects,
@@ -296,82 +290,12 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                     );
                 }
             } else {
-                tracing::info!(
+                tracing::debug!(
                     thread_id,
                     incoming_messages = messages.len(),
-                    foreground = ?state.read().foreground_thread_id,
-                    "Desktop thread history reply received"
+                    "thread history reply received"
                 );
-                use rustyclaw_core::types::MessageRole;
-                use rustyclaw_core::ui::{ChatMessage as UiChatMessage, ToolCallInfo};
-                use std::collections::VecDeque;
-                let mut converted: VecDeque<UiChatMessage> =
-                    VecDeque::with_capacity(messages.len());
-                for m in messages.into_iter() {
-                    // Tool result: fold into the previous assistant turn's
-                    // matching tool call rather than emit a standalone bubble.
-                    if m.role == "tool"
-                        && let Some(call_id) = m.tool_call_id.as_deref()
-                        && let Some(prev) = converted.iter_mut().rev().find(|c| {
-                            c.role == MessageRole::Assistant
-                                && c.tool_calls.iter().any(|tc| tc.id == call_id)
-                        })
-                    {
-                        if let Some(tc) = prev.tool_calls.iter_mut().find(|tc| tc.id == call_id) {
-                            tc.result = Some(m.content.clone());
-                            tc.is_error = false;
-                        }
-                        continue;
-                    }
-                    let role = match m.role.as_str() {
-                        "user" => MessageRole::User,
-                        "assistant" => MessageRole::Assistant,
-                        "tool" => MessageRole::ToolResult,
-                        "system" => MessageRole::System,
-                        _ => MessageRole::System,
-                    };
-                    let mut tool_calls: Vec<ToolCallInfo> = Vec::new();
-                    if let Some(tcs) = m.tool_calls.as_ref().and_then(|v| v.as_array()) {
-                        for tc in tcs {
-                            tool_calls.push(ToolCallInfo {
-                                id: tc
-                                    .get("id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                name: tc
-                                    .get("name")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("")
-                                    .to_string(),
-                                arguments: tc
-                                    .get("arguments")
-                                    .map(|v| v.to_string())
-                                    .unwrap_or_default(),
-                                result: None,
-                                is_error: false,
-                                collapsed: true,
-                                duration_ms: None,
-                                live_status: None,
-                                live_output: String::new(),
-                            });
-                        }
-                    }
-                    converted.push_back(UiChatMessage {
-                        id: uuid::Uuid::new_v4().to_string(),
-                        role,
-                        content: m.content,
-                        timestamp: chrono::Utc::now(),
-                        tool_calls,
-                        is_streaming: false,
-                        duration_ms: None,
-                    });
-                }
-                tracing::info!(
-                    thread_id,
-                    converted_messages = converted.len(),
-                    "Desktop thread history converted"
-                );
+                let converted = crate::state::ui_history_from_gateway(messages);
                 state.write().apply_thread_history(thread_id, converted);
             }
         }
