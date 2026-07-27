@@ -310,7 +310,7 @@ mod lite {
                 links.push(json!({
                     "tag": "a",
                     "href": href,
-                    "text": if text.len() > 80 { format!("{}…", &text[..80]) } else { text },
+                    "text": crate::text::truncate_chars(&text, 80),
                 }));
             }
             if links.len() >= 50 {
@@ -516,7 +516,10 @@ mod lite {
         };
         let text = &tab.text_content;
         if text.len() > 50_000 {
-            Ok(format!("{}…\n\n[truncated at 50KB]", &text[..50_000]))
+            Ok(format!(
+                "{}…\n\n[truncated at 50KB]",
+                crate::text::truncate_bytes(text, 50_000)
+            ))
         } else {
             Ok(text.clone())
         }

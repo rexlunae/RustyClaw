@@ -64,6 +64,7 @@ pub mod streaming;
 pub mod subconscious;
 pub mod swarm;
 pub mod tasks;
+pub mod text;
 pub mod theme;
 pub mod threads;
 pub mod tool_pipeline;

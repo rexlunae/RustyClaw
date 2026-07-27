@@ -352,16 +352,82 @@ pub(crate) async fn handle_chat_frame(
 }
 
 /// Derive a short thread label from the first user message.
+///
+/// Budgets are in characters, not bytes: this runs on arbitrary user input,
+/// and byte-indexing it panicked on any message whose first line exceeded 50
+/// bytes without a character boundary there (e.g. CJK or emoji).
 fn auto_thread_label(content: &str) -> String {
+    /// Hard cap on the generated label.
+    const MAX_CHARS: usize = 50;
+    /// Only break at a space if it leaves at least this much text; otherwise
+    /// a long unbroken run would collapse to a stub.
+    const MIN_WORD_BREAK_CHARS: usize = 20;
+
     let trimmed = content.trim();
-    // Use the first line, capped at 50 chars on a word boundary.
     let first_line = trimmed.lines().next().unwrap_or(trimmed);
-    if first_line.len() <= 50 {
-        first_line.to_string()
-    } else {
-        match first_line[..50].rfind(' ') {
-            Some(pos) if pos > 20 => format!("{}…", &first_line[..pos]),
-            _ => format!("{}…", &first_line[..50]),
+
+    if first_line.chars().count() <= MAX_CHARS {
+        return first_line.to_string();
+    }
+
+    let head: String = first_line.chars().take(MAX_CHARS).collect();
+    // `rfind` yields a byte index of an ASCII space, which is always a
+    // character boundary, so slicing `head` here is safe.
+    match head.rfind(' ') {
+        Some(pos) if head[..pos].chars().count() > MIN_WORD_BREAK_CHARS => {
+            format!("{}…", &head[..pos])
         }
+        _ => format!("{}…", head),
+    }
+}
+
+#[cfg(test)]
+mod auto_thread_label_tests {
+    use super::auto_thread_label;
+
+    #[test]
+    fn short_messages_pass_through() {
+        assert_eq!(auto_thread_label("hello there"), "hello there");
+        assert_eq!(auto_thread_label("  padded  "), "padded");
+        assert_eq!(auto_thread_label(""), "");
+    }
+
+    #[test]
+    fn only_the_first_line_is_used() {
+        assert_eq!(auto_thread_label("title\nbody\nmore"), "title");
+    }
+
+    #[test]
+    fn long_ascii_breaks_on_a_word_boundary() {
+        let msg = "the quick brown fox jumps over the lazy dog and keeps running onward";
+        let label = auto_thread_label(msg);
+        assert!(label.ends_with('…'));
+        assert!(
+            !label.trim_end_matches('…').ends_with(' '),
+            "breaks at a word, not mid-word: {label}"
+        );
+        assert!(label.chars().count() <= 51, "within budget: {label}");
+    }
+
+    /// Regression: this input panicked with
+    /// "byte index 50 is not a char boundary".
+    #[test]
+    fn multibyte_input_does_not_panic() {
+        let msg = "日本語のメッセージをここに書きます、これはとても長いテキストです";
+        assert!(msg.len() > 50, "exceeds a 50-byte budget");
+        let label = auto_thread_label(msg);
+        assert_eq!(label, msg, "32 characters is under the 50-character cap");
+
+        // A genuinely over-budget multibyte line still truncates cleanly.
+        let long: String = "あ".repeat(80);
+        let label = auto_thread_label(&long);
+        assert_eq!(label.chars().count(), 51, "50 chars plus the ellipsis");
+        assert!(label.ends_with('…'));
+    }
+
+    #[test]
+    fn emoji_input_does_not_panic() {
+        let label = auto_thread_label(&"🦞".repeat(60));
+        assert_eq!(label.chars().count(), 51);
     }
 }

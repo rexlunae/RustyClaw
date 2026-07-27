@@ -925,6 +925,7 @@ fn tool_category(name: &str) -> &'static str {
         "ast_grep_manage" | "uv_manage" | "npm_manage" => "code",
         "pdf" => "documents",
         n if n.starts_with("swarm_") => "swarm",
+        n if n.starts_with("plugin_") => "plugins",
         "todo" => "planning",
         "skill_curator" => "skills",
         "ask_user" | "client_dom_query" => "interactive",

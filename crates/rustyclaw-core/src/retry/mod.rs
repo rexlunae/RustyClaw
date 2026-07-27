@@ -153,7 +153,11 @@ where
                 Err(err),
             ) => {
                 let backoff = policy.backoff_delay(attempt);
-                let base_delay = retry_after.unwrap_or(backoff);
+                // A server-supplied Retry-After is honoured but clamped —
+                // an unbounded value would park the request indefinitely.
+                let base_delay = retry_after
+                    .map(|d| policy.clamp_retry_after(d))
+                    .unwrap_or(backoff);
                 let delay = policy.with_jitter(base_delay);
                 on_retry(RetryAttempt {
                     attempt,
@@ -171,7 +175,11 @@ where
                 Ok(_),
             ) => {
                 let backoff = policy.backoff_delay(attempt);
-                let base_delay = retry_after.unwrap_or(backoff);
+                // A server-supplied Retry-After is honoured but clamped —
+                // an unbounded value would park the request indefinitely.
+                let base_delay = retry_after
+                    .map(|d| policy.clamp_retry_after(d))
+                    .unwrap_or(backoff);
                 let delay = policy.with_jitter(base_delay);
                 on_retry(RetryAttempt {
                     attempt,
@@ -208,6 +216,7 @@ mod tests {
             base_delay: Duration::from_millis(0),
             max_delay: Duration::from_millis(0),
             jitter_ratio: 0.0,
+            max_retry_after: Duration::from_secs(30),
         };
         let attempts = Arc::new(AtomicU32::new(0));
         let seen = attempts.clone();

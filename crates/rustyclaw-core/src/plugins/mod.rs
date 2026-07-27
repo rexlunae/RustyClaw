@@ -391,18 +391,13 @@ pub fn default_plugins_dir(workspace: &Path) -> PathBuf {
     workspace.join("plugins")
 }
 
-/// Truncate a string for prompt context display, respecting UTF-8 code point boundaries.
+/// Truncate a string for prompt context display, respecting UTF-8 code point
+/// boundaries. `max` is a byte budget, since this feeds a prompt-size limit.
 fn truncate_for_prompt(s: &str, max: usize) -> String {
     if s.len() <= max {
         s.to_string()
     } else {
-        // Walk back to the nearest code point boundary to avoid panicking on
-        // multi-byte characters (emoji, CJK, accented text).
-        let mut end = max;
-        while end > 0 && !s.is_char_boundary(end) {
-            end -= 1;
-        }
-        format!("{}…", &s[..end])
+        format!("{}…", crate::text::truncate_bytes(s, max))
     }
 }
 
