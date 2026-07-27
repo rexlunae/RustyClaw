@@ -105,6 +105,21 @@ pub(crate) fn tone_color(tone: Tone) -> Option<BulmaColor> {
     }
 }
 
+/// Map a view-layer semantic [`Tone`] to a CSS modifier class.
+///
+/// Used where a custom element (rather than a Bulma widget) needs to carry
+/// the tone, e.g. the sidebar's connection dot.
+pub(crate) fn tone_modifier(tone: Tone) -> &'static str {
+    match tone {
+        Tone::Neutral => "is-neutral",
+        Tone::Primary => "is-primary",
+        Tone::Info => "is-info",
+        Tone::Success => "is-success",
+        Tone::Warning => "is-warning",
+        Tone::Danger => "is-danger",
+    }
+}
+
 /// Props for [`RcModal`].
 #[derive(Props, Clone, PartialEq)]
 pub struct RcModalProps {

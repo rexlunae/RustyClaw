@@ -43,6 +43,7 @@ clap = { workspace = true }
 qrcode = "0.14"
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
+tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ammonia = "4"
 rfd = "0.15"
