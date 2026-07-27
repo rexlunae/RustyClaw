@@ -46,6 +46,7 @@ base64 = "0.22"
 tracing.workspace = true
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 ammonia = "4"
+pulldown-cmark.workspace = true
 rfd = "0.15"
 
 # macOS: set the Dock icon at runtime so bare-binary launches (cargo

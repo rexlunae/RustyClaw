@@ -26,6 +26,7 @@ mod app;
 mod app_support;
 mod chat_transcript;
 mod components;
+mod markdown_prep;
 mod menu;
 mod state;
 

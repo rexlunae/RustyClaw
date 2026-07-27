@@ -245,6 +245,24 @@ body,
     margin-bottom: 0;
 }
 
+/* Links in agent output. Clicks are intercepted and handed to the OS
+   browser (see LINK_INTERCEPT_JS), so they get a pointer cursor and a
+   restrained underline rather than looking like plain text. Long URLs wrap
+   instead of forcing the transcript to scroll sideways. */
+.gc-body a {
+    color: var(--rc-primary);
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--rc-primary) 40%, transparent);
+    text-underline-offset: 2px;
+    cursor: pointer;
+    overflow-wrap: anywhere;
+    transition: text-decoration-color 0.12s ease, color 0.12s ease;
+}
+
+.gc-body a:hover {
+    text-decoration-color: var(--rc-primary);
+}
+
 /* Compact tag used outside the sidebar (swarm panel cards). */
 .tag.rc-chip {
     font-size: 11px;

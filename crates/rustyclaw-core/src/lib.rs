@@ -39,6 +39,7 @@ pub mod memory_vault;
 pub mod messengers;
 pub mod models;
 pub mod observability;
+pub mod open_external;
 pub mod pairing;
 pub mod plugins;
 pub mod process_manager;

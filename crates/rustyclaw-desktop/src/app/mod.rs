@@ -34,6 +34,35 @@ const DIRECTORY_OTHER_SENTINEL: &str = "__directory_other__";
 const BULMA: &str = include_str!("../../assets/bulma.min.css");
 const STYLES: &str = include_str!("../../assets/styles.css");
 
+/// Delegated click handler that routes external links out to the OS browser.
+///
+/// Registered once (guarded by a window flag, since the effect can re-run) and
+/// installed in the capture phase so it wins regardless of anything the
+/// rendered markup does. Only `http(s)` and `mailto:` are forwarded; anything
+/// else is left for the webview to ignore, and the Rust side re-validates the
+/// scheme before it reaches a shell.
+const LINK_INTERCEPT_JS: &str = r#"
+(function () {
+  if (window.__rcLinkIntercept) return;
+  window.__rcLinkIntercept = true;
+  document.addEventListener(
+    "click",
+    function (ev) {
+      if (ev.defaultPrevented || ev.button !== 0) return;
+      var el = ev.target;
+      while (el && el.nodeType === 1 && el.tagName !== "A") el = el.parentElement;
+      if (!el || el.tagName !== "A") return;
+      var href = el.getAttribute("href") || "";
+      if (!/^\s*(https?:|mailto:)/i.test(href)) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      dioxus.send(href.trim());
+    },
+    true
+  );
+})();
+"#;
+
 #[component]
 pub fn App() -> Element {
     // Application state
@@ -171,6 +200,28 @@ pub fn App() -> Element {
     #[cfg(target_os = "macos")]
     use_effect(move || {
         crate::set_dock_icon();
+    });
+
+    // Links in agent output open in the user's browser.
+    //
+    // A plain anchor click inside a webview navigates the webview itself,
+    // which would replace the whole app UI with the target page, and
+    // `target="_blank"` is simply swallowed because no new-window handler is
+    // installed. Both are intercepted here and handed to the OS instead.
+    use_future(move || async move {
+        let mut eval = document::eval(LINK_INTERCEPT_JS);
+        loop {
+            match eval.recv::<String>().await {
+                Ok(url) => match rustyclaw_core::open_external::open_external(&url) {
+                    Ok(()) => tracing::debug!(%url, "opened link externally"),
+                    Err(e) => tracing::warn!(%url, error = %e, "refused to open link"),
+                },
+                Err(e) => {
+                    tracing::warn!(error = %e, "link interceptor stopped");
+                    break;
+                }
+            }
+        }
     });
 
     // Close the connection dialog automatically once we've successfully
