@@ -78,8 +78,8 @@ pub async fn update_command_task_session(
 /// Mark a command task as completed.
 #[instrument(skip(task_mgr))]
 pub async fn complete_command_task(task_mgr: &SharedTaskManager, task_id: TaskId, output: &str) {
-    let summary = if output.len() > 100 {
-        Some(format!("{}...", &output[..100]))
+    let summary = if output.chars().count() > 100 {
+        Some(rustyclaw_core::text::truncate_chars(output, 100).into_owned())
     } else if !output.is_empty() {
         Some(output.to_string())
     } else {
@@ -113,9 +113,5 @@ pub fn parse_session_id(output: &str) -> Option<String> {
 /// Truncate a command string for display.
 fn truncate_command(cmd: &str, max_len: usize) -> String {
     let first_line = cmd.lines().next().unwrap_or(cmd);
-    if first_line.len() > max_len {
-        format!("{}...", &first_line[..max_len])
-    } else {
-        first_line.to_string()
-    }
+    rustyclaw_core::text::truncate_chars(first_line, max_len).into_owned()
 }

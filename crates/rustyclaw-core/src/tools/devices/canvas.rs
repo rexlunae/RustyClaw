@@ -98,7 +98,7 @@ pub async fn exec_canvas_async(args: &Value, _workspace_dir: &Path) -> ToolResul
                 "status": "eval_recorded",
                 "canvas_url": current_url,
                 "script_length": js.len(),
-                "script_preview": if js.len() > 200 { &js[..200] } else { js },
+                "script_preview": crate::text::truncate_chars(js, 200),
                 "note": "JavaScript evaluation requires browser context. Enable 'browser' feature for CDP support.",
             }).to_string())
         }

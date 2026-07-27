@@ -546,11 +546,7 @@ async fn process_incoming_message(
             trace!(
                 tool_name = %tc.name,
                 is_error = is_error,
-                output_preview = %if output.len() > 100 {
-                    format!("{}...", &output[..100])
-                } else {
-                    output.clone()
-                },
+                output_preview = %rustyclaw_core::text::truncate_chars(&output, 100),
                 "Tool result"
             );
 
@@ -619,11 +615,7 @@ async fn process_incoming_message(
                 Ok(msg_id) => {
                     debug!(
                         message_id = %msg_id,
-                        response_preview = %if final_response.len() > 50 {
-                            format!("{}...", &final_response[..50])
-                        } else {
-                            final_response.clone()
-                        },
+                        response_preview = %rustyclaw_core::text::truncate_chars(&final_response, 50),
                         "Sent response"
                     );
                 }

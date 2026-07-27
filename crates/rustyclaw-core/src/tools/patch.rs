@@ -58,6 +58,12 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
             String::new()
         };
 
+        // Preserve the file's existing line ending and whether it ended with
+        // a newline: `lines()` discards both, so rejoining with "\n" would
+        // silently strip the trailing newline and rewrite CRLF files as LF.
+        let line_ending = detect_line_ending(&content);
+        let had_trailing_newline = content.ends_with('\n');
+
         let mut lines: Vec<String> = content.lines().map(String::from).collect();
 
         // Apply hunks in reverse order (to preserve line numbers)
@@ -68,7 +74,12 @@ pub fn exec_apply_patch(args: &Value, workspace_dir: &Path) -> ToolResult {
             lines = apply_hunk(&lines, hunk)?;
         }
 
-        let new_content = lines.join("\n");
+        let mut new_content = lines.join(line_ending);
+        // A new file (empty original) gets a trailing newline too — POSIX
+        // text files end with one, and every tool downstream expects it.
+        if !new_content.is_empty() && (had_trailing_newline || content.is_empty()) {
+            new_content.push_str(line_ending);
+        }
 
         if dry_run {
             debug!(file = %file_path, hunks = file_hunks.len(), "Dry run successful");
@@ -198,6 +209,17 @@ pub fn parse_unified_diff(patch: &str) -> ToolResult<Vec<DiffHunk>> {
     Ok(hunks)
 }
 
+/// Detect the dominant line ending in `content`, defaulting to `\n`.
+///
+/// A file is treated as CRLF only if its first line ending is CRLF, matching
+/// how editors decide; mixed files keep whatever their first line used.
+fn detect_line_ending(content: &str) -> &'static str {
+    match content.find('\n') {
+        Some(idx) if idx > 0 && content.as_bytes()[idx - 1] == b'\r' => "\r\n",
+        _ => "\n",
+    }
+}
+
 /// Parse a range like "10,5" or "10" into (start, count).
 fn parse_range(s: &str) -> ToolResult<(usize, usize)> {
     if let Some((start, count)) = s.split_once(',') {
@@ -255,4 +277,58 @@ fn apply_hunk(lines: &[String], hunk: &DiffHunk) -> ToolResult<Vec<String>> {
     result.extend(lines.iter().skip(old_idx).cloned());
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn apply(dir: &Path, name: &str, original: &str, patch: &str) -> String {
+        let path = dir.join(name);
+        std::fs::write(&path, original).unwrap();
+        exec_apply_patch(&json!({ "patch": patch, "path": name }), dir)
+            .unwrap_or_else(|e| panic!("patch failed: {e}"));
+        std::fs::read_to_string(&path).unwrap()
+    }
+
+    const PATCH: &str = "--- a/f.txt\n+++ b/f.txt\n@@ -1,3 +1,3 @@\n alpha\n-beta\n+BETA\n gamma\n";
+
+    /// Regression: the read/modify/write round-trip went through `lines()`
+    /// and `join("\n")`, which silently ate the file's trailing newline.
+    #[test]
+    fn preserves_trailing_newline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let out = apply(dir.path(), "f.txt", "alpha\nbeta\ngamma\n", PATCH);
+        assert_eq!(out, "alpha\nBETA\ngamma\n");
+        assert!(out.ends_with('\n'), "trailing newline survives: {out:?}");
+    }
+
+    /// A file that genuinely has no trailing newline must not gain one.
+    #[test]
+    fn preserves_absent_trailing_newline() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let out = apply(dir.path(), "f.txt", "alpha\nbeta\ngamma", PATCH);
+        assert_eq!(out, "alpha\nBETA\ngamma");
+        assert!(!out.ends_with('\n'), "no newline added: {out:?}");
+    }
+
+    /// Regression: CRLF files were silently rewritten as LF.
+    #[test]
+    fn preserves_crlf_line_endings() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let out = apply(dir.path(), "f.txt", "alpha\r\nbeta\r\ngamma\r\n", PATCH);
+        assert_eq!(out, "alpha\r\nBETA\r\ngamma\r\n");
+        assert!(!out.contains("\n\n"), "no bare LF introduced: {out:?}");
+    }
+
+    #[test]
+    fn detect_line_ending_picks_the_first_terminator() {
+        assert_eq!(detect_line_ending("a\r\nb\r\n"), "\r\n");
+        assert_eq!(detect_line_ending("a\nb\n"), "\n");
+        assert_eq!(detect_line_ending("no newline at all"), "\n");
+        assert_eq!(detect_line_ending(""), "\n");
+        // A leading bare newline must not be read as CRLF (index 0 guard).
+        assert_eq!(detect_line_ending("\nabc"), "\n");
+    }
 }
