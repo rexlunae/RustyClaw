@@ -316,7 +316,7 @@ pub(crate) async fn handle_thread_update(
     threads_path: &std::path::Path,
     thread_id: u64,
     label: String,
-    working_dir: Option<String>,
+    working_dir: Option<std::path::PathBuf>,
 ) -> Result<()> {
     debug!(
         thread_id,
@@ -335,24 +335,30 @@ pub(crate) async fn handle_thread_update(
         return send_error(writer, "Thread caption cannot be empty".to_string()).await;
     }
 
-    // An all-whitespace directory is an empty override, not a directory named
-    // " " — treat it as "inherit from the project".
-    let working_dir = working_dir
-        .map(|d| d.trim().to_string())
-        .filter(|d| !d.is_empty());
+    // An empty path is an empty override, not a directory with no name —
+    // treat it as "inherit from the project". Whitespace is left alone: the
+    // client trims its text field, and a directory name that ends in a space
+    // is legal, so trimming here could only corrupt a deliberate path.
+    let working_dir = working_dir.filter(|d| !d.as_os_str().is_empty());
 
     if let Some(ref dir) = working_dir {
+        if let Err(message) = crate::helpers::reject_non_utf8_path(dir) {
+            return send_error(writer, message).await;
+        }
         if let Err(e) = std::fs::create_dir_all(dir) {
             return send_error(
                 writer,
-                format!("Could not use '{dir}' as the thread's working directory: {e}"),
+                format!(
+                    "Could not use '{}' as the thread's working directory: {e}",
+                    dir.display()
+                ),
             )
             .await;
         }
     }
 
     thread_mgr.rename(id, &label);
-    thread_mgr.set_working_dir(id, working_dir.map(std::path::PathBuf::from));
+    thread_mgr.set_working_dir(id, working_dir);
     crate::helpers::persist_threads(thread_mgr, threads_path);
 
     // Editing the foreground thread's directory has to take effect right away,
@@ -476,7 +482,7 @@ mod tests {
             &threads_path,
             id.0,
             "  Renamed  ".to_string(),
-            Some(override_dir.display().to_string()),
+            Some(override_dir.clone()),
         )
         .await
         .unwrap();
@@ -510,8 +516,7 @@ mod tests {
         assert_eq!(config.workspace_dir(), tmp.path().join("api"));
     }
 
-    /// A whitespace-only directory is an empty override, not a directory whose
-    /// name is a space.
+    /// An empty path is an empty override, not a directory with no name.
     #[tokio::test]
     async fn blank_override_means_inherit() {
         let tmp = tempfile::tempdir().unwrap();
@@ -529,13 +534,56 @@ mod tests {
             &threads_path,
             id.0,
             "Keep".to_string(),
-            Some("   ".to_string()),
+            Some(std::path::PathBuf::new()),
         )
         .await
         .unwrap();
 
         assert!(writer.errors().is_empty());
         assert_eq!(threads.get(id).unwrap().working_dir, None);
+    }
+
+    /// A path that isn't valid UTF-8 is refused at the edit, naming the path,
+    /// rather than surfacing later as an opaque encode failure with nothing to
+    /// identify the culprit. (Unix-only: `OsStr` cannot be built from
+    /// arbitrary bytes portably.)
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn non_utf8_override_is_refused_by_name() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let threads_path = tmp.path().join("threads.json");
+        let mut writer = CapturingWriter { frames: Vec::new() };
+
+        let bad = std::path::PathBuf::from(std::ffi::OsStr::from_bytes(b"/tmp/\xff\xfeweird"));
+        handle_thread_update(
+            &mut writer,
+            &mut config,
+            &mut threads,
+            &projects,
+            &task_mgr,
+            &threads_path,
+            id.0,
+            "Keep".to_string(),
+            Some(bad),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(writer.errors().len(), 1);
+        assert!(
+            writer.errors()[0].contains("not valid UTF-8"),
+            "{:?}",
+            writer.errors()
+        );
+        assert_eq!(
+            threads.get(id).unwrap().working_dir,
+            None,
+            "a refused path is not stored"
+        );
     }
 
     /// Rejections are reported, not swallowed: a bad edit has to come back as

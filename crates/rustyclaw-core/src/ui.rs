@@ -6,6 +6,7 @@
 
 use crate::types::MessageRole;
 use crate::user_prompt_types::UserPrompt;
+use std::path::PathBuf;
 
 // ── Connection status ───────────────────────────────────────────────────────
 
@@ -213,7 +214,7 @@ pub struct ThreadInfo {
     pub message_count: usize,
     /// Working-directory override, or `None` when the thread inherits its
     /// project's directory.
-    pub working_dir: Option<String>,
+    pub working_dir: Option<PathBuf>,
 }
 
 /// Project info for the sidebar's top level.
@@ -221,7 +222,8 @@ pub struct ThreadInfo {
 pub struct ProjectInfo {
     pub id: u64,
     pub name: String,
-    pub path: String,
+    /// The project's working directory.
+    pub path: PathBuf,
 }
 
 // ── Dialog state helpers ────────────────────────────────────────────────────

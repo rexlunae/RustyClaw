@@ -9,7 +9,7 @@
 //! overwritten.
 
 use anyhow::Result;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tracing::debug;
 
 use rustyclaw_core::config::Config;
@@ -37,7 +37,7 @@ pub(crate) fn repoint_workspace(
         .and_then(|t| project_mgr.effective_dir_for(t))
         .or_else(|| project_mgr.path_of(project_mgr.active_id()));
     if let Some(dir) = dir {
-        admin::handle_set_working_directory(config, dir.display().to_string());
+        admin::handle_set_working_directory(config, dir);
     }
 }
 
@@ -78,15 +78,25 @@ pub(crate) async fn handle_project_create(
     thread_mgr: &ThreadManager,
     projects_path: &Path,
     name: String,
-    path: String,
+    path: PathBuf,
 ) -> Result<()> {
-    debug!("Project create request: {} @ {}", name, path);
+    debug!("Project create request: {} @ {}", name, path.display());
+    if let Err(message) = crate::helpers::reject_non_utf8_path(&path) {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error { ok: false, message },
+        };
+        return send_frame(writer, &frame).await;
+    }
     if let Err(e) = std::fs::create_dir_all(&path) {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
             payload: ServerPayload::Error {
                 ok: false,
-                message: format!("Could not create project directory '{path}': {e}"),
+                message: format!(
+                    "Could not create project directory '{}': {e}",
+                    path.display()
+                ),
             },
         };
         return send_frame(writer, &frame).await;
@@ -124,11 +134,13 @@ pub(crate) async fn handle_project_update(
     projects_path: &Path,
     project_id: u64,
     name: String,
-    path: String,
+    path: PathBuf,
 ) -> Result<()> {
     debug!(
         "Project update request: {} -> {} @ {}",
-        project_id, name, path
+        project_id,
+        name,
+        path.display()
     );
     let id = ProjectId(project_id);
 
@@ -155,8 +167,11 @@ pub(crate) async fn handle_project_update(
         return send_frame(writer, &frame).await;
     }
 
-    let path = path.trim().to_string();
-    if path.is_empty() {
+    // Only emptiness is rejected. Whitespace is *not* trimmed here: a
+    // directory whose name legitimately ends in a space is a real thing on
+    // every platform, and the client already trims its text field, so
+    // trimming again server-side could only corrupt a deliberate path.
+    if path.as_os_str().is_empty() {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
             payload: ServerPayload::Error {
@@ -167,12 +182,23 @@ pub(crate) async fn handle_project_update(
         return send_frame(writer, &frame).await;
     }
 
+    if let Err(message) = crate::helpers::reject_non_utf8_path(&path) {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Error,
+            payload: ServerPayload::Error { ok: false, message },
+        };
+        return send_frame(writer, &frame).await;
+    }
+
     if let Err(e) = std::fs::create_dir_all(&path) {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
             payload: ServerPayload::Error {
                 ok: false,
-                message: format!("Could not use '{path}' as the project directory: {e}"),
+                message: format!(
+                    "Could not use '{}' as the project directory: {e}",
+                    path.display()
+                ),
             },
         };
         return send_frame(writer, &frame).await;

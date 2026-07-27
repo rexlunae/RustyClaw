@@ -5,6 +5,7 @@
 //! type for each sidebar item.
 
 use std::borrow::Cow;
+use std::path::PathBuf;
 
 /// Data for a single item in the thread sidebar.
 ///
@@ -39,7 +40,7 @@ pub struct SidebarItemData {
 
     /// Working-directory override, or `None` when the thread inherits its
     /// project's directory.
-    pub working_dir: Option<String>,
+    pub working_dir: Option<PathBuf>,
 }
 
 impl SidebarItemData {
@@ -131,7 +132,7 @@ pub struct ProjectGroupData {
     /// Project name (the sidebar header label).
     pub name: String,
     /// Working directory (shown as a subtitle / tooltip).
-    pub path: String,
+    pub path: PathBuf,
     /// Whether this is the active project.
     pub is_active: bool,
     /// Threads belonging to this project, in display order.
@@ -140,6 +141,61 @@ pub struct ProjectGroupData {
 
 /// Name used for a synthesized group when the project list hasn't arrived yet.
 pub const FALLBACK_PROJECT_NAME: &str = "Workspace";
+
+// The path helpers below split on both `/` and `\` rather than using
+// `std::path`'s component logic, and that is deliberate: the gateway may run
+// on a different platform than the client, so a Windows path routinely has to
+// render in a Unix sidebar (and vice versa). `Path::file_name` would treat
+// `C:\Users\dev\proj` as one long segment on Unix.
+
+/// The last non-empty path segment, ignoring any trailing separator.
+fn path_tail(path: &str) -> Option<&str> {
+    path.trim_end_matches(['/', '\\'])
+        .rsplit(['/', '\\'])
+        .find(|seg| !seg.is_empty())
+}
+
+/// Keep the rightmost `max_chars` characters, marking the cut with a leading
+/// ellipsis. Counts characters, not bytes, so multi-byte paths aren't split.
+fn truncate_from_left(path: &str, max_chars: usize) -> Cow<'_, str> {
+    if path.chars().count() <= max_chars {
+        return Cow::Borrowed(path);
+    }
+    let chars: Vec<char> = path.chars().collect();
+    let tail: String = chars[chars.len().saturating_sub(max_chars.saturating_sub(1))..]
+        .iter()
+        .collect();
+    Cow::Owned(format!("…{tail}"))
+}
+
+/// `home` collapsed to `~`, then truncated from the left to `max_chars`.
+fn pretty_path_str<'a>(path: &'a str, home: Option<&str>, max_chars: usize) -> Cow<'a, str> {
+    if path.is_empty() {
+        return Cow::Borrowed("");
+    }
+
+    // Collapse the home prefix, but only on a path-segment boundary so
+    // `/home/user-old` isn't mangled into `~-old`.
+    let shortened = home
+        .map(|h| h.trim_end_matches(['/', '\\']))
+        .filter(|h| !h.is_empty())
+        .and_then(|h| {
+            let rest = path.strip_prefix(h)?;
+            if rest.is_empty() {
+                Some(Cow::Borrowed("~"))
+            } else if rest.starts_with(['/', '\\']) {
+                Some(Cow::Owned(format!("~{rest}")))
+            } else {
+                None
+            }
+        })
+        .unwrap_or(Cow::Borrowed(path));
+
+    match shortened {
+        Cow::Borrowed(s) => truncate_from_left(s, max_chars),
+        Cow::Owned(s) => Cow::Owned(truncate_from_left(&s, max_chars).into_owned()),
+    }
+}
 
 impl ProjectGroupData {
     /// The resolved display name, never empty.
@@ -152,15 +208,25 @@ impl ProjectGroupData {
         if !self.name.trim().is_empty() {
             return Cow::Borrowed(self.name.trim());
         }
-        let tail = self
-            .path
-            .trim_end_matches(['/', '\\'])
-            .rsplit(['/', '\\'])
-            .find(|seg| !seg.is_empty());
-        match tail {
-            Some(seg) => Cow::Borrowed(seg),
-            None => Cow::Borrowed(FALLBACK_PROJECT_NAME),
+        match self.path_text() {
+            Cow::Borrowed(p) => match path_tail(p) {
+                Some(seg) => Cow::Borrowed(seg),
+                None => Cow::Borrowed(FALLBACK_PROJECT_NAME),
+            },
+            Cow::Owned(p) => match path_tail(&p) {
+                Some(seg) => Cow::Owned(seg.to_string()),
+                None => Cow::Borrowed(FALLBACK_PROJECT_NAME),
+            },
         }
+    }
+
+    /// The path as display text.
+    ///
+    /// Lossy for a path that isn't valid UTF-8 — but only here, at the point
+    /// of rendering, where the alternative is showing the user nothing. The
+    /// stored [`path`](Self::path) keeps the original bytes.
+    fn path_text(&self) -> Cow<'_, str> {
+        self.path.to_string_lossy()
     }
 
     /// A display path: `home` collapsed to `~`, then truncated from the left.
@@ -172,55 +238,17 @@ impl ProjectGroupData {
     ///
     /// Pass the user's home directory (`None` to skip the `~` step).
     pub fn pretty_path(&self, home: Option<&str>, max_chars: usize) -> Cow<'_, str> {
-        if self.path.is_empty() {
-            return Cow::Borrowed("");
+        match self.path_text() {
+            Cow::Borrowed(p) => pretty_path_str(p, home, max_chars),
+            Cow::Owned(p) => Cow::Owned(pretty_path_str(&p, home, max_chars).into_owned()),
         }
-
-        // Collapse the home prefix, but only on a path-segment boundary so
-        // `/home/user-old` isn't mangled into `~-old`.
-        let shortened = home
-            .map(|h| h.trim_end_matches(['/', '\\']))
-            .filter(|h| !h.is_empty())
-            .and_then(|h| {
-                let rest = self.path.strip_prefix(h)?;
-                if rest.is_empty() {
-                    Some(Cow::Borrowed("~"))
-                } else if rest.starts_with(['/', '\\']) {
-                    Some(Cow::Owned(format!("~{rest}")))
-                } else {
-                    None
-                }
-            })
-            .unwrap_or(Cow::Borrowed(self.path.as_str()));
-
-        if shortened.chars().count() <= max_chars {
-            return shortened;
-        }
-
-        let tail: String = {
-            let chars: Vec<char> = shortened.chars().collect();
-            chars[chars.len().saturating_sub(max_chars.saturating_sub(1))..]
-                .iter()
-                .collect()
-        };
-        Cow::Owned(format!("…{tail}"))
     }
 
     /// Path truncated from the left (keeping the tail) to `max_chars`.
     pub fn truncated_path(&self, max_chars: usize) -> Cow<'_, str> {
-        if self.path.chars().count() > max_chars {
-            let tail: String = self
-                .path
-                .chars()
-                .rev()
-                .take(max_chars.saturating_sub(1))
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            Cow::Owned(format!("…{tail}"))
-        } else {
-            Cow::Borrowed(&self.path)
+        match self.path_text() {
+            Cow::Borrowed(p) => truncate_from_left(p, max_chars),
+            Cow::Owned(p) => Cow::Owned(truncate_from_left(&p, max_chars).into_owned()),
         }
     }
 }
@@ -301,7 +329,7 @@ impl SidebarTree {
             groups.push(ProjectGroupData {
                 id: active_project_id,
                 name: FALLBACK_PROJECT_NAME.to_string(),
-                path: String::new(),
+                path: PathBuf::new(),
                 is_active: true,
                 threads: Vec::new(),
             });

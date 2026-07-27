@@ -3,6 +3,7 @@
 //! This module contains the shared types used by both client and server.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// Incoming frame types from client to gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -587,7 +588,7 @@ pub enum ClientPayload {
     },
     /// Set the working directory for all tool execution.
     SetWorkingDirectory {
-        path: String,
+        path: PathBuf,
     },
     /// Request the gateway-persisted conversation history for a thread.
     ThreadHistoryRequest {
@@ -601,7 +602,7 @@ pub enum ClientPayload {
     /// Create a new project (a named working directory).
     ProjectCreate {
         name: String,
-        path: String,
+        path: PathBuf,
     },
     /// Rename a project.
     ProjectRename {
@@ -826,7 +827,7 @@ pub enum ClientPayload {
     ProjectUpdate {
         project_id: u64,
         name: String,
-        path: String,
+        path: PathBuf,
     },
     /// Edit a thread in place: set its caption and working-directory override.
     ///
@@ -836,7 +837,7 @@ pub enum ClientPayload {
     ThreadUpdate {
         thread_id: u64,
         label: String,
-        working_dir: Option<String>,
+        working_dir: Option<PathBuf>,
     },
 }
 

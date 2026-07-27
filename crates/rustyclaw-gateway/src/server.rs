@@ -71,7 +71,7 @@ pub(crate) async fn handle_connection(
         .project_mgr
         .path_of(agent_session.project_mgr.active_id())
     {
-        admin::handle_set_working_directory(&mut config, active_path.display().to_string());
+        admin::handle_set_working_directory(&mut config, active_path);
     }
 
     // Local engine registry for model management.

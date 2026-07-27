@@ -1345,7 +1345,8 @@ pub fn App() -> Element {
                                             // panics if Dioxus re-renders during suspension.
                                             let gw = gateway.read().clone();
                                             if let Some(client) = gw {
-                                                let path = selected.clone();
+                                                let path =
+                                                    std::path::PathBuf::from(selected.clone());
                                                 let _ = client
                                                     .send(GatewayCommand::SetWorkingDirectory {
                                                         path,
@@ -1384,7 +1385,7 @@ pub fn App() -> Element {
                                 // Tell the gateway so agent tools use the new dir.
                                 let gw = gateway.read().clone();
                                 if let Some(client) = gw {
-                                    let p = path.clone();
+                                    let p = std::path::PathBuf::from(path.clone());
                                     spawn(async move {
                                         let _ = client
                                             .send(GatewayCommand::SetWorkingDirectory { path: p })
@@ -1470,7 +1471,7 @@ pub fn App() -> Element {
             NewProjectDialog {
                 visible: show_new_project(),
                 on_cancel: move |_| show_new_project.set(false),
-                on_create: move |(name, path): (String, String)| {
+                on_create: move |(name, path): (String, std::path::PathBuf)| {
                     show_new_project.set(false);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
@@ -1494,7 +1495,7 @@ pub fn App() -> Element {
                     name: project.name.clone(),
                     path: project.path.clone(),
                     on_cancel: move |_| edit_project.set(None),
-                    on_save: move |(project_id, name, path): (u64, String, String)| {
+                    on_save: move |(project_id, name, path): (u64, String, std::path::PathBuf)| {
                         edit_project.set(None);
                         let gw = gateway.read().clone();
                         if let Some(client) = gw {
@@ -1535,7 +1536,11 @@ pub fn App() -> Element {
                     working_dir: thread.working_dir.clone(),
                     project_path,
                     on_cancel: move |_| edit_thread.set(None),
-                    on_save: move |(thread_id, label, working_dir): (u64, String, Option<String>)| {
+                    on_save: move |(thread_id, label, working_dir): (
+                        u64,
+                        String,
+                        Option<std::path::PathBuf>,
+                    )| {
                         edit_thread.set(None);
                         let gw = gateway.read().clone();
                         if let Some(client) = gw {

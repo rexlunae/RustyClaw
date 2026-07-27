@@ -346,7 +346,8 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
     // `display_name` never yields an empty string, so a blank or not-yet-known
     // project name still renders a readable label.
     let name = props.group.display_name().into_owned();
-    let full_path = props.group.path.clone();
+    // Tooltip text, so lossy rendering of a non-UTF-8 path is the right call.
+    let full_path = props.group.path.to_string_lossy().into_owned();
     // Shown inline under the name: `~`-collapsed and budgeted to the sidebar
     // width. The untruncated path stays in the row tooltip.
     let path = props

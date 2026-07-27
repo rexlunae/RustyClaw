@@ -90,3 +90,20 @@ pub fn persist_config(config: &rustyclaw_core::config::Config) {
         tracing::error!(error = %e, "Failed to persist config — recent settings changes will be lost on restart");
     }
 }
+
+/// Reject a path that isn't valid UTF-8, with a message fit to show the user.
+///
+/// Both the JSON on disk and the bincode on the wire encode a path as its
+/// UTF-8 string and error otherwise, so such a path could never round-trip
+/// anyway — it would surface later as an opaque codec failure with nothing
+/// identifying which path caused it. Checking here means the edit that
+/// introduced it is what gets blamed.
+pub fn reject_non_utf8_path(path: &std::path::Path) -> Result<(), String> {
+    if path.to_str().is_some() {
+        return Ok(());
+    }
+    Err(format!(
+        "'{}' is not valid UTF-8; RustyClaw cannot store or transmit that path",
+        path.display()
+    ))
+}
