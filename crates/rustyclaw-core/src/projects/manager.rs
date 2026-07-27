@@ -72,6 +72,20 @@ impl ProjectManager {
         self.projects.get(&id).map(|p| p.path.clone())
     }
 
+    /// The directory a thread should actually run in.
+    ///
+    /// A thread's own `working_dir` wins when set; otherwise it inherits its
+    /// project's directory, so moving a project moves every thread that has
+    /// not opted out. This is the single place that rule is expressed —
+    /// callers that repoint the workspace must go through it rather than
+    /// reading `project.path` directly, or overrides silently stop applying.
+    pub fn effective_dir_for(&self, thread: &crate::threads::AgentThread) -> Option<PathBuf> {
+        thread
+            .working_dir
+            .clone()
+            .or_else(|| self.path_of(thread.project_id))
+    }
+
     /// Set the active project. Bumps its `last_active`. Returns false if the
     /// project doesn't exist.
     pub fn set_active(&mut self, id: ProjectId) -> bool {
@@ -87,6 +101,20 @@ impl ProjectManager {
     pub fn rename(&mut self, id: ProjectId, name: impl Into<String>) -> bool {
         if let Some(p) = self.projects.get_mut(&id) {
             p.name = name.into();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Repoint a project at a different working directory.
+    ///
+    /// Callers are responsible for making sure the directory exists and for
+    /// re-pointing the agent's workspace when the project is the active one —
+    /// this only updates the record. Returns false if the project is unknown.
+    pub fn set_path(&mut self, id: ProjectId, path: impl Into<PathBuf>) -> bool {
+        if let Some(p) = self.projects.get_mut(&id) {
+            p.path = path.into();
             true
         } else {
             false
@@ -243,5 +271,45 @@ mod tests {
         assert_ne!(p_new, p);
         assert!(p_new.0 > p.0);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A thread inherits its project's directory unless it pins its own, and
+    /// moving the project moves every thread that has not opted out.
+    #[test]
+    fn effective_dir_prefers_the_thread_override_then_the_project() {
+        use crate::threads::ThreadManager;
+
+        let mut projects = ProjectManager::new();
+        let proj = projects.create("Api", "/srv/api");
+
+        let mut threads = ThreadManager::new();
+        let inheriting = threads.create_chat("inherits");
+        let pinned = threads.create_chat("pinned");
+        threads.set_project(inheriting, proj);
+        threads.set_project(pinned, proj);
+        threads.get_mut(pinned).unwrap().working_dir = Some("/tmp/scratch".into());
+
+        assert_eq!(
+            projects.effective_dir_for(threads.get(inheriting).unwrap()),
+            Some("/srv/api".into()),
+            "no override: inherit the project"
+        );
+        assert_eq!(
+            projects.effective_dir_for(threads.get(pinned).unwrap()),
+            Some("/tmp/scratch".into()),
+            "override wins over the project"
+        );
+
+        // Moving the project carries the inheriting thread and leaves the
+        // pinned one where it was.
+        projects.set_path(proj, "/srv/api-v2");
+        assert_eq!(
+            projects.effective_dir_for(threads.get(inheriting).unwrap()),
+            Some("/srv/api-v2".into()),
+        );
+        assert_eq!(
+            projects.effective_dir_for(threads.get(pinned).unwrap()),
+            Some("/tmp/scratch".into()),
+        );
     }
 }

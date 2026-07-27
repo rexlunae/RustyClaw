@@ -42,6 +42,8 @@ pub struct SidebarProps {
     // Thread actions.
     pub on_switch_thread: EventHandler<u64>,
     pub on_rename_thread: EventHandler<(u64, String)>,
+    /// Open the thread edit dialog (caption + working directory).
+    pub on_edit_thread: EventHandler<u64>,
     pub on_delete_thread: EventHandler<u64>,
     /// Create a new thread in the given project.
     pub on_new_thread_in: EventHandler<u64>,
@@ -49,6 +51,8 @@ pub struct SidebarProps {
     pub on_new_project: EventHandler<()>,
     pub on_switch_project: EventHandler<u64>,
     pub on_rename_project: EventHandler<(u64, String)>,
+    /// Open the project edit dialog (name + working directory).
+    pub on_edit_project: EventHandler<u64>,
     pub on_delete_project: EventHandler<u64>,
     // Footer.
     pub on_pair: EventHandler<()>,
@@ -92,10 +96,12 @@ pub fn Sidebar(props: SidebarProps) -> Element {
                 on_new_thread_in: props.on_new_thread_in,
                 on_switch_thread: props.on_switch_thread,
                 on_rename_thread: props.on_rename_thread,
+                on_edit_thread: props.on_edit_thread,
                 on_delete_thread: props.on_delete_thread,
                 on_new_project: props.on_new_project,
                 on_switch_project: props.on_switch_project,
                 on_rename_project: props.on_rename_project,
+                on_edit_project: props.on_edit_project,
                 on_delete_project: props.on_delete_project,
             }
 
@@ -245,10 +251,12 @@ struct ProjectsListProps {
     on_new_thread_in: EventHandler<u64>,
     on_switch_thread: EventHandler<u64>,
     on_rename_thread: EventHandler<(u64, String)>,
+    on_edit_thread: EventHandler<u64>,
     on_delete_thread: EventHandler<u64>,
     on_new_project: EventHandler<()>,
     on_switch_project: EventHandler<u64>,
     on_rename_project: EventHandler<(u64, String)>,
+    on_edit_project: EventHandler<u64>,
     on_delete_project: EventHandler<u64>,
 }
 
@@ -292,9 +300,11 @@ fn ProjectsList(props: ProjectsListProps) -> Element {
                         on_new_thread_in: props.on_new_thread_in,
                         on_switch_thread: props.on_switch_thread,
                         on_rename_thread: props.on_rename_thread,
+                        on_edit_thread: props.on_edit_thread,
                         on_delete_thread: props.on_delete_thread,
                         on_switch_project: props.on_switch_project,
                         on_rename_project: props.on_rename_project,
+                        on_edit_project: props.on_edit_project,
                         on_delete_project: props.on_delete_project,
                     }
                 }
@@ -322,9 +332,11 @@ struct ProjectGroupProps {
     on_new_thread_in: EventHandler<u64>,
     on_switch_thread: EventHandler<u64>,
     on_rename_thread: EventHandler<(u64, String)>,
+    on_edit_thread: EventHandler<u64>,
     on_delete_thread: EventHandler<u64>,
     on_switch_project: EventHandler<u64>,
     on_rename_project: EventHandler<(u64, String)>,
+    on_edit_project: EventHandler<u64>,
     on_delete_project: EventHandler<u64>,
 }
 
@@ -442,6 +454,16 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                             "＋"
                         }
                         button {
+                            class: "row-action",
+                            title: "Edit project",
+                            "aria-label": "Edit project",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                props.on_edit_project.call(project_id);
+                            },
+                            "✎"
+                        }
+                        button {
                             class: "row-action is-danger",
                             title: "Delete project",
                             "aria-label": "Delete project",
@@ -475,6 +497,11 @@ fn ProjectGroup(props: ProjectGroupProps) -> Element {
                                     move |_| cb.call(id)
                                 },
                                 on_rename: props.on_rename_thread,
+                                on_edit: {
+                                    let id = thread.id;
+                                    let cb = props.on_edit_thread;
+                                    move |_| cb.call(id)
+                                },
                                 on_delete: {
                                     let id = thread.id;
                                     let cb = props.on_delete_thread;
@@ -498,6 +525,7 @@ struct SessionRowProps {
     collapsed: bool,
     on_click: EventHandler<()>,
     on_rename: EventHandler<(u64, String)>,
+    on_edit: EventHandler<()>,
     on_delete: EventHandler<()>,
 }
 
@@ -582,6 +610,16 @@ fn SessionRow(props: SessionRowProps) -> Element {
                         }
                     }
                     div { class: "row-actions",
+                        button {
+                            class: "row-action",
+                            title: "Edit thread",
+                            "aria-label": "Edit thread",
+                            onclick: move |evt| {
+                                evt.stop_propagation();
+                                props.on_edit.call(());
+                            },
+                            "✎"
+                        }
                         button {
                             class: "row-action is-danger",
                             title: "Delete thread",

@@ -5,7 +5,9 @@ use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons, Notification
 use rustyclaw_view::{tokio, tracing};
 use std::sync::{Arc, Mutex as StdMutex};
 
-use crate::components::{Chat, NewProjectDialog, PluginActionEvent, Sidebar};
+use crate::components::{
+    Chat, EditProjectDialog, EditThreadDialog, NewProjectDialog, PluginActionEvent, Sidebar,
+};
 
 use crate::app_support::*;
 use crate::state::{AppState, RightSidebarTab};
@@ -107,6 +109,10 @@ pub fn App() -> Element {
 
     // New-project dialog state
     let mut show_new_project = use_signal(|| false);
+    // Edit dialogs mount only while open so their fields always initialise
+    // from the row's current values.
+    let mut edit_project = use_signal(|| None::<u64>);
+    let mut edit_thread = use_signal(|| None::<u64>);
 
     // Thread deletion confirmation state
     let pending_thread_delete = use_signal(|| None::<(u64, String)>);
@@ -717,6 +723,8 @@ pub fn App() -> Element {
         }
     };
 
+    let on_edit_project = move |project_id: u64| edit_project.set(Some(project_id));
+
     let on_delete_project = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
@@ -762,6 +770,8 @@ pub fn App() -> Element {
             });
         }
     };
+
+    let on_edit_thread = move |thread_id: u64| edit_thread.set(Some(thread_id));
 
     let on_delete_thread = move |thread_id: u64| {
         let gw = gateway.read().clone();
@@ -1134,11 +1144,13 @@ pub fn App() -> Element {
                         },
                         on_switch_thread: on_switch_thread,
                         on_rename_thread: on_rename_thread,
+                        on_edit_thread: on_edit_thread,
                         on_delete_thread: on_delete_thread,
                         on_new_thread_in: on_new_thread_in,
                         on_new_project: on_new_project,
                         on_switch_project: on_switch_project,
                         on_rename_project: on_rename_project,
+                        on_edit_project: on_edit_project,
                         on_delete_project: on_delete_project,
                         tree: rustyclaw_view::SidebarTree::build(
                             &state.read().projects,
@@ -1469,6 +1481,77 @@ pub fn App() -> Element {
                         });
                     }
                 },
+            }
+
+            // Edit dialogs. Rendered from an Option so each open remounts with
+            // the row's current values; a row that vanished (deleted from
+            // another client) simply renders nothing.
+            if let Some(project) = edit_project()
+                .and_then(|id| state.read().projects.iter().find(|p| p.id == id).cloned())
+            {
+                EditProjectDialog {
+                    project_id: project.id,
+                    name: project.name.clone(),
+                    path: project.path.clone(),
+                    on_cancel: move |_| edit_project.set(None),
+                    on_save: move |(project_id, name, path): (u64, String, String)| {
+                        edit_project.set(None);
+                        let gw = gateway.read().clone();
+                        if let Some(client) = gw {
+                            spawn(async move {
+                                if let Err(e) = client
+                                    .send(GatewayCommand::ProjectUpdate { project_id, name, path })
+                                    .await
+                                {
+                                    tracing::error!(project_id, error = %e, "ProjectUpdate send failed");
+                                }
+                            });
+                        }
+                    },
+                }
+            }
+
+            {
+                edit_thread()
+                    .and_then(|id| state.read().threads.iter().find(|t| t.id == id).cloned())
+                    .map(|thread| {
+                        // A thread with project_id 0 belongs to the active project.
+                        let project_id = if thread.project_id == 0 {
+                            state.read().active_project_id
+                        } else {
+                            thread.project_id
+                        };
+                        let project_path = state
+                            .read()
+                            .projects
+                            .iter()
+                            .find(|p| p.id == project_id)
+                            .map(|p| p.path.clone())
+                            .unwrap_or_default();
+                        rsx! {
+                            EditThreadDialog {
+                    thread_id: thread.id,
+                    label: thread.label.clone().unwrap_or_default(),
+                    working_dir: thread.working_dir.clone(),
+                    project_path,
+                    on_cancel: move |_| edit_thread.set(None),
+                    on_save: move |(thread_id, label, working_dir): (u64, String, Option<String>)| {
+                        edit_thread.set(None);
+                        let gw = gateway.read().clone();
+                        if let Some(client) = gw {
+                            spawn(async move {
+                                if let Err(e) = client
+                                    .send(GatewayCommand::ThreadUpdate { thread_id, label, working_dir })
+                                    .await
+                                {
+                                    tracing::error!(thread_id, error = %e, "ThreadUpdate send failed");
+                                }
+                            });
+                        }
+                    },
+                            }
+                        }
+                    })
             }
 
             // Modals

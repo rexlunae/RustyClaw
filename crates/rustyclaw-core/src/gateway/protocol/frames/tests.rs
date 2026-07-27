@@ -89,6 +89,65 @@ mod serialization {
         assert_eq!(ClientFrameType::ProjectRename as u8, 33);
         assert_eq!(ClientFrameType::ProjectDelete as u8, 34);
         assert_eq!(ClientFrameType::ProjectSwitch as u8, 35);
+        assert_eq!(ClientFrameType::ProjectUpdate as u8, 78);
+        assert_eq!(ClientFrameType::ThreadUpdate as u8, 79);
+    }
+
+    #[test]
+    fn test_project_update_client_roundtrip() {
+        let frame = ClientFrame {
+            frame_type: ClientFrameType::ProjectUpdate,
+            payload: ClientPayload::ProjectUpdate {
+                project_id: 7,
+                name: "Renamed".into(),
+                path: "/home/me/moved".into(),
+            },
+        };
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ClientFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ClientPayload::ProjectUpdate {
+                project_id,
+                name,
+                path,
+            } => {
+                assert_eq!(project_id, 7);
+                assert_eq!(name, "Renamed");
+                assert_eq!(path, "/home/me/moved");
+            }
+            _ => panic!("Expected ProjectUpdate payload"),
+        }
+    }
+
+    #[test]
+    fn test_thread_update_client_roundtrip() {
+        // Both states of the override have to survive the wire: `None` is how
+        // the client says "go back to inheriting the project's directory".
+        for working_dir in [Some("/tmp/worktree".to_string()), None] {
+            let frame = ClientFrame {
+                frame_type: ClientFrameType::ThreadUpdate,
+                payload: ClientPayload::ThreadUpdate {
+                    thread_id: 5,
+                    label: "Refactor".into(),
+                    working_dir: working_dir.clone(),
+                },
+            };
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ClientFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+            match decoded.payload {
+                ClientPayload::ThreadUpdate {
+                    thread_id,
+                    label,
+                    working_dir: got,
+                } => {
+                    assert_eq!(thread_id, 5);
+                    assert_eq!(label, "Refactor");
+                    assert_eq!(got, working_dir);
+                }
+                _ => panic!("Expected ThreadUpdate payload"),
+            }
+        }
     }
 
     #[test]

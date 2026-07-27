@@ -761,6 +761,16 @@ body,
     opacity: 0;
 }
 
+/* The actions overlay the row's right edge, so shrink the text while they're
+   showing — otherwise a long name sits underneath the buttons. */
+.project-header:hover .project-text {
+    padding-right: 66px;
+}
+
+.session-row:hover .session-text {
+    padding-right: 45px;
+}
+
 .row-action {
     display: flex;
     align-items: center;

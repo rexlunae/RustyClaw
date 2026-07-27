@@ -42,6 +42,7 @@ pub(crate) async fn send_threads_update(
             message_count: t.message_count,
             has_summary: t.has_summary,
             project_id: t.project_id.0,
+            working_dir: t.working_dir.as_ref().map(|d| d.display().to_string()),
         })
         .collect();
 
@@ -84,6 +85,7 @@ pub(crate) async fn send_threads_update(
             // Ephemeral tasks aren't bound to a project; the client buckets
             // project_id == 0 under the active project.
             project_id: 0,
+            working_dir: None,
         });
     }
 
@@ -130,6 +132,7 @@ pub(crate) async fn send_threads_update(
                 message_count: session.messages.len(),
                 has_summary: session.status != SessionStatus::Active,
                 project_id: 0,
+                working_dir: None,
             });
         }
     }

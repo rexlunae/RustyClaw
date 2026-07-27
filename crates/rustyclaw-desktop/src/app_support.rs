@@ -257,6 +257,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                     status: t.status,
                     is_foreground: t.is_foreground,
                     message_count: t.message_count,
+                    working_dir: t.working_dir,
                 })
                 .collect();
             state.write().set_foreground_thread(foreground_id);

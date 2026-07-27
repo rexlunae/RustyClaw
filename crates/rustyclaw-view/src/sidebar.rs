@@ -36,6 +36,10 @@ pub struct SidebarItemData {
 
     /// Number of messages in the thread.
     pub message_count: usize,
+
+    /// Working-directory override, or `None` when the thread inherits its
+    /// project's directory.
+    pub working_dir: Option<String>,
 }
 
 impl SidebarItemData {
@@ -113,6 +117,7 @@ impl From<&rustyclaw_core::ui::ThreadInfo> for SidebarItemData {
             status: t.status.clone(),
             is_foreground: t.is_foreground,
             message_count: t.message_count,
+            working_dir: t.working_dir.clone(),
         }
     }
 }
@@ -363,6 +368,7 @@ mod tests {
             status: "active".into(),
             is_foreground: false,
             message_count: 0,
+            working_dir: None,
         }
     }
 

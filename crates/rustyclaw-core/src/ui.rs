@@ -211,6 +211,9 @@ pub struct ThreadInfo {
     pub status: String,
     pub is_foreground: bool,
     pub message_count: usize,
+    /// Working-directory override, or `None` when the thread inherits its
+    /// project's directory.
+    pub working_dir: Option<String>,
 }
 
 /// Project info for the sidebar's top level.

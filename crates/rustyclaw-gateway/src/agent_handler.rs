@@ -161,6 +161,7 @@ pub(crate) async fn handle_agent_switch(
         writer,
         config,
         &mut session.project_mgr,
+        &session.thread_mgr,
         &session.projects_path,
         active_project,
     )

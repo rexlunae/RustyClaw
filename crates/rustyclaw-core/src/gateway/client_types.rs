@@ -468,6 +468,23 @@ pub enum GatewayCommand {
     #[serde(rename = "project_rename")]
     ProjectRename { project_id: u64, new_name: String },
 
+    /// Edit a project's display name and working directory together.
+    #[serde(rename = "project_update")]
+    ProjectUpdate {
+        project_id: u64,
+        name: String,
+        path: String,
+    },
+
+    /// Edit a thread's caption and working-directory override. A
+    /// `working_dir` of `None` clears the override.
+    #[serde(rename = "thread_update")]
+    ThreadUpdate {
+        thread_id: u64,
+        label: String,
+        working_dir: Option<String>,
+    },
+
     /// Delete a project
     #[serde(rename = "project_delete")]
     ProjectDelete { project_id: u64 },
@@ -781,6 +798,30 @@ impl GatewayCommand {
                 payload: ClientPayload::ProjectRename {
                     project_id,
                     new_name,
+                },
+            },
+            GatewayCommand::ProjectUpdate {
+                project_id,
+                name,
+                path,
+            } => ClientFrame {
+                frame_type: ClientFrameType::ProjectUpdate,
+                payload: ClientPayload::ProjectUpdate {
+                    project_id,
+                    name,
+                    path,
+                },
+            },
+            GatewayCommand::ThreadUpdate {
+                thread_id,
+                label,
+                working_dir,
+            } => ClientFrame {
+                frame_type: ClientFrameType::ThreadUpdate,
+                payload: ClientPayload::ThreadUpdate {
+                    thread_id,
+                    label,
+                    working_dir,
                 },
             },
             GatewayCommand::ProjectDelete { project_id } => ClientFrame {
@@ -1253,6 +1294,7 @@ impl GatewayEvent {
                         status: t.status.unwrap_or_default(),
                         is_foreground: t.is_foreground,
                         message_count: t.message_count,
+                        working_dir: t.working_dir,
                     })
                     .collect(),
                 foreground_id,
@@ -1638,6 +1680,10 @@ pub struct ThreadInfoDto {
     pub status: String,
     pub is_foreground: bool,
     pub message_count: usize,
+    /// Working-directory override, or `None` when the thread inherits its
+    /// project's directory. The edit dialog needs to tell those apart.
+    #[serde(default)]
+    pub working_dir: Option<String>,
 }
 
 /// Project info from gateway (client-facing).

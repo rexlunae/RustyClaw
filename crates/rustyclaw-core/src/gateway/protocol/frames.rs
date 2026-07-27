@@ -164,6 +164,10 @@ pub enum ClientFrameType {
     AgentDelete = 76,
     /// Request the live model list for a cloud provider.
     ProviderModelList = 77,
+    /// Edit a project's name and/or working directory.
+    ProjectUpdate = 78,
+    /// Edit a thread's caption and/or working-directory override.
+    ThreadUpdate = 79,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -812,6 +816,27 @@ pub enum ClientPayload {
     /// themselves).
     ProviderModelList {
         provider: String,
+    },
+    /// Edit a project in place: set its display name and working directory.
+    ///
+    /// Distinct from `ProjectRename`, which can only change the name — the
+    /// wire format is positional, so widening that variant would break
+    /// compatibility. Both fields carry the full desired value, so the
+    /// gateway does not have to reason about partial updates.
+    ProjectUpdate {
+        project_id: u64,
+        name: String,
+        path: String,
+    },
+    /// Edit a thread in place: set its caption and working-directory override.
+    ///
+    /// `working_dir: None` clears the override, so the thread goes back to
+    /// inheriting its project's directory. Distinct from `ThreadRename` for
+    /// the same wire-compatibility reason as `ProjectUpdate`.
+    ThreadUpdate {
+        thread_id: u64,
+        label: String,
+        working_dir: Option<String>,
     },
 }
 
