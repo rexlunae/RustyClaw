@@ -133,6 +133,15 @@ pub fn prepare(src: &str) -> String {
                     });
                     blocked.push(range);
                 }
+                // Alt text counts as "inside a link" for autolinking purposes.
+                // Injecting `[url](<url>)` into an `![…]` span rewrites the
+                // document for no benefit — alt text cannot hold a link — and
+                // relies on CommonMark flattening it back out to render
+                // correctly, which extra brackets in the alt text can defeat.
+                link_depth += 1;
+            }
+            Event::End(TagEnd::Image) => {
+                link_depth = link_depth.saturating_sub(1);
             }
             // Only plain text outside links is a candidate for autolinking.
             // Code spans and fenced blocks arrive as `Event::Code` /
@@ -408,6 +417,38 @@ mod tests {
         let html = pipeline("![img](javascript:alert(1))");
         assert!(!html.contains(r#"src="javascript:"#), "{html}");
         assert!(!html.contains("<img"), "{html}");
+    }
+
+    /// Alt text must be left exactly as written. Autolinking inside it
+    /// rewrote the source to `![see [url](<url>)](…)`, which only rendered
+    /// correctly because CommonMark flattens alt text back to plain text.
+    #[test]
+    fn url_in_image_alt_text_is_left_alone() {
+        let src = "![see https://example.com](https://safe.example/i.png)";
+        assert_eq!(prepare(src), src, "the source must not be rewritten");
+
+        let html = pipeline(src);
+        assert!(
+            html.contains(r#"<img src="https://safe.example/i.png""#),
+            "{html}"
+        );
+        assert!(
+            !html.contains("<a "),
+            "alt text must not be autolinked: {html}"
+        );
+        assert!(html.contains(r#"alt="see https://example.com""#), "{html}");
+    }
+
+    /// An image is not a link, so prose *after* it still autolinks — proving
+    /// the depth counter is decremented rather than leaking.
+    #[test]
+    fn autolinking_resumes_after_an_image() {
+        let html = pipeline("![i](https://safe.example/i.png) then https://example.com/x");
+        assert!(html.contains("<img "), "{html}");
+        assert!(
+            html.contains(r#"<a href="https://example.com/x""#),
+            "{html}"
+        );
     }
 
     #[test]
