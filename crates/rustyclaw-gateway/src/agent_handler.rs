@@ -43,7 +43,7 @@ impl AgentSession {
         let thread_mgr = ThreadManager::load_or_default(&threads_path);
         let mut project_mgr = ProjectManager::load_or_new(&projects_path);
         project_mgr.ensure_default(config.workspace_dir_for(agent_id));
-        let _ = project_mgr.save_to_file(&projects_path);
+        crate::helpers::persist_projects(&project_mgr, &projects_path);
         Self {
             agent_id: agent_id.to_string(),
             threads_path,
@@ -55,8 +55,8 @@ impl AgentSession {
 
     /// Persist thread and project state.
     pub fn save(&self) {
-        let _ = self.thread_mgr.save_to_file(&self.threads_path);
-        let _ = self.project_mgr.save_to_file(&self.projects_path);
+        crate::helpers::persist_threads(&self.thread_mgr, &self.threads_path);
+        crate::helpers::persist_projects(&self.project_mgr, &self.projects_path);
     }
 }
 

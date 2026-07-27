@@ -615,7 +615,7 @@ pub(crate) async fn dispatch_text_message(
             if let Some(thread) = thread_mgr.foreground_mut() {
                 thread.memory_flushed = true;
             }
-            let _ = thread_mgr.save_to_file(threads_path);
+            crate::helpers::persist_threads(thread_mgr, threads_path);
             flush_pending_resume = true;
             flushed_this_round = true;
 
@@ -852,7 +852,7 @@ pub(crate) async fn dispatch_text_message(
                     }
                     // Persist the final assistant turn so reconnecting
                     // clients see it via ThreadHistoryRequest.
-                    let _ = thread_mgr.save_to_file(threads_path);
+                    crate::helpers::persist_threads(thread_mgr, threads_path);
                     // Auto-ingest assistant response into Steel Memory
                     #[cfg(feature = "semantic-memory")]
                     {
@@ -1058,7 +1058,7 @@ pub(crate) async fn dispatch_text_message(
                                     thread_mgr.rename(fg_id, caption);
                                     output = format!("Thread caption set to: {}", caption);
                                     send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-                                    let _ = thread_mgr.save_to_file(threads_path);
+                                    crate::helpers::persist_threads(thread_mgr, threads_path);
                                 } else {
                                     output = "No active thread to caption.".to_string();
                                 }
@@ -1161,7 +1161,7 @@ pub(crate) async fn dispatch_text_message(
                 thread.add_tool_result(tr.id.clone(), tr.output.clone());
             }
         }
-        let _ = thread_mgr.save_to_file(threads_path);
+        crate::helpers::persist_threads(thread_mgr, threads_path);
 
         // ── Bail out if tools keep failing with no progress ─────────
         // A round where every tool call errored may still recover (the

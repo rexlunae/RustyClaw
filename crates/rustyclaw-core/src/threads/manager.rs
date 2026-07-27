@@ -511,6 +511,15 @@ impl ThreadManager {
     // ── Persistence ─────────────────────────────────────────────────────────
 
     /// Save threads to a file.
+    ///
+    /// Writes to a sibling temporary file and renames it into place. Every
+    /// thread's entire message history lives in this one document, so a
+    /// direct `write` that fails partway — a full disk, a killed process —
+    /// would leave truncated JSON behind. `load_from_file` cannot parse that,
+    /// and `load_or_default` responds by starting a fresh manager and
+    /// overwriting the file, which turns one failed write into the loss of
+    /// every thread. `rename` is atomic on both Unix and Windows, so readers
+    /// see either the previous file or the complete new one.
     pub fn save_to_file(&self, path: &Path) -> std::io::Result<()> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -521,7 +530,25 @@ impl ThreadManager {
         };
         let json = serde_json::to_string_pretty(&state)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        std::fs::write(path, json)
+
+        let tmp = path.with_extension("json.tmp");
+        // Flush and fsync before the rename: a rename that lands ahead of the
+        // data would publish an empty file after a crash.
+        {
+            use std::io::Write;
+            let mut file = std::fs::File::create(&tmp)?;
+            file.write_all(json.as_bytes())?;
+            file.flush()?;
+            file.sync_all()?;
+        }
+        match std::fs::rename(&tmp, path) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Don't leave the temporary behind on failure.
+                let _ = std::fs::remove_file(&tmp);
+                Err(e)
+            }
+        }
     }
 
     /// Load threads from a file.
@@ -763,6 +790,43 @@ mod tests {
         let restored = round_trip(&mgr, "no-foreground");
         assert_eq!(restored.foreground_id(), Some(chat));
         assert_eq!(restored.foreground().map(|t| t.messages.len()), Some(1));
+    }
+
+    /// Regression: the save must be atomic. Thread history is one document,
+    /// so a partial write leaves unparseable JSON — and `load_or_default`
+    /// answers a parse failure by starting fresh and overwriting the file,
+    /// turning one bad write into the loss of every thread. A pre-existing
+    /// truncated temp file must also not be mistaken for the real thing.
+    #[test]
+    fn saving_never_leaves_a_partial_file_behind() {
+        let dir = std::env::temp_dir().join(format!("rustyclaw-atomic-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("threads.json");
+
+        let mut mgr = ThreadManager::new();
+        let chat = mgr.create_chat("Lengthy");
+        for i in 0..500 {
+            mgr.add_message(chat, MessageRole::User, format!("message {i}"));
+        }
+        mgr.save_to_file(&path).expect("save");
+
+        // Leftover junk at the temp path must not affect the real file.
+        std::fs::write(path.with_extension("json.tmp"), "{ truncated").unwrap();
+        mgr.save_to_file(&path).expect("save over stale temp");
+
+        let restored = ThreadManager::load_from_file(&path).expect("still parseable");
+        assert_eq!(
+            restored.get(chat).map(|t| t.messages.len()),
+            Some(500),
+            "every message survives the round trip"
+        );
+        // The temp file is not left lying around next to the real one.
+        assert!(
+            !path.with_extension("json.tmp").exists(),
+            "temporary file is renamed away, not orphaned"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The elected foreground is an interactive thread, not a sub-agent or

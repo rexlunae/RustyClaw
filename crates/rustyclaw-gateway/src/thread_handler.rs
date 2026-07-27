@@ -78,7 +78,7 @@ pub(crate) async fn handle_thread_create(
     // Send updated thread list
     send_threads_update(writer, thread_mgr, task_mgr, None).await?;
     // Persist thread state
-    let _ = thread_mgr.save_to_file(threads_path);
+    crate::helpers::persist_threads(thread_mgr, threads_path);
     Ok(())
 }
 
@@ -117,7 +117,7 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        let _ = thread_mgr.save_to_file(threads_path);
+        crate::helpers::persist_threads(thread_mgr, threads_path);
         return Ok(());
     }
 
@@ -190,7 +190,7 @@ pub(crate) async fn handle_thread_switch(
         send_threads_update(writer, thread_mgr, task_mgr, None).await?;
         send_thread_messages_update(writer, target_id, thread_mgr).await?;
         // Persist thread state (includes compaction summary)
-        let _ = thread_mgr.save_to_file(threads_path);
+        crate::helpers::persist_threads(thread_mgr, threads_path);
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -295,7 +295,7 @@ pub(crate) async fn handle_thread_close(
         send_thread_messages_update(writer, fg, thread_mgr).await?;
     }
     // Persist thread state
-    let _ = thread_mgr.save_to_file(threads_path);
+    crate::helpers::persist_threads(thread_mgr, threads_path);
     Ok(())
 }
 
@@ -314,7 +314,7 @@ pub(crate) async fn handle_thread_rename(
         // Send updated thread list
         send_threads_update(writer, thread_mgr, task_mgr, None).await?;
         // Persist thread state
-        let _ = thread_mgr.save_to_file(threads_path);
+        crate::helpers::persist_threads(thread_mgr, threads_path);
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
