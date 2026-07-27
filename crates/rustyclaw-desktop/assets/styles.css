@@ -17,7 +17,14 @@
 
 /* ── 1. Brand → Bulma variable mapping ──────────────────────────────────── */
 
-:root {
+/* The brand palette must be declared on the themed elements as well as on
+ * `:root`. Bulma's own `[data-theme="…"]` blocks re-declare the palette hues,
+ * and they match the `#rc-root` element that carries `data-theme` — a `:root`
+ * declaration never competes with them, so the brand would silently revert to
+ * Bulma's default turquoise inside the app subtree. */
+:root,
+[data-theme="dark"],
+[data-theme="light"] {
     /* Brand primary: rusty orange #f06f3a */
     --bulma-primary-h: 18deg;
     --bulma-primary-s: 86%;
@@ -41,7 +48,9 @@
     --bulma-info-h: 213deg;
     --bulma-info-s: 94%;
     --bulma-info-l: 68%;
+}
 
+:root {
     /* Geometry + typography */
     --bulma-radius: 0.625rem;
     --bulma-radius-large: 0.875rem;
@@ -58,8 +67,20 @@
     --rc-sidebar-w-collapsed: 64px;
     --rc-topbar-h: 44px;
     --rc-content-max-w: 880px;
+}
 
-    /* Convenience aliases over Bulma runtime variables */
+/* Convenience aliases over Bulma runtime variables.
+ *
+ * These MUST be declared on the same elements that carry `data-theme`, not
+ * only on `:root`. A custom property whose value contains `var()` is
+ * substituted where it is *declared*, so aliasing `--rc-bg` once on `:root`
+ * would bake in the light-scheme colour and every descendant would inherit
+ * that value — even under `[data-theme="dark"]`, which only redefines the
+ * underlying Bulma variables further down the tree. Re-declaring them here
+ * makes the aliases re-substitute against whichever scheme is active. */
+:root,
+[data-theme="dark"],
+[data-theme="light"] {
     --rc-primary: hsl(var(--bulma-primary-h), var(--bulma-primary-s), var(--bulma-primary-l));
     --rc-primary-soft: hsla(var(--bulma-primary-h), var(--bulma-primary-s), var(--bulma-primary-l), 0.14);
     --rc-bg: var(--bulma-scheme-main);
@@ -224,16 +245,32 @@ body,
     margin-bottom: 0;
 }
 
+/* Compact tag used outside the sidebar (swarm panel cards). */
+.tag.rc-chip {
+    font-size: 11px;
+    max-width: 100%;
+}
+
 /* ── 3. Sidebar ─────────────────────────────────────────────────────────── */
 
+/* Every interactive row in the sidebar — project header, thread, footer
+   action — is built from these tokens, so they share one rhythm. Change the
+   row geometry here and the whole sidebar follows. */
 .sidebar {
+    --rc-row-h: 32px;
+    --rc-row-pad: 8px;
+    --rc-row-radius: 9px;
+    --rc-row-gap: 8px;
+    --rc-rail-w: 2px;
+    --rc-ease: cubic-bezier(0.32, 0.72, 0, 1);
+
     display: flex;
     flex-direction: column;
     width: var(--rc-sidebar-w);
     min-width: var(--rc-sidebar-w);
-    background: var(--rc-bg-elev);
+    background: linear-gradient(180deg, var(--rc-bg-elev) 0%, var(--rc-bg) 100%);
     border-right: 1px solid var(--rc-border);
-    transition: width 0.18s ease, min-width 0.18s ease;
+    transition: width 0.22s var(--rc-ease), min-width 0.22s var(--rc-ease);
     overflow: hidden;
 }
 
@@ -249,19 +286,34 @@ body,
     border-left: 1px solid var(--rc-border);
 }
 
-/* Brand header */
+/* Shared focus treatment for the sidebar's bespoke controls. */
+.sidebar button:focus-visible,
+.sidebar .project-header:focus-visible,
+.sidebar .session-row:focus-visible {
+    outline: 2px solid var(--rc-primary);
+    outline-offset: -2px;
+    border-radius: var(--rc-row-radius);
+}
+
+/* Brand header ─────────────────────────────────────────────────────────── */
 .sidebar-brand {
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 12px 12px 10px;
-    border-bottom: 1px solid var(--rc-border);
+    padding: 12px;
+    min-height: 56px;
+}
+
+.sidebar.is-collapsed .sidebar-brand {
+    padding: 12px 0;
+    justify-content: center;
 }
 
 .brand-mark {
-    font-size: 22px;
+    font-size: 20px;
     line-height: 1;
-    filter: drop-shadow(0 1px 4px var(--rc-primary-soft));
+    flex-shrink: 0;
+    filter: drop-shadow(0 2px 6px var(--rc-primary-soft));
 }
 
 .brand-text {
@@ -269,11 +321,13 @@ body,
     flex-direction: column;
     min-width: 0;
     flex: 1;
+    gap: 1px;
 }
 
 .brand-name {
-    font-weight: 700;
+    font-weight: 650;
     font-size: 14px;
+    letter-spacing: -0.01em;
     color: var(--rc-text-strong);
     white-space: nowrap;
     overflow: hidden;
@@ -281,206 +335,491 @@ body,
 }
 
 .brand-sub {
-    font-size: 11px;
+    font-size: 10.5px;
+    letter-spacing: 0.02em;
     color: var(--rc-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
-.sidebar-collapse-btn.button {
+.sidebar-collapse-btn {
     margin-left: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 7px;
     color: var(--rc-text-muted);
-    text-decoration: none;
+    cursor: pointer;
+    transition: background 0.14s var(--rc-ease), color 0.14s var(--rc-ease);
 }
-.sidebar-collapse-btn.button:hover {
+
+.sidebar-collapse-btn:hover {
+    background: var(--rc-bg-raised);
     color: var(--rc-text-strong);
-    text-decoration: none;
 }
 
-/* Status chips */
-.tags.sidebar-status {
-    padding: 10px 12px 0;
-    gap: 6px;
-    margin-bottom: 0 !important;
+/* One glyph, rotated — smoother than swapping ‹ for ›. */
+.collapse-caret {
+    display: block;
+    font-size: 15px;
+    line-height: 1;
+    transition: transform 0.22s var(--rc-ease);
 }
 
-.tag.rc-chip {
-    font-size: 11px;
-    max-width: 100%;
+.sidebar.is-collapsed .sidebar-collapse-btn {
+    margin-left: 0;
 }
 
-.tag.rc-chip .dot {
+.sidebar.is-collapsed .collapse-caret {
+    transform: rotate(180deg);
+}
+
+/* Status block ─────────────────────────────────────────────────────────── */
+.sidebar-status {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 0 12px 10px;
+}
+
+.sidebar-status.is-collapsed {
+    align-items: center;
+    padding: 0 0 10px;
+}
+
+.status-line {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    min-width: 0;
+    font-size: 11.5px;
+    color: var(--rc-text-muted);
+}
+
+.status-line .status-label {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.status-line.is-error {
+    color: hsl(var(--bulma-danger-h), var(--bulma-danger-s), var(--bulma-danger-l));
+}
+
+.status-glyph {
+    flex-shrink: 0;
+    font-size: 10px;
+    opacity: 0.75;
+}
+
+.status-provider {
+    color: var(--rc-text);
+}
+
+.status-sep {
+    margin: 0 4px;
+    opacity: 0.5;
+}
+
+.status-dot {
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: currentColor;
-    margin-right: 6px;
     flex-shrink: 0;
+    background: var(--rc-text-muted);
+    box-shadow: 0 0 0 3px transparent;
+    transition: background 0.18s var(--rc-ease), box-shadow 0.18s var(--rc-ease);
 }
 
-.rc-chip.is-pulse .dot,
-.rc-chip.is-pulse {
+.status-dot.is-success {
+    background: hsl(var(--bulma-success-h), var(--bulma-success-s), var(--bulma-success-l));
+    box-shadow: 0 0 0 3px hsla(var(--bulma-success-h), var(--bulma-success-s), var(--bulma-success-l), 0.16);
+}
+.status-dot.is-warning {
+    background: hsl(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l));
+    box-shadow: 0 0 0 3px hsla(var(--bulma-warning-h), var(--bulma-warning-s), var(--bulma-warning-l), 0.16);
+}
+.status-dot.is-danger {
+    background: hsl(var(--bulma-danger-h), var(--bulma-danger-s), var(--bulma-danger-l));
+    box-shadow: 0 0 0 3px hsla(var(--bulma-danger-h), var(--bulma-danger-s), var(--bulma-danger-l), 0.16);
+}
+.status-dot.is-info {
+    background: hsl(var(--bulma-info-h), var(--bulma-info-s), var(--bulma-info-l));
+    box-shadow: 0 0 0 3px hsla(var(--bulma-info-h), var(--bulma-info-s), var(--bulma-info-l), 0.16);
+}
+.status-dot.is-primary {
+    background: var(--rc-primary);
+    box-shadow: 0 0 0 3px var(--rc-primary-soft);
+}
+
+.status-dot.is-pulse {
     animation: rc-pulse 1.6s ease-in-out infinite;
 }
 
-.rc-chip-error {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    max-width: 220px;
-    display: inline-block;
-}
-
-/* Projects menu */
-.menu.projects-menu {
+/* Projects ─────────────────────────────────────────────────────────────── */
+.projects-menu {
     display: flex;
     flex-direction: column;
     flex: 1;
     min-height: 0;
-    padding: 12px 10px 6px;
+    padding: 4px 8px 6px;
+    border-top: 1px solid var(--rc-border);
 }
 
-.menu-label.sidebar-section-label {
-    margin: 0 4px 6px;
-    font-size: 10.5px;
-    letter-spacing: 0.08em;
-    color: var(--rc-text-muted);
-}
-
-.sidebar-new-project.button {
-    justify-content: flex-start;
-    gap: 6px;
-    margin-bottom: 10px;
-}
-
-.sidebar.is-collapsed .sidebar-new-project.button {
-    justify-content: center;
-}
-
-.menu-list.projects-list {
-    flex: 1;
-    overflow-y: auto;
-    min-height: 0;
-    padding-right: 2px;
-}
-
-.menu-list.projects-list li {
-    list-style: none;
-}
-
-/* Project group header */
-.project-header {
+.sidebar-section {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 6px 6px;
-    border-radius: var(--bulma-radius);
-    cursor: pointer;
-    color: var(--rc-text);
-    user-select: none;
+    gap: 6px;
+    height: 30px;
+    padding: 0 4px 0 6px;
+    flex-shrink: 0;
 }
 
-.project-header:hover {
-    background: var(--rc-bg-raised);
+.sidebar.is-collapsed .sidebar-section {
+    justify-content: center;
+    padding: 0;
 }
 
-.project-header.is-active {
-    background: var(--rc-primary-soft);
-    color: var(--rc-text-strong);
-}
-
-.project-chevron {
-    background: none;
-    border: none;
-    color: var(--rc-text-muted);
-    cursor: pointer;
-    font-size: 11px;
-    padding: 0 2px;
-    line-height: 1;
-}
-
-.project-name {
+.sidebar-section-label {
     flex: 1;
     min-width: 0;
-    font-size: 13px;
-    font-weight: 600;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--rc-text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.tag.project-count,
-.tag.session-count {
-    background: var(--rc-bg-raised);
-    color: var(--rc-text-muted);
+.sidebar-section-count {
     font-size: 10px;
-    height: 1.4em;
-    padding: 0 0.5em;
+    font-variant-numeric: tabular-nums;
+    color: var(--rc-text-muted);
+    opacity: 0.7;
 }
 
-.project-add-btn {
+.sidebar-section-add {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    flex-shrink: 0;
+    padding: 0;
+    font-size: 13px;
+    line-height: 1;
     background: none;
     border: none;
+    border-radius: 6px;
     color: var(--rc-text-muted);
     cursor: pointer;
-    font-size: 13px;
-    padding: 0 2px;
-    line-height: 1;
-    opacity: 0;
-    transition: opacity 0.12s;
+    transition: background 0.14s var(--rc-ease), color 0.14s var(--rc-ease);
 }
 
-.project-delete-btn,
-.session-delete-btn {
-    opacity: 0;
-    transition: opacity 0.12s;
-    flex-shrink: 0;
-}
-
-.project-header:hover .project-add-btn,
-.project-header:hover .project-delete-btn,
-.session-row:hover .session-delete-btn {
-    opacity: 1;
-}
-
-.project-add-btn:hover {
+.sidebar-section-add:hover {
+    background: var(--rc-primary-soft);
     color: var(--rc-primary);
 }
 
-/* Nested sessions */
-.sessions-list.is-nested {
-    margin: 2px 0 6px 14px;
-    padding-left: 8px;
-    border-left: 1px solid var(--rc-border);
+.projects-list {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    min-height: 0;
+    margin: 0;
+    padding: 2px 0 4px;
+    list-style: none;
+    /* Thin, unobtrusive scrollbar — the list is dense enough already. */
+    scrollbar-width: thin;
 }
 
-.sidebar-empty-sessions {
-    font-size: 12px;
-    color: var(--rc-text-muted);
-    padding: 4px 8px;
-    font-style: italic;
+.projects-list li {
+    list-style: none;
 }
 
-.session-row {
+.project-group + .project-group {
+    margin-top: 2px;
+}
+
+/* Rows: project header, thread, footer action all share this geometry. */
+.project-header,
+.session-row,
+.sidebar-action {
+    position: relative;
     display: flex;
     align-items: center;
-    gap: 8px;
-    padding: 5px 8px;
-    border-radius: var(--bulma-radius);
-    cursor: pointer;
+    gap: var(--rc-row-gap);
+    width: 100%;
+    min-height: var(--rc-row-h);
+    padding: 0 var(--rc-row-pad);
+    border: none;
+    border-radius: var(--rc-row-radius);
+    background: transparent;
     color: var(--rc-text);
+    font-family: inherit;
+    font-size: 13px;
+    text-align: left;
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.14s var(--rc-ease), color 0.14s var(--rc-ease);
 }
 
-.session-row:hover {
+.project-header:hover,
+.session-row:hover,
+.sidebar-action:hover {
     background: var(--rc-bg-raised);
+    color: var(--rc-text-strong);
 }
 
+/* Active rows get a tint plus a left rail that grows in. */
+.project-header.is-active,
 .session-row.is-active {
     background: var(--rc-primary-soft);
     color: var(--rc-text-strong);
 }
 
-.session-icon {
-    font-size: 13px;
+.project-header::before,
+.session-row::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    width: var(--rc-rail-w);
+    height: 0;
+    border-radius: 0 var(--rc-rail-w) var(--rc-rail-w) 0;
+    background: var(--rc-primary);
+    transform: translateY(-50%);
+    transition: height 0.2s var(--rc-ease);
+}
+
+.project-header.is-active::before,
+.session-row.is-active::before {
+    height: 60%;
+}
+
+.project-chevron {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
     flex-shrink: 0;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 4px;
+    color: var(--rc-text-muted);
+    font-size: 9px;
+    line-height: 1;
+    cursor: pointer;
+    transition: transform 0.2s var(--rc-ease), color 0.14s var(--rc-ease);
+}
+
+.project-header:hover .project-chevron {
+    color: var(--rc-text-strong);
+}
+
+.project-header.is-folded .project-chevron {
+    transform: rotate(-90deg);
+}
+
+.project-text {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    gap: 1px;
+}
+
+.project-name {
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: -0.005em;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* The path is the project's identity as much as the name is — show it
+   inline rather than hiding it in a tooltip. It arrives already shortened
+   (`~`-collapsed and left-truncated) from `ProjectGroupData::pretty_path`;
+   the ellipsis here is only a backstop for narrow windows. Deliberately not
+   `direction: rtl` — that reorders the leading separator, turning
+   `~/src/app` into `src/app/~`. */
+.project-path {
+    font-size: 10.5px;
+    line-height: 1.25;
+    color: var(--rc-text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Collapsed rail: a single initial stands in for the project name. */
+.project-initial {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    margin: 0 auto;
+    flex-shrink: 0;
+    border-radius: 6px;
+    background: var(--rc-bg-raised);
+    color: var(--rc-text-strong);
+    font-size: 11px;
+    font-weight: 650;
+}
+
+.project-header.is-active .project-initial {
+    background: var(--rc-primary);
+    color: #fff;
+}
+
+.sidebar.is-collapsed .project-header,
+.sidebar.is-collapsed .session-row,
+.sidebar.is-collapsed .sidebar-action {
+    justify-content: center;
+    padding: 0 4px;
+}
+
+.sidebar.is-collapsed .project-chevron {
+    display: none;
+}
+
+.count-badge {
+    flex-shrink: 0;
+    min-width: 18px;
+    padding: 0 5px;
+    border-radius: 999px;
+    background: var(--rc-bg-raised);
+    color: var(--rc-text-muted);
+    font-size: 10px;
+    font-variant-numeric: tabular-nums;
+    line-height: 16px;
+    text-align: center;
+    transition: opacity 0.14s var(--rc-ease);
+}
+
+.project-header.is-active .count-badge,
+.session-row.is-active .count-badge {
+    background: hsla(var(--bulma-primary-h), var(--bulma-primary-s), var(--bulma-primary-l), 0.22);
+    color: var(--rc-text-strong);
+}
+
+/* Row actions sit over the badge so revealing them causes no layout shift. */
+.row-actions {
+    position: absolute;
+    right: 6px;
+    top: 50%;
+    display: flex;
+    align-items: center;
+    gap: 1px;
+    transform: translateY(-50%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s var(--rc-ease);
+}
+
+.project-header:hover .row-actions,
+.session-row:hover .row-actions,
+.row-actions:focus-within {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.project-header:hover .count-badge,
+.session-row:hover .count-badge {
+    opacity: 0;
+}
+
+.row-action {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    background: none;
+    border: none;
+    border-radius: 5px;
+    color: var(--rc-text-muted);
+    font-size: 11px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.12s var(--rc-ease), color 0.12s var(--rc-ease);
+}
+
+.row-action:hover {
+    background: var(--rc-primary-soft);
+    color: var(--rc-primary);
+}
+
+.row-action.is-danger:hover {
+    background: hsla(var(--bulma-danger-h), var(--bulma-danger-s), var(--bulma-danger-l), 0.16);
+    color: hsl(var(--bulma-danger-h), var(--bulma-danger-s), var(--bulma-danger-l));
+}
+
+/* Threads ──────────────────────────────────────────────────────────────── */
+.sessions-list {
+    margin: 1px 0 4px;
+    padding: 0 0 0 17px;
+    list-style: none;
+    position: relative;
+}
+
+/* Guide line that stops short of the last row instead of overshooting. */
+.sessions-list::before {
+    content: "";
+    position: absolute;
+    left: 15px;
+    top: 2px;
+    bottom: 12px;
+    width: 1px;
+    background: var(--rc-border);
+}
+
+.sidebar.is-collapsed .sessions-list {
+    padding-left: 0;
+}
+
+.sidebar.is-collapsed .sessions-list::before {
+    display: none;
+}
+
+.session-row {
+    font-size: 12.5px;
+}
+
+.session-dot {
+    width: 5px;
+    height: 5px;
+    flex-shrink: 0;
+    border-radius: 50%;
+    background: var(--rc-text-muted);
+    opacity: 0.45;
+    transition: background 0.14s var(--rc-ease), opacity 0.14s var(--rc-ease),
+        box-shadow 0.14s var(--rc-ease);
+}
+
+.session-row:hover .session-dot {
+    opacity: 0.8;
+}
+
+.session-row.is-active .session-dot {
+    background: var(--rc-primary);
+    opacity: 1;
+    box-shadow: 0 0 0 3px var(--rc-primary-soft);
 }
 
 .session-text {
@@ -488,52 +827,115 @@ body,
     flex-direction: column;
     flex: 1;
     min-width: 0;
+    gap: 1px;
 }
 
 .session-label {
-    font-size: 13px;
+    font-size: 12.5px;
+    line-height: 1.3;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+}
+
+.session-row.is-active .session-label {
+    font-weight: 550;
 }
 
 .session-description {
-    font-size: 11px;
+    font-size: 10.5px;
+    line-height: 1.25;
     color: var(--rc-text-muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
 }
 
-.session-rename-input {
-    flex: 1;
-    min-width: 0;
+.sidebar-empty-sessions {
+    padding: 3px 8px 5px;
+    font-size: 11.5px;
+    color: var(--rc-text-muted);
+    opacity: 0.75;
 }
 
-/* Footer actions */
-.sidebar-footer {
-    padding: 8px 10px 10px;
-    border-top: 1px solid var(--rc-border);
+/* Empty state (no projects at all) */
+.sidebar-empty-state {
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    gap: 3px;
+    padding: 28px 12px;
+    text-align: center;
 }
 
-.sidebar-action.button {
-    justify-content: flex-start;
-    gap: 8px;
+.empty-glyph {
+    font-size: 18px;
     color: var(--rc-text-muted);
-    text-decoration: none;
+    opacity: 0.5;
 }
 
-.sidebar-action.button:hover {
-    color: var(--rc-text-strong);
-    background: var(--rc-bg-raised);
-    text-decoration: none;
+.empty-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--rc-text);
 }
 
-.sidebar.is-collapsed .sidebar-action.button {
+.empty-hint {
+    font-size: 11px;
+    color: var(--rc-text-muted);
+}
+
+/* Inline rename input, shared by project and thread rows. */
+.rename-input.input {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    padding: 0 7px;
+    font-size: 12.5px;
+    border-radius: 6px;
+}
+
+/* Footer ───────────────────────────────────────────────────────────────── */
+.sidebar-footer {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 6px 8px 8px;
+    border-top: 1px solid var(--rc-border);
+    flex-shrink: 0;
+}
+
+.sidebar-action {
+    color: var(--rc-text-muted);
+    font-size: 12.5px;
+}
+
+.action-icon {
+    display: flex;
+    align-items: center;
     justify-content: center;
+    width: 16px;
+    flex-shrink: 0;
+    font-size: 12px;
+    opacity: 0.9;
+}
+
+.action-label {
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Respect the OS "reduce motion" setting. */
+@media (prefers-reduced-motion: reduce) {
+    .sidebar,
+    .sidebar *,
+    .sidebar *::before {
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+    }
 }
 
 /* ── 4. Chat transcript ─────────────────────────────────────────────────── */
