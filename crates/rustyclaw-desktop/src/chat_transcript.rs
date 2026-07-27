@@ -315,8 +315,13 @@ fn reasoning_steps(content: &str, is_streaming: bool) -> Vec<ReasoningStep> {
 // unmodified because it is not HTML.  Raw HTML *outside* code fences is
 // cleaned to the ammonia default allowlist (safe inline elements only).
 
+// `ammonia` alone is not sufficient, because it runs on the markdown *source*
+// and therefore never sees the `<a>` / `<img>` that pulldown-cmark builds from
+// markdown link syntax — a `[x](javascript:…)` link reached the DOM untouched.
+// `markdown_prep::prepare` closes that gap and also autolinks bare URLs; see
+// that module for the details.
 fn sanitize_markdown(src: &str) -> String {
-    ammonia::clean(src)
+    crate::markdown_prep::prepare(&ammonia::clean(src))
 }
 
 // ── Tool call hints ──────────────────────────────────────────────────────────
