@@ -44,9 +44,11 @@ impl std::error::Error for OpenError {}
 /// could be interpreted as a local file by some openers.
 pub fn is_openable(url: &str) -> bool {
     let trimmed = url.trim();
-    // A control character (or newline) could split an argument or smuggle a
-    // scheme past the prefix check.
-    if trimmed.chars().any(|c| c.is_control()) {
+    // Interior whitespace (including control characters and newlines) could
+    // split an argument for a platform opener, and smuggle a scheme past the
+    // prefix check. A real URL percent-encodes spaces, so rejecting them
+    // costs nothing.
+    if trimmed.chars().any(|c| c.is_control() || c.is_whitespace()) {
         return false;
     }
     let lowered = trimmed.to_ascii_lowercase();
@@ -76,10 +78,18 @@ pub fn open_external(url: &str) -> Result<(), OpenError> {
         }
         #[cfg(target_os = "windows")]
         {
-            // `start` is a cmd builtin; the empty "" is the window title,
-            // without which a quoted URL is taken as the title.
-            Command::new("cmd")
-                .args(["/C", "start", "", url])
+            // Deliberately NOT `cmd /C start`. `start` is a cmd builtin, so
+            // cmd re-parses the URL and applies its own metacharacter rules:
+            // `&`, `|`, `^` and `%VAR%` are interpreted even when the URL is
+            // passed as a separate argument. That breaks ordinary URLs with
+            // query strings ("?a=1&b=2") and, because these URLs come from
+            // agent output, lets `…&calc` start a second command.
+            //
+            // `rundll32` is an ordinary executable launched through
+            // CreateProcess, so no shell parses the URL at any point.
+            Command::new("rundll32.exe")
+                .arg("url.dll,FileProtocolHandler")
+                .arg(url)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .spawn()
@@ -133,12 +143,28 @@ mod tests {
     }
 
     #[test]
-    fn rejects_control_characters() {
+    fn rejects_control_characters_and_interior_whitespace() {
         // A newline could split the argument for a naive opener, and
         // "java\nscript:" defeats a plain prefix check.
         assert!(!is_openable("java\nscript:alert(1)"));
         assert!(!is_openable("https://example.com\nrm -rf /"));
         assert!(!is_openable("https://example.com\0"));
+        assert!(!is_openable("https://example.com/a b"), "interior space");
+        assert!(!is_openable("https://example.com/a\tb"), "interior tab");
+    }
+
+    /// Query strings are the common case and must survive intact — the
+    /// previous `cmd /C start` path let cmd treat `&` as a command separator.
+    #[test]
+    fn accepts_query_strings_with_shell_metacharacters() {
+        for url in [
+            "https://example.com/?a=1&b=2",
+            "https://example.com/?q=a|b",
+            "https://example.com/?pct=%20value",
+            "https://example.com/?caret=a^b",
+        ] {
+            assert!(is_openable(url), "must accept {url:?}");
+        }
     }
 
     #[test]
