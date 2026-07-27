@@ -4,6 +4,7 @@
 //! domain types live here as `From` impls so producers can use `.into()`.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 /// DTO for local engine info in protocol results.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -158,8 +159,13 @@ pub struct ThreadInfoDto {
     pub project_id: u64,
     /// Working-directory override, or `None` when the thread inherits its
     /// project's directory. Appended last, as above.
+    ///
+    /// A `PathBuf` rather than a `String`: bincode encodes both as a
+    /// length-prefixed UTF-8 run, so the wire format is unchanged, but the
+    /// type keeps the value from being laundered through `display()` — which
+    /// silently mangles a path that isn't valid UTF-8 — at every hop.
     #[serde(default)]
-    pub working_dir: Option<String>,
+    pub working_dir: Option<PathBuf>,
 }
 
 /// DTO for project info in `ProjectsUpdate`.
@@ -167,7 +173,9 @@ pub struct ThreadInfoDto {
 pub struct ProjectInfoDto {
     pub id: u64,
     pub name: String,
-    pub path: String,
+    /// The project's working directory. See [`ThreadInfoDto::working_dir`]
+    /// for why this is a `PathBuf`.
+    pub path: PathBuf,
 }
 
 /// DTO for agent info in `AgentsUpdate`.

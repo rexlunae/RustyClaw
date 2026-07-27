@@ -42,7 +42,7 @@ pub(crate) async fn send_threads_update(
             message_count: t.message_count,
             has_summary: t.has_summary,
             project_id: t.project_id.0,
-            working_dir: t.working_dir.as_ref().map(|d| d.display().to_string()),
+            working_dir: t.working_dir.clone(),
         })
         .collect();
 

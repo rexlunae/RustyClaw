@@ -3,6 +3,8 @@
 //! A project is a working directory that groups threads; creating one points
 //! the agent's tools at that directory for the project's threads.
 
+use std::path::PathBuf;
+
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, Button, Buttons, Control, Field, FieldLabel, Help};
 
@@ -13,7 +15,7 @@ pub struct NewProjectDialogProps {
     /// Whether the dialog is rendered.
     pub visible: bool,
     /// User confirmed: `(name, path)`.
-    pub on_create: EventHandler<(String, String)>,
+    pub on_create: EventHandler<(String, PathBuf)>,
     /// User dismissed the dialog.
     pub on_cancel: EventHandler<()>,
 }
@@ -34,7 +36,7 @@ pub fn NewProjectDialog(props: NewProjectDialogProps) -> Element {
         let n = name.read().trim().to_string();
         let p = path.read().trim().to_string();
         if !n.is_empty() && !p.is_empty() {
-            on_create.call((n, p));
+            on_create.call((n, PathBuf::from(p)));
         }
     };
 
@@ -87,7 +89,7 @@ pub fn NewProjectDialog(props: NewProjectDialogProps) -> Element {
                                 let n = name.read().trim().to_string();
                                 let p = path.read().trim().to_string();
                                 if !n.is_empty() && !p.is_empty() {
-                                    on_create.call((n, p));
+                                    on_create.call((n, PathBuf::from(p)));
                                 }
                             }
                         },

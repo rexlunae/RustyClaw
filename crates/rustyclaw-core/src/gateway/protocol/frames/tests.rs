@@ -4,6 +4,7 @@ use super::*;
 
 mod serialization {
     use super::*;
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn test_server_frame_type_values() {
@@ -93,6 +94,53 @@ mod serialization {
         assert_eq!(ClientFrameType::ThreadUpdate as u8, 79);
     }
 
+    /// Typing the path fields as `PathBuf` did not change the wire format.
+    ///
+    /// serde encodes a path as its UTF-8 `str`, so bincode emits exactly the
+    /// length-prefixed bytes it emitted when these were `String`s — an older
+    /// peer decodes a newer peer's frames unchanged, and vice versa. This is
+    /// the whole basis for calling the change wire-compatible, so it is
+    /// asserted rather than assumed.
+    #[test]
+    fn path_fields_encode_byte_for_byte_like_strings() {
+        #[derive(serde::Serialize)]
+        struct ProjectAsStrings {
+            id: u64,
+            name: String,
+            path: String,
+        }
+
+        let typed = ProjectInfoDto {
+            id: 3,
+            name: "Api".into(),
+            path: PathBuf::from("/srv/api"),
+        };
+        let stringly = ProjectAsStrings {
+            id: 3,
+            name: "Api".into(),
+            path: "/srv/api".into(),
+        };
+        assert_eq!(
+            serialize_frame(&typed).unwrap(),
+            serialize_frame(&stringly).unwrap(),
+        );
+
+        // Including the `Option` case, where the discriminant precedes it.
+        #[derive(serde::Serialize)]
+        struct OverrideAsString(Option<String>);
+
+        for dir in ["/tmp/worktree", ""] {
+            assert_eq!(
+                serialize_frame(&Some(PathBuf::from(dir))).unwrap(),
+                serialize_frame(&OverrideAsString(Some(dir.to_string()))).unwrap(),
+            );
+        }
+        assert_eq!(
+            serialize_frame(&Option::<PathBuf>::None).unwrap(),
+            serialize_frame(&OverrideAsString(None)).unwrap(),
+        );
+    }
+
     #[test]
     fn test_project_update_client_roundtrip() {
         let frame = ClientFrame {
@@ -113,7 +161,7 @@ mod serialization {
             } => {
                 assert_eq!(project_id, 7);
                 assert_eq!(name, "Renamed");
-                assert_eq!(path, "/home/me/moved");
+                assert_eq!(path, Path::new("/home/me/moved"));
             }
             _ => panic!("Expected ProjectUpdate payload"),
         }
@@ -123,7 +171,7 @@ mod serialization {
     fn test_thread_update_client_roundtrip() {
         // Both states of the override have to survive the wire: `None` is how
         // the client says "go back to inheriting the project's directory".
-        for working_dir in [Some("/tmp/worktree".to_string()), None] {
+        for working_dir in [Some(PathBuf::from("/tmp/worktree")), None] {
             let frame = ClientFrame {
                 frame_type: ClientFrameType::ThreadUpdate,
                 payload: ClientPayload::ThreadUpdate {
@@ -181,7 +229,7 @@ mod serialization {
             } => {
                 assert_eq!(projects.len(), 2);
                 assert_eq!(projects[1].name, "Side");
-                assert_eq!(projects[1].path, "/home/me/side");
+                assert_eq!(projects[1].path, Path::new("/home/me/side"));
                 assert_eq!(active_id, 2);
             }
             _ => panic!("Expected ProjectsUpdate payload"),
@@ -202,7 +250,7 @@ mod serialization {
         match decoded.payload {
             ClientPayload::ProjectCreate { name, path } => {
                 assert_eq!(name, "Side");
-                assert_eq!(path, "/home/me/side");
+                assert_eq!(path, Path::new("/home/me/side"));
             }
             _ => panic!("Expected ProjectCreate payload"),
         }

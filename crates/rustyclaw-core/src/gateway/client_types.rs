@@ -6,6 +6,7 @@
 //! [`super::protocol`], which handle the wire format.
 
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 use crate::user_prompt_types::UserPrompt;
 
@@ -462,7 +463,7 @@ pub enum GatewayCommand {
 
     /// Create a new project (a named working directory)
     #[serde(rename = "project_create")]
-    ProjectCreate { name: String, path: String },
+    ProjectCreate { name: String, path: PathBuf },
 
     /// Rename a project
     #[serde(rename = "project_rename")]
@@ -473,7 +474,7 @@ pub enum GatewayCommand {
     ProjectUpdate {
         project_id: u64,
         name: String,
-        path: String,
+        path: PathBuf,
     },
 
     /// Edit a thread's caption and working-directory override. A
@@ -482,7 +483,7 @@ pub enum GatewayCommand {
     ThreadUpdate {
         thread_id: u64,
         label: String,
-        working_dir: Option<String>,
+        working_dir: Option<PathBuf>,
     },
 
     /// Delete a project
@@ -526,7 +527,7 @@ pub enum GatewayCommand {
 
     /// Set the working directory for tool execution
     #[serde(rename = "set_working_directory")]
-    SetWorkingDirectory { path: String },
+    SetWorkingDirectory { path: PathBuf },
 
     /// Store a secret (API key) in the gateway vault
     #[serde(rename = "secrets_store")]
@@ -1683,7 +1684,7 @@ pub struct ThreadInfoDto {
     /// Working-directory override, or `None` when the thread inherits its
     /// project's directory. The edit dialog needs to tell those apart.
     #[serde(default)]
-    pub working_dir: Option<String>,
+    pub working_dir: Option<PathBuf>,
 }
 
 /// Project info from gateway (client-facing).
@@ -1691,7 +1692,8 @@ pub struct ThreadInfoDto {
 pub struct ProjectInfoDto {
     pub id: u64,
     pub name: String,
-    pub path: String,
+    /// The project's working directory.
+    pub path: PathBuf,
 }
 
 /// Agent info from gateway (client-facing).

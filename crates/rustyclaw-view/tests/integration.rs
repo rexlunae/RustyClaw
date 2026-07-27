@@ -163,7 +163,10 @@ fn from_thread_info_preserves_fields() {
     assert_eq!(data.status, "active");
     assert!(data.is_foreground);
     assert_eq!(data.message_count, 128);
-    assert_eq!(data.working_dir.as_deref(), Some("/tmp/worktree"));
+    assert_eq!(
+        data.working_dir.as_deref(),
+        Some(std::path::Path::new("/tmp/worktree"))
+    );
 }
 
 #[test]

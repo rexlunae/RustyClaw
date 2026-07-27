@@ -190,9 +190,9 @@ pub(crate) async fn handle_set_agent_name(
 
 /// Handle a `SetWorkingDirectory`: repoint the workspace and re-register the
 /// sandbox so tool access controls apply to the new location.
-pub(crate) fn handle_set_working_directory(config: &mut Config, path: String) {
-    debug!("Working directory change: {}", path);
-    let new_dir = std::path::PathBuf::from(&path);
+pub(crate) fn handle_set_working_directory(config: &mut Config, path: std::path::PathBuf) {
+    debug!("Working directory change: {}", path.display());
+    let new_dir = path;
     config.workspace_dir = Some(new_dir.clone());
     // Re-register sandbox with the new workspace dir so tool
     // access controls apply to the new location.

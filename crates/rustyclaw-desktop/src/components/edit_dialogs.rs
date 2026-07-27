@@ -8,6 +8,8 @@
 //! Both dialogs are mounted only while open (the caller renders them from an
 //! `Option`), so their fields initialise from the current values every time.
 
+use std::path::PathBuf;
+
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, Button, Buttons, Control, Field, FieldLabel, Help};
 
@@ -27,6 +29,23 @@ async fn pick_folder(start: String) -> Option<String> {
         .map(|folder| folder.path().display().to_string())
 }
 
+/// A path as editable text.
+///
+/// Lossy for a path that isn't valid UTF-8, and unavoidably so — a text input
+/// holds text. Confining the conversion to the dialogs means a path the user
+/// never edits is carried as a `PathBuf` end to end and never laundered.
+fn path_field(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// The text field back to a path. Trimmed, because surrounding whitespace in
+/// a text box is a typo rather than part of a directory name; empty means the
+/// user cleared it.
+fn field_path(text: &str) -> Option<PathBuf> {
+    let trimmed = text.trim();
+    (!trimmed.is_empty()).then(|| PathBuf::from(trimmed))
+}
+
 // ── Project ─────────────────────────────────────────────────────────────────
 
 #[derive(Props, Clone, PartialEq)]
@@ -35,9 +54,9 @@ pub struct EditProjectDialogProps {
     /// Current project name.
     pub name: String,
     /// Current working directory.
-    pub path: String,
+    pub path: PathBuf,
     /// User confirmed: `(project_id, name, path)`.
-    pub on_save: EventHandler<(u64, String, String)>,
+    pub on_save: EventHandler<(u64, String, PathBuf)>,
     /// User dismissed the dialog.
     pub on_cancel: EventHandler<()>,
 }
@@ -45,7 +64,7 @@ pub struct EditProjectDialogProps {
 #[component]
 pub fn EditProjectDialog(props: EditProjectDialogProps) -> Element {
     let mut name = use_signal(|| props.name.clone());
-    let mut path = use_signal(|| props.path.clone());
+    let mut path = use_signal(|| path_field(&props.path));
 
     let project_id = props.project_id;
     let on_save = props.on_save;
@@ -54,8 +73,8 @@ pub fn EditProjectDialog(props: EditProjectDialogProps) -> Element {
     let can_save = !name.read().trim().is_empty() && !path.read().trim().is_empty();
     let submit = move || {
         let n = name.read().trim().to_string();
-        let p = path.read().trim().to_string();
-        if !n.is_empty() && !p.is_empty() {
+        let p = field_path(&path.read());
+        if let (false, Some(p)) = (n.is_empty(), p) {
             on_save.call((project_id, n, p));
         }
     };
@@ -145,13 +164,13 @@ pub struct EditThreadDialogProps {
     pub label: String,
     /// Current working-directory override, or `None` when the thread inherits
     /// its project's directory.
-    pub working_dir: Option<String>,
+    pub working_dir: Option<PathBuf>,
     /// The project directory this thread inherits when it has no override.
     /// Shown so the effective directory is never a mystery.
-    pub project_path: String,
+    pub project_path: PathBuf,
     /// User confirmed: `(thread_id, label, working_dir)`. `None` clears the
     /// override.
-    pub on_save: EventHandler<(u64, String, Option<String>)>,
+    pub on_save: EventHandler<(u64, String, Option<PathBuf>)>,
     /// User dismissed the dialog.
     pub on_cancel: EventHandler<()>,
 }
@@ -162,19 +181,20 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
     // Seed the path field with the inherited directory so switching the
     // override on gives you somewhere to edit from rather than a blank box.
     let mut path = use_signal(|| {
-        props
-            .working_dir
-            .clone()
-            .unwrap_or_else(|| props.project_path.clone())
+        path_field(
+            props
+                .working_dir
+                .as_deref()
+                .unwrap_or(props.project_path.as_path()),
+        )
     });
     let mut overridden = use_signal(|| props.working_dir.is_some());
 
     let thread_id = props.thread_id;
-    let inherited = props.project_path.clone();
-    let inherited_display = if inherited.is_empty() {
+    let inherited_display = if props.project_path.as_os_str().is_empty() {
         "the project's directory".to_string()
     } else {
-        inherited
+        path_field(&props.project_path)
     };
     let on_save = props.on_save;
     let on_cancel = props.on_cancel;
@@ -188,11 +208,11 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
             return;
         }
         let dir = if *overridden.read() {
-            let p = path.read().trim().to_string();
-            if p.is_empty() {
-                return;
+            match field_path(&path.read()) {
+                Some(p) => Some(p),
+                // The override is on but the box is empty — nothing to save.
+                None => return,
             }
-            Some(p)
         } else {
             None
         };

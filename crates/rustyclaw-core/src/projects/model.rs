@@ -57,7 +57,7 @@ impl From<&Project> for ProjectInfo {
         Self {
             id: p.id,
             name: p.name.clone(),
-            path: p.path.display().to_string(),
+            path: p.path.clone(),
         }
     }
 }
@@ -67,5 +67,5 @@ impl From<&Project> for ProjectInfo {
 pub struct ProjectInfo {
     pub id: ProjectId,
     pub name: String,
-    pub path: String,
+    pub path: PathBuf,
 }
