@@ -719,9 +719,9 @@ pub(crate) async fn handle_connection(
                                 let root = config.workspace_dir();
                                 crate::workspace_files::handle_read_file(&mut *writer, &root, path).await?;
                             }
-                            ClientPayload::WorkspaceWriteFile { path, content } => {
+                            ClientPayload::WorkspaceWriteFile { path, content, expected_root } => {
                                 let root = config.workspace_dir();
-                                crate::workspace_files::handle_write_file(&mut *writer, &root, path, content).await?;
+                                crate::workspace_files::handle_write_file(&mut *writer, &root, path, content, expected_root).await?;
                             }
                             ClientPayload::ProjectList => {
                                 project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;

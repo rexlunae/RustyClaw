@@ -29,6 +29,190 @@ pub enum PendingWorkspaceChange {
     Thread(u64),
 }
 
+/// The editor's view of one working directory.
+///
+/// Tagged with the directory it describes, which is what makes a stale path
+/// *unrepresentable* rather than merely wrong. Reads for a different root come
+/// back empty, and replies for a different root are ignored — so nothing has
+/// to remember to clear anything. Four separate bugs came from callers
+/// forgetting exactly that.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct WorkspaceView {
+    /// The directory every path below is relative to. `None` before the first
+    /// listing arrives.
+    root: Option<std::path::PathBuf>,
+    listings: HashMap<std::path::PathBuf, Vec<rustyclaw_core::gateway::WorkspaceEntryDto>>,
+    files: HashMap<std::path::PathBuf, String>,
+    edits: HashMap<std::path::PathBuf, String>,
+    saving: HashMap<std::path::PathBuf, String>,
+    expanded: HashSet<std::path::PathBuf>,
+    open: Vec<std::path::PathBuf>,
+    active: Option<std::path::PathBuf>,
+    /// Bumped on every rebase. The gateway only sends a listing in reply to a
+    /// request, so something must ask again after a move; watching a counter
+    /// rather than "are the listings empty" keeps a directory that genuinely
+    /// lists as empty — or one whose listing failed — from asking forever.
+    generation: u64,
+}
+
+impl WorkspaceView {
+    /// Incremented every time the view rebases.
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    /// The directory this view describes, if it has one yet.
+    pub fn root(&self) -> Option<&std::path::Path> {
+        self.root.as_deref()
+    }
+
+    /// Whether a reply tagged with `root` belongs to this view.
+    ///
+    /// A view with no root yet accepts the first reply and adopts its root:
+    /// that is how it learns where it is.
+    pub fn accepts(&self, root: &std::path::Path) -> bool {
+        match &self.root {
+            Some(current) => current == root,
+            None => true,
+        }
+    }
+
+    /// Learn where this view lives from a reply, when it did not know yet.
+    /// Only ever called after [`Self::accepts`], so it cannot relabel a view
+    /// that already has a root.
+    pub fn adopt_root(&mut self, root: std::path::PathBuf) {
+        if self.root.is_none() {
+            self.root = Some(root);
+        }
+    }
+
+    /// Start over in `root`, returning the files whose edits were unsaved.
+    ///
+    /// A no-op when the root is unchanged, so a spurious call cannot discard
+    /// work — the case that produced two of the four bugs.
+    pub fn rebase(&mut self, root: std::path::PathBuf) -> Vec<std::path::PathBuf> {
+        if self.root.as_ref() == Some(&root) {
+            return Vec::new();
+        }
+        let unsaved = self.unsaved();
+        let generation = self.generation.wrapping_add(1);
+        *self = Self {
+            root: Some(root),
+            generation,
+            ..Self::default()
+        };
+        unsaved
+    }
+
+    /// Forget where we are, so the next reply re-establishes it.
+    ///
+    /// Used when the workspace is known to have moved but not yet to where —
+    /// a thread or project switch, whose new directory only the gateway knows.
+    pub fn rebase_to_current_thread(&mut self) -> Vec<std::path::PathBuf> {
+        let unsaved = self.unsaved();
+        let generation = self.generation.wrapping_add(1);
+        *self = Self {
+            generation,
+            ..Self::default()
+        };
+        unsaved
+    }
+
+    /// Treat every unsaved edit as written.
+    ///
+    /// Used when the user chose Save before moving the workspace: the writes
+    /// are queued and the view is about to be rebased, so waiting for the
+    /// replies would only produce a "discarded" warning for work the user
+    /// explicitly saved. A write that fails still surfaces its own error.
+    pub fn assume_saved(&mut self) {
+        for path in self.unsaved() {
+            if let Some(edited) = self.edits.get(&path).cloned() {
+                self.files.insert(path, edited);
+            }
+        }
+    }
+
+    /// Files with edits that differ from what was loaded.
+    pub fn unsaved(&self) -> Vec<std::path::PathBuf> {
+        let mut files: Vec<std::path::PathBuf> = self
+            .edits
+            .iter()
+            .filter(|(path, edited)| self.files.get(*path) != Some(*edited))
+            .map(|(path, _)| path.clone())
+            .collect();
+        files.sort();
+        files
+    }
+
+    pub fn listings(
+        &self,
+    ) -> &HashMap<std::path::PathBuf, Vec<rustyclaw_core::gateway::WorkspaceEntryDto>> {
+        &self.listings
+    }
+    pub fn files(&self) -> &HashMap<std::path::PathBuf, String> {
+        &self.files
+    }
+    pub fn edits(&self) -> &HashMap<std::path::PathBuf, String> {
+        &self.edits
+    }
+    pub fn expanded(&self) -> &HashSet<std::path::PathBuf> {
+        &self.expanded
+    }
+    pub fn open(&self) -> &[std::path::PathBuf] {
+        &self.open
+    }
+    pub fn active(&self) -> Option<&std::path::Path> {
+        self.active.as_deref()
+    }
+
+    pub fn set_listing(
+        &mut self,
+        path: std::path::PathBuf,
+        entries: Vec<rustyclaw_core::gateway::WorkspaceEntryDto>,
+    ) {
+        self.listings.insert(path, entries);
+    }
+    pub fn set_file(&mut self, path: std::path::PathBuf, content: String) {
+        self.files.insert(path, content);
+    }
+    pub fn set_edit(&mut self, path: std::path::PathBuf, content: String) {
+        self.edits.insert(path, content);
+    }
+    pub fn begin_save(&mut self, path: std::path::PathBuf, content: String) {
+        self.saving.insert(path, content);
+    }
+    /// Reconcile a completed save: the written text becomes the loaded text.
+    pub fn finish_save(&mut self, path: &std::path::Path, ok: bool) {
+        if let (Some(written), true) = (self.saving.remove(path), ok) {
+            self.files.insert(path.to_path_buf(), written);
+        }
+    }
+    /// Toggle a directory open/closed; returns true when it now needs listing.
+    pub fn toggle_dir(&mut self, path: std::path::PathBuf) -> bool {
+        if self.expanded.remove(&path) {
+            return false;
+        }
+        let needs = !self.listings.contains_key(&path);
+        self.expanded.insert(path);
+        needs
+    }
+    pub fn open_file(&mut self, path: std::path::PathBuf) {
+        if !self.open.contains(&path) {
+            self.open.push(path.clone());
+        }
+        self.active = Some(path);
+    }
+    pub fn close_file(&mut self, path: &std::path::Path) {
+        self.open.retain(|p| p != path);
+        if self.active.as_deref() == Some(path) {
+            self.active = self.open.last().cloned();
+        }
+    }
+    pub fn focus(&mut self, path: std::path::PathBuf) {
+        self.active = Some(path);
+    }
+}
+
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Theme {
@@ -165,49 +349,11 @@ pub struct AppState {
     /// directory changes; the editor plugin renders it.
     pub file_browser: rustyclaw_view::FileBrowserData,
 
-    /// Directory listings from the thread's working directory, keyed by the
-    /// directory's path relative to it. Populated by `WorkspaceDirListing`.
-    pub workspace_listings: std::collections::HashMap<
-        std::path::PathBuf,
-        Vec<rustyclaw_core::gateway::WorkspaceEntryDto>,
-    >,
-
-    /// Contents of files opened from the thread's working directory, keyed by
-    /// path relative to it. Populated by `WorkspaceFileContent`.
-    pub workspace_files: std::collections::HashMap<std::path::PathBuf, String>,
-
-    /// Directories the editor's tree has expanded, relative to the thread's
-    /// working directory. The root (`""`) starts expanded.
-    pub editor_expanded: std::collections::HashSet<std::path::PathBuf>,
-
-    /// Files the editor has open, in tab order.
-    pub editor_open: Vec<std::path::PathBuf>,
-
-    /// The tab the editor is showing.
-    pub editor_active: Option<std::path::PathBuf>,
-
-    /// Edited contents, keyed by path. Present only once the user has typed:
-    /// a file with no entry here is unmodified, so `is_dirty` needs no
-    /// separate flag to fall out of sync with.
-    pub editor_edits: std::collections::HashMap<std::path::PathBuf, String>,
-
-    /// Contents of saves the editor has sent but not yet heard back about,
-    /// keyed by path. `WorkspaceWriteResult` reports only path/ok/error, so
-    /// the written text has to be remembered here to reconcile the buffer
-    /// once the save lands.
-    pub editor_saving: std::collections::HashMap<std::path::PathBuf, String>,
+    /// The editor's view of the current working directory.
+    pub workspace: WorkspaceView,
 
     /// A workspace change waiting on the unsaved-changes prompt.
     pub pending_workspace_change: Option<PendingWorkspaceChange>,
-
-    /// Bumped every time the workspace view is reset.
-    ///
-    /// The gateway never pushes a directory listing — it only answers a
-    /// request — so after a reset something has to ask again. Watching a
-    /// counter rather than "is the cache empty" means a directory that
-    /// genuinely lists as empty, or one whose listing failed, does not
-    /// re-request forever.
-    pub workspace_generation: u64,
 
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
@@ -363,15 +509,8 @@ impl Default for AppState {
             directory_selector_error: None,
             left_sidebar_visible: true,
             plugin_dock_visible: true,
-            workspace_listings: Default::default(),
-            workspace_files: Default::default(),
-            editor_expanded: Default::default(),
-            editor_open: Vec::new(),
-            editor_active: None,
-            editor_edits: Default::default(),
-            editor_saving: Default::default(),
+            workspace: WorkspaceView::default(),
             pending_workspace_change: None,
-            workspace_generation: 0,
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
@@ -721,6 +860,24 @@ impl AppState {
             self.thread_messages.insert(outgoing, self.messages.clone());
         }
         self.foreground_thread_id = thread_id;
+
+        // A different foreground thread may run in a different directory, and
+        // this is the one place that learns of the change however it happened
+        // — an explicit switch, a thread being deleted or created, or the
+        // gateway electing a new one. Resetting here rather than in each
+        // caller is what keeps a path from being missed.
+        let dropped = self.workspace.rebase_to_current_thread();
+        if !dropped.is_empty() {
+            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+            self.push_notice(
+                rustyclaw_core::types::MessageRole::Warning,
+                format!(
+                    "The working directory changed with unsaved editor changes; discarded: {}",
+                    names.join(", ")
+                ),
+            );
+        }
+
         if self.foreground_request_in_flight() {
             return;
         }
@@ -759,48 +916,6 @@ impl AppState {
 
     /// Switch to a different thread, saving current messages and
     /// restoring the target thread's history.
-    /// Files the editor has unsaved changes for.
-    ///
-    /// An edit that merely matches what was loaded is not unsaved, so this
-    /// names real losses only — the same rule [`Self::reset_workspace_view`]
-    /// reports by, kept in one place so the prompt and the warning cannot
-    /// disagree about what is at stake.
-    pub fn unsaved_editor_files(&self) -> Vec<std::path::PathBuf> {
-        let mut files: Vec<std::path::PathBuf> = self
-            .editor_edits
-            .iter()
-            .filter(|(path, edited)| self.workspace_files.get(*path) != Some(*edited))
-            .map(|(path, _)| path.clone())
-            .collect();
-        files.sort();
-        files
-    }
-
-    /// Forget everything the editor cached about the workspace.
-    ///
-    /// Every `Workspace*` path is relative to the thread's *current* working
-    /// directory, so a cached tree or an open tab becomes a path into a
-    /// different folder the moment that directory changes — and saving such a
-    /// tab would write stale content over whatever same-named file happens to
-    /// live there. Anything that can repoint the workspace (directory picker,
-    /// thread switch, project switch, reconnect) must call this.
-    ///
-    /// Returns the files that had unsaved edits, so the caller can say what
-    /// was dropped instead of discarding work without a word.
-    pub fn reset_workspace_view(&mut self) -> Vec<std::path::PathBuf> {
-        let unsaved = self.unsaved_editor_files();
-
-        self.workspace_listings.clear();
-        self.workspace_files.clear();
-        self.editor_expanded.clear();
-        self.editor_open.clear();
-        self.editor_active = None;
-        self.editor_edits.clear();
-        self.editor_saving.clear();
-        self.workspace_generation = self.workspace_generation.wrapping_add(1);
-        unsaved
-    }
-
     pub fn switch_thread(&mut self, target_id: u64) {
         // A different thread may run in a different directory (its own
         // override, else its project's), so the editor's view cannot carry
@@ -811,17 +926,10 @@ impl AppState {
         // it switches to a fallback directly — so reporting here rather than
         // trusting the caller means no path can drop work in silence, this one
         // or a future one.
-        let dropped = self.reset_workspace_view();
-        if !dropped.is_empty() {
-            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
-            self.push_notice(
-                rustyclaw_core::types::MessageRole::Warning,
-                format!(
-                    "Left a thread with unsaved editor changes; discarded: {}",
-                    names.join(", ")
-                ),
-            );
-        }
+        // The reset and any warning belong to `set_foreground_thread`, which
+        // the gateway's reply drives — that path sees every foreground change,
+        // including thread deletion, which never reaches here.
+        self.workspace.rebase_to_current_thread();
 
         // Save current thread's messages
         if let Some(current_id) = self.foreground_thread_id
@@ -956,6 +1064,8 @@ fn ui_message_from_gateway(message: protocol::types::ChatMessage) -> ChatMessage
 
 #[cfg(test)]
 mod tests {
+    use std::path::{Path, PathBuf};
+
     use super::*;
     use rustyclaw_core::types::MessageRole;
 
@@ -1133,92 +1243,141 @@ mod tests {
         assert_eq!(s.thread_messages.get(&7).map(VecDeque::len), Some(2));
     }
 
-    /// Every `Workspace*` path is relative to the *current* working directory,
-    /// so a cached tree or open tab from a previous directory is not merely
-    /// stale — saving it would write that content into a same-named file in
-    /// the new directory. Everything must go.
+    /// The property that makes the whole class of "forgot to invalidate" bugs
+    /// impossible: a view knows which directory it describes, so a reply for a
+    /// different one is not merely stale — it is rejected.
     #[test]
-    fn resetting_the_workspace_view_clears_every_editor_cache() {
-        let mut s = AppState::default();
-        let path = std::path::PathBuf::from("src/main.rs");
+    fn a_view_rejects_replies_from_another_directory() {
+        let mut view = WorkspaceView::default();
+        // With no root yet, the first reply establishes one.
+        assert!(view.accepts(Path::new("/srv/api")));
+        view.adopt_root(PathBuf::from("/srv/api"));
 
-        s.workspace_listings
-            .insert(std::path::PathBuf::new(), Vec::new());
-        s.workspace_files.insert(path.clone(), "loaded".into());
-        s.editor_expanded.insert(std::path::PathBuf::from("src"));
-        s.editor_open.push(path.clone());
-        s.editor_active = Some(path.clone());
-        s.editor_edits.insert(path.clone(), "typed".into());
-        s.editor_saving.insert(path.clone(), "in flight".into());
+        assert!(view.accepts(Path::new("/srv/api")));
+        assert!(
+            !view.accepts(Path::new("/srv/other")),
+            "a reply from a directory this view is not looking at must be refused"
+        );
+        // Adopting cannot relabel an established view.
+        view.adopt_root(PathBuf::from("/srv/other"));
+        assert_eq!(view.root(), Some(Path::new("/srv/api")));
+    }
 
-        let dropped = s.reset_workspace_view();
+    /// Rebasing to the same directory is a no-op, so a spurious call — the
+    /// shape of two earlier bugs — cannot throw work away.
+    #[test]
+    fn rebasing_to_the_same_directory_keeps_everything() {
+        let mut view = WorkspaceView::default();
+        view.adopt_root(PathBuf::from("/srv/api"));
+        view.set_file(PathBuf::from("a.rs"), "loaded".into());
+        view.set_edit(PathBuf::from("a.rs"), "typed".into());
+
+        assert!(view.rebase(PathBuf::from("/srv/api")).is_empty());
+        assert_eq!(view.unsaved(), vec![PathBuf::from("a.rs")]);
+    }
+
+    /// Moving to a different directory drops everything and reports the loss.
+    #[test]
+    fn rebasing_elsewhere_reports_and_clears() {
+        let mut view = WorkspaceView::default();
+        view.adopt_root(PathBuf::from("/srv/api"));
+        view.set_file(PathBuf::from("a.rs"), "loaded".into());
+        view.set_edit(PathBuf::from("a.rs"), "typed".into());
+        view.open_file(PathBuf::from("a.rs"));
 
         assert_eq!(
-            dropped,
-            vec![path],
-            "unsaved work is reported, not silently dropped"
+            view.rebase(PathBuf::from("/srv/new")),
+            vec![PathBuf::from("a.rs")]
         );
-        assert!(s.workspace_listings.is_empty());
-        assert!(s.workspace_files.is_empty());
-        assert!(s.editor_expanded.is_empty());
-        assert!(s.editor_open.is_empty());
-        assert!(s.editor_active.is_none());
-        assert!(s.editor_edits.is_empty());
+        assert_eq!(view.root(), Some(Path::new("/srv/new")));
+        assert!(view.open().is_empty());
+        assert!(view.files().is_empty());
+        assert!(view.unsaved().is_empty());
+    }
+
+    /// A save reconciles by promoting the written text; a failed one leaves
+    /// the edit alone so the work can be retried.
+    #[test]
+    fn finishing_a_save_promotes_only_on_success() {
+        let mut view = WorkspaceView::default();
+        let path = PathBuf::from("a.rs");
+        view.set_file(path.clone(), "old".into());
+        view.set_edit(path.clone(), "new".into());
+
+        view.begin_save(path.clone(), "new".into());
+        view.finish_save(&path, true);
         assert!(
-            s.editor_saving.is_empty(),
-            "an in-flight save must not reconcile into the new directory"
+            view.unsaved().is_empty(),
+            "a saved file is no longer unsaved"
+        );
+
+        view.set_edit(path.clone(), "newer".into());
+        view.begin_save(path.clone(), "newer".into());
+        view.finish_save(&path, false);
+        assert_eq!(view.unsaved(), vec![path], "a failed save keeps the work");
+    }
+
+    /// Closing a tab keeps its text: closing is not a way to discard work.
+    #[test]
+    fn closing_a_tab_keeps_unsaved_text() {
+        let mut view = WorkspaceView::default();
+        let path = PathBuf::from("a.rs");
+        view.set_file(path.clone(), "old".into());
+        view.set_edit(path.clone(), "new".into());
+        view.open_file(path.clone());
+
+        view.close_file(&path);
+        assert!(view.open().is_empty());
+        assert_eq!(view.unsaved(), vec![path]);
+    }
+
+    /// Expanding fetches once; collapsing and reopening reuses the listing.
+    #[test]
+    fn toggling_a_directory_fetches_only_the_first_time() {
+        let mut view = WorkspaceView::default();
+        let dir = PathBuf::from("src");
+
+        assert!(view.toggle_dir(dir.clone()), "first expand needs a listing");
+        view.set_listing(dir.clone(), Vec::new());
+        assert!(!view.toggle_dir(dir.clone()), "collapsing fetches nothing");
+        assert!(!view.toggle_dir(dir), "reopening reuses what arrived");
+    }
+
+    /// Deleting or creating a thread never routes through the guarded switch —
+    /// the gateway just reports a new foreground. That path has to invalidate
+    /// the view too, or the editor keeps showing the previous directory.
+    #[test]
+    fn a_foreground_change_from_the_gateway_rebases_the_view() {
+        let mut s = AppState::default();
+        s.foreground_thread_id = Some(1);
+        s.workspace.adopt_root(PathBuf::from("/srv/api"));
+        s.workspace.set_file(PathBuf::from("a.rs"), "loaded".into());
+        s.workspace.open_file(PathBuf::from("a.rs"));
+
+        s.set_foreground_thread(Some(2));
+
+        assert!(s.workspace.open().is_empty(), "stale tabs must not survive");
+        assert!(s.workspace.files().is_empty());
+        assert_eq!(
+            s.workspace.root(),
+            None,
+            "the next reply re-establishes where we are"
         );
     }
 
-    /// A file whose edit matches what was loaded has nothing unsaved, so it is
-    /// not reported as discarded — the warning should name real losses only.
+    /// Choosing Save must not then be told the work was discarded.
     #[test]
-    fn resetting_reports_only_genuinely_unsaved_files() {
-        let mut s = AppState::default();
-        let clean = std::path::PathBuf::from("clean.rs");
-        s.workspace_files.insert(clean.clone(), "same".into());
-        s.editor_edits.insert(clean, "same".into());
+    fn assuming_saved_silences_the_discard_warning() {
+        let mut view = WorkspaceView::default();
+        view.set_file(PathBuf::from("a.rs"), "old".into());
+        view.set_edit(PathBuf::from("a.rs"), "new".into());
+        assert_eq!(view.unsaved(), vec![PathBuf::from("a.rs")]);
 
-        assert!(s.reset_workspace_view().is_empty());
-    }
-
-    /// The prompt and the discard warning must agree about what is at stake,
-    /// so both read from `unsaved_editor_files`.
-    #[test]
-    fn unsaved_files_lists_only_real_changes_and_is_non_destructive() {
-        let mut s = AppState::default();
-        let dirty = std::path::PathBuf::from("b.rs");
-        let clean = std::path::PathBuf::from("a.rs");
-        let fresh = std::path::PathBuf::from("c.rs");
-
-        s.workspace_files.insert(clean.clone(), "same".into());
-        s.editor_edits.insert(clean, "same".into());
-        s.workspace_files.insert(dirty.clone(), "old".into());
-        s.editor_edits.insert(dirty.clone(), "new".into());
-        // Never loaded, but typed into: unsaved.
-        s.editor_edits.insert(fresh.clone(), "typed".into());
-
-        let mut expected = vec![dirty, fresh];
-        expected.sort();
-        assert_eq!(s.unsaved_editor_files(), expected);
-
-        // Asking must not disturb anything — the user may still cancel.
-        assert_eq!(s.editor_edits.len(), 3);
-        assert_eq!(s.unsaved_editor_files(), expected);
-    }
-
-    /// The gateway never pushes a listing, so a reset has to be observable or
-    /// the tree stays blank forever. The counter is what makes it observable.
-    #[test]
-    fn resetting_bumps_the_workspace_generation() {
-        let mut s = AppState::default();
-        let before = s.workspace_generation;
-        s.reset_workspace_view();
-        assert_ne!(s.workspace_generation, before);
-
-        // Every reset is distinct, so consecutive switches each re-fetch.
-        let after_one = s.workspace_generation;
-        s.reset_workspace_view();
-        assert_ne!(s.workspace_generation, after_one);
+        view.assume_saved();
+        assert!(
+            view.unsaved().is_empty(),
+            "queued saves must not be reported as discarded"
+        );
+        assert!(view.rebase_to_current_thread().is_empty());
     }
 }

@@ -164,6 +164,7 @@ pub enum GatewayEvent {
         path: PathBuf,
         entries: Vec<WorkspaceEntryDto>,
         error: Option<String>,
+        root: PathBuf,
     },
 
     /// One file's contents, from inside the thread's working directory.
@@ -171,6 +172,7 @@ pub enum GatewayEvent {
         path: PathBuf,
         content: String,
         error: Option<String>,
+        root: PathBuf,
     },
 
     /// Outcome of writing a file in the thread's working directory.
@@ -178,6 +180,7 @@ pub enum GatewayEvent {
         path: PathBuf,
         ok: bool,
         error: Option<String>,
+        root: PathBuf,
     },
 
     /// Projects updated
@@ -529,7 +532,12 @@ pub enum GatewayCommand {
 
     /// Write a file inside the thread's working directory.
     #[serde(rename = "workspace_write_file")]
-    WorkspaceWriteFile { path: PathBuf, content: String },
+    WorkspaceWriteFile {
+        path: PathBuf,
+        content: String,
+        /// The working directory the client believed it was editing.
+        expected_root: PathBuf,
+    },
 
     /// Delete a project
     #[serde(rename = "project_delete")]
@@ -848,9 +856,17 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::WorkspaceReadFile,
                 payload: ClientPayload::WorkspaceReadFile { path },
             },
-            GatewayCommand::WorkspaceWriteFile { path, content } => ClientFrame {
+            GatewayCommand::WorkspaceWriteFile {
+                path,
+                content,
+                expected_root,
+            } => ClientFrame {
                 frame_type: ClientFrameType::WorkspaceWriteFile,
-                payload: ClientPayload::WorkspaceWriteFile { path, content },
+                payload: ClientPayload::WorkspaceWriteFile {
+                    path,
+                    content,
+                    expected_root,
+                },
             },
             GatewayCommand::ProjectCreate { name, path } => ClientFrame {
                 frame_type: ClientFrameType::ProjectCreate,
@@ -1372,23 +1388,35 @@ impl GatewayEvent {
                 path,
                 entries,
                 error,
+                root,
             } => Some(GatewayEvent::WorkspaceDirListing {
                 path,
                 entries,
                 error,
+                root,
             }),
             ServerPayload::WorkspaceFileContent {
                 path,
                 content,
                 error,
+                root,
             } => Some(GatewayEvent::WorkspaceFileContent {
                 path,
                 content,
                 error,
+                root,
             }),
-            ServerPayload::WorkspaceWriteResult { path, ok, error } => {
-                Some(GatewayEvent::WorkspaceWriteResult { path, ok, error })
-            }
+            ServerPayload::WorkspaceWriteResult {
+                path,
+                ok,
+                error,
+                root,
+            } => Some(GatewayEvent::WorkspaceWriteResult {
+                path,
+                ok,
+                error,
+                root,
+            }),
             ServerPayload::ProjectsUpdate {
                 projects,
                 active_id,
