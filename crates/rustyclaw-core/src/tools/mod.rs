@@ -17,6 +17,7 @@ mod cron_tool;
 mod devices;
 pub mod exo_ai;
 mod file;
+pub mod freenet;
 mod gateway_tools;
 pub(crate) mod helpers;
 #[cfg(feature = "image-gen")]
@@ -580,6 +581,9 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &PLUGIN_STATE_SET,
         &PLUGIN_STATE_PATCH,
         &PLUGIN_CREATE,
+        &FREENET,
+        &RIVER,
+        &ATLAS,
     ]
 }
 
@@ -677,6 +681,9 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
     "nodes",
     "canvas",
     "web_extract",
+    "freenet",
+    "river",
+    "atlas",
     #[cfg(feature = "image-gen")]
     "image_generate",
 ];
@@ -758,6 +765,9 @@ pub async fn execute_tool_streaming(
             "nodes" => devices::exec_nodes_async(args, workspace_dir).await,
             "canvas" => devices::exec_canvas_async(args, workspace_dir).await,
             "web_extract" => web_extract::exec_web_extract_async(args, workspace_dir).await,
+            "freenet" => freenet::exec_freenet_async(args, workspace_dir).await,
+            "river" => freenet::exec_river_async(args, workspace_dir).await,
+            "atlas" => freenet::exec_atlas_async(args, workspace_dir).await,
             #[cfg(feature = "image-gen")]
             "image_generate" => image_gen::exec_image_generate_async(args, workspace_dir).await,
             _ => unreachable!(),

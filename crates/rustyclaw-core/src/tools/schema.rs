@@ -7,8 +7,8 @@ use serde_json::{Value, json};
 
 use super::params::*;
 use super::{
-    ToolDef, ToolParam, all_tools, kernel_tools, mcp_tools, model_tools, plugin, service_tools,
-    subagent_tools, task_tools,
+    ToolDef, ToolParam, all_tools, freenet, kernel_tools, mcp_tools, model_tools, plugin,
+    service_tools, subagent_tools, task_tools, web_extract,
 };
 
 // ── Provider-specific formatters ────────────────────────────────────────────
@@ -163,6 +163,12 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "plugin_state_set" => plugin::plugin_state_set_params(),
         "plugin_state_patch" => plugin::plugin_state_patch_params(),
         "plugin_create" => plugin::plugin_create_params(),
+        // `web_extract` was registered without its params reaching this table,
+        // so providers saw a tool that took no arguments at all.
+        "web_extract" => web_extract::web_extract_params(),
+        "freenet" => freenet::freenet_params(),
+        "river" => freenet::river_params(),
+        "atlas" => freenet::atlas_params(),
         _ => vec![],
     }
 }
