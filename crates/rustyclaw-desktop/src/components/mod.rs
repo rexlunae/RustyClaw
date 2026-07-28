@@ -32,6 +32,7 @@ mod connection;
 mod credential_request;
 mod cron;
 mod device_flow;
+mod dir_picker;
 mod edit_dialogs;
 mod engines;
 mod file_browser;

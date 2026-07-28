@@ -341,21 +341,15 @@ pub(crate) async fn handle_thread_update(
     // is legal, so trimming here could only corrupt a deliberate path.
     let working_dir = working_dir.filter(|d| !d.as_os_str().is_empty());
 
-    if let Some(ref dir) = working_dir {
-        if let Err(message) = crate::helpers::reject_non_utf8_path(dir) {
-            return send_error(writer, message).await;
+    let working_dir = match working_dir {
+        Some(dir) => {
+            match crate::helpers::prepare_workspace_dir(&dir, "thread's working directory") {
+                Ok(dir) => Some(dir),
+                Err(message) => return send_error(writer, message).await,
+            }
         }
-        if let Err(e) = std::fs::create_dir_all(dir) {
-            return send_error(
-                writer,
-                format!(
-                    "Could not use '{}' as the thread's working directory: {e}",
-                    dir.display()
-                ),
-            )
-            .await;
-        }
-    }
+        None => None,
+    };
 
     thread_mgr.rename(id, &label);
     thread_mgr.set_working_dir(id, working_dir);

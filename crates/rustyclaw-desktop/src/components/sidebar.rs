@@ -20,12 +20,10 @@ use super::tone_modifier;
 /// sidebar width; the full path remains available as the row tooltip.
 const PROJECT_PATH_MAX_CHARS: usize = 34;
 
-/// The user's home directory, for collapsing project paths to `~`.
+/// The user's home directory, for collapsing project paths to `~`. Shares the
+/// dialogs' notion of "home" so a path the picker produced collapses here.
 fn home_dir() -> Option<String> {
-    std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()
-        .filter(|h| !h.is_empty())
+    super::dir_picker::home_dir().map(|h| h.display().to_string())
 }
 
 // ── Public top-level component ──────────────────────────────────────────────
