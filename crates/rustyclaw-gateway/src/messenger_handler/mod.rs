@@ -406,6 +406,7 @@ async fn process_incoming_message(
         base_url: model_ctx.base_url.clone(),
         api_key: effective_key,
         messages: messages.clone(),
+        allowed_tools: None,
     };
 
     // Run the agentic tool loop

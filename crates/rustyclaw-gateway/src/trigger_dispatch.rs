@@ -150,6 +150,7 @@ async fn run_inner(
             ChatMessage::text("system", &system_prompt),
             ChatMessage::text("user", &user_message),
         ],
+        allowed_tools: None,
     };
 
     let session_key = format!("trigger:{}", fire.trigger_id);

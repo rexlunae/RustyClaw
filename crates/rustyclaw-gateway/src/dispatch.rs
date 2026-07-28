@@ -994,6 +994,16 @@ pub(crate) async fn dispatch_text_message(
                             execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
                         } else if tools::is_dom_query_tool(&tc.name) {
                             execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
+                        } else if tools::is_subagent_run_tool(&tc.name) {
+                            let config_snapshot = shared_config.read().await.clone();
+                            crate::subagent_runner::execute_subagent_run(
+                                http,
+                                &resolved,
+                                &tc.arguments,
+                                &config_snapshot,
+                                workspace_dir,
+                            )
+                            .await
                         } else {
                             execute_tool_with_live_output(
                                 writer,
@@ -1018,6 +1028,16 @@ pub(crate) async fn dispatch_text_message(
                         execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
                     } else if tools::is_dom_query_tool(&tc.name) {
                         execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
+                    } else if tools::is_subagent_run_tool(&tc.name) {
+                        let config_snapshot = shared_config.read().await.clone();
+                        crate::subagent_runner::execute_subagent_run(
+                            http,
+                            &resolved,
+                            &tc.arguments,
+                            &config_snapshot,
+                            workspace_dir,
+                        )
+                        .await
                     } else {
                         execute_tool_with_live_output(
                             writer,
@@ -1070,7 +1090,7 @@ pub(crate) async fn dispatch_text_message(
             }
 
             // Tools that modify session state should trigger sidebar update
-            const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagents"];
+            const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagent_run"];
             if SESSION_TOOLS.contains(&tc.name.as_str()) && !is_error {
                 send_threads_update(writer, thread_mgr, task_mgr, None).await?;
             }

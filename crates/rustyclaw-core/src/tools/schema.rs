@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::params::*;
 use super::{
     ToolDef, ToolParam, all_tools, kernel_tools, mcp_tools, model_tools, plugin, service_tools,
-    task_tools,
+    subagent_tools, task_tools,
 };
 
 // ── Provider-specific formatters ────────────────────────────────────────────
@@ -68,6 +68,10 @@ fn resolve_params(tool: &ToolDef) -> Vec<ToolParam> {
         "agents_list" => agents_list_params(),
         "agents_create" => agents_create_params(),
         "agents_delete" => agents_delete_params(),
+        "subagent_list" => subagent_tools::subagent_list_params(),
+        "subagent_create" => subagent_tools::subagent_create_params(),
+        "subagent_delete" => subagent_tools::subagent_delete_params(),
+        "subagent_run" => subagent_tools::subagent_run_params(),
         "triggers_create" => triggers_create_params(),
         "triggers_list" => triggers_list_params(),
         "triggers_update" => triggers_update_params(),

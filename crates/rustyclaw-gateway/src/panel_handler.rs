@@ -898,6 +898,7 @@ fn tool_category(name: &str) -> &'static str {
         n if n.starts_with("sessions_")
             || n == "session_status"
             || n.starts_with("agents_")
+            || n.starts_with("subagent_")
             || n.starts_with("triggers_") =>
         {
             "sessions"

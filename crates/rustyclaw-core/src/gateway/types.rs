@@ -82,6 +82,10 @@ pub struct ProviderRequest {
     pub provider: String,
     pub base_url: String,
     pub api_key: Option<String>,
+    /// When set, only these tools are presented to the model (used for
+    /// focused subagent runs). `None` presents the full registry;
+    /// `Some(vec![])` presents no tools at all.
+    pub allowed_tools: Option<Vec<String>>,
 }
 
 // ── Model context (resolved once at startup) ────────────────────────────────

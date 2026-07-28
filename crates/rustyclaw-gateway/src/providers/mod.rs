@@ -149,6 +149,7 @@ pub fn resolve_request(
         provider,
         base_url,
         api_key,
+        allowed_tools: None,
     })
 }
 
@@ -506,6 +507,7 @@ pub async fn compact_conversation(
         provider: resolved.provider.clone(),
         base_url: resolved.base_url.clone(),
         api_key: resolved.api_key.clone(),
+        allowed_tools: Some(Vec::new()),
     };
 
     let summary_result = tokio::time::timeout(
