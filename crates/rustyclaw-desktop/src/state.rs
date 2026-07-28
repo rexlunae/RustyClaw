@@ -1348,8 +1348,10 @@ mod tests {
     /// the view too, or the editor keeps showing the previous directory.
     #[test]
     fn a_foreground_change_from_the_gateway_rebases_the_view() {
-        let mut s = AppState::default();
-        s.foreground_thread_id = Some(1);
+        let mut s = AppState {
+            foreground_thread_id: Some(1),
+            ..AppState::default()
+        };
         s.workspace.adopt_root(PathBuf::from("/srv/api"));
         s.workspace.set_file(PathBuf::from("a.rs"), "loaded".into());
         s.workspace.open_file(PathBuf::from("a.rs"));
