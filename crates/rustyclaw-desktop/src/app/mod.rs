@@ -698,7 +698,25 @@ pub fn App() -> Element {
 
     let on_new_project = move |_| show_new_project.set(true);
 
+    // Drop the editor's cached tree and tabs whenever the workspace may have
+    // moved. Warns rather than discarding unsaved work in silence.
+    let mut reset_workspace_view = move || {
+        let dropped = state.write().reset_workspace_view();
+        if !dropped.is_empty() {
+            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+            state.write().push_notice(
+                MessageRole::Warning,
+                format!(
+                    "Working directory changed with unsaved editor changes; discarded: {}",
+                    names.join(", ")
+                ),
+            );
+        }
+    };
+
     let on_switch_project = move |project_id: u64| {
+        // A different project means a different directory.
+        reset_workspace_view();
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -1362,6 +1380,8 @@ pub fn App() -> Element {
                     on_remove_attachment: on_remove_attachment,
 
                     on_select_directory: move |path: String| {
+                        // Either branch below repoints the workspace.
+                        reset_workspace_view();
                         if path == DIRECTORY_OTHER_SENTINEL {
                             let start_dir = state
                                 .read()

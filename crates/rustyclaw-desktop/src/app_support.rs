@@ -97,6 +97,20 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.is_streaming = false;
             s.is_thinking = false;
             s.streaming_thread_id = None;
+            // The gateway repoints the workspace at the restored foreground
+            // thread's directory on connect, which need not be where the
+            // previous session's editor cache came from.
+            let dropped = s.reset_workspace_view();
+            if !dropped.is_empty() {
+                let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+                s.push_notice(
+                    MessageRole::Warning,
+                    format!(
+                        "Reconnected; discarded unsaved editor changes: {}",
+                        names.join(", ")
+                    ),
+                );
+            }
         }
         GatewayEvent::Disconnected { reason } => {
             let mut s = state.write();
