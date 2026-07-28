@@ -146,6 +146,8 @@ pub(crate) async fn handle_thread_switch(
                             provider: ctx.provider.clone(),
                             base_url: ctx.base_url.clone(),
                             api_key: ctx.api_key.clone(),
+                            // Summarisation never needs tools.
+                            allowed_tools: Some(Vec::new()),
                         };
 
                         let summary_result =

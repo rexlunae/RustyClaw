@@ -358,7 +358,7 @@ fn to_genai_chat_request(req: &ProviderRequest) -> ChatRequest {
     }
 
     let mut chat_req = ChatRequest::new(gen_messages);
-    let tools = tools_for_genai();
+    let tools = tools_for_genai(req.allowed_tools.as_deref());
     if !tools.is_empty() {
         chat_req = chat_req.with_tools(tools);
     }
@@ -490,7 +490,10 @@ fn parse_canonical(content: &str, kind: &str) -> Option<serde_json::Value> {
 
 /// Build genai tool definitions from RustyClaw's tool registry, reusing the
 /// OpenAI function-schema formatter as the source of truth.
-fn tools_for_genai() -> Vec<Tool> {
+///
+/// When `allowed` is set, only the named tools are included — this is how
+/// focused subagent runs restrict what the model can see.
+fn tools_for_genai(allowed: Option<&[String]>) -> Vec<Tool> {
     if std::env::var("RUSTYCLAW_SKIP_TOOLS").is_ok() {
         return Vec::new();
     }
@@ -499,6 +502,11 @@ fn tools_for_genai() -> Vec<Tool> {
         .filter_map(|v| {
             let function = v.get("function")?;
             let name = function.get("name")?.as_str()?.to_string();
+            if let Some(allowed) = allowed {
+                if !allowed.iter().any(|a| a == &name) {
+                    return None;
+                }
+            }
             let mut tool = Tool::new(name);
             if let Some(desc) = function.get("description").and_then(|d| d.as_str()) {
                 tool = tool.with_description(desc.to_string());
@@ -612,6 +620,10 @@ mod tests {
     use super::*;
     use genai::chat::ChatRole;
 
+    /// Serialises tests that read or mutate `RUSTYCLAW_SKIP_TOOLS`, which is
+    /// process-global state.
+    static TOOLS_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn adapter_mapping() {
         assert_eq!(adapter_for("anthropic"), AdapterKind::Anthropic);
@@ -704,6 +716,7 @@ mod tests {
 
     #[test]
     fn to_chat_request_routes_roles_and_tools() {
+        let _guard = TOOLS_ENV_LOCK.lock().unwrap();
         let req = ProviderRequest {
             messages: vec![
                 crate::gateway::ChatMessage::text("system", "be brief"),
@@ -713,6 +726,7 @@ mod tests {
             provider: "openai".to_string(),
             base_url: "https://api.openai.com/v1".to_string(),
             api_key: Some("sk-test".to_string()),
+            allowed_tools: None,
         };
         // Avoid pulling the full tool registry into the assertion.
         unsafe { std::env::set_var("RUSTYCLAW_SKIP_TOOLS", "1") };
@@ -723,5 +737,23 @@ mod tests {
         assert_eq!(chat_req.messages[0].role, ChatRole::System);
         assert_eq!(chat_req.messages[1].role, ChatRole::User);
         assert!(chat_req.tools.is_none());
+    }
+
+    #[test]
+    fn allowed_tools_filter_restricts_registry() {
+        let _guard = TOOLS_ENV_LOCK.lock().unwrap();
+
+        let all = tools_for_genai(None);
+        assert!(all.iter().any(|t| t.name.as_ref() == "read_file"));
+        assert!(all.iter().any(|t| t.name.as_ref() == "subagent_run"));
+
+        let allowed = vec!["read_file".to_string(), "search_files".to_string()];
+        let filtered = tools_for_genai(Some(&allowed));
+        let mut names: Vec<&str> = filtered.iter().map(|t| t.name.as_ref()).collect();
+        names.sort_unstable();
+        assert_eq!(names, vec!["read_file", "search_files"]);
+
+        // An empty allowlist presents no tools at all.
+        assert!(tools_for_genai(Some(&[])).is_empty());
     }
 }

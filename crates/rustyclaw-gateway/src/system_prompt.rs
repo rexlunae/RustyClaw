@@ -209,11 +209,21 @@ If low confidence after search, mention that you checked but didn't find a match
 - Long-running: `execute_command(command=\"...\", background=true)` then `process(action=\"poll\", session_id=\"...\")`
 - Interactive TTY: use `pty=true` for commands needing terminal
 
-### Sub-Agents
-Spawn sub-agents for complex or time-consuming tasks:
-- `sessions_spawn(task=\"...\", model=\"...\")` — runs asynchronously
-- Results auto-announce when complete — no polling needed
-- Use cheaper models for simple tasks (llama3.2, claude-haiku)
+### Sub-Agents (focused delegation)
+Delegate well-scoped work to a focused subagent with `subagent_run`. A subagent
+runs with ONLY its profile's system prompt, the task, and the context you pass —
+it cannot see this conversation, and it only gets the profile's minimal toolset.
+This keeps it focused and undistracted.
+- `subagent_list()` — see profiles: code-writer, code-reviewer, bug-hunter,
+  test-writer, researcher, doc-writer, plus custom ones
+- `subagent_run(profile=\"code-reviewer\", task=\"...\", context=\"...\")` — runs the
+  subagent to completion and returns its report as the tool result
+- Feed ALL relevant context explicitly (file paths, findings, constraints,
+  error output) — the subagent starts from nothing
+- `subagent_create(...)` — define a new profile when a recurring job doesn't fit
+  an existing one; keep its toolset minimal
+- `sessions_spawn(task=\"...\")` remains available for coarse, session-based
+  delegation to full agents
 
 ### Code-Aware Tools (AST-Level)
 **Prefer `ast_grep_manage` over grep/edit for structural code operations.**

@@ -33,6 +33,7 @@ mod secrets_tools;
 mod sessions_tools;
 mod skill_curator;
 mod skills_tools;
+pub mod subagent_tools;
 mod swarm_tools;
 mod sysadmin;
 mod system_tools;
@@ -107,6 +108,11 @@ use sessions_tools::{
 // Agent management operations
 mod agent_tools;
 use agent_tools::{exec_agents_create, exec_agents_delete};
+
+// Subagent profile operations
+use subagent_tools::{
+    exec_subagent_create, exec_subagent_delete, exec_subagent_list, exec_subagent_run_stub,
+};
 
 // Trigger management operations
 mod trigger_tools;
@@ -312,6 +318,10 @@ pub fn tool_summary(name: &str) -> &'static str {
         "agents_list" => "List available agent types",
         "agents_create" => "Create a new persistent agent in this installation",
         "agents_delete" => "Delete a persistent agent and its state",
+        "subagent_list" => "List focused subagent profiles",
+        "subagent_create" => "Create a custom focused subagent profile",
+        "subagent_delete" => "Delete a custom subagent profile",
+        "subagent_run" => "Run a focused subagent and return its result",
         "triggers_create" => "Create an external trigger that fires an agent",
         "triggers_list" => "List external triggers",
         "triggers_update" => "Update an external trigger's code or settings",
@@ -471,6 +481,10 @@ pub fn all_tools() -> Vec<&'static ToolDef> {
         &AGENTS_LIST,
         &AGENTS_CREATE,
         &AGENTS_DELETE,
+        &SUBAGENT_LIST,
+        &SUBAGENT_CREATE,
+        &SUBAGENT_DELETE,
+        &SUBAGENT_RUN,
         &TRIGGERS_CREATE,
         &TRIGGERS_LIST,
         &TRIGGERS_UPDATE,
@@ -613,6 +627,13 @@ pub fn is_user_prompt_tool(name: &str) -> bool {
 /// the gateway → desktop client → gateway → tool-result path.
 pub fn is_dom_query_tool(name: &str) -> bool {
     name == "client_dom_query"
+}
+
+/// Returns `true` for the subagent-run tool that must be intercepted by the
+/// gateway dispatch loop, which holds the model credentials needed to drive
+/// the subagent's own tool loop.
+pub fn is_subagent_run_tool(name: &str) -> bool {
+    name == "subagent_run"
 }
 
 /// Tools that have native async implementations.

@@ -245,6 +245,47 @@ pub static AGENTS_DELETE: ToolDef = ToolDef {
     execute: exec_agents_delete,
 };
 
+pub static SUBAGENT_LIST: ToolDef = ToolDef {
+    name: "subagent_list",
+    description: "List subagent profiles: focused agents with a narrow system prompt and a \
+                  minimal toolset, run synchronously with subagent_run. Built-in profiles \
+                  cover common jobs (code-writer, code-reviewer, bug-hunter, test-writer, \
+                  researcher, doc-writer); custom profiles can be added with subagent_create.",
+    parameters: vec![],
+    execute: exec_subagent_list,
+};
+
+pub static SUBAGENT_CREATE: ToolDef = ToolDef {
+    name: "subagent_create",
+    description: "Create a custom subagent profile: a focused system prompt plus a minimal \
+                  tool allowlist. Create a profile when a recurring job doesn't fit any \
+                  existing profile (see subagent_list first). Keep the toolset as small as \
+                  the job allows — focus is the point.",
+    parameters: vec![],
+    execute: exec_subagent_create,
+};
+
+pub static SUBAGENT_DELETE: ToolDef = ToolDef {
+    name: "subagent_delete",
+    description: "Delete a custom subagent profile. Built-in profiles cannot be deleted.",
+    parameters: vec![],
+    execute: exec_subagent_delete,
+};
+
+pub static SUBAGENT_RUN: ToolDef = ToolDef {
+    name: "subagent_run",
+    description: "Run a focused subagent and get its result back as this tool's output. The \
+                  subagent starts fresh with only the profile's system prompt, the task, and \
+                  the context you pass — it cannot see this conversation, and its model calls \
+                  only expose the profile's small toolset. Use it to delegate well-scoped \
+                  work (implementing a change, reviewing code, hunting a bug, research) \
+                  without dragging the full conversation and tool registry along. Feed it \
+                  ALL relevant context explicitly (file paths, findings, constraints); \
+                  the run blocks until the subagent finishes.",
+    parameters: vec![],
+    execute: exec_subagent_run_stub,
+};
+
 pub static TRIGGERS_CREATE: ToolDef = ToolDef {
     name: "triggers_create",
     description: "Create an external trigger: a small program (script) the gateway runs as a \

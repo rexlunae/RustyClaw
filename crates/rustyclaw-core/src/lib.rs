@@ -62,6 +62,7 @@ pub mod steel_memory;
 #[cfg(feature = "semantic-memory")]
 pub mod steel_memory_indexer;
 pub mod streaming;
+pub mod subagents;
 pub mod subconscious;
 pub mod swarm;
 pub mod tasks;

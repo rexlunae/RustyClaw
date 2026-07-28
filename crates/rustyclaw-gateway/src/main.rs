@@ -31,6 +31,7 @@ mod service_handler;
 mod session;
 mod skills_handler;
 mod ssh;
+mod subagent_runner;
 mod system_prompt;
 mod task_handler;
 mod thread_handler;

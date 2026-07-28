@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Focused subagents: narrow profiles, restricted toolsets, real runs.**
+  The main agent can now delegate well-scoped work to *focused subagents*
+  via a new `subagent_run` tool. A subagent runs from a **profile** — a
+  tight, job-specific system prompt plus an explicit tool allowlist — and
+  starts with no conversation history: it sees only the task and the
+  context the main agent explicitly feeds it, and its model calls only
+  present the profile's tools (a new `ProviderRequest::allowed_tools`
+  filter; previously every model call carried the entire ~120-tool
+  registry). Built-in profiles cover common jobs — `code-writer`,
+  `code-reviewer`, `bug-hunter`, `test-writer`, `researcher`,
+  `doc-writer` — and the main agent can define custom profiles on demand
+  with `subagent_create` (persisted under `<settings_dir>/subagents/`,
+  validated against the tool registry; interactive, agent-management, and
+  installation-level tools are rejected from subagent toolsets).
+  `subagent_list` shows every profile with its toolset, `subagent_delete`
+  removes custom ones. Runs execute in a headless gateway tool loop that
+  enforces the allowlist and the user's per-tool permission policy
+  (anything not `Allow` is refused — no user is present to approve),
+  honors the shared rate limiter, records the run in the session manager
+  (visible via `sessions_list` / `sessions_history`), and returns the
+  subagent's final report to the parent as the tool result. Thread and
+  compaction summarisation requests now present no tools at all via the
+  same mechanism.
+
 - **Engines dialog: per-engine tabs and live install output.** The Local
   Engines & Models dialog now renders one tab per detected engine (←/→ or
   Tab to switch in the TUI; a Bulma tab strip on desktop), so each
