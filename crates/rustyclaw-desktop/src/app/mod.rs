@@ -10,7 +10,7 @@ use crate::components::{
 };
 
 use crate::app_support::*;
-use crate::state::AppState;
+use crate::state::{AppState, PendingWorkspaceChange};
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
@@ -698,33 +698,92 @@ pub fn App() -> Element {
 
     let on_new_project = move |_| show_new_project.set(true);
 
-    // Drop the editor's cached tree and tabs whenever the workspace may have
-    // moved. Warns rather than discarding unsaved work in silence.
-    let mut reset_workspace_view = move || {
-        let dropped = state.write().reset_workspace_view();
-        if !dropped.is_empty() {
-            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
-            state.write().push_notice(
-                MessageRole::Warning,
-                format!(
-                    "Working directory changed with unsaved editor changes; discarded: {}",
-                    names.join(", ")
-                ),
-            );
+    // ── Workspace changes and unsaved editor work ───────────────────────
+    //
+    // Anything that repoints the working directory invalidates every path the
+    // editor holds, so unsaved changes cannot come along. `guard` defers the
+    // change behind a prompt when there is work at stake; `apply` performs it
+    // once there is nothing to lose (or the user has said to go ahead).
+    let mut apply_workspace_change = move |change: PendingWorkspaceChange| {
+        state.write().reset_workspace_view();
+        let gw = gateway.read().clone();
+        match change {
+            PendingWorkspaceChange::Directory(path) => match std::env::set_current_dir(&path) {
+                Ok(()) => {
+                    let options = build_directory_options(&path);
+                    {
+                        let mut s = state.write();
+                        s.working_directory = Some(path.clone());
+                        s.available_directories = options;
+                        s.file_browser = rustyclaw_view::FileBrowserData::load(&path);
+                        s.directory_selector_expanded = false;
+                        s.directory_selector_error = None;
+                        s.push_notice(
+                            MessageRole::Info,
+                            format!("Working directory set to {}", display_path(&path)),
+                        );
+                    }
+                    if let Some(client) = gw {
+                        let p = std::path::PathBuf::from(path);
+                        spawn(async move {
+                            if let Err(e) = client
+                                .send(GatewayCommand::SetWorkingDirectory { path: p })
+                                .await
+                            {
+                                tracing::error!(error = %e, "SetWorkingDirectory send failed");
+                            }
+                        });
+                    }
+                }
+                Err(e) => {
+                    state.write().directory_selector_error =
+                        Some(format!("Failed to change directory: {}", e));
+                }
+            },
+            PendingWorkspaceChange::Project(project_id) => {
+                if let Some(client) = gw {
+                    spawn(async move {
+                        if let Err(e) = client
+                            .send(GatewayCommand::ProjectSwitch { project_id })
+                            .await
+                        {
+                            tracing::error!(error = %e, "ProjectSwitch send failed");
+                        }
+                    });
+                }
+            }
+            PendingWorkspaceChange::Thread(thread_id) => {
+                if let Some(client) = gw {
+                    spawn(async move {
+                        let _ = client
+                            .send(GatewayCommand::ThreadSwitch { thread_id })
+                            .await;
+                        tracing::info!(
+                            thread_id,
+                            "Desktop requesting thread history after ThreadSwitch"
+                        );
+                        let _ = client
+                            .send(GatewayCommand::ThreadHistoryRequest { thread_id })
+                            .await;
+                    });
+                }
+                state.write().switch_thread(thread_id);
+            }
+        }
+    };
+
+    // Apply now when nothing is at stake; otherwise park it behind the prompt.
+    let mut guard_workspace_change = move |change: PendingWorkspaceChange| {
+        if state.read().unsaved_editor_files().is_empty() {
+            apply_workspace_change(change);
+        } else {
+            state.write().pending_workspace_change = Some(change);
         }
     };
 
     let on_switch_project = move |project_id: u64| {
         // A different project means a different directory.
-        reset_workspace_view();
-        let gw = gateway.read().clone();
-        if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
-                    .send(GatewayCommand::ProjectSwitch { project_id })
-                    .await;
-            });
-        }
+        guard_workspace_change(PendingWorkspaceChange::Project(project_id));
     };
 
     let on_rename_project = move |(project_id, new_name): (u64, String)| {
@@ -755,24 +814,9 @@ pub fn App() -> Element {
     };
 
     let on_switch_thread = move |thread_id: u64| {
-        let gw = gateway.read().clone();
-        if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
-                    .send(GatewayCommand::ThreadSwitch { thread_id })
-                    .await;
-                // Pull authoritative history from the gateway so this
-                // client reflects work done from any other session.
-                tracing::info!(
-                    thread_id,
-                    "Desktop requesting thread history after ThreadSwitch"
-                );
-                let _ = client
-                    .send(GatewayCommand::ThreadHistoryRequest { thread_id })
-                    .await;
-            });
-        }
-        state.write().switch_thread(thread_id);
+        // A thread may pin its own working directory, so this can move the
+        // workspace out from under the editor.
+        guard_workspace_change(PendingWorkspaceChange::Thread(thread_id));
     };
 
     let on_rename_thread = move |(thread_id, new_label): (u64, String)| {
@@ -1380,8 +1424,6 @@ pub fn App() -> Element {
                     on_remove_attachment: on_remove_attachment,
 
                     on_select_directory: move |path: String| {
-                        // Either branch below repoints the workspace.
-                        reset_workspace_view();
                         if path == DIRECTORY_OTHER_SENTINEL {
                             let start_dir = state
                                 .read()
@@ -1389,94 +1431,22 @@ pub fn App() -> Element {
                                 .clone()
                                 .unwrap_or_else(|| ".".to_string());
                             spawn(async move {
-                                let picked = rfd::AsyncFileDialog::new()
+                                match rfd::AsyncFileDialog::new()
                                     .set_directory(start_dir)
                                     .pick_folder()
-                                    .await;
-                                if let Some(folder) = picked {
-                                    let selected = folder.path().display().to_string();
-                                    match std::env::set_current_dir(&selected) {
-                                        Ok(()) => {
-                                            let options = build_directory_options(&selected);
-                                            {
-                                                let mut s = state.write();
-                                                s.working_directory = Some(selected.clone());
-                                                s.available_directories = options;
-                                                s.file_browser =
-                                                    rustyclaw_view::FileBrowserData::load(
-                                                        &selected,
-                                                    );
-                                                s.directory_selector_expanded = false;
-                                                s.directory_selector_error = None;
-                                                s.push_notice(
-                                                    MessageRole::Info,
-                                                    format!(
-                                                        "Working directory set to {}",
-                                                        display_path(&selected)
-                                                    ),
-                                                );
-                                            }
-                                            // Tell the gateway so agent tools use the new dir.
-                                            // Guard must be dropped before .await to avoid
-                                            // panics if Dioxus re-renders during suspension.
-                                            let gw = gateway.read().clone();
-                                            if let Some(client) = gw {
-                                                let path =
-                                                    std::path::PathBuf::from(selected.clone());
-                                                let _ = client
-                                                    .send(GatewayCommand::SetWorkingDirectory {
-                                                        path,
-                                                    })
-                                                    .await;
-                                            }
-                                        }
-                                        Err(e) => {
-                                            let mut s = state.write();
-                                            s.directory_selector_error = Some(format!(
-                                                "Failed to change directory: {}",
-                                                e
-                                            ));
-                                        }
-                                    }
-                                } else {
-                                    state.write().directory_selector_expanded = false;
+                                    .await
+                                {
+                                    Some(folder) => guard_workspace_change(
+                                        PendingWorkspaceChange::Directory(
+                                            folder.path().display().to_string(),
+                                        ),
+                                    ),
+                                    None => state.write().directory_selector_expanded = false,
                                 }
                             });
                             return;
                         }
-
-                        match std::env::set_current_dir(&path) {
-                            Ok(()) => {
-                                let options = build_directory_options(&path);
-                                let mut s = state.write();
-                                s.working_directory = Some(path.clone());
-                                s.available_directories = options;
-                                s.file_browser = rustyclaw_view::FileBrowserData::load(&path);
-                                s.directory_selector_expanded = false;
-                                s.directory_selector_error = None;
-                                s.push_notice(
-                                    MessageRole::Info,
-                                    format!("Working directory set to {}", display_path(&path)),
-                                );
-                                // Tell the gateway so agent tools use the new dir.
-                                let gw = gateway.read().clone();
-                                if let Some(client) = gw {
-                                    let p = std::path::PathBuf::from(path.clone());
-                                    spawn(async move {
-                                        let _ = client
-                                            .send(GatewayCommand::SetWorkingDirectory { path: p })
-                                            .await;
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                let mut s = state.write();
-                                s.directory_selector_error = Some(format!(
-                                    "Failed to change directory: {}",
-                                    e
-                                ));
-                            }
-                        }
+                        guard_workspace_change(PendingWorkspaceChange::Directory(path));
                     },
                 }
             }
@@ -1639,6 +1609,70 @@ pub fn App() -> Element {
                             }
                         }
                     })
+            }
+
+            // Unsaved-changes prompt, gating any workspace change.
+            {
+                state.read().pending_workspace_change.clone().map(|change| {
+                    let files = state.read().unsaved_editor_files();
+                    let destination = match &change {
+                        PendingWorkspaceChange::Directory(path) => display_path(path),
+                        PendingWorkspaceChange::Project(_) => "another project".to_string(),
+                        PendingWorkspaceChange::Thread(_) => "another thread".to_string(),
+                    };
+                    rsx! {
+                        crate::components::UnsavedChangesDialog {
+                            files,
+                            destination,
+                            on_choose: move |choice: crate::components::UnsavedChoice| {
+                                use crate::components::UnsavedChoice as C;
+                                let change = change.clone();
+                                state.write().pending_workspace_change = None;
+                                match choice {
+                                    // Nothing moves, so nothing is lost.
+                                    C::Cancel => {}
+                                    C::Discard => apply_workspace_change(change),
+                                    C::Save => {
+                                        // The gateway handles a connection's frames in
+                                        // order, so writes queued before the repoint
+                                        // resolve against the directory they were
+                                        // written in. Failures still surface as error
+                                        // notices from WorkspaceWriteResult.
+                                        let pending: Vec<(std::path::PathBuf, String)> = {
+                                            let s = state.read();
+                                            s.unsaved_editor_files()
+                                                .into_iter()
+                                                .filter_map(|p| {
+                                                    s.editor_edits.get(&p).map(|c| (p, c.clone()))
+                                                })
+                                                .collect()
+                                        };
+                                        let gw = gateway.read().clone();
+                                        if let Some(client) = gw {
+                                            spawn(async move {
+                                                for (path, content) in pending {
+                                                    if let Err(e) = client
+                                                        .send(GatewayCommand::WorkspaceWriteFile {
+                                                            path,
+                                                            content,
+                                                        })
+                                                        .await
+                                                    {
+                                                        tracing::error!(
+                                                            error = %e,
+                                                            "Save-before-switch write failed to send"
+                                                        );
+                                                    }
+                                                }
+                                            });
+                                        }
+                                        apply_workspace_change(change);
+                                    }
+                                }
+                            },
+                        }
+                    }
+                })
             }
 
             // Modals

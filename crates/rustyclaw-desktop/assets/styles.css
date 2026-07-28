@@ -1903,6 +1903,20 @@ body,
     }
 }
 
+/* Unsaved-changes prompt */
+.unsaved-list {
+    margin-top: 8px;
+    max-height: 180px;
+    overflow: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: var(--rc-text-muted);
+}
+
+.unsaved-list li {
+    padding: 1px 0;
+}
+
 /* ── Plugin panel ────────────────────────────────────────────────────────── */
 /* None of these had styles before: plugin state never reached a client, so the
    panel never rendered and nothing was ever missed. */

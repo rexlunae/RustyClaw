@@ -52,6 +52,7 @@ mod swarm_panel;
 mod system_info;
 mod tool_approval;
 mod tools_config;
+mod unsaved_changes;
 mod user_prompt;
 mod vault_unlock;
 
@@ -88,6 +89,7 @@ pub use swarm_panel::SwarmPanel;
 pub use system_info::SystemInfoDialog;
 pub use tool_approval::ToolApprovalDialog;
 pub use tools_config::ToolsConfigDialog;
+pub use unsaved_changes::{UnsavedChangesDialog, UnsavedChoice};
 pub use vault_unlock::VaultUnlockDialog;
 
 /// Copy text to the system clipboard via the webview's Clipboard API.
