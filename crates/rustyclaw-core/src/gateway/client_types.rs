@@ -17,7 +17,7 @@ pub use crate::gateway::protocol::ServiceInfoDto;
 pub use crate::gateway::protocol::frames::{
     ChannelStatusDto, CronJobDto, EngineInfoDto, EngineModelDto, HistoryEntryDto, McpServerDto,
     MemoryEntryDto, ModelUsageDto, PluginActionDto, PluginInfoDto, SessionUsageDto, ToolConfigDto,
-    UsageTotalsDto,
+    UsageTotalsDto, WorkspaceEntryDto,
 };
 
 // ── Events (server → client) ────────────────────────────────────────────────
@@ -158,6 +158,27 @@ pub enum GatewayEvent {
 
     /// Plugin list and state updated.
     PluginsUpdate { plugins: Vec<PluginInfoDto> },
+
+    /// One directory's entries, inside the thread's working directory.
+    WorkspaceDirListing {
+        path: PathBuf,
+        entries: Vec<WorkspaceEntryDto>,
+        error: Option<String>,
+    },
+
+    /// One file's contents, from inside the thread's working directory.
+    WorkspaceFileContent {
+        path: PathBuf,
+        content: String,
+        error: Option<String>,
+    },
+
+    /// Outcome of writing a file in the thread's working directory.
+    WorkspaceWriteResult {
+        path: PathBuf,
+        ok: bool,
+        error: Option<String>,
+    },
 
     /// Projects updated
     ProjectsUpdate {
@@ -498,6 +519,18 @@ pub enum GatewayCommand {
     #[serde(rename = "plugin_refresh")]
     PluginRefresh { plugin_name: String },
 
+    /// List a directory inside the thread's working directory.
+    #[serde(rename = "workspace_list_dir")]
+    WorkspaceListDir { path: PathBuf },
+
+    /// Read a file inside the thread's working directory.
+    #[serde(rename = "workspace_read_file")]
+    WorkspaceReadFile { path: PathBuf },
+
+    /// Write a file inside the thread's working directory.
+    #[serde(rename = "workspace_write_file")]
+    WorkspaceWriteFile { path: PathBuf, content: String },
+
     /// Delete a project
     #[serde(rename = "project_delete")]
     ProjectDelete { project_id: u64 },
@@ -806,6 +839,18 @@ impl GatewayCommand {
             GatewayCommand::PluginRefresh { plugin_name } => ClientFrame {
                 frame_type: ClientFrameType::PluginRefresh,
                 payload: ClientPayload::PluginRefresh { plugin_name },
+            },
+            GatewayCommand::WorkspaceListDir { path } => ClientFrame {
+                frame_type: ClientFrameType::WorkspaceListDir,
+                payload: ClientPayload::WorkspaceListDir { path },
+            },
+            GatewayCommand::WorkspaceReadFile { path } => ClientFrame {
+                frame_type: ClientFrameType::WorkspaceReadFile,
+                payload: ClientPayload::WorkspaceReadFile { path },
+            },
+            GatewayCommand::WorkspaceWriteFile { path, content } => ClientFrame {
+                frame_type: ClientFrameType::WorkspaceWriteFile,
+                payload: ClientPayload::WorkspaceWriteFile { path, content },
             },
             GatewayCommand::ProjectCreate { name, path } => ClientFrame {
                 frame_type: ClientFrameType::ProjectCreate,
@@ -1322,6 +1367,27 @@ impl GatewayEvent {
             }),
             ServerPayload::PluginsUpdate { plugins } => {
                 Some(GatewayEvent::PluginsUpdate { plugins })
+            }
+            ServerPayload::WorkspaceDirListing {
+                path,
+                entries,
+                error,
+            } => Some(GatewayEvent::WorkspaceDirListing {
+                path,
+                entries,
+                error,
+            }),
+            ServerPayload::WorkspaceFileContent {
+                path,
+                content,
+                error,
+            } => Some(GatewayEvent::WorkspaceFileContent {
+                path,
+                content,
+                error,
+            }),
+            ServerPayload::WorkspaceWriteResult { path, ok, error } => {
+                Some(GatewayEvent::WorkspaceWriteResult { path, ok, error })
             }
             ServerPayload::ProjectsUpdate {
                 projects,

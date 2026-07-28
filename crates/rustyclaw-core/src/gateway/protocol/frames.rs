@@ -173,6 +173,12 @@ pub enum ClientFrameType {
     PluginList = 80,
     /// Re-read one plugin's state from disk and push it back.
     PluginRefresh = 81,
+    /// List a directory inside the thread's working directory.
+    WorkspaceListDir = 82,
+    /// Read a file inside the thread's working directory.
+    WorkspaceReadFile = 83,
+    /// Write a file inside the thread's working directory.
+    WorkspaceWriteFile = 84,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -355,6 +361,12 @@ pub enum ServerFrameType {
     ProviderModelListResult = 85,
     /// The gateway's plugin list with each plugin's current state.
     PluginsUpdate = 86,
+    /// Result of a `WorkspaceListDir`.
+    WorkspaceDirListing = 87,
+    /// Result of a `WorkspaceReadFile`.
+    WorkspaceFileContent = 88,
+    /// Result of a `WorkspaceWriteFile`.
+    WorkspaceWriteResult = 89,
 }
 
 /// Status frame sub-types.
@@ -855,6 +867,26 @@ pub enum ClientPayload {
     PluginRefresh {
         plugin_name: String,
     },
+    // ── Workspace file access ─────────────────────────────────────────────
+    //
+    // Client-driven file I/O for editor-style UI, confined to the foreground
+    // thread's effective working directory. Distinct from the agent's file
+    // tools: those run under the sandbox policy, which permits anything not
+    // explicitly denied, whereas these refuse everything outside the thread's
+    // directory. `path` is always relative to that directory.
+    /// List one directory.
+    WorkspaceListDir {
+        path: PathBuf,
+    },
+    /// Read one file's contents.
+    WorkspaceReadFile {
+        path: PathBuf,
+    },
+    /// Overwrite one file's contents.
+    WorkspaceWriteFile {
+        path: PathBuf,
+        content: String,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1315,6 +1347,26 @@ pub enum ServerPayload {
     /// on request, and after a refresh.
     PluginsUpdate {
         plugins: Vec<PluginInfoDto>,
+    },
+    /// One directory's entries. `error` is set when the listing was refused
+    /// or failed, in which case `entries` is empty.
+    WorkspaceDirListing {
+        path: PathBuf,
+        entries: Vec<WorkspaceEntryDto>,
+        error: Option<String>,
+    },
+    /// One file's contents. `error` is set when the read was refused or
+    /// failed, in which case `content` is empty.
+    WorkspaceFileContent {
+        path: PathBuf,
+        content: String,
+        error: Option<String>,
+    },
+    /// Outcome of a write. `error` carries the reason when `ok` is false.
+    WorkspaceWriteResult {
+        path: PathBuf,
+        ok: bool,
+        error: Option<String>,
     },
 }
 

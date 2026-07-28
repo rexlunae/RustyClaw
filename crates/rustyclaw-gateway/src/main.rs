@@ -38,6 +38,7 @@ mod thread_updates;
 mod tool_executor;
 mod trigger_dispatch;
 mod trigger_manager;
+mod workspace_files;
 
 use std::io::IsTerminal;
 use std::sync::Arc;

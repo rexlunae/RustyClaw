@@ -149,6 +149,17 @@ pub struct AppState {
     /// directory changes; the editor plugin renders it.
     pub file_browser: rustyclaw_view::FileBrowserData,
 
+    /// Directory listings from the thread's working directory, keyed by the
+    /// directory's path relative to it. Populated by `WorkspaceDirListing`.
+    pub workspace_listings: std::collections::HashMap<
+        std::path::PathBuf,
+        Vec<rustyclaw_core::gateway::WorkspaceEntryDto>,
+    >,
+
+    /// Contents of files opened from the thread's working directory, keyed by
+    /// path relative to it. Populated by `WorkspaceFileContent`.
+    pub workspace_files: std::collections::HashMap<std::path::PathBuf, String>,
+
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
 
@@ -303,6 +314,8 @@ impl Default for AppState {
             directory_selector_error: None,
             left_sidebar_visible: true,
             plugin_dock_visible: true,
+            workspace_listings: Default::default(),
+            workspace_files: Default::default(),
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)

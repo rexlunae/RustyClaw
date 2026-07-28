@@ -211,6 +211,61 @@ mod serialization {
     }
 
     #[test]
+    fn test_workspace_file_frames_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::WorkspaceDirListing,
+            payload: ServerPayload::WorkspaceDirListing {
+                path: PathBuf::from("src"),
+                entries: vec![WorkspaceEntryDto {
+                    path: PathBuf::from("src/main.rs"),
+                    name: "main.rs".into(),
+                    is_dir: false,
+                    size: 12,
+                }],
+                error: None,
+            },
+        };
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::WorkspaceDirListing { entries, error, .. } => {
+                assert!(error.is_none());
+                assert_eq!(entries[0].name, "main.rs");
+                assert_eq!(entries[0].path, Path::new("src/main.rs"));
+                assert_eq!(entries[0].size, 12);
+            }
+            _ => panic!("Expected WorkspaceDirListing payload"),
+        }
+
+        // A refusal must survive the wire too — it is the only way the user
+        // learns why an open did nothing.
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::WorkspaceFileContent,
+            payload: ServerPayload::WorkspaceFileContent {
+                path: PathBuf::from("../secret"),
+                content: String::new(),
+                error: Some("outside this thread's working directory".into()),
+            },
+        };
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::WorkspaceFileContent { content, error, .. } => {
+                assert!(content.is_empty());
+                assert!(error.unwrap().contains("outside"));
+            }
+            _ => panic!("Expected WorkspaceFileContent payload"),
+        }
+
+        assert_eq!(ClientFrameType::WorkspaceListDir as u8, 82);
+        assert_eq!(ClientFrameType::WorkspaceReadFile as u8, 83);
+        assert_eq!(ClientFrameType::WorkspaceWriteFile as u8, 84);
+        assert_eq!(ServerFrameType::WorkspaceDirListing as u8, 87);
+        assert_eq!(ServerFrameType::WorkspaceFileContent as u8, 88);
+        assert_eq!(ServerFrameType::WorkspaceWriteResult as u8, 89);
+    }
+
+    #[test]
     fn test_project_update_client_roundtrip() {
         let frame = ClientFrame {
             frame_type: ClientFrameType::ProjectUpdate,

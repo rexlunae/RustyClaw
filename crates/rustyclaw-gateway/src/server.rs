@@ -711,6 +711,18 @@ pub(crate) async fn handle_connection(
                             ClientPayload::PluginRefresh { plugin_name } => {
                                 plugin_handler::handle_plugin_refresh(&mut *writer, plugin_name).await?;
                             }
+                            ClientPayload::WorkspaceListDir { path } => {
+                                let root = config.workspace_dir();
+                                crate::workspace_files::handle_list_dir(&mut *writer, &root, path).await?;
+                            }
+                            ClientPayload::WorkspaceReadFile { path } => {
+                                let root = config.workspace_dir();
+                                crate::workspace_files::handle_read_file(&mut *writer, &root, path).await?;
+                            }
+                            ClientPayload::WorkspaceWriteFile { path, content } => {
+                                let root = config.workspace_dir();
+                                crate::workspace_files::handle_write_file(&mut *writer, &root, path, content).await?;
+                            }
                             ClientPayload::ProjectList => {
                                 project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;
                             }
