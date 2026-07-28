@@ -1,4 +1,4 @@
-//! Plugin panel for the right-hand sidebar.
+//! Plugin panel for the plugin dock (the workspace's right-hand column).
 //!
 //! Renders plugin states as interactive panels. Each plugin can:
 //! - Show a title with emoji

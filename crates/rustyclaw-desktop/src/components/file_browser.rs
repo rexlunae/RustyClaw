@@ -1,7 +1,8 @@
-//! File browser panel for the right-hand sidebar.
+//! File browser panel.
 //!
 //! Renders the `FileBrowserData` from `rustyclaw-view` as a VS Code-style
-//! collapsible directory tree.  Changes to the root directory are handled
+//! collapsible directory tree. Unmounted since the right sidebar was replaced
+//! by the plugin dock; retained for the editor plugin to render.  Changes to the root directory are handled
 //! by the parent via `on_change_root`; expansion/selection events are
 //! emitted so the parent can update state.
 

@@ -142,14 +142,12 @@ pub struct AppState {
     /// Whether the left sidebar (thread list) is visible.
     pub left_sidebar_visible: bool,
 
-    /// Whether the right sidebar (file browser) is visible.
     /// Whether the plugin dock (the workspace's right-hand column) is shown.
     pub plugin_dock_visible: bool,
 
-    /// File browser data for the right sidebar.
+    /// File tree for the workspace directory. Kept up to date as the working
+    /// directory changes; the editor plugin renders it.
     pub file_browser: rustyclaw_view::FileBrowserData,
-
-    /// Right sidebar active tab.
 
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
