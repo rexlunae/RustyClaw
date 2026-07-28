@@ -258,7 +258,7 @@ pub fn App() -> Element {
         let (generation, connected) = {
             let s = state.read();
             (
-                s.workspace_generation,
+                s.workspace.generation(),
                 matches!(
                     s.connection,
                     ConnectionStatus::Connected | ConnectionStatus::Authenticated
@@ -739,6 +739,21 @@ pub fn App() -> Element {
 
     let on_new_project = move |_| show_new_project.set(true);
 
+    /// Say what unsaved work a workspace move discarded, if any.
+    fn warn_dropped(mut state: Signal<AppState>, dropped: Vec<std::path::PathBuf>) {
+        if dropped.is_empty() {
+            return;
+        }
+        let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+        state.write().push_notice(
+            MessageRole::Warning,
+            format!(
+                "Working directory changed with unsaved editor changes; discarded: {}",
+                names.join(", ")
+            ),
+        );
+    }
+
     // ── Workspace changes and unsaved editor work ───────────────────────
     //
     // Anything that repoints the working directory invalidates every path the
@@ -754,7 +769,7 @@ pub fn App() -> Element {
             // gratuitous loss.
             PendingWorkspaceChange::Directory(path) => match std::env::set_current_dir(&path) {
                 Ok(()) => {
-                    state.write().reset_workspace_view();
+                    warn_dropped(state, state.write().workspace.rebase(path.clone().into()));
                     let options = build_directory_options(&path);
                     {
                         let mut s = state.write();
@@ -786,7 +801,7 @@ pub fn App() -> Element {
                 }
             },
             PendingWorkspaceChange::Project(project_id) => {
-                state.write().reset_workspace_view();
+                warn_dropped(state, state.write().workspace.rebase_to_current_thread());
                 if let Some(client) = gw {
                     spawn(async move {
                         if let Err(e) = client
@@ -821,7 +836,7 @@ pub fn App() -> Element {
 
     // Apply now when nothing is at stake; otherwise park it behind the prompt.
     let mut guard_workspace_change = move |change: PendingWorkspaceChange| {
-        if state.read().unsaved_editor_files().is_empty() {
+        if state.read().workspace.unsaved().is_empty() {
             apply_workspace_change(change);
         } else {
             state.write().pending_workspace_change = Some(change);
@@ -1142,23 +1157,29 @@ pub fn App() -> Element {
         // Opening a file adds its tab and focuses it before the contents
         // arrive, so the pane can show "Loading…" rather than nothing.
         if let A::OpenFile(ref path) = action {
-            let mut s = state.write();
-            if !s.editor_open.contains(path) {
-                s.editor_open.push(path.clone());
-            }
-            s.editor_active = Some(path.clone());
+            state.write().workspace.open_file(path.clone());
         }
         let command = match action {
             A::OpenFile(path) => GatewayCommand::WorkspaceReadFile { path },
             A::Save { path, content } => {
                 // Remember what is being written: the result frame carries
                 // only path/ok/error, and the buffer cannot be reconciled
-                // without knowing which text actually reached disk.
-                state
-                    .write()
-                    .editor_saving
-                    .insert(path.clone(), content.clone());
-                GatewayCommand::WorkspaceWriteFile { path, content }
+                // without knowing which text actually reached disk. The root
+                // travels too, so the gateway refuses a buffer captured
+                // before the workspace moved.
+                let expected_root = {
+                    let mut s = state.write();
+                    s.workspace.begin_save(path.clone(), content.clone());
+                    s.workspace
+                        .root()
+                        .map(|r| r.to_path_buf())
+                        .unwrap_or_default()
+                };
+                GatewayCommand::WorkspaceWriteFile {
+                    path,
+                    content,
+                    expected_root,
+                }
             }
         };
         let gw = gateway.read().clone();
@@ -1172,17 +1193,9 @@ pub fn App() -> Element {
     };
 
     let on_editor_toggle_dir = move |path: std::path::PathBuf| {
-        let needs_listing = {
-            let mut s = state.write();
-            if s.editor_expanded.remove(&path) {
-                false
-            } else {
-                s.editor_expanded.insert(path.clone());
-                // Fetch on first expand only; a collapsed-then-reopened
-                // directory keeps what it already has.
-                !s.workspace_listings.contains_key(&path)
-            }
-        };
+        // Fetch on first expand only; a collapsed-then-reopened directory
+        // keeps what it already has.
+        let needs_listing = state.write().workspace.toggle_dir(path.clone());
         if needs_listing {
             let gw = gateway.read().clone();
             if let Some(client) = gw {
@@ -1196,13 +1209,9 @@ pub fn App() -> Element {
     };
 
     let on_editor_close_tab = move |path: std::path::PathBuf| {
-        let mut s = state.write();
-        s.editor_open.retain(|p| p != &path);
         // Unsaved text is kept: closing a tab should not be a silent way to
         // throw work away. Reopening the file shows it again.
-        if s.editor_active.as_ref() == Some(&path) {
-            s.editor_active = s.editor_open.last().cloned();
-        }
+        state.write().workspace.close_file(&path);
     };
 
     // Top-bar title: "Project — Thread" for the active project / foreground thread.
@@ -1510,12 +1519,12 @@ pub fn App() -> Element {
                                 emoji: "📝".to_string(),
                                 body: rsx! {
                                     crate::components::Editor {
-                                        listings: state.read().workspace_listings.clone(),
-                                        files: state.read().workspace_files.clone(),
-                                        edits: state.read().editor_edits.clone(),
-                                        expanded: state.read().editor_expanded.clone(),
-                                        open: state.read().editor_open.clone(),
-                                        active: state.read().editor_active.clone(),
+                                        listings: state.read().workspace.listings().clone(),
+                                        files: state.read().workspace.files().clone(),
+                                        edits: state.read().workspace.edits().clone(),
+                                        expanded: state.read().workspace.expanded().clone(),
+                                        open: state.read().workspace.open().to_vec(),
+                                        active: state.read().workspace.active().map(|p| p.to_path_buf()),
                                         root_label: state
                                             .read()
                                             .working_directory
@@ -1524,11 +1533,11 @@ pub fn App() -> Element {
                                         on_action: on_editor_action,
                                         on_toggle_dir: on_editor_toggle_dir,
                                         on_select_tab: move |path: std::path::PathBuf| {
-                                            state.write().editor_active = Some(path);
+                                            state.write().workspace.focus(path);
                                         },
                                         on_close_tab: on_editor_close_tab,
                                         on_edit: move |(path, text): (std::path::PathBuf, String)| {
-                                            state.write().editor_edits.insert(path, text);
+                                            state.write().workspace.set_edit(path, text);
                                         },
                                     }
                                 },
@@ -1660,7 +1669,7 @@ pub fn App() -> Element {
             // Unsaved-changes prompt, gating any workspace change.
             {
                 state.read().pending_workspace_change.clone().map(|change| {
-                    let files = state.read().unsaved_editor_files();
+                    let files = state.read().workspace.unsaved();
                     let destination = match &change {
                         PendingWorkspaceChange::Directory(path) => display_path(path),
                         PendingWorkspaceChange::Project(_) => "another project".to_string(),
@@ -1684,14 +1693,22 @@ pub fn App() -> Element {
                                         // resolve against the directory they were
                                         // written in. Failures still surface as error
                                         // notices from WorkspaceWriteResult.
-                                        let pending: Vec<(std::path::PathBuf, String)> = {
+                                        let (pending, expected_root) = {
                                             let s = state.read();
-                                            s.unsaved_editor_files()
+                                            let root = s
+                                                .workspace
+                                                .root()
+                                                .map(|r| r.to_path_buf())
+                                                .unwrap_or_default();
+                                            let files: Vec<(std::path::PathBuf, String)> = s
+                                                .workspace
+                                                .unsaved()
                                                 .into_iter()
                                                 .filter_map(|p| {
-                                                    s.editor_edits.get(&p).map(|c| (p, c.clone()))
+                                                    s.workspace.edits().get(&p).map(|c| (p, c.clone()))
                                                 })
-                                                .collect()
+                                                .collect();
+                                            (files, root)
                                         };
                                         let gw = gateway.read().clone();
                                         if let Some(client) = gw {
@@ -1701,6 +1718,7 @@ pub fn App() -> Element {
                                                         .send(GatewayCommand::WorkspaceWriteFile {
                                                             path,
                                                             content,
+                                                            expected_root: expected_root.clone(),
                                                         })
                                                         .await
                                                     {
@@ -1712,6 +1730,11 @@ pub fn App() -> Element {
                                                 }
                                             });
                                         }
+                                        // The writes are queued; treat them as
+                                        // landed so the rebase does not warn
+                                        // about work the user just chose to
+                                        // save. Failures still report.
+                                        state.write().workspace.assume_saved();
                                         apply_workspace_change(change);
                                     }
                                 }

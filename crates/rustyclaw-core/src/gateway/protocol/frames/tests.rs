@@ -223,6 +223,7 @@ mod serialization {
                     size: 12,
                 }],
                 error: None,
+                root: PathBuf::from("/srv/api"),
             },
         };
         let bytes = serialize_frame(&frame).expect("serialize should succeed");
@@ -245,6 +246,7 @@ mod serialization {
                 path: PathBuf::from("../secret"),
                 content: String::new(),
                 error: Some("outside this thread's working directory".into()),
+                root: PathBuf::from("/srv/api"),
             },
         };
         let bytes = serialize_frame(&frame).expect("serialize should succeed");

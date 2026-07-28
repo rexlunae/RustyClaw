@@ -108,6 +108,7 @@ pub(crate) fn resolve_within(root: &Path, requested: &Path) -> Result<PathBuf, P
 /// Send a `WorkspaceDirListing` refusal/error.
 async fn listing_error(
     writer: &mut dyn transport::TransportWriter,
+    root: &Path,
     path: PathBuf,
     message: String,
 ) -> Result<()> {
@@ -117,6 +118,7 @@ async fn listing_error(
             path,
             entries: Vec::new(),
             error: Some(message),
+            root: root.to_path_buf(),
         },
     };
     send_frame(writer, &frame).await
@@ -131,7 +133,9 @@ pub(crate) async fn handle_list_dir(
     debug!(path = %path.display(), "Workspace list-dir request");
     let resolved = match resolve_within(root, &path) {
         Ok(p) => p,
-        Err(refusal) => return listing_error(writer, path.clone(), refusal.message(&path)).await,
+        Err(refusal) => {
+            return listing_error(writer, root, path.clone(), refusal.message(&path)).await;
+        }
     };
 
     let read = match std::fs::read_dir(&resolved) {
@@ -139,6 +143,7 @@ pub(crate) async fn handle_list_dir(
         Err(e) => {
             return listing_error(
                 writer,
+                root,
                 path.clone(),
                 format!("Could not list '{}': {e}", path.display()),
             )
@@ -177,6 +182,7 @@ pub(crate) async fn handle_list_dir(
             path,
             entries,
             error: None,
+            root: root.to_path_buf(),
         },
     };
     send_frame(writer, &frame).await
@@ -185,6 +191,7 @@ pub(crate) async fn handle_list_dir(
 /// Send a `WorkspaceFileContent` refusal/error.
 async fn content_error(
     writer: &mut dyn transport::TransportWriter,
+    root: &Path,
     path: &Path,
     message: String,
 ) -> Result<()> {
@@ -194,6 +201,7 @@ async fn content_error(
             path: path.to_path_buf(),
             content: String::new(),
             error: Some(message),
+            root: root.to_path_buf(),
         },
     };
     send_frame(writer, &frame).await
@@ -208,13 +216,14 @@ pub(crate) async fn handle_read_file(
     debug!(path = %path.display(), "Workspace read-file request");
     let resolved = match resolve_within(root, &path) {
         Ok(p) => p,
-        Err(refusal) => return content_error(writer, &path, refusal.message(&path)).await,
+        Err(refusal) => return content_error(writer, root, &path, refusal.message(&path)).await,
     };
 
     match std::fs::metadata(&resolved) {
         Ok(meta) if meta.len() > MAX_EDITABLE_BYTES => {
             return content_error(
                 writer,
+                root,
                 &path,
                 format!(
                     "'{}' is {} bytes; the editor opens files up to {MAX_EDITABLE_BYTES} bytes",
@@ -227,6 +236,7 @@ pub(crate) async fn handle_read_file(
         Ok(meta) if meta.is_dir() => {
             return content_error(
                 writer,
+                root,
                 &path,
                 format!("'{}' is a directory", path.display()),
             )
@@ -236,6 +246,7 @@ pub(crate) async fn handle_read_file(
         Err(e) => {
             return content_error(
                 writer,
+                root,
                 &path,
                 format!("Could not open '{}': {e}", path.display()),
             )
@@ -252,6 +263,7 @@ pub(crate) async fn handle_read_file(
             Err(_) => {
                 return content_error(
                     writer,
+                    root,
                     &path,
                     format!("'{}' is not valid UTF-8 text", path.display()),
                 )
@@ -261,6 +273,7 @@ pub(crate) async fn handle_read_file(
         Err(e) => {
             return content_error(
                 writer,
+                root,
                 &path,
                 format!("Could not read '{}': {e}", path.display()),
             )
@@ -274,6 +287,7 @@ pub(crate) async fn handle_read_file(
             path,
             content,
             error: None,
+            root: root.to_path_buf(),
         },
     };
     send_frame(writer, &frame).await
@@ -285,9 +299,26 @@ pub(crate) async fn handle_write_file(
     root: &Path,
     path: PathBuf,
     content: String,
+    expected_root: PathBuf,
 ) -> Result<()> {
     debug!(path = %path.display(), bytes = content.len(), "Workspace write-file request");
-    let result = resolve_within(root, &path).map_err(|refusal| refusal.message(&path));
+
+    // The client edited a buffer taken from `expected_root`. If the workspace
+    // has moved since, this path is still *legal* here — it just names a
+    // different file, and writing would overwrite an unrelated one. Refuse.
+    // Confinement alone cannot catch this: the path is inside both roots.
+    let stale = std::fs::canonicalize(&expected_root).ok() != std::fs::canonicalize(root).ok();
+    let result = if stale {
+        Err(format!(
+            "'{}' was edited in '{}', but this thread now works in '{}'; \
+             the file was not written",
+            path.display(),
+            expected_root.display(),
+            root.display()
+        ))
+    } else {
+        resolve_within(root, &path).map_err(|refusal| refusal.message(&path))
+    };
 
     let error = match result {
         Err(message) => Some(message),
@@ -303,6 +334,7 @@ pub(crate) async fn handle_write_file(
             path,
             ok: error.is_none(),
             error,
+            root: root.to_path_buf(),
         },
     };
     send_frame(writer, &frame).await
@@ -399,6 +431,58 @@ mod tests {
         assert_eq!(
             resolve_within(&root, Path::new("link/f.txt")),
             Err(PathRefusal::Escapes)
+        );
+    }
+
+    /// A buffer captured in one directory must not be written into another,
+    /// even though the path is perfectly legal in both. Confinement alone
+    /// cannot catch this — only the root the client edited in can.
+    #[tokio::test]
+    async fn a_write_from_a_moved_workspace_is_refused() {
+        use async_trait::async_trait;
+
+        struct Capture(Vec<ServerFrame>);
+        #[async_trait]
+        impl transport::TransportWriter for Capture {
+            async fn send_on_stream(&mut self, _s: u64, frame: &ServerFrame) -> Result<()> {
+                self.0.push(frame.clone());
+                Ok(())
+            }
+            async fn close(&mut self) -> Result<()> {
+                Ok(())
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let old_root = tmp.path().join("old");
+        let new_root = tmp.path().join("new");
+        std::fs::create_dir_all(&old_root).unwrap();
+        std::fs::create_dir_all(&new_root).unwrap();
+        // The same relative path exists in both — an unrelated file.
+        std::fs::write(new_root.join("notes.md"), "someone else's file").unwrap();
+
+        let mut writer = Capture(Vec::new());
+        handle_write_file(
+            &mut writer,
+            &new_root,
+            PathBuf::from("notes.md"),
+            "text typed against the old directory".to_string(),
+            old_root.clone(),
+        )
+        .await
+        .unwrap();
+
+        match &writer.0[0].payload {
+            ServerPayload::WorkspaceWriteResult { ok, error, .. } => {
+                assert!(!ok, "a write from a moved workspace must be refused");
+                assert!(error.as_deref().unwrap().contains("now works in"));
+            }
+            other => panic!("expected a write result, got {other:?}"),
+        }
+        assert_eq!(
+            std::fs::read_to_string(new_root.join("notes.md")).unwrap(),
+            "someone else's file",
+            "the unrelated file must be untouched"
         );
     }
 

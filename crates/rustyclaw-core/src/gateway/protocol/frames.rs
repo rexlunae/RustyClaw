@@ -883,9 +883,16 @@ pub enum ClientPayload {
         path: PathBuf,
     },
     /// Overwrite one file's contents.
+    ///
+    /// `expected_root` is the working directory the client believed it was
+    /// editing. The gateway refuses the write when that no longer matches,
+    /// so a buffer captured before a directory change cannot be written into
+    /// a same-named file in the new one — the confinement check alone would
+    /// happily allow that, since the path is legal in both.
     WorkspaceWriteFile {
         path: PathBuf,
         content: String,
+        expected_root: PathBuf,
     },
 }
 
@@ -1354,6 +1361,10 @@ pub enum ServerPayload {
         path: PathBuf,
         entries: Vec<WorkspaceEntryDto>,
         error: Option<String>,
+        /// The working directory these paths are relative to. A client that
+        /// has since moved discards the reply rather than mixing it into a
+        /// view of somewhere else.
+        root: PathBuf,
     },
     /// One file's contents. `error` is set when the read was refused or
     /// failed, in which case `content` is empty.
@@ -1361,12 +1372,16 @@ pub enum ServerPayload {
         path: PathBuf,
         content: String,
         error: Option<String>,
+        /// See [`ServerPayload::WorkspaceDirListing::root`].
+        root: PathBuf,
     },
     /// Outcome of a write. `error` carries the reason when `ok` is false.
     WorkspaceWriteResult {
         path: PathBuf,
         ok: bool,
         error: Option<String>,
+        /// See [`ServerPayload::WorkspaceDirListing::root`].
+        root: PathBuf,
     },
 }
 
