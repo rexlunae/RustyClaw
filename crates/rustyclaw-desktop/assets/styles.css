@@ -301,8 +301,10 @@ body,
    right sidebar, which was a fixed Files/Plugins tab pair; plugins now own
    this space and it only renders when at least one plugin is loaded. */
 .plugin-dock {
-    width: 300px;
-    min-width: 300px;
+    /* Wider than the old sidebar: the editor plugin needs room for a tree and
+       a text pane side by side. */
+    width: 460px;
+    min-width: 460px;
     border-right: none;
     border-left: 1px solid var(--rc-border);
 }
@@ -1899,4 +1901,314 @@ body,
     to {
         transform: rotate(360deg);
     }
+}
+
+/* ── Plugin panel ────────────────────────────────────────────────────────── */
+/* None of these had styles before: plugin state never reached a client, so the
+   panel never rendered and nothing was ever missed. */
+.plugin-panel {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    font-size: 12px;
+}
+
+.plugin-panel-tabs {
+    display: flex;
+    flex-direction: row;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--rc-border);
+}
+
+.plugin-tab {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 10px;
+    cursor: pointer;
+    white-space: nowrap;
+    border-right: 1px solid var(--rc-border);
+    color: var(--rc-text-muted);
+    transition: background 0.12s var(--rc-ease), color 0.12s var(--rc-ease);
+}
+
+.plugin-tab:hover {
+    background: var(--rc-bg-raised);
+}
+
+.plugin-tab.active {
+    background: var(--rc-primary-soft);
+    color: var(--rc-text-strong);
+}
+
+.plugin-tab-emoji {
+    font-size: 13px;
+}
+
+.plugin-panel-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    flex: 1;
+    padding: 24px 16px;
+    text-align: center;
+    color: var(--rc-text-muted);
+}
+
+.plugin-panel-empty-icon {
+    font-size: 26px;
+    opacity: 0.7;
+}
+
+.plugin-panel-empty-text {
+    color: var(--rc-text);
+}
+
+.plugin-panel-content {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    padding: 10px;
+    gap: 8px;
+}
+
+.plugin-panel-header {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.plugin-panel-title {
+    font-weight: 600;
+    color: var(--rc-text-strong);
+    flex: 1;
+}
+
+.plugin-panel-description {
+    color: var(--rc-text-muted);
+    margin: 0;
+}
+
+.plugin-refresh-btn,
+.plugin-action-btn {
+    background: var(--rc-bg-raised);
+    color: var(--rc-text);
+    border: 1px solid var(--rc-border);
+    border-radius: 5px;
+    padding: 3px 8px;
+    cursor: pointer;
+}
+
+.plugin-refresh-btn:hover,
+.plugin-action-btn:hover {
+    background: var(--rc-primary-soft);
+}
+
+.plugin-panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.plugin-state-fields,
+.plugin-state-list {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.plugin-state-field,
+.plugin-state-list-item {
+    display: flex;
+    gap: 6px;
+    align-items: baseline;
+}
+
+.plugin-state-key,
+.plugin-state-index {
+    color: var(--rc-text-muted);
+    min-width: 80px;
+    flex-shrink: 0;
+}
+
+.plugin-state-value,
+.plugin-state-scalar {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    word-break: break-word;
+}
+
+.plugin-state-empty {
+    color: var(--rc-text-muted);
+    font-style: italic;
+}
+
+/* ── Editor plugin ───────────────────────────────────────────────────────── */
+.editor {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+    font-size: 12px;
+}
+
+.editor-header {
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--rc-border);
+    color: var(--rc-text-muted);
+}
+
+.editor-root {
+    display: block;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor-body {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+}
+
+.editor-tree {
+    width: 160px;
+    min-width: 160px;
+    overflow: auto;
+    border-right: 1px solid var(--rc-border);
+    padding: 4px 0;
+}
+
+.editor-tree-row {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.editor-tree-row:hover {
+    background: var(--rc-bg-raised);
+}
+
+.editor-tree-row.active {
+    background: var(--rc-primary-soft);
+}
+
+.editor-tree-icon {
+    width: 10px;
+    color: var(--rc-text-muted);
+}
+
+.editor-tree-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.editor-tree-empty {
+    color: var(--rc-text-muted);
+    font-style: italic;
+    padding: 2px 6px;
+}
+
+.editor-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+}
+
+.editor-tabs {
+    display: flex;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--rc-border);
+}
+
+.editor-tab {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    cursor: pointer;
+    border-right: 1px solid var(--rc-border);
+    white-space: nowrap;
+}
+
+.editor-tab.active {
+    background: var(--rc-primary-soft);
+}
+
+.editor-tab-dirty {
+    color: var(--rc-primary);
+    font-size: 9px;
+}
+
+.editor-tab-close {
+    background: none;
+    border: none;
+    color: var(--rc-text-muted);
+    cursor: pointer;
+    padding: 0 2px;
+    font-size: 10px;
+}
+
+.editor-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--rc-border);
+}
+
+.editor-path {
+    color: var(--rc-text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.editor-save {
+    background: var(--rc-primary);
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 2px 10px;
+    cursor: pointer;
+}
+
+.editor-save:disabled {
+    background: var(--rc-bg-raised);
+    color: var(--rc-text-muted);
+    cursor: default;
+}
+
+.editor-text {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    resize: none;
+    border: none;
+    outline: none;
+    padding: 8px;
+    background: var(--rc-bg);
+    color: var(--rc-text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    tab-size: 4;
+}
+
+.editor-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+    color: var(--rc-text-muted);
 }

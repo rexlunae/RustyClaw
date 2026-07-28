@@ -1023,6 +1023,71 @@ pub fn App() -> Element {
         }
     });
 
+    // ── Editor plugin ───────────────────────────────────────────────────
+    //
+    // The editor is a native plugin; these translate its requests into the
+    // workspace file frames, which the gateway confines to the thread's
+    // effective working directory.
+    let on_editor_action = move |action: crate::components::EditorAction| {
+        use crate::components::EditorAction as A;
+        // Opening a file adds its tab and focuses it before the contents
+        // arrive, so the pane can show "Loading…" rather than nothing.
+        if let A::OpenFile(ref path) = action {
+            let mut s = state.write();
+            if !s.editor_open.contains(path) {
+                s.editor_open.push(path.clone());
+            }
+            s.editor_active = Some(path.clone());
+        }
+        let command = match action {
+            A::ListDir(path) => GatewayCommand::WorkspaceListDir { path },
+            A::OpenFile(path) => GatewayCommand::WorkspaceReadFile { path },
+            A::Save { path, content } => GatewayCommand::WorkspaceWriteFile { path, content },
+        };
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                if let Err(e) = client.send(command).await {
+                    tracing::error!(error = %e, "Editor request failed to send");
+                }
+            });
+        }
+    };
+
+    let on_editor_toggle_dir = move |path: std::path::PathBuf| {
+        let needs_listing = {
+            let mut s = state.write();
+            if s.editor_expanded.remove(&path) {
+                false
+            } else {
+                s.editor_expanded.insert(path.clone());
+                // Fetch on first expand only; a collapsed-then-reopened
+                // directory keeps what it already has.
+                !s.workspace_listings.contains_key(&path)
+            }
+        };
+        if needs_listing {
+            let gw = gateway.read().clone();
+            if let Some(client) = gw {
+                spawn(async move {
+                    if let Err(e) = client.send(GatewayCommand::WorkspaceListDir { path }).await {
+                        tracing::error!(error = %e, "Editor directory listing failed to send");
+                    }
+                });
+            }
+        }
+    };
+
+    let on_editor_close_tab = move |path: std::path::PathBuf| {
+        let mut s = state.write();
+        s.editor_open.retain(|p| p != &path);
+        // Unsaved text is kept: closing a tab should not be a silent way to
+        // throw work away. Reopening the file shows it again.
+        if s.editor_active.as_ref() == Some(&path) {
+            s.editor_active = s.editor_open.last().cloned();
+        }
+    };
+
     // Top-bar title: "Project — Thread" for the active project / foreground thread.
     let topbar_title = {
         let s = state.read();
@@ -1391,10 +1456,38 @@ pub fn App() -> Element {
                 // Files/Plugins tab pair. It only renders when at least one
                 // plugin is loaded, so an install with no plugins gets the full
                 // width for chat instead of an empty panel.
-                if state.read().plugin_dock_visible && !state.read().plugins.is_empty() {
+                if state.read().plugin_dock_visible {
                     aside { class: "sidebar plugin-dock",
                         crate::components::PluginPanel {
                             plugins: state.read().plugins.clone(),
+                            native: vec![crate::components::NativePluginTab {
+                                name: crate::components::EDITOR_PLUGIN.to_string(),
+                                emoji: "📝".to_string(),
+                                body: rsx! {
+                                    crate::components::Editor {
+                                        listings: state.read().workspace_listings.clone(),
+                                        files: state.read().workspace_files.clone(),
+                                        edits: state.read().editor_edits.clone(),
+                                        expanded: state.read().editor_expanded.clone(),
+                                        open: state.read().editor_open.clone(),
+                                        active: state.read().editor_active.clone(),
+                                        root_label: state
+                                            .read()
+                                            .working_directory
+                                            .clone()
+                                            .unwrap_or_else(|| "workspace".to_string()),
+                                        on_action: on_editor_action,
+                                        on_toggle_dir: on_editor_toggle_dir,
+                                        on_select_tab: move |path: std::path::PathBuf| {
+                                            state.write().editor_active = Some(path);
+                                        },
+                                        on_close_tab: on_editor_close_tab,
+                                        on_edit: move |(path, text): (std::path::PathBuf, String)| {
+                                            state.write().editor_edits.insert(path, text);
+                                        },
+                                    }
+                                },
+                            }],
                             active_plugin: state.read().active_plugin.clone(),
                             on_select_plugin: move |name: String| {
                                 state.write().active_plugin = Some(name);

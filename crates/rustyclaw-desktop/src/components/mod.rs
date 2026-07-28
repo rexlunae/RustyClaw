@@ -33,6 +33,7 @@ mod credential_request;
 mod cron;
 mod device_flow;
 mod edit_dialogs;
+mod editor;
 mod engines;
 mod file_browser;
 mod hatching;
@@ -64,6 +65,7 @@ pub use credential_request::CredentialRequestDialog;
 pub use cron::CronDialog;
 pub use device_flow::DeviceFlowDialog;
 pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};
+pub use editor::{EDITOR_PLUGIN, Editor, EditorAction};
 #[allow(unused_imports)]
 pub use engines::EnginesDialog;
 #[allow(unused_imports)]
@@ -74,7 +76,9 @@ pub use mcp::McpDialog;
 pub use memory::MemoryDialog;
 pub use new_project::NewProjectDialog;
 pub use pairing::{PairingDialog, generate_qr_code};
-pub use plugin_panel::{PluginActionEvent, PluginActionInfo, PluginPanel, PluginSnapshot};
+pub use plugin_panel::{
+    NativePluginTab, PluginActionEvent, PluginActionInfo, PluginPanel, PluginSnapshot,
+};
 pub use secrets::{SecretsCommand, SecretsDialog};
 pub use services::ServicesDialog;
 pub use settings::SettingsDialog;
