@@ -804,9 +804,24 @@ impl AppState {
     pub fn switch_thread(&mut self, target_id: u64) {
         // A different thread may run in a different directory (its own
         // override, else its project's), so the editor's view cannot carry
-        // over. The caller has already resolved any unsaved changes — see
-        // `PendingWorkspaceChange` — so discarding here is safe.
-        self.reset_workspace_view();
+        // over.
+        //
+        // Most callers route through `PendingWorkspaceChange` and have already
+        // asked the user what to do. Deleting the foreground thread does not —
+        // it switches to a fallback directly — so reporting here rather than
+        // trusting the caller means no path can drop work in silence, this one
+        // or a future one.
+        let dropped = self.reset_workspace_view();
+        if !dropped.is_empty() {
+            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+            self.push_notice(
+                rustyclaw_core::types::MessageRole::Warning,
+                format!(
+                    "Left a thread with unsaved editor changes; discarded: {}",
+                    names.join(", ")
+                ),
+            );
+        }
 
         // Save current thread's messages
         if let Some(current_id) = self.foreground_thread_id
