@@ -28,9 +28,23 @@ pub struct PluginActionInfo {
     pub description: String,
 }
 
+/// A plugin implemented as a compiled-in component rather than loaded from a
+/// plugin directory. It appears in the tab strip beside data plugins; the
+/// parent supplies its rendered body.
+#[derive(Clone, PartialEq)]
+pub struct NativePluginTab {
+    pub name: String,
+    pub emoji: String,
+    /// The component to render when this tab is active.
+    pub body: Element,
+}
+
 #[derive(Props, Clone, PartialEq)]
 pub struct PluginPanelProps {
     pub plugins: Vec<PluginSnapshot>,
+    /// Compiled-in plugins, listed before the data plugins.
+    #[props(default)]
+    pub native: Vec<NativePluginTab>,
     pub active_plugin: Option<String>,
     pub on_select_plugin: EventHandler<String>,
     pub on_action: EventHandler<PluginActionEvent>,
@@ -46,6 +60,7 @@ pub struct PluginActionEvent {
 #[component]
 pub fn PluginPanel(props: PluginPanelProps) -> Element {
     let plugins = props.plugins;
+    let native = props.native;
     let active_name = props.active_plugin;
     let on_select_plugin = props.on_select_plugin;
     let on_action = props.on_action;
@@ -71,7 +86,13 @@ pub fn PluginPanel(props: PluginPanelProps) -> Element {
             )
         });
 
-    let empty = plugins.is_empty();
+    // Only truly empty when there is nothing at all to show. A native plugin
+    // alone is a perfectly good dock.
+    let empty = plugins.is_empty() && native.is_empty();
+    let active_native = native
+        .iter()
+        .find(|n| Some(&n.name) == active_name.as_ref())
+        .cloned();
 
     rsx! {
         div { class: "plugin-panel",
@@ -86,6 +107,24 @@ pub fn PluginPanel(props: PluginPanelProps) -> Element {
                 }
             } else {
                 div { class: "plugin-panel-tabs",
+                    for tab in native.iter() {
+                        {
+                            let is_active = active_name.as_ref().is_some_and(|n| n == &tab.name);
+                            let cls = if is_active { "plugin-tab active" } else { "plugin-tab" };
+                            let tab_name = tab.name.clone();
+                            let emoji = tab.emoji.clone();
+                            let on_select = on_select_plugin;
+                            rsx! {
+                                div {
+                                    key: "native:{tab.name}",
+                                    class: "{cls}",
+                                    onclick: move |_| on_select.call(tab_name.clone()),
+                                    span { class: "plugin-tab-emoji", "{emoji}" }
+                                    span { class: "plugin-tab-name", "{tab.name}" }
+                                }
+                            }
+                        }
+                    }
                     for plugin in plugins.iter() {
                         {
                             let is_active = active_name.as_ref().is_some_and(|n| n == &plugin.name);
@@ -105,7 +144,9 @@ pub fn PluginPanel(props: PluginPanelProps) -> Element {
                         }
                     }
                 }
-                if let Some((emoji, name, desc, state, actions)) = active_plugin_data {
+                if let Some(tab) = active_native {
+                    {tab.body}
+                } else if let Some((emoji, name, desc, state, actions)) = active_plugin_data {
                     ActivePluginContent {
                         active_emoji: emoji,
                         active_name: name,

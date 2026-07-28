@@ -160,6 +160,21 @@ pub struct AppState {
     /// path relative to it. Populated by `WorkspaceFileContent`.
     pub workspace_files: std::collections::HashMap<std::path::PathBuf, String>,
 
+    /// Directories the editor's tree has expanded, relative to the thread's
+    /// working directory. The root (`""`) starts expanded.
+    pub editor_expanded: std::collections::HashSet<std::path::PathBuf>,
+
+    /// Files the editor has open, in tab order.
+    pub editor_open: Vec<std::path::PathBuf>,
+
+    /// The tab the editor is showing.
+    pub editor_active: Option<std::path::PathBuf>,
+
+    /// Edited contents, keyed by path. Present only once the user has typed:
+    /// a file with no entry here is unmodified, so `is_dirty` needs no
+    /// separate flag to fall out of sync with.
+    pub editor_edits: std::collections::HashMap<std::path::PathBuf, String>,
+
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
 
@@ -316,6 +331,10 @@ impl Default for AppState {
             plugin_dock_visible: true,
             workspace_listings: Default::default(),
             workspace_files: Default::default(),
+            editor_expanded: Default::default(),
+            editor_open: Vec::new(),
+            editor_active: None,
+            editor_edits: Default::default(),
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
