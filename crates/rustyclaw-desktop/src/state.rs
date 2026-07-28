@@ -200,6 +200,15 @@ pub struct AppState {
     /// A workspace change waiting on the unsaved-changes prompt.
     pub pending_workspace_change: Option<PendingWorkspaceChange>,
 
+    /// Bumped every time the workspace view is reset.
+    ///
+    /// The gateway never pushes a directory listing — it only answers a
+    /// request — so after a reset something has to ask again. Watching a
+    /// counter rather than "is the cache empty" means a directory that
+    /// genuinely lists as empty, or one whose listing failed, does not
+    /// re-request forever.
+    pub workspace_generation: u64,
+
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
 
@@ -362,6 +371,7 @@ impl Default for AppState {
             editor_edits: Default::default(),
             editor_saving: Default::default(),
             pending_workspace_change: None,
+            workspace_generation: 0,
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
@@ -787,6 +797,7 @@ impl AppState {
         self.editor_active = None;
         self.editor_edits.clear();
         self.editor_saving.clear();
+        self.workspace_generation = self.workspace_generation.wrapping_add(1);
         unsaved
     }
 
@@ -1179,5 +1190,20 @@ mod tests {
         // Asking must not disturb anything — the user may still cancel.
         assert_eq!(s.editor_edits.len(), 3);
         assert_eq!(s.unsaved_editor_files(), expected);
+    }
+
+    /// The gateway never pushes a listing, so a reset has to be observable or
+    /// the tree stays blank forever. The counter is what makes it observable.
+    #[test]
+    fn resetting_bumps_the_workspace_generation() {
+        let mut s = AppState::default();
+        let before = s.workspace_generation;
+        s.reset_workspace_view();
+        assert_ne!(s.workspace_generation, before);
+
+        // Every reset is distinct, so consecutive switches each re-fetch.
+        let after_one = s.workspace_generation;
+        s.reset_workspace_view();
+        assert_ne!(s.workspace_generation, after_one);
     }
 }
