@@ -27,8 +27,8 @@ pub use ssh_connection::{HANDSHAKE_TIMEOUT, SshConnection, SshReader, SshWriter,
 pub use protocol::{
     ChannelPairActionKind, ClientFrame, ClientFrameType, ClientPayload, CronActionKind,
     EngineActionKind, FrameCodecError, ModelActionKind, SecretEntryDto, ServerFrame,
-    ServerFrameType, ServerPayload, ServiceInfoDto, StatusType, WireFrame, deserialize_frame,
-    deserialize_wire_frame, serialize_frame, serialize_wire_frame,
+    ServerFrameType, ServerPayload, ServiceInfoDto, StatusType, WireFrame, WorkspaceEntryDto,
+    deserialize_frame, deserialize_wire_frame, serialize_frame, serialize_wire_frame,
 };
 
 // Re-export public types (includes protocol types via types module)

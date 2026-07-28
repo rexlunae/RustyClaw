@@ -205,6 +205,20 @@ pub struct PluginActionDto {
     pub description: String,
 }
 
+/// One entry in a `WorkspaceDirListing`.
+///
+/// `path` is relative to the thread's working directory — the client never
+/// learns the absolute location, and cannot ask for one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceEntryDto {
+    pub path: PathBuf,
+    /// Final component, for display.
+    pub name: String,
+    pub is_dir: bool,
+    /// Size in bytes; 0 for directories.
+    pub size: u64,
+}
+
 /// DTO for agent info in `AgentsUpdate`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInfoDto {

@@ -20,5 +20,6 @@ pub use frames::{
     CronActionKind, EngineActionKind, FrameCodecError, ModelActionKind, PluginActionDto,
     PluginInfoDto, ProjectInfoDto, SecretEntryDto, ServerFrame, ServerFrameType, ServerPayload,
     ServiceInfoDto, StatusType, TaskInfoDto, ThreadInfoDto, WIRE_PROTOCOL_VERSION, WireFrame,
-    deserialize_frame, deserialize_wire_frame, serialize_frame, serialize_wire_frame,
+    WorkspaceEntryDto, deserialize_frame, deserialize_wire_frame, serialize_frame,
+    serialize_wire_frame,
 };

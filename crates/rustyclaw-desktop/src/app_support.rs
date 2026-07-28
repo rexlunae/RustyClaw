@@ -305,6 +305,45 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             }
             s.plugins = snapshots;
         }
+        GatewayEvent::WorkspaceDirListing {
+            path,
+            entries,
+            error,
+        } => {
+            let mut s = state.write();
+            match error {
+                // A refused or failed listing is surfaced, not dropped: the
+                // tree would otherwise just silently fail to expand.
+                Some(message) => s.push_notice(MessageRole::Error, message),
+                None => {
+                    s.workspace_listings.insert(path, entries);
+                }
+            }
+        }
+        GatewayEvent::WorkspaceFileContent {
+            path,
+            content,
+            error,
+        } => {
+            let mut s = state.write();
+            match error {
+                Some(message) => s.push_notice(MessageRole::Error, message),
+                None => {
+                    s.workspace_files.insert(path, content);
+                }
+            }
+        }
+        GatewayEvent::WorkspaceWriteResult { path, ok, error } => {
+            let mut s = state.write();
+            if ok {
+                s.push_notice(MessageRole::Info, format!("Saved {}", path.display()));
+            } else {
+                s.push_notice(
+                    MessageRole::Error,
+                    error.unwrap_or_else(|| format!("Could not save {}", path.display())),
+                );
+            }
+        }
         GatewayEvent::ProjectsUpdate {
             projects,
             active_id,

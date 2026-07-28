@@ -165,6 +165,12 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         // now. Dropped explicitly rather than by a catch-all arm, so adding a
         // TUI plugin panel is a compile error away rather than a silent no-op.
         E::PluginsUpdate { .. } => return None,
+        // Workspace file access serves editor-style UI, which the TUI does
+        // not have. Explicit arms rather than a catch-all, so wiring one up
+        // later is a compile error away rather than a silent no-op.
+        E::WorkspaceDirListing { .. }
+        | E::WorkspaceFileContent { .. }
+        | E::WorkspaceWriteResult { .. } => return None,
         E::ProjectsUpdate {
             projects,
             active_id,
