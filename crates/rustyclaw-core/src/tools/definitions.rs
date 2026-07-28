@@ -1222,5 +1222,49 @@ pub static PLUGIN_CREATE: ToolDef = ToolDef {
     execute: exec_plugin_create,
 };
 
+// ── Freenet and the apps on it ──────────────────────────────────────────────
+
+pub static FREENET: ToolDef = ToolDef {
+    name: "freenet",
+    description: "Talk to a local Freenet node — the decentralized network where \
+                  keys are WebAssembly contracts and values are the state those \
+                  contracts govern (https://freenet.org). \
+                  Actions: 'status' (node and connected peers), 'get' (fetch a \
+                  contract's state by instance id), 'put' (publish a contract with \
+                  its initial state), 'update' (apply a delta to a contract). \
+                  This is the raw layer: contract state is opaque bytes. Prefer the \
+                  `river` tool for chat rooms and `atlas` for discovery — they \
+                  decode the state into something readable.",
+    parameters: vec![],
+    execute: freenet::exec_freenet_stub,
+};
+
+pub static RIVER: ToolDef = ToolDef {
+    name: "river",
+    description: "River — decentralized group chat on Freenet. Each room is one \
+                  contract, addressed by the instance id in its invite link. \
+                  Actions: 'read' (recent messages), 'members' (who is in the room \
+                  and who invited them), 'send' (post a public text message; needs \
+                  a signing key for an account that is already a member). \
+                  Private rooms encrypt message bodies with a secret shared out of \
+                  band, so their content is reported as encrypted, not rendered.",
+    parameters: vec![],
+    execute: freenet::exec_river_stub,
+};
+
+pub static ATLAS: ToolDef = ToolDef {
+    name: "atlas",
+    description: "Atlas — decentralized discovery and search for Freenet content \
+                  and apps. An index is a contract holding signed entries; search \
+                  runs client-side over the whole index. \
+                  Actions: 'search' (rank entries against a query), 'list' (browse \
+                  newest first), 'get' (look one subject up by id). \
+                  Atlas is deliberately pluralistic — there is no canonical index — \
+                  so the index contract id must be given, or set in \
+                  $ATLAS_INDEX_CONTRACT.",
+    parameters: vec![],
+    execute: freenet::exec_atlas_stub,
+};
+
 // Re-export provider-specific tool-schema formatters.
 pub use schema::{tools_anthropic, tools_google, tools_openai};

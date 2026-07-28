@@ -33,7 +33,25 @@ semantic-memory = ["dep:steel-memory"]
 # CLI-based messengers (tier 1) - no heavy deps, just HTTP
 signal-cli = ["chat-system/signal-cli"]
 all-messengers = ["whatsapp", "signal-cli", "matrix"]
-full = ["web-tools", "browser", "mcp", "all-messengers", "semantic-memory", "image-gen"]
+# Freenet and the apps on it (the `freenet`, `river`, and `atlas` tools).
+# Off by default: it pulls in a WebSocket client, ed25519, and River's contract
+# types. The tools stay registered either way and say so when it is off.
+freenet = [
+    "dep:freenet-stdlib",
+    "dep:river-core",
+    "dep:ciborium",
+    "dep:ed25519-dalek",
+    "dep:tokio-tungstenite",
+]
+full = [
+    "web-tools",
+    "browser",
+    "mcp",
+    "all-messengers",
+    "semantic-memory",
+    "image-gen",
+    "freenet",
+]
 
 [dependencies]
 serde.workspace = true
@@ -122,6 +140,19 @@ genai = "0.6.5"
 # AST-grep — structural code search and rewrite via tree-sitter
 ast-grep-core = "0.42.3"
 ast-grep-language = "0.42.3"
+
+# Freenet (optional; see the `freenet` feature).
+# `net` gives freenet-stdlib its WebSocket client for the node's command API.
+# ed25519-dalek is pinned to the 2.x line river-core uses, so keys and
+# signatures are the same types on both sides rather than two silently
+# incompatible copies.
+freenet-stdlib = { version = "0.8.5", default-features = false, features = [
+    "net",
+], optional = true }
+river-core = { version = "0.1.18", optional = true }
+ciborium = { version = "0.2.2", optional = true }
+ed25519-dalek = { version = "2.1", features = ["serde"], optional = true }
+tokio-tungstenite = { version = "0.27", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

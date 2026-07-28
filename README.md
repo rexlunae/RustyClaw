@@ -273,7 +273,8 @@ Features are split across the workspace crates:
 | `web-tools` | HTML parsing via scraper + html2md | ✅ |
 | `matrix` | Matrix messenger support | |
 | `browser` | CDP browser automation (chromiumoxide) | |
-| `full` | web-tools + matrix + browser | |
+| `freenet` | Freenet, River chat, and Atlas search tools | |
+| `full` | web-tools + matrix + browser + freenet | |
 | `signal` | Signal messenger (source-only, see below) | |
 
 ```bash
