@@ -243,6 +243,47 @@ pub fn App() -> Element {
         }
     });
 
+    // Keep the editor's root file listing in step with the workspace.
+    //
+    // The gateway only sends a listing in reply to a request, and the editor
+    // component stays mounted across thread switches, project switches, and
+    // reconnects — so a mount-time effect inside it would fire once and leave
+    // the tree blank forever after the first reset. Watching the generation
+    // counter here covers every reset path, including reconnect, which has no
+    // gateway handle of its own. Tracking the generation rather than "is the
+    // cache empty" means a directory that really is empty, or one whose
+    // listing failed, does not re-request in a loop.
+    let mut listed_generation = use_signal(|| None::<u64>);
+    use_effect(move || {
+        let (generation, connected) = {
+            let s = state.read();
+            (
+                s.workspace_generation,
+                matches!(
+                    s.connection,
+                    ConnectionStatus::Connected | ConnectionStatus::Authenticated
+                ),
+            )
+        };
+        if !connected || *listed_generation.read() == Some(generation) {
+            return;
+        }
+        listed_generation.set(Some(generation));
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                if let Err(e) = client
+                    .send(GatewayCommand::WorkspaceListDir {
+                        path: std::path::PathBuf::new(),
+                    })
+                    .await
+                {
+                    tracing::error!(error = %e, "Root workspace listing failed to send");
+                }
+            });
+        }
+    });
+
     // Ask the gateway for the active provider's live model list so the
     // model picker reflects the provider API instead of the static
     // catalogue.  Re-runs on provider switches; the `requested` set keeps
@@ -705,11 +746,15 @@ pub fn App() -> Element {
     // change behind a prompt when there is work at stake; `apply` performs it
     // once there is nothing to lose (or the user has said to go ahead).
     let mut apply_workspace_change = move |change: PendingWorkspaceChange| {
-        state.write().reset_workspace_view();
         let gw = gateway.read().clone();
         match change {
+            // The reset happens inside the success arm only: a directory that
+            // fails to open has not moved anything, and discarding the
+            // editor's work for a change that did not happen would be a
+            // gratuitous loss.
             PendingWorkspaceChange::Directory(path) => match std::env::set_current_dir(&path) {
                 Ok(()) => {
+                    state.write().reset_workspace_view();
                     let options = build_directory_options(&path);
                     {
                         let mut s = state.write();
@@ -741,6 +786,7 @@ pub fn App() -> Element {
                 }
             },
             PendingWorkspaceChange::Project(project_id) => {
+                state.write().reset_workspace_view();
                 if let Some(client) = gw {
                     spawn(async move {
                         if let Err(e) = client
@@ -753,6 +799,7 @@ pub fn App() -> Element {
                 }
             }
             PendingWorkspaceChange::Thread(thread_id) => {
+                // `switch_thread` resets the view itself.
                 if let Some(client) = gw {
                     spawn(async move {
                         let _ = client
@@ -1102,7 +1149,6 @@ pub fn App() -> Element {
             s.editor_active = Some(path.clone());
         }
         let command = match action {
-            A::ListDir(path) => GatewayCommand::WorkspaceListDir { path },
             A::OpenFile(path) => GatewayCommand::WorkspaceReadFile { path },
             A::Save { path, content } => {
                 // Remember what is being written: the result frame carries

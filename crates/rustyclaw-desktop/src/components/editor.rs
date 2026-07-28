@@ -27,8 +27,6 @@ pub const EDITOR_PLUGIN: &str = "editor";
 /// pure rendering of its props.
 #[derive(Debug, Clone, PartialEq)]
 pub enum EditorAction {
-    /// Load a directory's entries (expanding the tree, or the initial root).
-    ListDir(PathBuf),
     /// Load a file's contents (opening it).
     OpenFile(PathBuf),
     /// Persist a file's edited contents.
@@ -97,17 +95,11 @@ fn file_name(path: &Path) -> String {
 #[component]
 pub fn Editor(props: EditorProps) -> Element {
     let root = PathBuf::new();
-    let on_action = props.on_action;
 
-    // Ask for the root listing once, when it has never been requested. Doing
-    // this on mount rather than making the parent remember to prime it keeps
-    // the editor self-starting when the dock first shows it.
-    let has_root = props.listings.contains_key(&root);
-    use_effect(move || {
-        if !has_root {
-            on_action.call(EditorAction::ListDir(PathBuf::new()));
-        }
-    });
+    // The root listing is requested by the app, not here. A mount-time effect
+    // would fire once and never again — leaving the tree blank forever after
+    // a workspace reset, since the component stays mounted across thread and
+    // project switches and the gateway never pushes a listing unasked.
 
     let active_text = props
         .active
