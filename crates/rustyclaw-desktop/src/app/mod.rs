@@ -1111,7 +1111,7 @@ pub fn App() -> Element {
                 }
             }
 
-            // ── Workspace: left sidebar + main content + right sidebar ──────
+            // ── Workspace: sidebar + main content + plugin dock ─────────────
             div { class: "rc-workspace",
                 if state.read().left_sidebar_visible {
                     Sidebar {

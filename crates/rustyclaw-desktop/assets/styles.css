@@ -1774,7 +1774,7 @@ body,
     white-space: nowrap;
 }
 
-/* ── File browser (right sidebar) ───────────────────────────────────────── */
+/* ── File browser ───────────────────────────────────────────────────────── */
 
 .file-browser {
     display: flex;
