@@ -13,6 +13,22 @@ use rustyclaw_core::user_prompt_types::UserPrompt;
 use rustyclaw_view::{PromptAttachment, SecretsDialogData};
 use rustyclaw_view::{chrono, tracing, uuid};
 
+/// A workspace change held back while the user decides what to do with
+/// unsaved editor changes.
+///
+/// Every one of these repoints the thread's working directory, which
+/// invalidates the editor's caches — so the decision has to be made before the
+/// change is applied, not after.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingWorkspaceChange {
+    /// Change the working directory to this path.
+    Directory(String),
+    /// Make this project active.
+    Project(u64),
+    /// Bring this thread to the foreground.
+    Thread(u64),
+}
+
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Theme {
@@ -181,6 +197,9 @@ pub struct AppState {
     /// once the save lands.
     pub editor_saving: std::collections::HashMap<std::path::PathBuf, String>,
 
+    /// A workspace change waiting on the unsaved-changes prompt.
+    pub pending_workspace_change: Option<PendingWorkspaceChange>,
+
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
 
@@ -342,6 +361,7 @@ impl Default for AppState {
             editor_active: None,
             editor_edits: Default::default(),
             editor_saving: Default::default(),
+            pending_workspace_change: None,
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
@@ -729,6 +749,23 @@ impl AppState {
 
     /// Switch to a different thread, saving current messages and
     /// restoring the target thread's history.
+    /// Files the editor has unsaved changes for.
+    ///
+    /// An edit that merely matches what was loaded is not unsaved, so this
+    /// names real losses only — the same rule [`Self::reset_workspace_view`]
+    /// reports by, kept in one place so the prompt and the warning cannot
+    /// disagree about what is at stake.
+    pub fn unsaved_editor_files(&self) -> Vec<std::path::PathBuf> {
+        let mut files: Vec<std::path::PathBuf> = self
+            .editor_edits
+            .iter()
+            .filter(|(path, edited)| self.workspace_files.get(*path) != Some(*edited))
+            .map(|(path, _)| path.clone())
+            .collect();
+        files.sort();
+        files
+    }
+
     /// Forget everything the editor cached about the workspace.
     ///
     /// Every `Workspace*` path is relative to the thread's *current* working
@@ -741,12 +778,7 @@ impl AppState {
     /// Returns the files that had unsaved edits, so the caller can say what
     /// was dropped instead of discarding work without a word.
     pub fn reset_workspace_view(&mut self) -> Vec<std::path::PathBuf> {
-        let unsaved: Vec<std::path::PathBuf> = self
-            .editor_edits
-            .iter()
-            .filter(|(path, edited)| self.workspace_files.get(*path) != Some(*edited))
-            .map(|(path, _)| path.clone())
-            .collect();
+        let unsaved = self.unsaved_editor_files();
 
         self.workspace_listings.clear();
         self.workspace_files.clear();
@@ -760,19 +792,10 @@ impl AppState {
 
     pub fn switch_thread(&mut self, target_id: u64) {
         // A different thread may run in a different directory (its own
-        // override, else its project's), so the editor's view of the
-        // workspace cannot carry over.
-        let dropped = self.reset_workspace_view();
-        if !dropped.is_empty() {
-            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
-            self.push_notice(
-                rustyclaw_core::types::MessageRole::Warning,
-                format!(
-                    "Switched threads with unsaved editor changes; discarded: {}",
-                    names.join(", ")
-                ),
-            );
-        }
+        // override, else its project's), so the editor's view cannot carry
+        // over. The caller has already resolved any unsaved changes — see
+        // `PendingWorkspaceChange` — so discarding here is safe.
+        self.reset_workspace_view();
 
         // Save current thread's messages
         if let Some(current_id) = self.foreground_thread_id
@@ -1131,5 +1154,30 @@ mod tests {
         s.editor_edits.insert(clean, "same".into());
 
         assert!(s.reset_workspace_view().is_empty());
+    }
+
+    /// The prompt and the discard warning must agree about what is at stake,
+    /// so both read from `unsaved_editor_files`.
+    #[test]
+    fn unsaved_files_lists_only_real_changes_and_is_non_destructive() {
+        let mut s = AppState::default();
+        let dirty = std::path::PathBuf::from("b.rs");
+        let clean = std::path::PathBuf::from("a.rs");
+        let fresh = std::path::PathBuf::from("c.rs");
+
+        s.workspace_files.insert(clean.clone(), "same".into());
+        s.editor_edits.insert(clean, "same".into());
+        s.workspace_files.insert(dirty.clone(), "old".into());
+        s.editor_edits.insert(dirty.clone(), "new".into());
+        // Never loaded, but typed into: unsaved.
+        s.editor_edits.insert(fresh.clone(), "typed".into());
+
+        let mut expected = vec![dirty, fresh];
+        expected.sort();
+        assert_eq!(s.unsaved_editor_files(), expected);
+
+        // Asking must not disturb anything — the user may still cancel.
+        assert_eq!(s.editor_edits.len(), 3);
+        assert_eq!(s.unsaved_editor_files(), expected);
     }
 }
