@@ -154,7 +154,10 @@ fn build_subagent_system_prompt(
             label: label.map(String::from),
         },
     );
-    let ws_context = ws.build_context(SessionType::Isolated);
+    // Files only: the generic isolated-session guidance claims the parent's
+    // full toolset (sessions_send, secrets_list, …), which would contradict
+    // the restricted toolset section below.
+    let ws_context = ws.build_context_files_only(SessionType::Isolated);
     if !ws_context.is_empty() {
         prompt.push_str(&ws_context);
         prompt.push_str("\n\n");
@@ -431,5 +434,22 @@ mod tests {
         // …and the toolset section only lists allowlisted tools.
         assert!(!prompt.contains("`write_file`"));
         assert!(prompt.contains("no human in this session"));
+        // The generic isolated-session guidance must not leak in: it claims
+        // the parent's full toolset and names tools (plain, un-backticked)
+        // that this subagent can never use.
+        assert!(!prompt.contains("Sub-Agent Guidelines"));
+        assert!(!prompt.contains("same tools as the parent"));
+        for denied in [
+            "write_file",
+            "sessions_send",
+            "secrets_list",
+            "task_describe",
+            "cron",
+        ] {
+            assert!(
+                !prompt.contains(denied),
+                "prompt must not mention excluded tool '{denied}'"
+            );
+        }
     }
 }

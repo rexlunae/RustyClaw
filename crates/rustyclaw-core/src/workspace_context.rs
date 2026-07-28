@@ -240,6 +240,19 @@ impl WorkspaceContext {
     /// Returns a formatted string containing all applicable workspace files
     /// for inclusion in the system prompt.
     pub fn build_context(&self, session_type: SessionType) -> String {
+        self.build_context_inner(session_type, true)
+    }
+
+    /// Like [`Self::build_context`], but without the generic sub-agent
+    /// guidance for isolated sessions. Focused subagent runs use this: their
+    /// prompt carries an explicit restricted toolset, and the generic
+    /// guidance's claims ("same tools as the parent agent", use
+    /// `sessions_send`/`secrets_list`/…) would contradict it.
+    pub fn build_context_files_only(&self, session_type: SessionType) -> String {
+        self.build_context_inner(session_type, false)
+    }
+
+    fn build_context_inner(&self, session_type: SessionType, include_guidance: bool) -> String {
         if !self.config.enabled {
             return String::new();
         }
@@ -270,7 +283,7 @@ impl WorkspaceContext {
         }
 
         // Add sub-agent guidance for isolated sessions
-        if session_type == SessionType::Isolated {
+        if include_guidance && session_type == SessionType::Isolated {
             sections.push(self.build_subagent_guidance());
         }
 
@@ -457,6 +470,26 @@ mod tests {
         let prompt = ctx.build_context(SessionType::Isolated);
         assert!(prompt.contains("SOUL.md"));
         assert!(!prompt.contains("MEMORY.md"));
+    }
+
+    #[test]
+    fn test_files_only_context_omits_generic_guidance() {
+        let workspace = setup_workspace();
+        let ctx = WorkspaceContext::new(workspace.path().to_path_buf());
+
+        // The full isolated context carries the generic sub-agent guidance…
+        let full = ctx.build_context(SessionType::Isolated);
+        assert!(full.contains("Sub-Agent Guidelines"));
+        assert!(full.contains("same tools as the parent agent"));
+
+        // …the files-only variant keeps the workspace files but drops the
+        // guidance and its tool claims entirely.
+        let files_only = ctx.build_context_files_only(SessionType::Isolated);
+        assert!(files_only.contains("SOUL.md"));
+        assert!(!files_only.contains("MEMORY.md"));
+        assert!(!files_only.contains("Sub-Agent Guidelines"));
+        assert!(!files_only.contains("sessions_send"));
+        assert!(!files_only.contains("secrets_list"));
     }
 
     #[test]
