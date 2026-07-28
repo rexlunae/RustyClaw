@@ -144,27 +144,34 @@ impl WorkspaceView {
         files
     }
 
+    /// Directory listings, keyed by directory path relative to the root.
     pub fn listings(
         &self,
     ) -> &HashMap<std::path::PathBuf, Vec<rustyclaw_core::gateway::WorkspaceEntryDto>> {
         &self.listings
     }
+    /// Loaded file contents, keyed by path relative to the root.
     pub fn files(&self) -> &HashMap<std::path::PathBuf, String> {
         &self.files
     }
+    /// Typed-but-unwritten contents, keyed by path relative to the root.
     pub fn edits(&self) -> &HashMap<std::path::PathBuf, String> {
         &self.edits
     }
+    /// Directories the tree currently shows expanded.
     pub fn expanded(&self) -> &HashSet<std::path::PathBuf> {
         &self.expanded
     }
+    /// Open editor tabs, in display order.
     pub fn open(&self) -> &[std::path::PathBuf] {
         &self.open
     }
+    /// The tab currently being edited.
     pub fn active(&self) -> Option<&std::path::Path> {
         self.active.as_deref()
     }
 
+    /// Record a directory's entries as they arrived from the gateway.
     pub fn set_listing(
         &mut self,
         path: std::path::PathBuf,
@@ -172,12 +179,15 @@ impl WorkspaceView {
     ) {
         self.listings.insert(path, entries);
     }
+    /// Record a file's contents as they arrived from the gateway.
     pub fn set_file(&mut self, path: std::path::PathBuf, content: String) {
         self.files.insert(path, content);
     }
+    /// Record what the user has typed into a file.
     pub fn set_edit(&mut self, path: std::path::PathBuf, content: String) {
         self.edits.insert(path, content);
     }
+    /// Remember the text being written, so the reply can reconcile it.
     pub fn begin_save(&mut self, path: std::path::PathBuf, content: String) {
         self.saving.insert(path, content);
     }
@@ -196,18 +206,21 @@ impl WorkspaceView {
         self.expanded.insert(path);
         needs
     }
+    /// Open a file in a tab and focus it.
     pub fn open_file(&mut self, path: std::path::PathBuf) {
         if !self.open.contains(&path) {
             self.open.push(path.clone());
         }
         self.active = Some(path);
     }
+    /// Close a tab, keeping any unsaved text for when it is reopened.
     pub fn close_file(&mut self, path: &std::path::Path) {
         self.open.retain(|p| p != path);
         if self.active.as_deref() == Some(path) {
             self.active = self.open.last().cloned();
         }
     }
+    /// Bring an already-open tab to the front.
     pub fn focus(&mut self, path: std::path::PathBuf) {
         self.active = Some(path);
     }
