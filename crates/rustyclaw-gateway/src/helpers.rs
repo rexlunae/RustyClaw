@@ -1,3 +1,6 @@
+use std::io;
+use std::path::{Path, PathBuf};
+
 use tracing::debug;
 
 use rustyclaw_core::gateway::ChatMessage;
@@ -106,4 +109,185 @@ pub fn reject_non_utf8_path(path: &std::path::Path) -> Result<(), String> {
         "'{}' is not valid UTF-8; RustyClaw cannot store or transmit that path",
         path.display()
     ))
+}
+
+// ── Working directories ─────────────────────────────────────────────────────
+
+/// Resolve a client-supplied working directory and make sure it exists,
+/// returning the path to store or a message fit to show the user.
+///
+/// Every place a client names a directory — a project's, a thread's override —
+/// goes through here, so `~` means the same thing everywhere and a failure
+/// explains itself the same way. `purpose` names the field in the error
+/// ("project directory", "thread's working directory").
+///
+/// The *expanded* path is what comes back: storing the raw `~/code/app` would
+/// leave a literal `~` directory to be created again on the next restart.
+pub fn prepare_workspace_dir(path: &Path, purpose: &str) -> Result<PathBuf, String> {
+    reject_non_utf8_path(path)?;
+    let expanded = expand_home(path);
+    match std::fs::create_dir_all(&expanded) {
+        Ok(()) => Ok(expanded),
+        Err(e) => Err(describe_create_failure(&expanded, purpose, &e)),
+    }
+}
+
+/// Expand a leading `~` against this machine's home directory.
+///
+/// `~` is shell syntax, not filesystem syntax: `create_dir_all` would happily
+/// make a directory *named* `~` next to the gateway's working directory, and
+/// the project would then point somewhere the user has never heard of. Shares
+/// the tools' expansion so `~/code/app` means one thing across the gateway.
+fn expand_home(path: &Path) -> PathBuf {
+    match path.to_str() {
+        Some(text) => rustyclaw_core::tools::expand_tilde(text),
+        // Not UTF-8, so there is no `~` we could have recognised anyway.
+        None => path.to_path_buf(),
+    }
+}
+
+/// Explain a failed directory creation in terms the user can act on.
+///
+/// The bare `io::Error` is often actively misleading: creating a directory
+/// under `/home` on macOS fails with `Operation not supported (os error 45)`,
+/// which reads like a bug in RustyClaw rather than "that path can't exist on
+/// this OS". Where we recognise the situation we say what to do instead.
+fn describe_create_failure(path: &Path, purpose: &str, error: &io::Error) -> String {
+    let mut message = format!(
+        "Could not create the {purpose} '{}': {error}",
+        path.display()
+    );
+    if let Some(hint) = create_failure_hint(path, error) {
+        message.push_str(". ");
+        message.push_str(&hint);
+    }
+    message
+}
+
+fn create_failure_hint(path: &Path, error: &io::Error) -> Option<String> {
+    if cfg!(target_os = "macos") {
+        if let Some(suggestion) = macos_home_suggestion(path, dirs::home_dir().as_deref()) {
+            return Some(format!(
+                "On macOS '/home' belongs to the system automounter and cannot hold new \
+                 directories — home directories live under '/Users'. Try '{}'",
+                suggestion.display()
+            ));
+        }
+    }
+    if path.is_relative() {
+        let base = std::env::current_dir().ok()?;
+        return Some(format!(
+            "That path is relative, so it was resolved against the gateway's working \
+             directory '{}'. Use an absolute path",
+            base.display()
+        ));
+    }
+    let blocker = deepest_existing_ancestor(path)?;
+    match error.kind() {
+        io::ErrorKind::PermissionDenied => Some(format!(
+            "'{}' is not writable by the user the gateway runs as",
+            blocker.display()
+        )),
+        io::ErrorKind::NotADirectory => Some(format!(
+            "'{}' is a file, not a directory",
+            blocker.display()
+        )),
+        _ => Some(format!(
+            "The closest directory that does exist is '{}'",
+            blocker.display()
+        )),
+    }
+}
+
+/// The `/Users` path a macOS user probably meant by a `/home/...` one.
+///
+/// `/home/tserica/Money` → `<home>/Money`: the first component after `/home`
+/// is a username, which on macOS is already part of the home directory.
+/// `None` when the path isn't under `/home` or we have no home directory to
+/// suggest, so the caller falls through to a generic hint.
+fn macos_home_suggestion(path: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let home = home?;
+    let under_home = path.strip_prefix("/home").ok()?;
+    let mut components = under_home.components();
+    // Drop the username component; whatever follows is what the user named.
+    components.next()?;
+    let tail = components.as_path();
+    Some(if tail.as_os_str().is_empty() {
+        home.to_path_buf()
+    } else {
+        home.join(tail)
+    })
+}
+
+/// The nearest ancestor of `path` that exists, which is the directory that
+/// actually refused the write.
+fn deepest_existing_ancestor(path: &Path) -> Option<&Path> {
+    path.ancestors()
+        .skip(1)
+        .find(|a| !a.as_os_str().is_empty() && a.exists())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A client that sends `~/code/app` means the home directory, not a
+    /// directory named `~` beside the gateway's cwd.
+    #[test]
+    fn tilde_expands_to_the_home_directory() {
+        let home = dirs::home_dir().expect("test host has a home directory");
+        assert_eq!(expand_home(Path::new("~")), home);
+        assert_eq!(expand_home(Path::new("~/code/app")), home.join("code/app"));
+        // Not a tilde path, or another user's home: left exactly as sent.
+        assert_eq!(expand_home(Path::new("/srv/api")), Path::new("/srv/api"));
+        assert_eq!(expand_home(Path::new("~root/x")), Path::new("~root/x"));
+    }
+
+    /// The report this came from: `/home/tserica/Money` on macOS fails with
+    /// `os error 45`, which says nothing about the actual problem. The hint has
+    /// to name the path that would have worked.
+    #[test]
+    fn a_home_path_is_translated_to_users() {
+        let home = Path::new("/Users/tserica");
+        assert_eq!(
+            macos_home_suggestion(Path::new("/home/tserica/Money"), Some(home)),
+            Some(PathBuf::from("/Users/tserica/Money"))
+        );
+        assert_eq!(
+            macos_home_suggestion(Path::new("/home/tserica"), Some(home)),
+            Some(home.to_path_buf())
+        );
+        // Nothing to suggest for a path that isn't under /home.
+        assert_eq!(
+            macos_home_suggestion(Path::new("/srv/api"), Some(home)),
+            None
+        );
+        assert_eq!(macos_home_suggestion(Path::new("/home/x"), None), None);
+    }
+
+    /// A path inside an existing directory is created, and the stored path is
+    /// the expanded one.
+    #[test]
+    fn preparing_a_directory_creates_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target = tmp.path().join("nested/project");
+        let stored = prepare_workspace_dir(&target, "project directory").unwrap();
+        assert_eq!(stored, target);
+        assert!(target.is_dir());
+    }
+
+    /// A file where a directory should go is reported as such, naming the file
+    /// rather than leaving the user with a bare OS error.
+    #[test]
+    fn a_file_in_the_way_is_named() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("notadir");
+        std::fs::write(&file, b"x").unwrap();
+        let message = prepare_workspace_dir(&file.join("project"), "project directory")
+            .expect_err("a file cannot be a parent directory");
+        assert!(
+            message.contains(&file.display().to_string()),
+            "message should name the offending path: {message}"
+        );
+    }
 }

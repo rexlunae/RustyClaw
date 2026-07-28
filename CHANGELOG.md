@@ -169,6 +169,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Creating a project meant typing a path from memory, and failing at it
+  on macOS.** The New Project dialog had no folder picker (unlike the
+  Edit Project dialog) and offered `/home/you/code/my-project` as its
+  example, so a macOS user following that shape landed on `/home/...` —
+  a path owned by the system automounter, where `mkdir` fails with
+  `Operation not supported (os error 45)` and the gateway reported
+  exactly that and nothing else. The dialog now starts with the path
+  field on the user's home directory, has the same **Browse…** native
+  folder picker as the edit dialogs (filling in the project name from the
+  chosen folder when the name field is still empty), and every
+  directory placeholder is derived from the real home directory instead
+  of a hard-coded Linux path. Gateway-side, project and thread
+  directories now go through one `prepare_workspace_dir` helper that
+  expands a leading `~` (previously stored verbatim, which would create a
+  directory literally named `~` beside the gateway's working directory)
+  and explains a failure in terms of what to do about it — naming the
+  `/Users` path that would have worked for a macOS `/home` path, the
+  closest existing ancestor, the unwritable directory, or the file
+  standing where a directory should be. `expand_tilde` in core also
+  stopped expanding `~alice/notes` into `$HOME/alice/notes`.
+
 - **Thread history that never made it onto the screen.** Opening the
   desktop client could show nothing but system notices while the sidebar
   correctly reported each thread's message count — the messages were on

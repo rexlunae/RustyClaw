@@ -14,20 +14,7 @@ use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, Button, Buttons, Control, Field, FieldLabel, Help};
 
 use super::RcModal;
-
-/// Open a native folder picker starting at `start`, returning the choice.
-async fn pick_folder(start: String) -> Option<String> {
-    let start = if start.trim().is_empty() {
-        ".".to_string()
-    } else {
-        start
-    };
-    rfd::AsyncFileDialog::new()
-        .set_directory(start)
-        .pick_folder()
-        .await
-        .map(|folder| folder.path().display().to_string())
-}
+use super::dir_picker::{example_path, pick_folder};
 
 /// A path as editable text.
 ///
@@ -122,7 +109,7 @@ pub fn EditProjectDialog(props: EditProjectDialogProps) -> Element {
                             class: "input",
                             r#type: "text",
                             value: "{path}",
-                            placeholder: "/home/you/code/my-project",
+                            placeholder: example_path("my-project"),
                             oninput: move |evt| path.set(evt.value()),
                             onkeydown: move |evt: KeyboardEvent| {
                                 if evt.key() == Key::Enter {
@@ -278,7 +265,7 @@ pub fn EditThreadDialog(props: EditThreadDialogProps) -> Element {
                                 class: "input",
                                 r#type: "text",
                                 value: "{path}",
-                                placeholder: "/home/you/code/some-worktree",
+                                placeholder: example_path("some-worktree"),
                                 oninput: move |evt| path.set(evt.value()),
                             }
                         }

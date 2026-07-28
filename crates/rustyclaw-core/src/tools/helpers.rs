@@ -313,13 +313,28 @@ pub fn resolve_path(workspace_dir: &Path, path: &str) -> PathBuf {
 }
 
 /// Expand a leading `~` to the user's home directory.
+///
+/// Only the current user's home is expanded: `~alice/notes` is returned as-is,
+/// because another account's home directory is not ours to guess and treating
+/// `alice` as a subdirectory of *our* home would silently point at the wrong
+/// place. A path with no leading `~`, or a `~` we cannot resolve a home for,
+/// is likewise handed back untouched.
 pub fn expand_tilde(p: &str) -> PathBuf {
-    if p.starts_with('~') {
-        dirs::home_dir()
-            .map(|h| h.join(p.strip_prefix("~/").unwrap_or(&p[1..])))
-            .unwrap_or_else(|| PathBuf::from(p))
+    let Some(rest) = p.strip_prefix('~') else {
+        return PathBuf::from(p);
+    };
+    let separated = rest.starts_with('/') || (cfg!(windows) && rest.starts_with('\\'));
+    if !(rest.is_empty() || separated) {
+        return PathBuf::from(p);
+    }
+    let Some(home) = dirs::home_dir() else {
+        return PathBuf::from(p);
+    };
+    let rest = rest.trim_start_matches(['/', '\\']);
+    if rest.is_empty() {
+        home
     } else {
-        PathBuf::from(p)
+        home.join(rest)
     }
 }
 
@@ -515,5 +530,24 @@ pub fn sanitize_tool_output(output: String) -> String {
         )
     } else {
         output
+    }
+}
+
+#[cfg(test)]
+mod expand_tilde_tests {
+    use super::expand_tilde;
+    use std::path::PathBuf;
+
+    #[test]
+    fn expands_only_the_current_users_home() {
+        let home = dirs::home_dir().expect("test host has a home directory");
+        assert_eq!(expand_tilde("~"), home);
+        assert_eq!(expand_tilde("~/code/app"), home.join("code/app"));
+        assert_eq!(expand_tilde("/srv/api"), PathBuf::from("/srv/api"));
+        assert_eq!(expand_tilde(""), PathBuf::from(""));
+        // `~alice/notes` is another account's home. Expanding it against *our*
+        // home would quietly resolve to `$HOME/alice/notes`, a path the caller
+        // never asked for; leaving it alone fails visibly instead.
+        assert_eq!(expand_tilde("~alice/notes"), PathBuf::from("~alice/notes"));
     }
 }

@@ -81,26 +81,10 @@ pub(crate) async fn handle_project_create(
     path: PathBuf,
 ) -> Result<()> {
     debug!("Project create request: {} @ {}", name, path.display());
-    if let Err(message) = crate::helpers::reject_non_utf8_path(&path) {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error { ok: false, message },
-        };
-        return send_frame(writer, &frame).await;
-    }
-    if let Err(e) = std::fs::create_dir_all(&path) {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error {
-                ok: false,
-                message: format!(
-                    "Could not create project directory '{}': {e}",
-                    path.display()
-                ),
-            },
-        };
-        return send_frame(writer, &frame).await;
-    }
+    let path = match crate::helpers::prepare_workspace_dir(&path, "project directory") {
+        Ok(path) => path,
+        Err(message) => return send_error(writer, message).await,
+    };
     let id = project_mgr.create(name, path);
     activate_project(writer, config, project_mgr, thread_mgr, projects_path, id).await
 }
@@ -145,26 +129,16 @@ pub(crate) async fn handle_project_update(
     let id = ProjectId(project_id);
 
     if !project_mgr.contains(id) {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error {
-                ok: false,
-                message: format!("Cannot edit project {project_id}: not found"),
-            },
-        };
-        return send_frame(writer, &frame).await;
+        return send_error(
+            writer,
+            format!("Cannot edit project {project_id}: not found"),
+        )
+        .await;
     }
 
     let name = name.trim().to_string();
     if name.is_empty() {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error {
-                ok: false,
-                message: "Project name cannot be empty".to_string(),
-            },
-        };
-        return send_frame(writer, &frame).await;
+        return send_error(writer, "Project name cannot be empty".to_string()).await;
     }
 
     // Only emptiness is rejected. Whitespace is *not* trimmed here: a
@@ -172,37 +146,17 @@ pub(crate) async fn handle_project_update(
     // every platform, and the client already trims its text field, so
     // trimming again server-side could only corrupt a deliberate path.
     if path.as_os_str().is_empty() {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error {
-                ok: false,
-                message: "Project working directory cannot be empty".to_string(),
-            },
-        };
-        return send_frame(writer, &frame).await;
+        return send_error(
+            writer,
+            "Project working directory cannot be empty".to_string(),
+        )
+        .await;
     }
 
-    if let Err(message) = crate::helpers::reject_non_utf8_path(&path) {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error { ok: false, message },
-        };
-        return send_frame(writer, &frame).await;
-    }
-
-    if let Err(e) = std::fs::create_dir_all(&path) {
-        let frame = ServerFrame {
-            frame_type: ServerFrameType::Error,
-            payload: ServerPayload::Error {
-                ok: false,
-                message: format!(
-                    "Could not use '{}' as the project directory: {e}",
-                    path.display()
-                ),
-            },
-        };
-        return send_frame(writer, &frame).await;
-    }
+    let path = match crate::helpers::prepare_workspace_dir(&path, "project directory") {
+        Ok(path) => path,
+        Err(message) => return send_error(writer, message).await,
+    };
 
     project_mgr.rename(id, name);
     project_mgr.set_path(id, &path);
@@ -240,14 +194,11 @@ pub(crate) async fn handle_project_delete(
         )
         .await;
     }
-    let frame = ServerFrame {
-        frame_type: ServerFrameType::Error,
-        payload: ServerPayload::Error {
-            ok: false,
-            message: "Cannot delete the default or last remaining project".to_string(),
-        },
-    };
-    send_frame(writer, &frame).await
+    send_error(
+        writer,
+        "Cannot delete the default or last remaining project".to_string(),
+    )
+    .await
 }
 
 /// Handle a `ProjectSwitch`: make the project active and repoint the workspace.
@@ -270,10 +221,153 @@ pub(crate) async fn handle_project_switch(
     .await
 }
 
+/// Send an `Error` frame. A refused create or edit fails loudly: the client
+/// shows the reason rather than silently leaving the dialog as it was.
+async fn send_error(writer: &mut dyn transport::TransportWriter, message: String) -> Result<()> {
+    let frame = ServerFrame {
+        frame_type: ServerFrameType::Error,
+        payload: ServerPayload::Error { ok: false, message },
+    };
+    send_frame(writer, &frame).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
     use rustyclaw_core::threads::ThreadManager;
+
+    struct CapturingWriter {
+        frames: Vec<ServerFrame>,
+    }
+
+    #[async_trait]
+    impl transport::TransportWriter for CapturingWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
+            self.frames.push(frame.clone());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    impl CapturingWriter {
+        fn new() -> Self {
+            Self { frames: Vec::new() }
+        }
+
+        fn errors(&self) -> Vec<String> {
+            self.frames
+                .iter()
+                .filter_map(|f| match &f.payload {
+                    ServerPayload::Error { message, .. } => Some(message.clone()),
+                    _ => None,
+                })
+                .collect()
+        }
+    }
+
+    /// Creating a project makes its directory and points the workspace at it.
+    #[tokio::test]
+    async fn project_create_makes_the_directory_and_activates() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = Config::default();
+        let mut projects = ProjectManager::new();
+        let threads = ThreadManager::new();
+        let target = tmp.path().join("code/money");
+        let mut writer = CapturingWriter::new();
+
+        handle_project_create(
+            &mut writer,
+            &mut config,
+            &mut projects,
+            &threads,
+            &tmp.path().join("projects.json"),
+            "Money".to_string(),
+            target.clone(),
+        )
+        .await
+        .unwrap();
+
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert!(target.is_dir(), "the project directory is created");
+        assert_eq!(config.workspace_dir(), target);
+    }
+
+    /// A directory that cannot be created is reported to the client, and no
+    /// half-made project is left behind. The reason is expanded on rather than
+    /// passed through raw — the report this came from was a bare
+    /// `Operation not supported (os error 45)`, which explains nothing.
+    #[tokio::test]
+    async fn project_create_reports_a_directory_it_cannot_make() {
+        let tmp = tempfile::tempdir().unwrap();
+        let blocker = tmp.path().join("not-a-directory");
+        std::fs::write(&blocker, b"x").unwrap();
+
+        let mut config = Config::default();
+        let mut projects = ProjectManager::new();
+        let threads = ThreadManager::new();
+        let before = projects.len();
+        let mut writer = CapturingWriter::new();
+
+        handle_project_create(
+            &mut writer,
+            &mut config,
+            &mut projects,
+            &threads,
+            &tmp.path().join("projects.json"),
+            "Money".to_string(),
+            blocker.join("Money"),
+        )
+        .await
+        .unwrap();
+
+        let errors = writer.errors();
+        assert_eq!(errors.len(), 1, "{errors:?}");
+        assert!(errors[0].contains("project directory"), "{errors:?}");
+        assert!(
+            errors[0].contains(&blocker.display().to_string()),
+            "the message should name what is in the way: {errors:?}"
+        );
+        assert_eq!(projects.len(), before, "no project is registered");
+    }
+
+    /// A `~` path is stored expanded. Left raw, the gateway would create a
+    /// directory literally named `~` and the project would point at it again
+    /// on every restart.
+    #[tokio::test]
+    async fn project_create_expands_a_tilde_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = dirs::home_dir().expect("test host has a home directory");
+        let leaf = ".rustyclaw-test-project";
+        let mut config = Config::default();
+        let mut projects = ProjectManager::new();
+        let threads = ThreadManager::new();
+        let mut writer = CapturingWriter::new();
+
+        handle_project_create(
+            &mut writer,
+            &mut config,
+            &mut projects,
+            &threads,
+            &tmp.path().join("projects.json"),
+            "Tilde".to_string(),
+            PathBuf::from(format!("~/{leaf}")),
+        )
+        .await
+        .unwrap();
+
+        let created = home.join(leaf);
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert_eq!(
+            projects.path_of(projects.active_id()),
+            Some(created.clone()),
+            "the stored path is the expanded one"
+        );
+        let _ = std::fs::remove_dir(&created);
+    }
 
     /// The workspace follows the foreground thread's *effective* directory,
     /// not the active project's path. Before `effective_dir_for` existed the
