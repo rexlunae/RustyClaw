@@ -729,7 +729,51 @@ impl AppState {
 
     /// Switch to a different thread, saving current messages and
     /// restoring the target thread's history.
+    /// Forget everything the editor cached about the workspace.
+    ///
+    /// Every `Workspace*` path is relative to the thread's *current* working
+    /// directory, so a cached tree or an open tab becomes a path into a
+    /// different folder the moment that directory changes — and saving such a
+    /// tab would write stale content over whatever same-named file happens to
+    /// live there. Anything that can repoint the workspace (directory picker,
+    /// thread switch, project switch, reconnect) must call this.
+    ///
+    /// Returns the files that had unsaved edits, so the caller can say what
+    /// was dropped instead of discarding work without a word.
+    pub fn reset_workspace_view(&mut self) -> Vec<std::path::PathBuf> {
+        let unsaved: Vec<std::path::PathBuf> = self
+            .editor_edits
+            .iter()
+            .filter(|(path, edited)| self.workspace_files.get(*path) != Some(*edited))
+            .map(|(path, _)| path.clone())
+            .collect();
+
+        self.workspace_listings.clear();
+        self.workspace_files.clear();
+        self.editor_expanded.clear();
+        self.editor_open.clear();
+        self.editor_active = None;
+        self.editor_edits.clear();
+        self.editor_saving.clear();
+        unsaved
+    }
+
     pub fn switch_thread(&mut self, target_id: u64) {
+        // A different thread may run in a different directory (its own
+        // override, else its project's), so the editor's view of the
+        // workspace cannot carry over.
+        let dropped = self.reset_workspace_view();
+        if !dropped.is_empty() {
+            let names: Vec<String> = dropped.iter().map(|p| p.display().to_string()).collect();
+            self.push_notice(
+                rustyclaw_core::types::MessageRole::Warning,
+                format!(
+                    "Switched threads with unsaved editor changes; discarded: {}",
+                    names.join(", ")
+                ),
+            );
+        }
+
         // Save current thread's messages
         if let Some(current_id) = self.foreground_thread_id
             && !self.messages.is_empty()
@@ -1038,5 +1082,54 @@ mod tests {
         assert!(s.messages.is_empty());
         assert!(s.is_processing);
         assert_eq!(s.thread_messages.get(&7).map(VecDeque::len), Some(2));
+    }
+
+    /// Every `Workspace*` path is relative to the *current* working directory,
+    /// so a cached tree or open tab from a previous directory is not merely
+    /// stale — saving it would write that content into a same-named file in
+    /// the new directory. Everything must go.
+    #[test]
+    fn resetting_the_workspace_view_clears_every_editor_cache() {
+        let mut s = AppState::default();
+        let path = std::path::PathBuf::from("src/main.rs");
+
+        s.workspace_listings
+            .insert(std::path::PathBuf::new(), Vec::new());
+        s.workspace_files.insert(path.clone(), "loaded".into());
+        s.editor_expanded.insert(std::path::PathBuf::from("src"));
+        s.editor_open.push(path.clone());
+        s.editor_active = Some(path.clone());
+        s.editor_edits.insert(path.clone(), "typed".into());
+        s.editor_saving.insert(path.clone(), "in flight".into());
+
+        let dropped = s.reset_workspace_view();
+
+        assert_eq!(
+            dropped,
+            vec![path],
+            "unsaved work is reported, not silently dropped"
+        );
+        assert!(s.workspace_listings.is_empty());
+        assert!(s.workspace_files.is_empty());
+        assert!(s.editor_expanded.is_empty());
+        assert!(s.editor_open.is_empty());
+        assert!(s.editor_active.is_none());
+        assert!(s.editor_edits.is_empty());
+        assert!(
+            s.editor_saving.is_empty(),
+            "an in-flight save must not reconcile into the new directory"
+        );
+    }
+
+    /// A file whose edit matches what was loaded has nothing unsaved, so it is
+    /// not reported as discarded — the warning should name real losses only.
+    #[test]
+    fn resetting_reports_only_genuinely_unsaved_files() {
+        let mut s = AppState::default();
+        let clean = std::path::PathBuf::from("clean.rs");
+        s.workspace_files.insert(clean.clone(), "same".into());
+        s.editor_edits.insert(clean, "same".into());
+
+        assert!(s.reset_workspace_view().is_empty());
     }
 }
