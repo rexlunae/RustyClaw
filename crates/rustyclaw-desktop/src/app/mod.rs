@@ -740,6 +740,10 @@ pub fn App() -> Element {
     let on_new_project = move |_| show_new_project.set(true);
 
     /// Say what unsaved work a workspace move discarded, if any.
+    ///
+    /// Take the list as an argument rather than doing the rebase here: a
+    /// caller must bind the rebase result to a variable first, so the write
+    /// guard is released before this takes its own.
     fn warn_dropped(mut state: Signal<AppState>, dropped: Vec<std::path::PathBuf>) {
         if dropped.is_empty() {
             return;
@@ -769,7 +773,8 @@ pub fn App() -> Element {
             // gratuitous loss.
             PendingWorkspaceChange::Directory(path) => match std::env::set_current_dir(&path) {
                 Ok(()) => {
-                    warn_dropped(state, state.write().workspace.rebase(path.clone().into()));
+                    let dropped = state.write().workspace.rebase(path.clone().into());
+                    warn_dropped(state, dropped);
                     let options = build_directory_options(&path);
                     {
                         let mut s = state.write();
@@ -801,7 +806,8 @@ pub fn App() -> Element {
                 }
             },
             PendingWorkspaceChange::Project(project_id) => {
-                warn_dropped(state, state.write().workspace.rebase_to_current_thread());
+                let dropped = state.write().workspace.rebase_to_current_thread();
+                warn_dropped(state, dropped);
                 if let Some(client) = gw {
                     spawn(async move {
                         if let Err(e) = client
