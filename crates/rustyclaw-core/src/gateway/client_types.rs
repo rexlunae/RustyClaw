@@ -16,7 +16,8 @@ pub use crate::gateway::protocol::SecretEntryDto;
 pub use crate::gateway::protocol::ServiceInfoDto;
 pub use crate::gateway::protocol::frames::{
     ChannelStatusDto, CronJobDto, EngineInfoDto, EngineModelDto, HistoryEntryDto, McpServerDto,
-    MemoryEntryDto, ModelUsageDto, SessionUsageDto, ToolConfigDto, UsageTotalsDto,
+    MemoryEntryDto, ModelUsageDto, PluginActionDto, PluginInfoDto, SessionUsageDto, ToolConfigDto,
+    UsageTotalsDto,
 };
 
 // ── Events (server → client) ────────────────────────────────────────────────
@@ -154,6 +155,9 @@ pub enum GatewayEvent {
         threads: Vec<ThreadInfoDto>,
         foreground_id: Option<u64>,
     },
+
+    /// Plugin list and state updated.
+    PluginsUpdate { plugins: Vec<PluginInfoDto> },
 
     /// Projects updated
     ProjectsUpdate {
@@ -486,6 +490,14 @@ pub enum GatewayCommand {
         working_dir: Option<PathBuf>,
     },
 
+    /// Request the plugin list and every plugin's current state.
+    #[serde(rename = "plugin_list")]
+    PluginList,
+
+    /// Re-read one plugin's state from disk and push the refreshed list.
+    #[serde(rename = "plugin_refresh")]
+    PluginRefresh { plugin_name: String },
+
     /// Delete a project
     #[serde(rename = "project_delete")]
     ProjectDelete { project_id: u64 },
@@ -786,6 +798,14 @@ impl GatewayCommand {
             GatewayCommand::ProjectList => ClientFrame {
                 frame_type: ClientFrameType::ProjectList,
                 payload: ClientPayload::ProjectList,
+            },
+            GatewayCommand::PluginList => ClientFrame {
+                frame_type: ClientFrameType::PluginList,
+                payload: ClientPayload::PluginList,
+            },
+            GatewayCommand::PluginRefresh { plugin_name } => ClientFrame {
+                frame_type: ClientFrameType::PluginRefresh,
+                payload: ClientPayload::PluginRefresh { plugin_name },
             },
             GatewayCommand::ProjectCreate { name, path } => ClientFrame {
                 frame_type: ClientFrameType::ProjectCreate,
@@ -1300,6 +1320,9 @@ impl GatewayEvent {
                     .collect(),
                 foreground_id,
             }),
+            ServerPayload::PluginsUpdate { plugins } => {
+                Some(GatewayEvent::PluginsUpdate { plugins })
+            }
             ServerPayload::ProjectsUpdate {
                 projects,
                 active_id,

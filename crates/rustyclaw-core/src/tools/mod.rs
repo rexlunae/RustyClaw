@@ -124,7 +124,7 @@ use plugin::{
     exec_plugin_create, exec_plugin_list, exec_plugin_state_get, exec_plugin_state_patch,
     exec_plugin_state_set,
 };
-pub use plugin::{init_plugin_manager, plugin_prompt_context, reload_plugins};
+pub use plugin::{init_plugin_manager, plugin_prompt_context, plugin_snapshots, reload_plugins};
 
 // Gateway operations
 use gateway_tools::{exec_gateway, exec_image, exec_message, exec_tts};
