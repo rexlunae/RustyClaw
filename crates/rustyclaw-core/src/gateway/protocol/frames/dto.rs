@@ -178,6 +178,33 @@ pub struct ProjectInfoDto {
     pub path: PathBuf,
 }
 
+/// DTO for one plugin in `PluginsUpdate`.
+///
+/// Mirrors [`crate::plugins::Plugin`] plus its live state. `state` and the
+/// action list are what the client renders; `html_template` is the plugin's
+/// declared custom template, carried so a client that can render one knows it
+/// exists.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PluginInfoDto {
+    pub name: String,
+    pub description: String,
+    pub emoji: Option<String>,
+    pub version: String,
+    pub enabled: bool,
+    /// Live plugin state as JSON, serialized because the wire format is
+    /// bincode and `serde_json::Value` is not directly encodable by it.
+    pub state_json: String,
+    pub actions: Vec<PluginActionDto>,
+    pub html_template: Option<String>,
+}
+
+/// DTO for one declared plugin action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginActionDto {
+    pub name: String,
+    pub description: String,
+}
+
 /// DTO for agent info in `AgentsUpdate`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentInfoDto {

@@ -27,7 +27,7 @@ use crate::thread_updates::{
 use crate::{
     SharedConfig, SharedCopilotSession, SharedModelCtx, SharedModelRegistry, SharedObserver,
     SharedSkillManager, SharedTaskManager, SharedVault, TOTP_LOCKOUT_SECS, ToolCancelFlag, admin,
-    auth, concurrent, project_handler, providers, thread_handler,
+    auth, concurrent, plugin_handler, project_handler, providers, thread_handler,
 };
 
 pub(crate) async fn handle_connection(
@@ -425,6 +425,9 @@ pub(crate) async fn handle_connection(
     {
         warn!(error = %e, "Failed to send initial agent list");
     }
+    if let Err(e) = plugin_handler::send_plugins_update(&mut *writer).await {
+        warn!(error = %e, "Failed to send initial plugin list");
+    }
 
     let reader_cancel = cancel.clone();
     let reader_tool_cancel = tool_cancel.clone();
@@ -701,6 +704,12 @@ pub(crate) async fn handle_connection(
                             }
                             ClientPayload::SetWorkingDirectory { path } => {
                                 admin::handle_set_working_directory(&mut config, path);
+                            }
+                            ClientPayload::PluginList => {
+                                plugin_handler::handle_plugin_list(&mut *writer).await?;
+                            }
+                            ClientPayload::PluginRefresh { plugin_name } => {
+                                plugin_handler::handle_plugin_refresh(&mut *writer, plugin_name).await?;
                             }
                             ClientPayload::ProjectList => {
                                 project_handler::handle_project_list(&mut *writer, &agent_session.project_mgr).await?;

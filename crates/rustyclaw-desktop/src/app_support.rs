@@ -262,6 +262,49 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 .collect();
             state.write().set_foreground_thread(foreground_id);
         }
+        GatewayEvent::PluginsUpdate { plugins } => {
+            tracing::info!(count = plugins.len(), "PluginsUpdate received");
+            let snapshots: Vec<crate::components::PluginSnapshot> = plugins
+                .into_iter()
+                .map(|p| {
+                    // A plugin whose state does not parse still belongs in the
+                    // list — it renders with empty state rather than vanishing
+                    // from the panel with no explanation.
+                    let state = serde_json::from_str(&p.state_json).unwrap_or_else(|e| {
+                        tracing::warn!(
+                            plugin = %p.name,
+                            error = %e,
+                            "Plugin state did not parse; rendering it empty"
+                        );
+                        serde_json::Value::Object(Default::default())
+                    });
+                    crate::components::PluginSnapshot {
+                        name: p.name,
+                        description: p.description,
+                        emoji: p.emoji,
+                        version: p.version,
+                        enabled: p.enabled,
+                        state,
+                        actions: p
+                            .actions
+                            .into_iter()
+                            .map(|a| crate::components::PluginActionInfo {
+                                name: a.name,
+                                description: a.description,
+                            })
+                            .collect(),
+                        html_template: p.html_template,
+                    }
+                })
+                .collect();
+            let mut s = state.write();
+            // Selecting the first plugin when nothing is selected means the
+            // panel shows content immediately instead of a bare tab strip.
+            if s.active_plugin.is_none() {
+                s.active_plugin = snapshots.first().map(|p| p.name.clone());
+            }
+            s.plugins = snapshots;
+        }
         GatewayEvent::ProjectsUpdate {
             projects,
             active_id,

@@ -169,6 +169,10 @@ pub enum ClientFrameType {
     ProjectUpdate = 78,
     /// Edit a thread's caption and/or working-directory override.
     ThreadUpdate = 79,
+    /// Request the current plugin list and state.
+    PluginList = 80,
+    /// Re-read one plugin's state from disk and push it back.
+    PluginRefresh = 81,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -349,6 +353,8 @@ pub enum ServerFrameType {
     AgentSwitched = 84,
     /// Live provider model list result.
     ProviderModelListResult = 85,
+    /// The gateway's plugin list with each plugin's current state.
+    PluginsUpdate = 86,
 }
 
 /// Status frame sub-types.
@@ -839,6 +845,16 @@ pub enum ClientPayload {
         label: String,
         working_dir: Option<PathBuf>,
     },
+    /// Request the plugin list and every plugin's current state.
+    ///
+    /// Plugins previously had no wire representation at all: the manager and
+    /// its agent tools were gateway-side only, so a client's plugin panel had
+    /// nothing to render and always showed an empty state.
+    PluginList,
+    /// Re-read one plugin's state from disk and push the refreshed list.
+    PluginRefresh {
+        plugin_name: String,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1294,6 +1310,11 @@ pub enum ServerPayload {
         provider: String,
         models: Vec<String>,
         error: Option<String>,
+    },
+    /// The full plugin list with each plugin's current state. Sent on connect,
+    /// on request, and after a refresh.
+    PluginsUpdate {
+        plugins: Vec<PluginInfoDto>,
     },
 }
 

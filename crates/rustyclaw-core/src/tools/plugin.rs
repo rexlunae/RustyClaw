@@ -49,6 +49,28 @@ pub fn plugin_prompt_context() -> String {
         .unwrap_or_default()
 }
 
+/// Every loaded plugin paired with its live state.
+///
+/// Returns owned data (rather than lending the manager's) so callers outside
+/// this crate's tool layer — notably the gateway, which pushes plugin state to
+/// clients — don't have to hold the global lock while they serialize.
+/// Empty when the manager has not been initialised.
+pub fn plugin_snapshots() -> Vec<(crate::plugins::Plugin, Value)> {
+    PLUGIN_MANAGER
+        .get()
+        .and_then(|m| m.lock().ok())
+        .map(|mgr| {
+            mgr.plugins()
+                .iter()
+                .map(|p| {
+                    let state = mgr.get_state(&p.name).unwrap_or_default();
+                    (p.clone(), state)
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Reload all plugins.
 pub fn reload_plugins() -> Result<(), String> {
     PLUGIN_MANAGER

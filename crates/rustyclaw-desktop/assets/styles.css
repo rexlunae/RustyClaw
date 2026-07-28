@@ -297,9 +297,12 @@ body,
     min-width: var(--rc-sidebar-w-collapsed);
 }
 
-.sidebar-right {
-    width: 260px;
-    min-width: 260px;
+/* Plugin dock — the workspace's right-hand column. Replaces the former
+   right sidebar, which was a fixed Files/Plugins tab pair; plugins now own
+   this space and it only renders when at least one plugin is loaded. */
+.plugin-dock {
+    width: 300px;
+    min-width: 300px;
     border-right: none;
     border-left: 1px solid var(--rc-border);
 }

@@ -10,7 +10,7 @@ use crate::components::{
 };
 
 use crate::app_support::*;
-use crate::state::{AppState, RightSidebarTab};
+use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
@@ -586,7 +586,7 @@ pub fn App() -> Element {
     let sidebar_collapsed = state.read().sidebar_collapsed;
 
     // Handlers
-    let on_submit = move |message: String| {
+    let mut on_submit = move |message: String| {
         let attachments = state.read().prompt_attachments.clone();
         let prompt = build_prompt_with_attachments(&message, &attachments);
         {
@@ -860,8 +860,8 @@ pub fn App() -> Element {
                 let v = state.read().left_sidebar_visible;
                 state.write().left_sidebar_visible = !v;
             } else if event.id == ids.toggle_right_sidebar {
-                let v = state.read().right_sidebar_visible;
-                state.write().right_sidebar_visible = !v;
+                let v = state.read().plugin_dock_visible;
+                state.write().plugin_dock_visible = !v;
             } else if event.id == ids.settings {
                 show_settings.set(true);
             } else if event.id == ids.secrets {
@@ -1023,24 +1023,6 @@ pub fn App() -> Element {
         }
     });
 
-    let on_file_browser_toggle = move |path: std::path::PathBuf| {
-        state.write().file_browser.toggle_expand(&path);
-    };
-
-    let on_file_browser_select = move |path: std::path::PathBuf| {
-        let path_str = path.to_string_lossy().into_owned();
-        let attachment = rustyclaw_view::PromptAttachment::from_file_path(path_str.clone());
-        let mut s = state.write();
-        if !s
-            .prompt_attachments
-            .iter()
-            .any(|item| item.path == attachment.path)
-        {
-            s.prompt_attachments.push(attachment);
-        }
-        s.push_notice(MessageRole::Info, format!("Attached {}", path.display()));
-    };
-
     // Top-bar title: "Project — Thread" for the active project / foreground thread.
     let topbar_title = {
         let s = state.read();
@@ -1122,8 +1104,8 @@ pub fn App() -> Element {
                     size: BulmaSize::Small,
                     class: "sidebar-toggle-btn",
                     onclick: move |_| {
-                        let v = state.read().right_sidebar_visible;
-                        state.write().right_sidebar_visible = !v;
+                        let v = state.read().plugin_dock_visible;
+                        state.write().plugin_dock_visible = !v;
                     },
                     "◫"
                 }
@@ -1405,63 +1387,41 @@ pub fn App() -> Element {
                 }
             }
 
-                if state.read().right_sidebar_visible {
-                    aside { class: "sidebar sidebar-right",
-                        // Tab bar
-                        div { class: "sidebar-right-tabs",
-                            {
-                                let tab = state.read().right_sidebar_tab;
-                                rsx! {
-                                    button {
-                                        class: if tab == RightSidebarTab::Files { "sidebar-right-tab active" } else { "sidebar-right-tab" },
-                                        onclick: move |_| {
-                                            state.write().right_sidebar_tab = RightSidebarTab::Files;
-                                        },
-                                        "📁 Files"
-                                    }
-                                    button {
-                                        class: if tab == RightSidebarTab::Plugins { "sidebar-right-tab active" } else { "sidebar-right-tab" },
-                                        onclick: move |_| {
-                                            state.write().right_sidebar_tab = RightSidebarTab::Plugins;
-                                        },
-                                        "🔌 Plugins"
-                                    }
+                // Plugin dock. Replaces the old right sidebar, which hard-coded a
+                // Files/Plugins tab pair. It only renders when at least one
+                // plugin is loaded, so an install with no plugins gets the full
+                // width for chat instead of an empty panel.
+                if state.read().plugin_dock_visible && !state.read().plugins.is_empty() {
+                    aside { class: "sidebar plugin-dock",
+                        crate::components::PluginPanel {
+                            plugins: state.read().plugins.clone(),
+                            active_plugin: state.read().active_plugin.clone(),
+                            on_select_plugin: move |name: String| {
+                                state.write().active_plugin = Some(name);
+                            },
+                            on_action: move |event: PluginActionEvent| {
+                                // Plugin actions are declared for the *agent* to
+                                // carry out — the manager has no executor of its
+                                // own — so clicking one asks the agent to run it
+                                // rather than pretending the UI can.
+                                on_submit(format!(
+                                    "Run the `{}` action on the `{}` plugin.",
+                                    event.action_name, event.plugin_name
+                                ));
+                            },
+                            on_refresh: move |name: String| {
+                                let gw = gateway.read().clone();
+                                if let Some(client) = gw {
+                                    spawn(async move {
+                                        if let Err(e) = client
+                                            .send(GatewayCommand::PluginRefresh { plugin_name: name })
+                                            .await
+                                        {
+                                            tracing::error!(error = %e, "PluginRefresh send failed");
+                                        }
+                                    });
                                 }
-                            }
-                        }
-                        // Panel content
-                        {
-                            let tab = state.read().right_sidebar_tab;
-                            match tab {
-                                RightSidebarTab::Files => rsx! {
-                                    crate::components::FileBrowser {
-                                        data: state.read().file_browser.clone(),
-                                        on_toggle: on_file_browser_toggle,
-                                        on_select: on_file_browser_select,
-                                    }
-                                },
-                                RightSidebarTab::Plugins => rsx! {
-                                    crate::components::PluginPanel {
-                                        plugins: state.read().plugins.clone(),
-                                        active_plugin: state.read().active_plugin.clone(),
-                                        on_select_plugin: move |name: String| {
-                                            state.write().active_plugin = Some(name);
-                                        },
-                                        on_action: move |event: PluginActionEvent| {
-                                            // TODO: send action to gateway
-                                            tracing::info!(
-                                                "Plugin action: {} / {}",
-                                                event.plugin_name,
-                                                event.action_name
-                                            );
-                                        },
-                                        on_refresh: move |name: String| {
-                                            // TODO: request plugin state refresh from gateway
-                                            tracing::info!("Plugin refresh: {name}");
-                                        },
-                                    }
-                                },
-                            }
+                            },
                         }
                     }
                 }

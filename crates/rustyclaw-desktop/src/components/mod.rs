@@ -66,6 +66,7 @@ pub use device_flow::DeviceFlowDialog;
 pub use edit_dialogs::{EditProjectDialog, EditThreadDialog};
 #[allow(unused_imports)]
 pub use engines::EnginesDialog;
+#[allow(unused_imports)]
 pub use file_browser::FileBrowser;
 pub use hatching::HatchingDialog;
 pub use logs::LogsDialog;
@@ -73,7 +74,7 @@ pub use mcp::McpDialog;
 pub use memory::MemoryDialog;
 pub use new_project::NewProjectDialog;
 pub use pairing::{PairingDialog, generate_qr_code};
-pub use plugin_panel::{PluginActionEvent, PluginPanel, PluginSnapshot};
+pub use plugin_panel::{PluginActionEvent, PluginActionInfo, PluginPanel, PluginSnapshot};
 pub use secrets::{SecretsCommand, SecretsDialog};
 pub use services::ServicesDialog;
 pub use settings::SettingsDialog;

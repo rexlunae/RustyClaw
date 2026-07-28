@@ -13,14 +13,6 @@ use rustyclaw_core::user_prompt_types::UserPrompt;
 use rustyclaw_view::{PromptAttachment, SecretsDialogData};
 use rustyclaw_view::{chrono, tracing, uuid};
 
-/// Right sidebar panel selection.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum RightSidebarTab {
-    #[default]
-    Files,
-    Plugins,
-}
-
 /// UI theme preference.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Theme {
@@ -151,13 +143,13 @@ pub struct AppState {
     pub left_sidebar_visible: bool,
 
     /// Whether the right sidebar (file browser) is visible.
-    pub right_sidebar_visible: bool,
+    /// Whether the plugin dock (the workspace's right-hand column) is shown.
+    pub plugin_dock_visible: bool,
 
     /// File browser data for the right sidebar.
     pub file_browser: rustyclaw_view::FileBrowserData,
 
     /// Right sidebar active tab.
-    pub right_sidebar_tab: RightSidebarTab,
 
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
@@ -312,12 +304,11 @@ impl Default for AppState {
             directory_selector_expanded: false,
             directory_selector_error: None,
             left_sidebar_visible: true,
-            right_sidebar_visible: true,
+            plugin_dock_visible: true,
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)
                 .unwrap_or_default(),
-            right_sidebar_tab: RightSidebarTab::default(),
             plugins: Vec::new(),
             active_plugin: None,
             host_info: None,

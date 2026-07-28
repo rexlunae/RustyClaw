@@ -141,6 +141,75 @@ mod serialization {
         );
     }
 
+    /// Plugins had no wire representation at all before this: the manager was
+    /// gateway-side only, so a client's plugin panel had nothing to render.
+    #[test]
+    fn test_plugins_update_roundtrip() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::PluginsUpdate,
+            payload: ServerPayload::PluginsUpdate {
+                plugins: vec![PluginInfoDto {
+                    name: "chart".into(),
+                    description: "Render live charts".into(),
+                    emoji: Some("📊".into()),
+                    version: "1.0.0".into(),
+                    enabled: true,
+                    state_json: r#"{"title":"Sales","data":[1,2,3]}"#.into(),
+                    actions: vec![PluginActionDto {
+                        name: "refresh".into(),
+                        description: "Re-fetch data".into(),
+                    }],
+                    html_template: Some("index.html".into()),
+                }],
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+
+        match decoded.payload {
+            ServerPayload::PluginsUpdate { plugins } => {
+                assert_eq!(plugins.len(), 1);
+                assert_eq!(plugins[0].name, "chart");
+                assert_eq!(plugins[0].emoji.as_deref(), Some("📊"));
+                assert_eq!(plugins[0].actions[0].name, "refresh");
+                assert_eq!(plugins[0].html_template.as_deref(), Some("index.html"));
+                // The state survives as JSON text and parses back to the value
+                // the gateway held.
+                let state: serde_json::Value =
+                    serde_json::from_str(&plugins[0].state_json).expect("state parses");
+                assert_eq!(state["title"], "Sales");
+                assert_eq!(state["data"][2], 3);
+            }
+            _ => panic!("Expected PluginsUpdate payload"),
+        }
+    }
+
+    #[test]
+    fn test_plugin_client_frames_roundtrip() {
+        for (frame_type, payload) in [
+            (ClientFrameType::PluginList, ClientPayload::PluginList),
+            (
+                ClientFrameType::PluginRefresh,
+                ClientPayload::PluginRefresh {
+                    plugin_name: "chart".into(),
+                },
+            ),
+        ] {
+            let frame = ClientFrame {
+                frame_type,
+                payload,
+            };
+            let bytes = serialize_frame(&frame).expect("serialize should succeed");
+            let decoded: ClientFrame =
+                deserialize_frame(&bytes).expect("deserialize should succeed");
+            assert_eq!(decoded.frame_type as u8, frame_type as u8);
+        }
+        assert_eq!(ClientFrameType::PluginList as u8, 80);
+        assert_eq!(ClientFrameType::PluginRefresh as u8, 81);
+        assert_eq!(ServerFrameType::PluginsUpdate as u8, 86);
+    }
+
     #[test]
     fn test_project_update_client_roundtrip() {
         let frame = ClientFrame {

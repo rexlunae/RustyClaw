@@ -22,6 +22,7 @@ mod mcp_handler;
 mod messenger_handler;
 mod model_handler;
 mod panel_handler;
+mod plugin_handler;
 mod project_handler;
 mod providers;
 mod secrets_handler;
