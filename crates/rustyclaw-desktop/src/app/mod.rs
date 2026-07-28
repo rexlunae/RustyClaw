@@ -1042,7 +1042,16 @@ pub fn App() -> Element {
         let command = match action {
             A::ListDir(path) => GatewayCommand::WorkspaceListDir { path },
             A::OpenFile(path) => GatewayCommand::WorkspaceReadFile { path },
-            A::Save { path, content } => GatewayCommand::WorkspaceWriteFile { path, content },
+            A::Save { path, content } => {
+                // Remember what is being written: the result frame carries
+                // only path/ok/error, and the buffer cannot be reconciled
+                // without knowing which text actually reached disk.
+                state
+                    .write()
+                    .editor_saving
+                    .insert(path.clone(), content.clone());
+                GatewayCommand::WorkspaceWriteFile { path, content }
+            }
         };
         let gw = gateway.read().clone();
         if let Some(client) = gw {

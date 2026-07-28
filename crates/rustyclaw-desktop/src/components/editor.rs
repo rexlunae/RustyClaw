@@ -388,6 +388,41 @@ mod tests {
         assert_eq!(buffer_text(Path::new("a.rs"), &map(&[]), &map(&[])), None);
     }
 
+    /// A completed save is reconciled by promoting the written text to the
+    /// loaded text — `WorkspaceWriteResult` carries no content, so the client
+    /// remembers what it sent. These two tests pin what that promotion buys.
+    ///
+    /// The ordinary case: nothing typed while the save was in flight, so the
+    /// file goes clean and the Save button greys out.
+    #[test]
+    fn promoting_a_saved_buffer_clears_the_dirty_marker() {
+        let mut files = map(&[("a.rs", "old")]);
+        let edits = map(&[("a.rs", "new")]);
+        assert!(is_dirty(Path::new("a.rs"), &files, &edits));
+
+        files.insert(PathBuf::from("a.rs"), "new".to_string());
+        assert!(
+            !is_dirty(Path::new("a.rs"), &files, &edits),
+            "a saved file must stop reading as modified"
+        );
+    }
+
+    /// The race: the user kept typing between issuing the save and the result
+    /// arriving. Promoting only what actually reached disk leaves the newer
+    /// text still marked unsaved, rather than claiming it was written.
+    #[test]
+    fn typing_during_a_save_stays_dirty_afterwards() {
+        let mut files = map(&[("a.rs", "old")]);
+        let edits = map(&[("a.rs", "newer still")]);
+
+        // What the save actually wrote was the older "new".
+        files.insert(PathBuf::from("a.rs"), "new".to_string());
+        assert!(
+            is_dirty(Path::new("a.rs"), &files, &edits),
+            "text typed after the save was issued is still unsaved"
+        );
+    }
+
     #[test]
     fn file_name_uses_the_final_component() {
         assert_eq!(file_name(Path::new("src/app/mod.rs")), "mod.rs");

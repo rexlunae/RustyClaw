@@ -175,6 +175,12 @@ pub struct AppState {
     /// separate flag to fall out of sync with.
     pub editor_edits: std::collections::HashMap<std::path::PathBuf, String>,
 
+    /// Contents of saves the editor has sent but not yet heard back about,
+    /// keyed by path. `WorkspaceWriteResult` reports only path/ok/error, so
+    /// the written text has to be remembered here to reconcile the buffer
+    /// once the save lands.
+    pub editor_saving: std::collections::HashMap<std::path::PathBuf, String>,
+
     /// Plugin snapshots for the plugin panel.
     pub plugins: Vec<crate::components::PluginSnapshot>,
 
@@ -335,6 +341,7 @@ impl Default for AppState {
             editor_open: Vec::new(),
             editor_active: None,
             editor_edits: Default::default(),
+            editor_saving: Default::default(),
             file_browser: working_directory
                 .as_deref()
                 .map(rustyclaw_view::FileBrowserData::load)

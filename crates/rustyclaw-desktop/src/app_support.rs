@@ -335,7 +335,16 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         }
         GatewayEvent::WorkspaceWriteResult { path, ok, error } => {
             let mut s = state.write();
+            let written = s.editor_saving.remove(&path);
             if ok {
+                // Promote the written text to the loaded text. Dirtiness is
+                // derived by comparing the two, so this alone clears the
+                // marker — and correctly leaves it set when the user typed
+                // more while the save was in flight, since the edit then
+                // differs from what actually reached disk.
+                if let Some(written) = written {
+                    s.workspace_files.insert(path.clone(), written);
+                }
                 s.push_notice(MessageRole::Info, format!("Saved {}", path.display()));
             } else {
                 s.push_notice(
