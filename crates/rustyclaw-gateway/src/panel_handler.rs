@@ -906,6 +906,9 @@ fn tool_category(name: &str) -> &'static str {
         n if n.starts_with("secrets_") => "secrets",
         "gateway" => "gateway",
         "message" | "tts" => "messaging",
+        // Freenet and the apps built on it — all reach the network through a
+        // local Freenet node rather than through `web_fetch`.
+        "freenet" | "river" | "atlas" => "freenet",
         "image" | "image_generate" => "media",
         "nodes" | "canvas" => "devices",
         "browser" => "browser",

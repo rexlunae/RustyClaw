@@ -9,6 +9,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Messenger setup in the clients: credentials, profile, and thread routing.**
+  Messengers were configurable only by hand-editing `[[messengers]]` in
+  `config.toml`, which meant live bot tokens sitting in plaintext next to
+  everything else. Both clients now have a setup panel — `/messengers` in
+  the TUI, *Tools → Messenger Setup…* on the desktop — covering three
+  things. **Credentials** go to the encrypted vault under
+  `messenger/<account>/<field>`; config keeps only a reference
+  (`secret_refs`), and the gateway resolves it at connect time. Values
+  travel one way: a credential is sent when you type it and is never
+  returned, so a client cannot display or leak one. **Profile** is the
+  name and description the agent presents on each messenger, defaulting to
+  the agent's own name and description and overridable per account; it
+  reaches the platform where the backend allows it (`set_text_status`,
+  `set_profile_picture`, IRC nick) and reaches the model always, via a new
+  identity section in the messenger system prompt. **Thread routing** is a
+  new `[[messenger_routes]]` table binding `(messenger, channel)` to a
+  gateway thread: a routed channel adopts that thread's conversation key
+  and working directory, so two channels pointed at one thread share a
+  conversation and tools run where the thread lives. Channel-specific
+  routes outrank account-wide ones; unrouted channels behave exactly as
+  before. What each backend needs is described once, as data, in
+  `rustyclaw_core::messengers::setup::KINDS` — both clients render their
+  forms from it, so a new messenger type is one entry rather than a form
+  per client.
+
+- **Existing plaintext credentials are flagged, not seized.** Accounts
+  carrying secrets in `config.toml` keep working and are marked in the
+  panel with a per-account "move to vault" action. Migration writes to the
+  vault before clearing the plaintext copy, so an interrupted move loses
+  nothing.
+
 - **Focused subagents: narrow profiles, restricted toolsets, real runs.**
   The main agent can now delegate well-scoped work to *focused subagents*
   via a new `subagent_run` tool. A subagent runs from a **profile** — a
@@ -168,6 +199,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/engines load|unload|remove <engine> <model>`.
 
 ### Fixed
+
+- **`MessengerConfig` no longer prints credentials in `Debug` output.** The
+  derived impl put live bot tokens and passwords into the log line emitted
+  when a messenger fails to initialize. Secrets are now redacted while the
+  non-secret fields — the ones that make a failure diagnosable — are kept.
+
+- **The `freenet`, `river`, and `atlas` tools had no panel category**, which
+  tripped the gateway's `tool_categories_cover_registry` test.
 
 - **Creating a project meant typing a path from memory, and failing at it
   on macOS.** The New Project dialog had no folder picker (unlike the

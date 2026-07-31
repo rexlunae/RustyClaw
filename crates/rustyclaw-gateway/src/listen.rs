@@ -262,7 +262,7 @@ pub async fn run_gateway(
     eprintln!("DEBUG: messengers configured: {}", config.messengers.len());
     let messenger_mgr = if !config.messengers.is_empty() {
         eprintln!("DEBUG: Creating messenger manager...");
-        match messenger_handler::create_messenger_manager(&config).await {
+        match messenger_handler::create_messenger_manager(&config, &vault).await {
             Ok(mgr) => {
                 eprintln!("DEBUG: Messenger manager created successfully");
                 let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));

@@ -164,6 +164,8 @@ pub(super) fn handle_normal_key(
         mut mcp_data,
         mut show_channels_dialog,
         mut channels_data,
+        mut show_messengers_dialog,
+        mut messengers_data,
         mut show_analytics_dialog,
         mut analytics_data,
         mut show_logs_dialog,
@@ -250,6 +252,179 @@ pub(super) fn handle_normal_key(
             }
             _ => {}
         }
+        return;
+    }
+    // Messenger setup: account list, account editor, and routing table share
+    // this overlay. The editor grabs the keyboard whole — it has text fields —
+    // so it is checked first.
+    if show_messengers_dialog.get() {
+        use rustyclaw_core::gateway::client_types::GatewayCommand;
+        use rustyclaw_view::messengers::{MessengerEditorData, MessengerTab};
+
+        let send_input = |input: UserInput| {
+            if let Ok(guard) = tx_for_keys.lock() {
+                if let Some(ref tx) = *guard {
+                    let _ = tx.send(input);
+                }
+            }
+        };
+        let mut data = messengers_data.read().clone().unwrap_or_default();
+
+        // ── Account editor ──
+        if let Some(editor) = data.editor.clone() {
+            let mut editor = editor;
+            match code {
+                KeyCode::Esc => data.editor = None,
+                KeyCode::Tab | KeyCode::Down => editor.focus_next(),
+                KeyCode::BackTab | KeyCode::Up => editor.focus_prev(),
+                KeyCode::Backspace => editor.backspace(),
+                KeyCode::Char(c) => editor.insert(c),
+                KeyCode::Enter => match editor.validate() {
+                    Ok(()) => {
+                        let (display_name, bio, avatar_path) = editor.profile_values();
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerAccountSave {
+                                original_name: editor.editing.clone(),
+                                name: editor.account_name().to_string(),
+                                messenger_type: editor.messenger_type.clone(),
+                                enabled: editor.enabled,
+                                fields: editor.field_values(),
+                                secrets: editor.secret_values(),
+                                display_name,
+                                bio,
+                                avatar_path,
+                                agent_id: None,
+                            },
+                        ));
+                        data.set_status("Saving…", false);
+                        // The editor stays open until the gateway confirms, so
+                        // a rejected save still has the typed values in it.
+                    }
+                    Err(errors) => editor.errors = errors,
+                },
+                _ => {}
+            }
+            if data.editor.is_some() {
+                data.editor = Some(editor);
+            }
+            messengers_data.set(Some(data));
+            return;
+        }
+
+        // ── Backend picker (step one of "new account") ──
+        if let Some(cursor) = data.kind_picker {
+            let kinds = data.selectable_kinds();
+            match code {
+                KeyCode::Esc => data.kind_picker = None,
+                KeyCode::Up if !kinds.is_empty() => {
+                    data.kind_picker = Some(match cursor {
+                        0 => kinds.len() - 1,
+                        n => n - 1,
+                    });
+                }
+                KeyCode::Down if !kinds.is_empty() => {
+                    data.kind_picker = Some((cursor + 1) % kinds.len());
+                }
+                KeyCode::Enter => {
+                    if let Some(kind) = kinds.get(cursor) {
+                        data.editor = Some(MessengerEditorData::new(kind.id));
+                        data.kind_picker = None;
+                    }
+                }
+                _ => {}
+            }
+            messengers_data.set(Some(data));
+            return;
+        }
+
+        // ── Lists ──
+        match code {
+            KeyCode::Esc => show_messengers_dialog.set(false),
+            KeyCode::Up => data.select_prev(),
+            KeyCode::Down => data.select_next(),
+            KeyCode::Char('t') | KeyCode::Tab => data.toggle_tab(),
+            KeyCode::Char('n') => match data.tab {
+                MessengerTab::Accounts => data.kind_picker = Some(0),
+                // Routes are bound from the thread side, where the thread ids
+                // are already on screen; offering a blank id field here would
+                // ask the user to memorise a number.
+                MessengerTab::Routes => data.set_status(
+                    "Add a route with: /messengers → accounts → select → 't'",
+                    false,
+                ),
+            },
+            KeyCode::Char('e') => {
+                if let Some(account) = data.selected_account() {
+                    data.editor = Some(MessengerEditorData::edit(account));
+                }
+            }
+            KeyCode::Char(' ') => {
+                match (data.tab, data.selected_account(), data.selected_route()) {
+                    (MessengerTab::Accounts, Some(account), _) => {
+                        let (display_name, bio, avatar_path) = (None, None, None);
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerAccountSave {
+                                original_name: Some(account.name.clone()),
+                                name: account.name.clone(),
+                                messenger_type: account.messenger_type.clone(),
+                                enabled: !account.enabled,
+                                // Toggling enabled must not disturb anything else,
+                                // so no fields and no secrets are sent: the gateway
+                                // starts from the stored entry.
+                                fields: Vec::new(),
+                                secrets: Vec::new(),
+                                display_name,
+                                bio,
+                                avatar_path,
+                                agent_id: None,
+                            },
+                        ));
+                    }
+                    (MessengerTab::Routes, _, Some(route)) => {
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerRouteSave {
+                                messenger: route.messenger.clone(),
+                                channel: route.channel.clone(),
+                                thread_id: route.thread_id,
+                                agent_id: Some(route.agent_id.clone()),
+                                enabled: !route.enabled,
+                            },
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('m') => {
+                if let Some(account) = data.selected_account().filter(|a| a.has_plaintext()) {
+                    send_input(UserInput::MessengerCommand(
+                        GatewayCommand::MessengerSecretsMigrate {
+                            name: account.name.clone(),
+                        },
+                    ));
+                    data.set_status("Moving credentials into the vault…", false);
+                }
+            }
+            KeyCode::Char('d') => match (data.selected_account(), data.selected_route()) {
+                (Some(account), _) => {
+                    send_input(UserInput::MessengerCommand(
+                        GatewayCommand::MessengerAccountDelete {
+                            name: account.name.clone(),
+                        },
+                    ));
+                }
+                (_, Some(route)) => {
+                    send_input(UserInput::MessengerCommand(
+                        GatewayCommand::MessengerRouteDelete {
+                            messenger: route.messenger.clone(),
+                            channel: route.channel.clone(),
+                        },
+                    ));
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        messengers_data.set(Some(data));
         return;
     }
     if show_analytics_dialog.get() {

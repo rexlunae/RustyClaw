@@ -179,6 +179,18 @@ pub enum ClientFrameType {
     WorkspaceReadFile = 83,
     /// Write a file inside the thread's working directory.
     WorkspaceWriteFile = 84,
+    /// Request the messenger setup view: accounts, routes, routable threads.
+    MessengerConfigRequest = 85,
+    /// Create or update a messenger account.
+    MessengerAccountSave = 86,
+    /// Delete a messenger account, its vault credentials, and its routes.
+    MessengerAccountDelete = 87,
+    /// Move an account's plaintext credentials into the vault.
+    MessengerSecretsMigrate = 88,
+    /// Create or update a channel-to-thread route.
+    MessengerRouteSave = 89,
+    /// Delete a channel-to-thread route.
+    MessengerRouteDelete = 90,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -367,6 +379,12 @@ pub enum ServerFrameType {
     WorkspaceFileContent = 88,
     /// Result of a `WorkspaceWriteFile`.
     WorkspaceWriteResult = 89,
+    /// The messenger setup view: accounts, routes, and routable threads.
+    MessengerConfigResult = 90,
+    /// Outcome of an account save, delete, or credential migration.
+    MessengerAccountResult = 91,
+    /// Outcome of a route save or delete.
+    MessengerRouteResult = 92,
 }
 
 /// Status frame sub-types.
@@ -894,6 +912,52 @@ pub enum ClientPayload {
         content: String,
         expected_root: PathBuf,
     },
+    // ── Messenger setup ───────────────────────────────────────────────────
+    /// Request accounts, routes, and the threads routes may point at.
+    MessengerConfigRequest,
+    /// Create or update an account.
+    ///
+    /// `secrets` carries credential values on their way *in*; they are written
+    /// to the vault and never stored in config or echoed back. Omitting a
+    /// secret field leaves whatever is already in the vault alone, so editing
+    /// a channel list does not require retyping a token.
+    MessengerAccountSave {
+        /// Name of the account being edited, or `None` when creating.
+        original_name: Option<String>,
+        name: String,
+        messenger_type: String,
+        enabled: bool,
+        /// Non-secret field values, keyed by schema field name.
+        fields: Vec<(String, String)>,
+        /// Secret field values to store in the vault.
+        secrets: Vec<(String, String)>,
+        /// Profile overrides. An empty string clears an override.
+        display_name: Option<String>,
+        bio: Option<String>,
+        avatar_path: Option<PathBuf>,
+        agent_id: Option<String>,
+    },
+    /// Delete an account along with its vault credentials and routes.
+    MessengerAccountDelete {
+        name: String,
+    },
+    /// Move an account's plaintext credentials into the vault.
+    MessengerSecretsMigrate {
+        name: String,
+    },
+    /// Create or update a route. Identity is `(messenger, channel)`.
+    MessengerRouteSave {
+        messenger: String,
+        channel: Option<String>,
+        thread_id: u64,
+        agent_id: Option<String>,
+        enabled: bool,
+    },
+    /// Delete the route for `(messenger, channel)`.
+    MessengerRouteDelete {
+        messenger: String,
+        channel: Option<String>,
+    },
 }
 
 /// Generic server frame envelope.
@@ -1382,6 +1446,32 @@ pub enum ServerPayload {
         error: Option<String>,
         /// See [`ServerPayload::WorkspaceDirListing::root`].
         root: PathBuf,
+    },
+    // ── Messenger setup ───────────────────────────────────────────────────
+    /// The full messenger setup view. Sent unsolicited after any successful
+    /// mutation too, so every connected client's form reflects what was saved.
+    MessengerConfigResult {
+        accounts: Vec<MessengerAccountDto>,
+        routes: Vec<ThreadRouteDto>,
+        /// Threads a route may point at, across all agents.
+        threads: Vec<RoutableThreadDto>,
+        /// Messenger type ids this gateway build can actually run.
+        available_kinds: Vec<String>,
+    },
+    /// Outcome of an account save, delete, or credential migration.
+    MessengerAccountResult {
+        ok: bool,
+        /// Account the operation applied to.
+        name: String,
+        /// One line per problem when `ok` is false.
+        errors: Vec<String>,
+        /// Human-readable note on success (what was migrated, for instance).
+        message: Option<String>,
+    },
+    /// Outcome of a route save or delete.
+    MessengerRouteResult {
+        ok: bool,
+        message: Option<String>,
     },
 }
 

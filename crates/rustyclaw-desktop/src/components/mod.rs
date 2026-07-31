@@ -41,6 +41,7 @@ mod hatching;
 mod logs;
 mod mcp;
 mod memory;
+mod messengers;
 mod new_project;
 mod pairing;
 mod plugin_panel;
@@ -76,6 +77,7 @@ pub use hatching::HatchingDialog;
 pub use logs::LogsDialog;
 pub use mcp::McpDialog;
 pub use memory::MemoryDialog;
+pub use messengers::{MessengerCommand, MessengersDialog};
 pub use new_project::NewProjectDialog;
 pub use pairing::{PairingDialog, generate_qr_code};
 pub use plugin_panel::{

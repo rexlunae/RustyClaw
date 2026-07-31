@@ -78,6 +78,7 @@ pub mod mcp;
 pub mod media;
 pub mod memory;
 pub mod message;
+pub mod messengers;
 pub mod preview;
 pub mod services;
 pub mod sidebar;
@@ -135,6 +136,11 @@ pub use logs::{LogSource, LogsPanelData};
 pub use mcp::{McpPanelData, McpServerData};
 pub use media::{MediaData, MediaKind};
 pub use memory::{HistoryEntryData, MemoryEntryData, MemoryPanelData};
+pub use messengers::{
+    EditorField, FIELD_ACCOUNT_NAME, FIELD_AVATAR, FIELD_BIO, FIELD_DISPLAY_NAME,
+    MessengerAccountData, MessengerEditorData, MessengerRouteData, MessengerTab,
+    MessengersPanelData, RoutableThreadData, is_synthetic,
+};
 pub use preview::PreviewPanelData;
 pub use tools_config::{ToolConfigData, ToolConfigPanelData};
 pub use voice::VoiceData;

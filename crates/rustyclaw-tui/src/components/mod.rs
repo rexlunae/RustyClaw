@@ -17,6 +17,7 @@ pub mod mcp_dialog;
 pub mod memory_dialog;
 pub mod message;
 pub mod messages;
+pub mod messengers_dialog;
 pub mod model_selector_dialog;
 pub mod pairing_dialog;
 pub mod provider_selector_dialog;

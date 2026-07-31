@@ -106,6 +106,7 @@ pub fn App() -> Element {
 
     // Secrets management state
     let mut show_secrets = use_signal(|| false);
+    let show_messengers = use_signal(|| false);
 
     // New-project dialog state
     let mut show_new_project = use_signal(|| false);
@@ -173,6 +174,7 @@ pub fn App() -> Element {
         qr_code_url,
         public_key,
         show_secrets,
+        show_messengers,
         pending_thread_delete,
         did_init_directories,
         show_connection,
@@ -994,6 +996,15 @@ pub fn App() -> Element {
                 state.write().plugin_dock_visible = !v;
             } else if event.id == ids.settings {
                 show_settings.set(true);
+            } else if event.id == ids.messengers {
+                let mut show_messengers = show_messengers;
+                show_messengers.set(true);
+                let gw = gateway.read().clone();
+                if let Some(client) = gw {
+                    spawn(async move {
+                        let _ = client.send(GatewayCommand::MessengerConfig).await;
+                    });
+                }
             } else if event.id == ids.secrets {
                 show_secrets.set(true);
                 let gw = gateway.read().clone();

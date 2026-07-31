@@ -7,6 +7,23 @@ use super::SecretsManager;
 use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
 
 impl SecretsManager {
+    /// Read a single-value credential that the *gateway process* needs in
+    /// order to do what the user configured — a messenger's bot token, for
+    /// instance.
+    ///
+    /// This deliberately bypasses [`AccessPolicy`]. That policy governs
+    /// whether the *agent* may read a secret, and the agent is not the caller
+    /// here: the user wrote this token into their messenger settings so the
+    /// gateway would log in with it. Routing that through the agent's
+    /// permission check would mean a bot could not connect unless the model
+    /// were also allowed to read its token, which is exactly backwards.
+    ///
+    /// Callers must be gateway-internal. Anything reachable from a tool call
+    /// belongs on [`SecretsManager::get_credential`] instead.
+    pub fn read_service_credential(&mut self, name: &str) -> Result<Option<String>> {
+        self.get_secret(&format!("val:{name}"), true)
+    }
+
     /// Delete a typed credential and all its associated vault keys.
     pub fn delete_credential(&mut self, name: &str) -> Result<()> {
         // Every possible sub-key pattern — best-effort removal.

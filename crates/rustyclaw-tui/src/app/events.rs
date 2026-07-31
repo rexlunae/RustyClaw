@@ -266,6 +266,20 @@ pub(crate) enum GwEvent {
     ChannelStatusResult {
         channels: Vec<rustyclaw_view::ChannelStatusData>,
     },
+    /// Open the messenger setup panel.
+    ShowMessengers,
+    /// The messenger setup view arrived — accounts, routes, routable threads.
+    MessengerConfigResult {
+        accounts: Vec<rustyclaw_view::MessengerAccountData>,
+        routes: Vec<rustyclaw_view::MessengerRouteData>,
+        threads: Vec<rustyclaw_view::RoutableThreadData>,
+        available_kinds: Vec<String>,
+    },
+    /// A messenger account or route mutation finished.
+    MessengerActionResult {
+        ok: bool,
+        message: Option<String>,
+    },
     /// A panel mutation finished — show the outcome and re-fetch the list.
     PanelActionResult {
         panel: PanelKind,

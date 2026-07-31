@@ -16,7 +16,8 @@ pub use crate::gateway::protocol::SecretEntryDto;
 pub use crate::gateway::protocol::ServiceInfoDto;
 pub use crate::gateway::protocol::frames::{
     ChannelStatusDto, CronJobDto, EngineInfoDto, EngineModelDto, HistoryEntryDto, McpServerDto,
-    MemoryEntryDto, ModelUsageDto, PluginActionDto, PluginInfoDto, SessionUsageDto, ToolConfigDto,
+    MemoryEntryDto, MessengerAccountDto, MessengerProfileDto, ModelUsageDto, PluginActionDto,
+    PluginInfoDto, RoutableThreadDto, SessionUsageDto, ThreadRouteDto, ToolConfigDto,
     UsageTotalsDto, WorkspaceEntryDto,
 };
 
@@ -182,6 +183,26 @@ pub enum GatewayEvent {
         error: Option<String>,
         root: PathBuf,
     },
+
+    /// The messenger setup view. Also arrives unsolicited after any successful
+    /// mutation, so a form never shows state the gateway has moved past.
+    MessengerConfigResult {
+        accounts: Vec<MessengerAccountDto>,
+        routes: Vec<ThreadRouteDto>,
+        threads: Vec<RoutableThreadDto>,
+        available_kinds: Vec<String>,
+    },
+
+    /// Outcome of an account save, delete, or credential migration.
+    MessengerAccountResult {
+        ok: bool,
+        name: String,
+        errors: Vec<String>,
+        message: Option<String>,
+    },
+
+    /// Outcome of a route save or delete.
+    MessengerRouteResult { ok: bool, message: Option<String> },
 
     /// Projects updated
     ProjectsUpdate {
@@ -789,6 +810,56 @@ pub enum GatewayCommand {
     /// Delete an agent ('main' is protected)
     #[serde(rename = "agent_delete")]
     AgentDelete { agent_id: String },
+
+    // ── Messenger setup ────────────────────────────────────────────────
+    /// Request accounts, routes, and the threads routes may point at.
+    #[serde(rename = "messenger_config")]
+    MessengerConfig,
+
+    /// Create or update a messenger account.
+    ///
+    /// `secrets` travels one way only: values go to the vault and are never
+    /// returned. Leaving a secret field out keeps the credential already
+    /// stored, so an edit does not force the user to retype a token.
+    #[serde(rename = "messenger_account_save")]
+    MessengerAccountSave {
+        /// Account being renamed, or `None` when creating a new one.
+        original_name: Option<String>,
+        name: String,
+        messenger_type: String,
+        enabled: bool,
+        fields: Vec<(String, String)>,
+        secrets: Vec<(String, String)>,
+        display_name: Option<String>,
+        bio: Option<String>,
+        avatar_path: Option<PathBuf>,
+        agent_id: Option<String>,
+    },
+
+    /// Delete an account, its vault credentials, and its routes.
+    #[serde(rename = "messenger_account_delete")]
+    MessengerAccountDelete { name: String },
+
+    /// Move an account's plaintext credentials into the vault.
+    #[serde(rename = "messenger_secrets_migrate")]
+    MessengerSecretsMigrate { name: String },
+
+    /// Create or update a channel-to-thread route.
+    #[serde(rename = "messenger_route_save")]
+    MessengerRouteSave {
+        messenger: String,
+        channel: Option<String>,
+        thread_id: u64,
+        agent_id: Option<String>,
+        enabled: bool,
+    },
+
+    /// Delete a channel-to-thread route.
+    #[serde(rename = "messenger_route_delete")]
+    MessengerRouteDelete {
+        messenger: String,
+        channel: Option<String>,
+    },
 }
 
 // ── Protocol bridge (client types ⇄ wire frames) ────────────────────────────
@@ -867,6 +938,64 @@ impl GatewayCommand {
                     content,
                     expected_root,
                 },
+            },
+            GatewayCommand::MessengerConfig => ClientFrame {
+                frame_type: ClientFrameType::MessengerConfigRequest,
+                payload: ClientPayload::MessengerConfigRequest,
+            },
+            GatewayCommand::MessengerAccountSave {
+                original_name,
+                name,
+                messenger_type,
+                enabled,
+                fields,
+                secrets,
+                display_name,
+                bio,
+                avatar_path,
+                agent_id,
+            } => ClientFrame {
+                frame_type: ClientFrameType::MessengerAccountSave,
+                payload: ClientPayload::MessengerAccountSave {
+                    original_name,
+                    name,
+                    messenger_type,
+                    enabled,
+                    fields,
+                    secrets,
+                    display_name,
+                    bio,
+                    avatar_path,
+                    agent_id,
+                },
+            },
+            GatewayCommand::MessengerAccountDelete { name } => ClientFrame {
+                frame_type: ClientFrameType::MessengerAccountDelete,
+                payload: ClientPayload::MessengerAccountDelete { name },
+            },
+            GatewayCommand::MessengerSecretsMigrate { name } => ClientFrame {
+                frame_type: ClientFrameType::MessengerSecretsMigrate,
+                payload: ClientPayload::MessengerSecretsMigrate { name },
+            },
+            GatewayCommand::MessengerRouteSave {
+                messenger,
+                channel,
+                thread_id,
+                agent_id,
+                enabled,
+            } => ClientFrame {
+                frame_type: ClientFrameType::MessengerRouteSave,
+                payload: ClientPayload::MessengerRouteSave {
+                    messenger,
+                    channel,
+                    thread_id,
+                    agent_id,
+                    enabled,
+                },
+            },
+            GatewayCommand::MessengerRouteDelete { messenger, channel } => ClientFrame {
+                frame_type: ClientFrameType::MessengerRouteDelete,
+                payload: ClientPayload::MessengerRouteDelete { messenger, channel },
             },
             GatewayCommand::ProjectCreate { name, path } => ClientFrame {
                 frame_type: ClientFrameType::ProjectCreate,
@@ -1417,6 +1546,31 @@ impl GatewayEvent {
                 error,
                 root,
             }),
+            ServerPayload::MessengerConfigResult {
+                accounts,
+                routes,
+                threads,
+                available_kinds,
+            } => Some(GatewayEvent::MessengerConfigResult {
+                accounts,
+                routes,
+                threads,
+                available_kinds,
+            }),
+            ServerPayload::MessengerAccountResult {
+                ok,
+                name,
+                errors,
+                message,
+            } => Some(GatewayEvent::MessengerAccountResult {
+                ok,
+                name,
+                errors,
+                message,
+            }),
+            ServerPayload::MessengerRouteResult { ok, message } => {
+                Some(GatewayEvent::MessengerRouteResult { ok, message })
+            }
             ServerPayload::ProjectsUpdate {
                 projects,
                 active_id,

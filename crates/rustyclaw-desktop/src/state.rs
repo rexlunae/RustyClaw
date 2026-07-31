@@ -340,6 +340,9 @@ pub struct AppState {
     /// Current secrets dialog data.
     pub secrets_data: SecretsDialogData,
 
+    /// Messenger setup panel: accounts, routes, and routable threads.
+    pub messengers_data: rustyclaw_view::MessengersPanelData,
+
     /// Current working directory path
     pub working_directory: Option<String>,
 
@@ -516,6 +519,7 @@ impl Default for AppState {
             streaming_bytes: 0,
             agent_access: false,
             secrets_data: SecretsDialogData::from_vault(Vec::new(), false, false),
+            messengers_data: rustyclaw_view::MessengersPanelData::default(),
             working_directory: working_directory.clone(),
             available_directories: Vec::new(),
             directory_selector_expanded: false,

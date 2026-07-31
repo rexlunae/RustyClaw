@@ -240,6 +240,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let mcp_data: State<Option<rustyclaw_view::McpPanelData>> = hooks.use_state(|| None);
     let show_channels_dialog = hooks.use_state(|| false);
     let channels_data: State<Option<rustyclaw_view::ChannelsPanelData>> = hooks.use_state(|| None);
+    let show_messengers_dialog = hooks.use_state(|| false);
+    let messengers_data: State<Option<rustyclaw_view::MessengersPanelData>> =
+        hooks.use_state(|| None);
     let show_analytics_dialog = hooks.use_state(|| false);
     let analytics_data: State<Option<rustyclaw_view::AnalyticsPanelData>> =
         hooks.use_state(|| None);
@@ -389,6 +392,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         mcp_data,
         show_channels_dialog,
         channels_data,
+        show_messengers_dialog,
+        messengers_data,
         show_analytics_dialog,
         analytics_data,
         show_logs_dialog,
@@ -663,6 +668,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
             mcp_data: mcp_data.read().clone(),
             show_channels_dialog: show_channels_dialog.get(),
             channels_data: channels_data.read().clone(),
+            show_messengers_dialog: show_messengers_dialog.get(),
+            messengers_data: messengers_data.read().clone(),
             show_analytics_dialog: show_analytics_dialog.get(),
             analytics_data: analytics_data.read().clone(),
             show_logs_dialog: show_logs_dialog.get(),

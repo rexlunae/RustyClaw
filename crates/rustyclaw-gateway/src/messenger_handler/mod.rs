@@ -44,14 +44,143 @@ const MAX_HISTORY_MESSAGES: usize = 50;
 /// Maximum tool loop rounds.
 const MAX_TOOL_ROUNDS: usize = 25;
 
+/// Fill an account's credential fields from the vault.
+///
+/// Config carries a *reference* — `secret_refs.token = "messenger/x/token"` —
+/// and the value lives encrypted. This produces the config the builders
+/// actually want: the same entry with those fields populated.
+///
+/// A reference that resolves to nothing is left as it is rather than blanked,
+/// so the builder's own "Telegram requires 'token'" error is what the user
+/// sees. Losing the credential and the explanation at once would be worse.
+async fn resolve_credentials(
+    messenger_config: &rustyclaw_core::config::MessengerConfig,
+    vault: &SharedVault,
+) -> rustyclaw_core::config::MessengerConfig {
+    if messenger_config.secret_refs.is_empty() {
+        return messenger_config.clone();
+    }
+
+    let mut resolved = messenger_config.clone();
+    let mut mgr = vault.lock().await;
+    for (field, credential) in &messenger_config.secret_refs {
+        match mgr.read_service_credential(credential) {
+            Ok(Some(value)) => {
+                if let Err(e) = resolved.set_field(field, &value) {
+                    warn!(field, error = %e, "Could not apply vaulted credential");
+                }
+            }
+            Ok(None) => warn!(
+                account = %messenger_config.name,
+                field,
+                credential,
+                "Credential is referenced by config but missing from the vault"
+            ),
+            Err(e) => warn!(
+                account = %messenger_config.name,
+                field,
+                error = %e,
+                "Could not read credential from the vault"
+            ),
+        }
+    }
+    resolved
+}
+
+/// Resolve an account's presented identity against its agent.
+fn resolved_profile(
+    messenger_config: &rustyclaw_core::config::MessengerConfig,
+    config: &Config,
+) -> rustyclaw_core::messengers::setup::ResolvedProfile {
+    let profile = messenger_config.profile.clone().unwrap_or_default();
+    let registry = config.agent_registry();
+    let agent = registry.get(
+        profile
+            .agent_id
+            .as_deref()
+            .unwrap_or(rustyclaw_core::agents::MAIN_AGENT_ID),
+    );
+    let (name, description) = match agent {
+        Some(info) => (info.name, info.description),
+        None => (config.agent_name.clone(), None),
+    };
+    profile.resolve(&name, description.as_deref())
+}
+
+/// Apply the parts of a profile that are config-level rather than API calls.
+///
+/// Only IRC has a name that is chosen at connect time. Everywhere else the
+/// display name belongs to the account itself and is set on the platform, not
+/// by us — see [`announce_profile`] for what can be pushed after connecting.
+fn apply_profile(
+    mut messenger_config: rustyclaw_core::config::MessengerConfig,
+    config: &Config,
+) -> rustyclaw_core::config::MessengerConfig {
+    if messenger_config.messenger_type == "irc" && messenger_config.nick.is_none() {
+        let profile = resolved_profile(&messenger_config, config);
+        // IRC nicks are far more restricted than display names, so the
+        // agent's name is reduced to something a server will accept rather
+        // than rejected outright at connect time.
+        let nick: String = profile
+            .display_name
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .take(16)
+            .collect();
+        if !nick.is_empty() {
+            messenger_config.nick = Some(nick);
+        }
+    }
+    messenger_config
+}
+
+/// Push the profile fields the platform will accept.
+///
+/// Both calls are no-ops on backends that do not support them — that is the
+/// trait's contract — so a failure here is worth a log and nothing more. It
+/// must not stop a messenger that is otherwise connected and working.
+async fn announce_profile(
+    messenger: &dyn Messenger,
+    profile: &rustyclaw_core::messengers::setup::ResolvedProfile,
+) {
+    if let Some(bio) = profile.bio.as_deref() {
+        if let Err(e) = messenger.set_text_status(bio).await {
+            debug!(messenger = %messenger.name(), error = %e, "Could not set status text");
+        }
+    }
+    if let Some(avatar) = profile.avatar_path.as_deref() {
+        match avatar.canonicalize() {
+            Ok(path) => {
+                let url = format!("file://{}", path.display());
+                if let Err(e) = messenger.set_profile_picture(&url).await {
+                    debug!(messenger = %messenger.name(), error = %e, "Could not set avatar");
+                }
+            }
+            Err(e) => warn!(
+                path = %avatar.display(),
+                error = %e,
+                "Avatar path does not exist; leaving the current picture alone"
+            ),
+        }
+    }
+}
+
 /// Create a messenger manager from config.
-pub async fn create_messenger_manager(config: &Config) -> Result<MessengerManager> {
+///
+/// Credentials come from the vault where the account has been migrated to it,
+/// and from plaintext config where it has not — see [`resolve_credentials`].
+pub async fn create_messenger_manager(
+    config: &Config,
+    vault: &SharedVault,
+) -> Result<MessengerManager> {
     let mut manager = MessengerManager::new();
 
     for messenger_config in &config.messengers {
         if !messenger_config.enabled {
             continue;
         }
+        let messenger_config =
+            &apply_profile(resolve_credentials(messenger_config, vault).await, config);
         match create_messenger(messenger_config).await {
             Ok(messenger) => {
                 info!(
@@ -59,6 +188,11 @@ pub async fn create_messenger_manager(config: &Config) -> Result<MessengerManage
                     messenger_type = %messenger.messenger_type(),
                     "Messenger initialized"
                 );
+                announce_profile(
+                    messenger.as_ref(),
+                    &resolved_profile(messenger_config, config),
+                )
+                .await;
                 manager = manager.add_boxed(messenger);
             }
             Err(e) => {
@@ -72,6 +206,77 @@ pub async fn create_messenger_manager(config: &Config) -> Result<MessengerManage
     }
 
     Ok(manager)
+}
+
+/// Where a message's conversation lives, and where its tools run.
+///
+/// Without a route these are the historical defaults: a conversation keyed by
+/// `"<type>:<channel>"` and the installation-wide workspace. A route replaces
+/// both — that is what binding a channel to a thread *means*.
+struct Routing {
+    /// Key into the conversation store.
+    conv_key: String,
+    /// Directory tools run in.
+    workspace_dir: std::path::PathBuf,
+    /// Thread the route named, for logging and the system prompt.
+    thread: Option<(u64, String)>,
+}
+
+/// Resolve where a message belongs.
+///
+/// The account name is what routes match on, but a message only carries its
+/// messenger *type*, so accounts are looked up by type. With two accounts of
+/// one type the first configured wins; naming them separately in a route
+/// requires the per-account channel to differ, which in practice it does.
+fn resolve_routing(config: &Config, messenger_type: &str, msg: &Message) -> Routing {
+    let channel = msg.channel.as_deref();
+    let fallback = || Routing {
+        conv_key: format!("{messenger_type}:{}", channel.unwrap_or(&msg.sender)),
+        workspace_dir: config.workspace_dir(),
+        thread: None,
+    };
+
+    let account = config
+        .messengers
+        .iter()
+        .find(|m| m.messenger_type == messenger_type && m.enabled);
+    let Some(account) = account else {
+        return fallback();
+    };
+
+    let Some(route) = rustyclaw_core::messengers::setup::route_for(
+        &config.messenger_routes,
+        &account.name,
+        channel,
+    ) else {
+        return fallback();
+    };
+
+    // The thread is read from disk each time rather than cached: a client may
+    // have renamed it, moved it, or deleted it since the loop started, and a
+    // stale working directory is a tool call in the wrong repository.
+    let threads_path = config.sessions_dir_for(route.agent()).join("threads.json");
+    let thread_mgr = rustyclaw_core::threads::ThreadManager::load_or_default(&threads_path);
+    let Some(thread) = thread_mgr.get(rustyclaw_core::threads::ThreadId(route.thread_id)) else {
+        warn!(
+            account = %account.name,
+            thread_id = route.thread_id,
+            agent = route.agent(),
+            "Route points at a thread that no longer exists; using the default workspace"
+        );
+        return fallback();
+    };
+
+    Routing {
+        // Keyed by thread, not by channel: two channels routed to one thread
+        // share a conversation, which is the point of routing them together.
+        conv_key: format!("thread:{}:{}", route.agent(), route.thread_id),
+        workspace_dir: thread
+            .working_dir
+            .clone()
+            .unwrap_or_else(|| config.workspace_dir_for(route.agent())),
+        thread: Some((route.thread_id, thread.label.clone())),
+    }
 }
 
 fn get_messenger_by_type<'a>(
@@ -324,14 +529,19 @@ async fn process_incoming_message(
         "Received message"
     );
 
-    let workspace_dir = config.workspace_dir();
-
-    // Build conversation key for this chat
-    let conv_key = format!(
-        "{}:{}",
-        messenger_type,
-        msg.channel.as_deref().unwrap_or(&msg.sender)
-    );
+    // A route binds this channel to a gateway thread, which decides both which
+    // conversation the message joins and where its tools run.
+    let routing = resolve_routing(config, messenger_type, &msg);
+    let workspace_dir = routing.workspace_dir.clone();
+    let conv_key = routing.conv_key.clone();
+    if let Some((thread_id, label)) = &routing.thread {
+        debug!(
+            thread_id,
+            thread_label = %label,
+            workspace = %workspace_dir.display(),
+            "Message routed to a gateway thread"
+        );
+    }
 
     // Get or create conversation history
     let mut messages = {
@@ -343,6 +553,22 @@ async fn process_incoming_message(
     };
 
     // Build system prompt (async to include task and model context)
+    let account = config
+        .messengers
+        .iter()
+        .find(|m| m.messenger_type == messenger_type && m.enabled);
+    let profile = match account {
+        Some(a) => resolved_profile(a, config),
+        // No matching account means the messenger was built from something
+        // other than this config; fall back to the agent's own identity.
+        None => rustyclaw_core::messengers::setup::MessengerProfile::default()
+            .resolve(&config.agent_name, None),
+    };
+    let identity = prompt::MessengerIdentity {
+        profile: &profile,
+        thread: routing.thread.as_ref().map(|(id, l)| (*id, l.as_str())),
+        workspace_dir: &workspace_dir,
+    };
     let system_prompt = build_messenger_system_prompt(
         config,
         messenger_type,
@@ -351,6 +577,7 @@ async fn process_incoming_message(
         model_registry,
         skill_mgr,
         &conv_key,
+        &identity,
     )
     .await;
 
@@ -628,4 +855,227 @@ async fn process_incoming_message(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rustyclaw_core::messengers::setup::{MessengerProfile, ThreadRoute};
+    use rustyclaw_core::threads::ThreadManager;
+
+    /// A config rooted in a temp dir, with one enabled account.
+    fn test_config(dir: &std::path::Path, messenger_type: &str) -> Config {
+        let mut config = Config {
+            settings_dir: dir.to_path_buf(),
+            agent_name: "Ada".to_string(),
+            ..Config::default()
+        };
+        config.settings_dir = dir.to_path_buf();
+        config.workspace_dir = Some(dir.join("workspace"));
+        config.messengers = vec![rustyclaw_core::config::MessengerConfig {
+            name: "acct".to_string(),
+            messenger_type: messenger_type.to_string(),
+            enabled: true,
+            ..Default::default()
+        }];
+        config
+    }
+
+    /// Persist a thread for the main agent and return its id.
+    fn write_thread(config: &Config, label: &str, working_dir: Option<&std::path::Path>) -> u64 {
+        let sessions = config.sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID);
+        std::fs::create_dir_all(&sessions).unwrap();
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat(label);
+        if let Some(dir) = working_dir {
+            mgr.set_working_dir(id, Some(dir.to_path_buf()));
+        }
+        mgr.save_to_file(&sessions.join("threads.json")).unwrap();
+        id.0
+    }
+
+    fn message(channel: Option<&str>) -> Message {
+        Message {
+            id: "1".into(),
+            sender: "someone".into(),
+            content: "hi".into(),
+            timestamp: 0,
+            channel: channel.map(str::to_string),
+            reply_to: None,
+            thread_id: None,
+            media: None,
+            is_direct: channel.is_none(),
+            message_type: Default::default(),
+            edited_timestamp: None,
+            reactions: None,
+        }
+    }
+
+    #[test]
+    fn an_unrouted_channel_keeps_its_own_conversation_and_the_default_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path(), "telegram");
+        let routing = resolve_routing(&config, "telegram", &message(Some("-100")));
+        assert_eq!(routing.conv_key, "telegram:-100");
+        assert_eq!(routing.workspace_dir, config.workspace_dir());
+        assert!(routing.thread.is_none());
+    }
+
+    #[test]
+    fn a_direct_message_without_a_channel_is_keyed_by_sender() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path(), "telegram");
+        let routing = resolve_routing(&config, "telegram", &message(None));
+        assert_eq!(routing.conv_key, "telegram:someone");
+    }
+
+    #[test]
+    fn a_routed_channel_adopts_the_threads_key_and_working_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let project = dir.path().join("project");
+        let thread_id = write_thread(&config, "Support", Some(&project));
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "acct".into(),
+            channel: Some("-100".into()),
+            thread_id,
+            agent_id: None,
+            enabled: true,
+        }];
+
+        let routing = resolve_routing(&config, "telegram", &message(Some("-100")));
+        assert_eq!(routing.conv_key, format!("thread:main:{thread_id}"));
+        assert_eq!(routing.workspace_dir, project);
+        assert_eq!(routing.thread, Some((thread_id, "Support".to_string())));
+    }
+
+    #[test]
+    fn two_channels_on_one_thread_share_a_conversation() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let thread_id = write_thread(&config, "Shared", None);
+        config.messenger_routes = vec![
+            ThreadRoute {
+                messenger: "acct".into(),
+                channel: Some("a".into()),
+                thread_id,
+                agent_id: None,
+                enabled: true,
+            },
+            ThreadRoute {
+                messenger: "acct".into(),
+                channel: Some("b".into()),
+                thread_id,
+                agent_id: None,
+                enabled: true,
+            },
+        ];
+
+        let a = resolve_routing(&config, "telegram", &message(Some("a")));
+        let b = resolve_routing(&config, "telegram", &message(Some("b")));
+        assert_eq!(
+            a.conv_key, b.conv_key,
+            "bridged channels must share history"
+        );
+    }
+
+    #[test]
+    fn a_thread_without_an_override_inherits_the_agent_workspace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let thread_id = write_thread(&config, "Main", None);
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "acct".into(),
+            channel: None,
+            thread_id,
+            agent_id: None,
+            enabled: true,
+        }];
+        let routing = resolve_routing(&config, "telegram", &message(Some("anything")));
+        assert_eq!(routing.workspace_dir, config.workspace_dir());
+    }
+
+    #[test]
+    fn a_route_to_a_deleted_thread_falls_back_rather_than_running_in_the_wrong_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        // No thread is ever written, so the id names nothing.
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "acct".into(),
+            channel: Some("-100".into()),
+            thread_id: 9999,
+            agent_id: None,
+            enabled: true,
+        }];
+        let routing = resolve_routing(&config, "telegram", &message(Some("-100")));
+        assert_eq!(routing.conv_key, "telegram:-100");
+        assert_eq!(routing.workspace_dir, config.workspace_dir());
+        assert!(routing.thread.is_none());
+    }
+
+    #[test]
+    fn a_disabled_account_is_not_matched_by_its_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let thread_id = write_thread(&config, "Support", None);
+        config.messengers[0].enabled = false;
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "acct".into(),
+            channel: None,
+            thread_id,
+            agent_id: None,
+            enabled: true,
+        }];
+        let routing = resolve_routing(&config, "telegram", &message(Some("c")));
+        assert!(routing.thread.is_none());
+    }
+
+    #[test]
+    fn an_irc_nick_is_derived_from_the_profile_when_none_is_configured() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path(), "irc");
+        let account = rustyclaw_core::config::MessengerConfig {
+            name: "libera".into(),
+            messenger_type: "irc".into(),
+            enabled: true,
+            profile: Some(MessengerProfile {
+                display_name: Some("Ada Lovelace!".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let applied = apply_profile(account, &config);
+        // Nick charset is far narrower than a display name's, so it is reduced
+        // rather than passed through and rejected at connect time.
+        assert_eq!(applied.nick.as_deref(), Some("Ada_Lovelace_"));
+    }
+
+    #[test]
+    fn a_configured_irc_nick_is_not_overwritten_by_the_profile() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path(), "irc");
+        let account = rustyclaw_core::config::MessengerConfig {
+            name: "libera".into(),
+            messenger_type: "irc".into(),
+            enabled: true,
+            nick: Some("rustybot".into()),
+            profile: Some(MessengerProfile {
+                display_name: Some("Ada".into()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        assert_eq!(
+            apply_profile(account, &config).nick.as_deref(),
+            Some("rustybot")
+        );
+    }
+
+    #[test]
+    fn an_account_with_no_profile_presents_the_agents_own_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = test_config(dir.path(), "telegram");
+        let resolved = resolved_profile(&config.messengers[0], &config);
+        assert_eq!(resolved.display_name, "Ada");
+    }
 }

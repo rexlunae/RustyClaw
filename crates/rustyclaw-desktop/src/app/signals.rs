@@ -36,6 +36,7 @@ pub(super) struct AppSignals {
     pub qr_code_url: Signal<Option<String>>,
     pub public_key: Signal<Option<String>>,
     pub show_secrets: Signal<bool>,
+    pub show_messengers: Signal<bool>,
     pub pending_thread_delete: Signal<Option<(u64, String)>>,
     pub did_init_directories: Signal<bool>,
     pub show_connection: Signal<bool>,

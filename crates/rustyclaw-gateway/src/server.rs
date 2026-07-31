@@ -887,6 +887,20 @@ pub(crate) async fn handle_connection(
                             | ClientPayload::PreviewFollowToggle { .. }) => {
                                 crate::panel_handler::handle_panel_request(&mut *writer, payload, &mut config).await?;
                             }
+                            // ── Messenger setup ──
+                            payload @ (ClientPayload::MessengerConfigRequest
+                            | ClientPayload::MessengerAccountSave { .. }
+                            | ClientPayload::MessengerAccountDelete { .. }
+                            | ClientPayload::MessengerSecretsMigrate { .. }
+                            | ClientPayload::MessengerRouteSave { .. }
+                            | ClientPayload::MessengerRouteDelete { .. }) => {
+                                crate::messenger_config_handler::handle_messenger_config(
+                                    &mut *writer,
+                                    payload,
+                                    &mut config,
+                                    &vault,
+                                ).await?;
+                            }
                             payload @ (ClientPayload::EngineList
                             | ClientPayload::EngineAction { .. }
                             | ClientPayload::EngineModelList { .. }

@@ -179,6 +179,8 @@ pub(super) fn apply_gw_event(
         mut mcp_data,
         mut show_channels_dialog,
         mut channels_data,
+        mut show_messengers_dialog,
+        mut messengers_data,
         mut show_analytics_dialog,
         mut analytics_data,
         mut show_logs_dialog,
@@ -1289,6 +1291,41 @@ pub(super) fn apply_gw_event(
             data.channels = channels;
             data.status = None;
             channels_data.set(Some(data));
+        }
+        GwEvent::ShowMessengers => {
+            let mut data = messengers_data.read().clone().unwrap_or_default();
+            data.set_status("Loading…", false);
+            messengers_data.set(Some(data));
+            show_messengers_dialog.set(true);
+        }
+        GwEvent::MessengerConfigResult {
+            accounts,
+            routes,
+            threads,
+            available_kinds,
+        } => {
+            let mut data = messengers_data.read().clone().unwrap_or_default();
+            // A refresh arrives after every mutation, so `apply` keeps the
+            // cursor where the user left it rather than resetting to the top.
+            data.apply(accounts, routes, threads, available_kinds);
+            // The editor is closed by whatever opened it; a refresh landing
+            // mid-edit must not discard what the user has typed.
+            messengers_data.set(Some(data));
+        }
+        GwEvent::MessengerActionResult { ok, message } => {
+            let mut data = messengers_data.read().clone().unwrap_or_default();
+            match (&message, ok) {
+                (Some(message), _) => data.set_status(message.clone(), !ok),
+                (None, true) => data.set_status("Saved", false),
+                (None, false) => data.set_status("Failed", true),
+            }
+            // A rejected save leaves the editor open with its contents intact
+            // so the user can fix the problem the message just named.
+            if ok {
+                data.editor = None;
+                data.kind_picker = None;
+            }
+            messengers_data.set(Some(data));
         }
         GwEvent::ShowAnalytics => {
             let mut data = analytics_data.read().clone().unwrap_or_default();

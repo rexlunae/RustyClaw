@@ -90,6 +90,13 @@ pub(crate) enum UserInput {
     RefreshSecrets,
     /// Re-request a gateway panel's data (after a mutation)
     RefreshPanel(crate::app::PanelKind),
+    /// A messenger-setup mutation or refresh, forwarded to the gateway.
+    ///
+    /// Carries the command rather than re-deriving it here: the messengers
+    /// dialog builds several different frames (save, delete, migrate, route
+    /// save, route delete) and re-encoding each as a `UserInput` variant would
+    /// duplicate the whole surface for no gain.
+    MessengerCommand(rustyclaw_core::gateway::client_types::GatewayCommand),
     /// Request current task list from gateway
     RefreshTasks,
     /// Request current thread list from gateway
@@ -580,6 +587,9 @@ impl App {
                         crate::app::PanelKind::Mcp => GatewayCommand::McpList,
                         crate::app::PanelKind::Channels => GatewayCommand::ChannelStatus,
                     };
+                    let _ = client.send(cmd).await;
+                }
+                Ok(UserInput::MessengerCommand(cmd)) => {
                     let _ = client.send(cmd).await;
                 }
                 Ok(UserInput::RefreshTasks) => {
