@@ -134,6 +134,16 @@ where
     Ok(result)
 }
 
+/// Why a wait for an `ask_user` answer ended without one.
+enum PromptWaitEnd {
+    /// The user pressed Stop while the question was on screen.
+    Cancelled,
+    /// Nobody answered within the wait window.
+    TimedOut,
+    /// The client went away.
+    Closed,
+}
+
 async fn execute_user_prompt(
     writer: &mut dyn transport::TransportWriter,
     call_id: &str,
@@ -147,6 +157,7 @@ async fn execute_user_prompt(
             )>,
         >,
     >,
+    tool_cancel: &ToolCancelFlag,
 ) -> (String, bool) {
     use rustyclaw_core::user_prompt_types::{FormField, PromptOption, PromptType, UserPrompt};
 
@@ -291,14 +302,45 @@ async fn execute_user_prompt(
         return (format!("Failed to send user prompt: {}", e), true);
     }
 
-    // Wait for the user's response (with 5 minute timeout).
+    // Wait for the user's response (with 5 minute timeout), watching the
+    // cancel flag throughout: a question is not a modal, so Stop has to end
+    // the wait instead of the user being forced to answer it first. Responses
+    // for other prompt ids are stale — an answer to a question a previous
+    // Stop already abandoned — and are dropped rather than mistaken for this
+    // one's answer.
     let rx_result = {
         let mut rx = user_prompt_rx.lock().await;
-        tokio::time::timeout(std::time::Duration::from_secs(300), rx.recv()).await
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+        loop {
+            if tool_cancel.load(Ordering::Relaxed) {
+                break Err(PromptWaitEnd::Cancelled);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break Err(PromptWaitEnd::TimedOut);
+            }
+            // A short poll interval keeps Stop responsive while the wait
+            // itself may last minutes.
+            let tick = std::time::Duration::from_millis(200).min(deadline - now);
+            match tokio::time::timeout(tick, rx.recv()).await {
+                Ok(Some((id, dismissed, value))) if id == call_id => {
+                    break Ok((dismissed, value));
+                }
+                Ok(Some((id, _, _))) => {
+                    tracing::debug!(
+                        stale_id = %id,
+                        expected_id = %call_id,
+                        "Dropping response for an abandoned user prompt"
+                    );
+                }
+                Ok(None) => break Err(PromptWaitEnd::Closed),
+                Err(_) => {} // tick elapsed; re-check cancel and keep waiting
+            }
+        }
     };
 
     match rx_result {
-        Ok(Some((id, dismissed, value))) if id == call_id => {
+        Ok((dismissed, value)) => {
             if dismissed {
                 (
                     "User dismissed the prompt without answering.".to_string(),
@@ -322,9 +364,14 @@ async fn execute_user_prompt(
                 }
             }
         }
-        Ok(Some(_)) => ("Mismatched prompt response ID.".to_string(), true),
-        Ok(None) => ("User prompt channel closed.".to_string(), true),
-        Err(_) => ("User prompt timed out after 5 minutes.".to_string(), true),
+        Err(PromptWaitEnd::Cancelled) => (
+            "The user stopped the turn before answering the question.".to_string(),
+            true,
+        ),
+        Err(PromptWaitEnd::Closed) => ("User prompt channel closed.".to_string(), true),
+        Err(PromptWaitEnd::TimedOut) => {
+            ("User prompt timed out after 5 minutes.".to_string(), true)
+        }
     }
 }
 
@@ -991,7 +1038,14 @@ pub(crate) async fn dispatch_text_message(
                             .await?;
 
                         if tools::is_user_prompt_tool(&tc.name) {
-                            execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
+                            execute_user_prompt(
+                                writer,
+                                &tc.id,
+                                &tc.arguments,
+                                user_prompt_rx,
+                                tool_cancel,
+                            )
+                            .await
                         } else if tools::is_dom_query_tool(&tc.name) {
                             execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
                         } else if tools::is_subagent_run_tool(&tc.name) {
@@ -1025,7 +1079,14 @@ pub(crate) async fn dispatch_text_message(
 
                     // Execute the tool.
                     if tools::is_user_prompt_tool(&tc.name) {
-                        execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
+                        execute_user_prompt(
+                            writer,
+                            &tc.id,
+                            &tc.arguments,
+                            user_prompt_rx,
+                            tool_cancel,
+                        )
+                        .await
                     } else if tools::is_dom_query_tool(&tc.name) {
                         execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
                     } else if tools::is_subagent_run_tool(&tc.name) {
@@ -1366,5 +1427,136 @@ mod live_status_tests {
             }
             other => panic!("expected ToolStatus payload, got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod user_prompt_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use rustyclaw_core::user_prompt_types::PromptResponseValue;
+    use std::sync::atomic::AtomicBool;
+
+    /// Writer that drops every frame; these tests are about the wait, not
+    /// about what goes out on the wire.
+    struct NullWriter;
+
+    #[async_trait]
+    impl transport::TransportWriter for NullWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, _frame: &ServerFrame) -> Result<()> {
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    type PromptTx = tokio::sync::mpsc::Sender<(String, bool, PromptResponseValue)>;
+    type PromptRx = Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, PromptResponseValue)>>>;
+
+    fn prompt_channel() -> (PromptTx, PromptRx) {
+        let (tx, rx) = tokio::sync::mpsc::channel(8);
+        (tx, Arc::new(Mutex::new(rx)))
+    }
+
+    fn text_question() -> serde_json::Value {
+        serde_json::json!({ "prompt_type": "text", "title": "Which colour?" })
+    }
+
+    /// Answering ends the wait with the user's text.
+    #[tokio::test]
+    async fn an_answer_ends_the_wait() {
+        let (tx, rx) = prompt_channel();
+        tx.send((
+            "tc1".to_string(),
+            false,
+            PromptResponseValue::Text("blue".into()),
+        ))
+        .await
+        .expect("send answer");
+
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+        let (out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &rx, &cancel),
+        )
+        .await
+        .expect("the wait must end once the answer arrives");
+
+        assert_eq!(out, "blue");
+        assert!(!is_error);
+    }
+
+    /// Stop ends a turn parked on a question instead of the user being
+    /// forced to answer it first.
+    #[tokio::test]
+    async fn stop_ends_the_wait_without_an_answer() {
+        let (_tx, rx) = prompt_channel();
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(true));
+
+        let (out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &rx, &cancel),
+        )
+        .await
+        .expect("a cancelled wait must not run to the five-minute timeout");
+
+        assert!(is_error, "the tool call did not get an answer");
+        assert!(out.contains("stopped"), "unhelpful tool result: {out}");
+    }
+
+    /// A cancel that lands while the question is on screen is observed too,
+    /// not just one that beat the question to it.
+    #[tokio::test]
+    async fn stop_lands_while_the_question_is_on_screen() {
+        let (_tx, rx) = prompt_channel();
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            flag.store(true, Ordering::Relaxed);
+        });
+
+        let (_out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &rx, &cancel),
+        )
+        .await
+        .expect("the wait must notice a cancel that arrives mid-wait");
+
+        assert!(is_error);
+    }
+
+    /// An answer to a question a previous Stop abandoned is stale: it must
+    /// not be handed to the question now waiting.
+    #[tokio::test]
+    async fn a_stale_answer_does_not_answer_the_current_question() {
+        let (tx, rx) = prompt_channel();
+        tx.send((
+            "old-call".to_string(),
+            false,
+            PromptResponseValue::Text("stale".into()),
+        ))
+        .await
+        .expect("send stale answer");
+        tx.send((
+            "tc2".to_string(),
+            false,
+            PromptResponseValue::Text("fresh".into()),
+        ))
+        .await
+        .expect("send fresh answer");
+
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+        let (out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc2", &text_question(), &rx, &cancel),
+        )
+        .await
+        .expect("a stale answer must be dropped, not mistaken for this one");
+
+        assert_eq!(out, "fresh");
+        assert!(!is_error);
     }
 }

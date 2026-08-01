@@ -1,10 +1,16 @@
 //! Inline user prompt: structured input requested by the agent (`ask_user`
 //! tool), rendered as a card in the chat stream instead of a modal overlay.
 //!
-//! The card takes the composer's place at the bottom of the transcript while
-//! the agent is waiting for an answer, so the question is always visible in
-//! context. It supports all five prompt types: free text, yes/no confirm,
-//! single select (radio), multi select (checkboxes), and multi-field forms.
+//! The card is a band at the foot of the chat column, under the composer,
+//! while the agent waits for an answer — always on screen, and taking nothing
+//! else with it: the composer, the Stop button and the thread list all stay
+//! live alongside it, and the question can be left parked while the user
+//! works in another thread. It supports all five prompt types: free text,
+//! yes/no confirm, single select (radio), multi select (checkboxes), and
+//! multi-field forms.
+//!
+//! Keyboard: Enter submits from anywhere in the card, Escape dismisses, and
+//! the arrow keys move the selection in the two list types.
 
 use dioxus::prelude::*;
 use dioxus_bulma::prelude::{BulmaColor, BulmaSize, Button, Buttons};
@@ -65,8 +71,8 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
     let submit = move || {
         let value = match &prompt_for_submit.prompt_type {
             PromptType::TextInput { .. } => PromptResponseValue::Text(text_input.read().clone()),
-            // Confirm answers via its own Yes/No buttons; this path is
-            // never wired up for it, but stay total rather than panic.
+            // Confirm normally answers via its own Yes/No buttons; this path
+            // is what Enter takes, which answers with the prompt's default.
             PromptType::Confirm { default } => PromptResponseValue::Confirm(*default),
             PromptType::Select { options, .. } => {
                 let label = options
@@ -98,7 +104,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
         };
         on_respond.call((prompt_for_submit.id.clone(), value));
     };
-    let submit_for_enter = submit.clone();
+    let submit_for_key = submit.clone();
     let submit_for_click = submit.clone();
 
     // A form is submittable once every required field has a value.
@@ -116,10 +122,69 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
     let is_confirm = matches!(prompt.prompt_type, PromptType::Confirm { .. });
     let prompt_id_confirm = prompt.id.clone();
     let prompt_id_dismiss = prompt.id.clone();
+    let prompt_id_key = prompt.id.clone();
     let on_dismiss = props.on_dismiss;
 
+    // Keyboard handling for the whole card. Every prompt type has its own
+    // input widgets, but keydown bubbles, so one handler on the container
+    // covers text fields, form fields, radios and checkboxes alike — and it
+    // fires for list types, which have no text field to type Enter into.
+    let option_count = match &prompt.prompt_type {
+        PromptType::Select { options, .. } | PromptType::MultiSelect { options, .. } => {
+            options.len()
+        }
+        _ => 0,
+    };
+    // Arrow keys move the highlight; for multi-select that is a cursor the
+    // space bar toggles, which the browser already does for a focused
+    // checkbox, so only single-select needs the movement wired up.
+    let is_select = matches!(prompt.prompt_type, PromptType::Select { .. });
+    let on_card_keydown = move |evt: KeyboardEvent| match evt.key() {
+        Key::Enter => {
+            evt.prevent_default();
+            if form_complete {
+                submit_for_key();
+            }
+        }
+        Key::Escape => {
+            evt.prevent_default();
+            on_dismiss.call(prompt_id_key.clone());
+        }
+        Key::ArrowDown if is_select && option_count > 0 => {
+            evt.prevent_default();
+            let next = (*selected_index.read() + 1).min(option_count - 1);
+            selected_index.set(next);
+        }
+        Key::ArrowUp if is_select && option_count > 0 => {
+            evt.prevent_default();
+            let next = selected_index.read().saturating_sub(1);
+            selected_index.set(next);
+        }
+        _ => {}
+    };
+
+    // Where the initial focus goes. Text entry focuses its first field; the
+    // list and confirm types have nothing to type into, so the card itself
+    // takes focus and keys reach the handler above. `autofocus` alone is not
+    // enough: the webview ignores it on nodes inserted after page load, which
+    // is every one of these cards.
+    let focus_card = !matches!(
+        prompt.prompt_type,
+        PromptType::TextInput { .. } | PromptType::Form { .. }
+    );
+
     rsx! {
-        div { class: "rc-inline-prompt",
+        div {
+            class: "rc-inline-prompt",
+            tabindex: "-1",
+            onkeydown: on_card_keydown,
+            onmounted: move |evt: Event<MountedData>| {
+                if focus_card {
+                    spawn(async move {
+                        let _ = evt.set_focus(true).await;
+                    });
+                }
+            },
             div { class: "rc-inline-prompt-header",
                 span { class: "rc-inline-prompt-icon", "💬" }
                 span { class: "rc-inline-prompt-title", "{prompt.title}" }
@@ -138,13 +203,12 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                             placeholder: "{ph}",
                             value: "{text_input}",
                             autofocus: true,
-                            oninput: move |evt| text_input.set(evt.value()),
-                            onkeydown: move |evt: KeyboardEvent| {
-                                if evt.key() == Key::Enter {
-                                    evt.prevent_default();
-                                    submit_for_enter();
-                                }
+                            onmounted: move |evt: Event<MountedData>| {
+                                spawn(async move {
+                                    let _ = evt.set_focus(true).await;
+                                });
                             },
+                            oninput: move |evt| text_input.set(evt.value()),
                         }
                     }
                 }
@@ -229,6 +293,13 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                                     placeholder: field.placeholder.clone().unwrap_or_default(),
                                     value: form_values.read().get(i).cloned().unwrap_or_default(),
                                     autofocus: i == 0,
+                                    onmounted: move |evt: Event<MountedData>| {
+                                        if i == 0 {
+                                            spawn(async move {
+                                                let _ = evt.set_focus(true).await;
+                                            });
+                                        }
+                                    },
                                     oninput: move |evt| {
                                         let mut v = form_values.write();
                                         if let Some(slot) = v.get_mut(i) {
@@ -243,6 +314,13 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
             }}
 
             div { class: "rc-inline-prompt-actions",
+                span { class: "rc-inline-prompt-hint",
+                    if is_confirm {
+                        "Enter to accept the default · Esc to dismiss"
+                    } else {
+                        "Enter to answer · Esc to dismiss"
+                    }
+                }
                 Button {
                     size: BulmaSize::Small,
                     color: BulmaColor::Ghost,

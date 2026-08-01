@@ -1443,18 +1443,18 @@ body,
 
 /* ── Inline user prompt (agent questions in the chat stream) ────────────── */
 
-/* The card takes the composer's place at the bottom of the transcript while
-   the agent waits for a structured answer: same sticky anchoring as the
-   input box so the question never scrolls out of view. */
+/* A band under the chat column's scroll area while the agent waits for a
+   structured answer, so the question is always on screen without covering
+   the composer (which is sticky-pinned inside that scroll area) or blocking
+   anything else: the transcript still scrolls, Stop still works, and the
+   thread list is still one click away. */
 .rc-inline-prompt {
-    position: sticky;
-    bottom: 0;
-    z-index: 5;
+    flex: 0 0 auto;
     width: 100%;
     max-width: var(--rc-content-max-w);
-    margin: auto auto 0;
+    margin: 0 auto;
     padding: 14px 20px 12px;
-    background: var(--rc-bg);
+    background: var(--rc-bg-elev);
     border-top: 1px solid var(--rc-border);
     animation: rc-pop-in 0.25s ease-out;
 }
@@ -1489,9 +1489,25 @@ body,
 
 .rc-inline-prompt-actions {
     display: flex;
+    align-items: center;
     justify-content: flex-end;
     gap: 8px;
     margin-top: 10px;
+}
+
+/* Keyboard hint sits left of the buttons on the same row. */
+.rc-inline-prompt-hint {
+    margin-right: auto;
+    color: var(--rc-text-muted);
+    font-size: 12px;
+}
+
+/* The card is focusable so list and confirm prompts get key events, but a
+   focus ring on the whole card reads as an error state — the highlighted
+   option is the real cursor. */
+.rc-inline-prompt:focus,
+.rc-inline-prompt:focus-visible {
+    outline: none;
 }
 
 .rc-inline-prompt-confirm {

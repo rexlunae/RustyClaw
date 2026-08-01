@@ -916,6 +916,9 @@ pub fn App() -> Element {
         let mut s = state.write();
         s.push_notice(MessageRole::Info, "Cancellation requested…");
         s.finish_current_message();
+        // Stop applies to a turn parked on a question too: the gateway drops
+        // the wait, so the card must go with it.
+        s.clear_user_prompt();
         drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
@@ -927,7 +930,7 @@ pub fn App() -> Element {
 
     // Structured answers for the inline agent-question card (`ask_user` tool).
     let on_prompt_respond = move |(id, value): (String, PromptResponseValue)| {
-        state.write().pending_user_prompt = None;
+        state.write().clear_user_prompt();
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -943,7 +946,7 @@ pub fn App() -> Element {
     };
 
     let on_prompt_dismiss = move |id: String| {
-        state.write().pending_user_prompt = None;
+        state.write().clear_user_prompt();
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -1449,7 +1452,7 @@ pub fn App() -> Element {
                         },
                     },
                     agent_name: state.read().agent_name.clone(),
-                    pending_prompt: state.read().pending_user_prompt.clone(),
+                    pending_prompt: state.read().visible_user_prompt(),
                     provider_models: state.read().provider_models.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,
