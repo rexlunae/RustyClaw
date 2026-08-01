@@ -214,6 +214,11 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             is_error,
         } => {
             let mut s = state.write();
+            // The `ask_user` tool's result means the gateway has stopped
+            // waiting — answered, cancelled, or timed out. Retire the card
+            // even if the user never touched it, and regardless of which
+            // thread is on screen.
+            s.clear_user_prompt_if(&id);
             // A failed tool call already surfaces inline: the tool panel
             // shows Failed status with the full error result. No banner.
             if s.stream_targets_foreground() {
@@ -445,7 +450,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             state.write().hydrate_thread_messages(thread_id, messages);
         }
         GatewayEvent::UserPromptRequest { id: _, prompt } => {
-            state.write().pending_user_prompt = Some(prompt);
+            state.write().set_user_prompt(prompt);
         }
         GatewayEvent::CredentialRequest {
             id,

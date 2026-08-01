@@ -169,6 +169,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An agent question was inline in looks only — everything else stopped
+  until you answered it.** The desktop's `ask_user` card rendered in the
+  chat stream, but it replaced the composer, which took the **Stop**
+  button, model picker and directory picker down with it; it stayed on
+  screen no matter which thread you switched to; and the gateway's wait
+  for an answer ignored the cancel flag, so Stop could not end a turn
+  parked on a question — the only ways out were answering, dismissing, or
+  the five-minute timeout. The composer now stays mounted with the
+  question as a band beneath it, so Stop stays one click away; the
+  question belongs to the thread that asked it (switch away and it is
+  parked, switch back and it returns); pressing Stop ends the wait
+  gateway-side and the tool reports back that the user stopped the turn;
+  and the card is retired by the `ask_user` tool's own result, so a
+  question abandoned by a cancel or a timeout does not linger. Keyboard
+  handling is on the card as a whole rather than only its text field:
+  **Enter** submits from anywhere in it — including select, multi-select
+  and multi-field forms, which had no Enter handler at all — **Esc**
+  dismisses, and ↑/↓ move the selection in a single-select. The card also
+  takes focus explicitly when it mounts, since a webview ignores
+  `autofocus` on nodes inserted after page load, which is every one of
+  these cards.
+
 - **Creating a project meant typing a path from memory, and failing at it
   on macOS.** The New Project dialog had no folder picker (unlike the
   Edit Project dialog) and offered `/home/you/code/my-project` as its

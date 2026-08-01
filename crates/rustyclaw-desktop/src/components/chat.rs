@@ -84,10 +84,11 @@ pub fn Chat(props: ChatProps) -> Element {
 
     // The crate renders its send/stop buttons *below* the input box, so keep
     // them off; ours live in the accessory row inside the box instead.
-    // While the agent is waiting on a structured answer the composer would be
-    // disabled anyway, so the inline question card takes its place.
+    // The composer stays mounted while a question is on screen: hiding it took
+    // the Stop button, the model picker and the directory picker with it, which
+    // is what made an inline question behave like a modal.
     let controls = ChatControls {
-        show_input: !prompt_pending,
+        show_input: true,
         show_send_button: false,
         show_stop_button: false,
         show_retry_button: false,
@@ -171,13 +172,17 @@ pub fn Chat(props: ChatProps) -> Element {
                         ContextEvent::Remove(id) => props.on_remove_attachment.call(id),
                     },
                 }
-                if let Some(prompt) = props.pending_prompt.clone() {
-                    UserPromptCard {
-                        key: "{prompt.id}",
-                        prompt,
-                        on_respond: props.on_prompt_respond,
-                        on_dismiss: props.on_prompt_dismiss,
-                    }
+            }
+            // The question sits below the scroll area rather than inside it:
+            // the composer is sticky-pinned to the bottom of that area, and a
+            // second bottom-pinned card would land on top of it — covering the
+            // Stop button the question is supposed to leave reachable.
+            if let Some(prompt) = props.pending_prompt.clone() {
+                UserPromptCard {
+                    key: "{prompt.id}",
+                    prompt,
+                    on_respond: props.on_prompt_respond,
+                    on_dismiss: props.on_prompt_dismiss,
                 }
             }
         }

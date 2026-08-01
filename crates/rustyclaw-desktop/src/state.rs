@@ -322,6 +322,13 @@ pub struct AppState {
     /// Pending user prompt from the agent.
     pub pending_user_prompt: Option<UserPrompt>,
 
+    /// The thread the pending question belongs to. Questions are per-thread,
+    /// not per-window: switching to another thread hides the card, switching
+    /// back restores it, so a question never holds the whole app hostage.
+    /// `None` means the owning thread is unknown (the question arrived before
+    /// any thread existed), in which case the card shows wherever the user is.
+    pub pending_user_prompt_thread: Option<u64>,
+
     /// Pending credential request (id, provider, secret_name, message).
     pub pending_credential_request: Option<(String, String, String, String)>,
 
@@ -510,6 +517,7 @@ impl Default for AppState {
             theme: Theme::default(),
             pending_tool_approval: None,
             pending_user_prompt: None,
+            pending_user_prompt_thread: None,
             pending_credential_request: None,
             pending_device_flow: None,
             streaming_chunks: 0,
@@ -600,6 +608,42 @@ impl AppState {
     /// events apply to whatever is in the foreground.
     pub fn stream_targets_foreground(&self) -> bool {
         self.streaming_thread_id.is_none() || self.streaming_thread_id == self.foreground_thread_id
+    }
+
+    /// Record a question from the agent, tagged with the thread whose turn
+    /// asked it (the streaming thread, else whatever is in the foreground).
+    pub fn set_user_prompt(&mut self, prompt: UserPrompt) {
+        self.pending_user_prompt_thread = self.streaming_thread_id.or(self.foreground_thread_id);
+        self.pending_user_prompt = Some(prompt);
+    }
+
+    /// The question to render in the chat stream: `Some` only while the
+    /// thread that asked it is the one on screen.
+    pub fn visible_user_prompt(&self) -> Option<UserPrompt> {
+        let prompt = self.pending_user_prompt.as_ref()?;
+        let owner = self.pending_user_prompt_thread;
+        (owner.is_none() || owner == self.foreground_thread_id).then(|| prompt.clone())
+    }
+
+    /// Drop the pending question. Used when it is answered or dismissed, and
+    /// when the gateway stops waiting for it (cancel, timeout, tool result).
+    pub fn clear_user_prompt(&mut self) {
+        self.pending_user_prompt = None;
+        self.pending_user_prompt_thread = None;
+    }
+
+    /// Drop the pending question if `id` identifies it. The prompt id is the
+    /// `ask_user` tool call id, so the tool's result frame — which arrives
+    /// whether the wait ended in an answer, a cancel, or a timeout — is what
+    /// retires a card the user never touched.
+    pub fn clear_user_prompt_if(&mut self, id: &str) {
+        if self
+            .pending_user_prompt
+            .as_ref()
+            .is_some_and(|p| p.id == id)
+        {
+            self.clear_user_prompt();
+        }
     }
 
     /// Start a new assistant message (streaming).
@@ -1394,5 +1438,67 @@ mod tests {
             "queued saves must not be reported as discarded"
         );
         assert!(view.rebase_to_current_thread().is_empty());
+    }
+
+    fn question(id: &str) -> UserPrompt {
+        UserPrompt {
+            id: id.to_string(),
+            title: "Which way?".to_string(),
+            description: None,
+            prompt_type: rustyclaw_core::user_prompt_types::PromptType::TextInput {
+                placeholder: None,
+                default: None,
+            },
+        }
+    }
+
+    /// A question belongs to the thread that asked it: switching away hides
+    /// the card, switching back brings it out. Without this the question
+    /// follows the user everywhere, which is what made an inline card behave
+    /// like a modal.
+    #[test]
+    fn a_question_is_scoped_to_the_thread_that_asked_it() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        s.set_user_prompt(question("call-1"));
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+
+        s.switch_thread(2);
+        assert!(
+            s.visible_user_prompt().is_none(),
+            "another thread's question must not be on screen"
+        );
+        assert!(
+            s.pending_user_prompt.is_some(),
+            "switching away parks the question, it does not answer it"
+        );
+
+        s.switch_thread(1);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+    }
+
+    /// The `ask_user` tool result means the gateway stopped waiting —
+    /// answered, cancelled or timed out. The card goes with it, even if the
+    /// user is looking at a different thread.
+    #[test]
+    fn a_tool_result_retires_the_question_it_belongs_to() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call-1"));
+
+        s.clear_user_prompt_if("some-other-call");
+        assert!(s.pending_user_prompt.is_some());
+
+        s.clear_user_prompt_if("call-1");
+        assert!(s.pending_user_prompt.is_none());
+        assert!(s.pending_user_prompt_thread.is_none());
     }
 }
