@@ -118,6 +118,7 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     let mut credential_request_secret_name = ui.credential_request_secret_name;
     let mut credential_request_message = ui.credential_request_message;
     let mut credential_request_input = ui.credential_request_input;
+    let mut credential_request_thread = ui.credential_request_thread;
     let mut show_device_flow = ui.show_device_flow;
     let mut queued_device_flows = ui.queued_device_flows;
     let mut device_flow_thread = ui.device_flow_thread;
@@ -185,8 +186,9 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     if !show_credential_request.get() {
         let mut queue = queued_credentials.read().clone();
         if !queue.is_empty() {
-            let (_thread, id, provider, secret_name, message) = queue.remove(0);
+            let (thread, id, provider, secret_name, message) = queue.remove(0);
             queued_credentials.set(queue);
+            credential_request_thread.set(thread);
             credential_request_id.set(id);
             credential_request_provider.set(provider);
             credential_request_secret_name.set(secret_name);
@@ -278,6 +280,7 @@ pub(super) fn apply_gw_event(
         mut credential_request_secret_name,
         mut credential_request_message,
         mut credential_request_input,
+        mut credential_request_thread,
         mut show_provider_selector,
         mut provider_selector_items,
         mut provider_selector_ids,
@@ -404,6 +407,15 @@ pub(super) fn apply_gw_event(
             queued_credentials.set(Vec::new());
             queued_device_flows.set(Vec::new());
             device_flow_thread.set(None);
+            // The requests already drained into dialogs died with their
+            // turns too; a box left on screen would swallow keyboard input
+            // for an answer that has nowhere to go.
+            show_tool_approval.set(false);
+            show_user_prompt.set(false);
+            show_credential_request.set(false);
+            credential_request_thread.set(None);
+            show_device_flow.set(false);
+            device_flow_browser_opened.set(false);
             streaming.set(false);
             stream_start.set(None);
             elapsed.set(String::new());
@@ -422,6 +434,12 @@ pub(super) fn apply_gw_event(
             queued_credentials.set(Vec::new());
             queued_device_flows.set(Vec::new());
             device_flow_thread.set(None);
+            show_tool_approval.set(false);
+            show_user_prompt.set(false);
+            show_credential_request.set(false);
+            credential_request_thread.set(None);
+            show_device_flow.set(false);
+            device_flow_browser_opened.set(false);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::info("Gateway connected."));
             messages.set(m);
@@ -598,6 +616,15 @@ pub(super) fn apply_gw_event(
                     show_device_flow.set(false);
                     device_flow_browser_opened.set(false);
                     device_flow_thread.set(None);
+                }
+                // The displayed credential request left the queue when the
+                // dialog drained it, so the retain above cannot reach it —
+                // without this the password box outlives the request and
+                // swallows an answer nobody is waiting for.
+                if show_credential_request.get() && credential_request_thread.get() == Some(thread)
+                {
+                    show_credential_request.set(false);
+                    credential_request_thread.set(None);
                 }
             }
             // Only the turn on screen can end what is on screen. A close-out
@@ -1130,16 +1157,28 @@ pub(super) fn apply_gw_event(
             show_agent_selector.set(true);
         }
         GwEvent::ThreadMessages {
-            thread_id: _,
+            thread_id,
             messages: thread_messages,
         } => {
-            messages.set(
-                thread_messages
-                    .into_iter()
-                    .map(display_message_from_gateway)
-                    .collect(),
-            );
-            scroll_offset.set(0);
+            let converted: Vec<DisplayMessage> = thread_messages
+                .into_iter()
+                .map(display_message_from_gateway)
+                .collect();
+            // The snapshot is authoritative for its own thread whichever
+            // that is — it feeds the cache a later switch restores from.
+            // This is how a background turn's transcript arrives whole.
+            let mut cache = thread_messages_cache.read().clone();
+            cache.insert(thread_id, converted.clone());
+            thread_messages_cache.set(cache);
+            // But only the foreground thread's snapshot may take the
+            // screen. A turn completing in a background thread sends one
+            // too, and applying it would swap the conversation being read
+            // for another — mid-word, when an answer is still streaming
+            // here.
+            if foreground_thread_id.get() == Some(thread_id) {
+                messages.set(converted);
+                scroll_offset.set(0);
+            }
         }
         GwEvent::ThreadSwitched {
             thread_id,

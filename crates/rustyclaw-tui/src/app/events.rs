@@ -138,7 +138,6 @@ pub(crate) enum GwEvent {
 
     /// Live message/history update for a thread.
     ThreadMessages {
-        #[allow(dead_code)]
         thread_id: u64,
         messages: Vec<rustyclaw_core::gateway::protocol::types::ChatMessage>,
     },

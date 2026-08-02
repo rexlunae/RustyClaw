@@ -83,6 +83,7 @@ pub(super) fn handle_normal_key(
         mut credential_request_secret_name,
         mut credential_request_message,
         mut credential_request_input,
+        mut credential_request_thread,
         mut show_provider_selector,
         mut provider_selector_items,
         mut provider_selector_ids,

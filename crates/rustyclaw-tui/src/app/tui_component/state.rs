@@ -84,6 +84,10 @@ pub(super) struct Ui {
     pub credential_request_secret_name: State<String>,
     pub credential_request_message: State<String>,
     pub credential_request_input: State<String>,
+    /// The turn whose request the visible credential dialog belongs to, so
+    /// a close-out for another turn cannot tear it down — and the one for
+    /// its own turn can.
+    pub credential_request_thread: State<Option<u64>>,
     pub show_provider_selector: State<bool>,
     pub provider_selector_items: State<Vec<String>>,
     pub provider_selector_ids: State<Vec<String>>,

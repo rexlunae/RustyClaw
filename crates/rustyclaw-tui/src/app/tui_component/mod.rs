@@ -128,6 +128,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let credential_request_secret_name = hooks.use_state(String::new);
     let credential_request_message = hooks.use_state(String::new);
     let credential_request_input = hooks.use_state(String::new);
+    let credential_request_thread: State<Option<u64>> = hooks.use_state(|| None);
 
     // ── Provider / model selection dialog state ─────────────────────
     let show_provider_selector = hooks.use_state(|| false);
@@ -319,6 +320,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         credential_request_secret_name,
         credential_request_message,
         credential_request_input,
+        credential_request_thread,
         show_provider_selector,
         provider_selector_items,
         provider_selector_ids,
