@@ -17,6 +17,7 @@
 //! waiting on is logged and dropped, not mistaken for something else.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::oneshot;
 
@@ -27,13 +28,22 @@ use tokio::sync::oneshot;
 /// the guard from ever crossing a suspension point.
 #[derive(Debug)]
 pub struct PendingResponses<T> {
-    waiters: Mutex<HashMap<String, oneshot::Sender<T>>>,
+    /// Each entry is stamped with the claim that made it. Ids are not
+    /// reliably unique — several model adapters emit `call_0`, `call_1`, …
+    /// per request, which is why `is_likely_non_unique_tool_id` exists — and
+    /// with turns running concurrently two of them can be waiting on the same
+    /// literal id at once. Without the stamp, the older claim's `Drop` would
+    /// delete the newer claim's entry, and the newer call would wait out its
+    /// whole timeout with the user's answer already discarded as unclaimed.
+    waiters: Mutex<HashMap<String, (u64, oneshot::Sender<T>)>>,
+    generations: AtomicU64,
 }
 
 impl<T> Default for PendingResponses<T> {
     fn default() -> Self {
         Self {
             waiters: Mutex::new(HashMap::new()),
+            generations: AtomicU64::new(0),
         }
     }
 }
@@ -47,14 +57,16 @@ impl<T> PendingResponses<T> {
     /// the one that can still be answered.
     pub fn register(self: &Arc<Self>, id: impl Into<String>) -> Pending<T> {
         let id = id.into();
+        let generation = self.generations.fetch_add(1, Ordering::Relaxed);
         let (tx, rx) = oneshot::channel();
         self.waiters
             .lock()
             .expect("pending responses mutex poisoned")
-            .insert(id.clone(), tx);
+            .insert(id.clone(), (generation, tx));
         Pending {
             registry: Arc::clone(self),
             id,
+            generation,
             rx,
         }
     }
@@ -73,17 +85,25 @@ impl<T> PendingResponses<T> {
         match waiter {
             // The receiver is gone if the waiting side stopped between the
             // lookup and now. Same outcome as never having been there.
-            Some(tx) => tx.send(value).is_ok(),
+            Some((_, tx)) => tx.send(value).is_ok(),
             None => false,
         }
     }
 
-    /// Give up on `id` without answering it.
-    fn forget(&self, id: &str) {
-        self.waiters
+    /// Give up on `id` without answering it — but only if the entry is still
+    /// the one this claim made. A claim displaced by a later one with the
+    /// same id must not take the live claim down with it when it drops.
+    fn forget(&self, id: &str, generation: u64) {
+        let mut waiters = self
+            .waiters
             .lock()
-            .expect("pending responses mutex poisoned")
-            .remove(id);
+            .expect("pending responses mutex poisoned");
+        if waiters
+            .get(id)
+            .is_some_and(|(stamp, _)| *stamp == generation)
+        {
+            waiters.remove(id);
+        }
     }
 
     /// How many calls are outstanding.
@@ -107,6 +127,8 @@ impl<T> PendingResponses<T> {
 pub struct Pending<T> {
     registry: Arc<PendingResponses<T>>,
     id: String,
+    /// Distinguishes this claim from a later one that reused the id.
+    generation: u64,
     rx: oneshot::Receiver<T>,
 }
 
@@ -121,7 +143,7 @@ impl<T> Pending<T> {
 
 impl<T> Drop for Pending<T> {
     fn drop(&mut self) {
-        self.registry.forget(&self.id);
+        self.registry.forget(&self.id, self.generation);
     }
 }
 
@@ -180,6 +202,40 @@ mod tests {
             live.rx().try_recv().is_err(),
             "the live call must not receive somebody else's answer"
         );
+    }
+
+    /// A displaced claim does not take the live one with it.
+    ///
+    /// Ids are not reliably unique: several model adapters emit `call_0`,
+    /// `call_1`, … per request — `is_likely_non_unique_tool_id` exists for
+    /// exactly that — and the remap to unique ids happens only *after* the
+    /// approval and prompt waits. With turns running concurrently, two can be
+    /// waiting on the same literal id at once.
+    ///
+    /// Removing by id alone meant the older claim's `Drop` deleted the newer
+    /// claim's entry. The user's answer was then discarded as unclaimed and
+    /// the live call waited out its whole timeout — two minutes for an
+    /// approval, five for a question — before being read as a denial.
+    #[tokio::test]
+    async fn a_displaced_claim_does_not_evict_the_one_that_replaced_it() {
+        let registry: Arc<PendingResponses<bool>> = Arc::new(PendingResponses::default());
+
+        let displaced = registry.register("call_0");
+        let mut live = registry.register("call_0");
+
+        // The older turn gives up — timed out, or stopped.
+        drop(displaced);
+
+        assert_eq!(
+            registry.outstanding(),
+            1,
+            "the live claim must survive its predecessor"
+        );
+        assert!(
+            registry.deliver("call_0", true),
+            "the live call must still be answerable"
+        );
+        assert_eq!(live.rx().await, Ok(true));
     }
 
     /// Giving up on a call releases its id.

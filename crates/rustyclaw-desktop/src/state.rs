@@ -735,6 +735,24 @@ impl AppState {
         self.streaming_thread_id = None;
     }
 
+    /// Retire the in-flight turn on Stop, returning the thread it was running
+    /// in so the request can name it.
+    ///
+    /// Reading and retiring are one operation because the order matters and
+    /// is invisible at the call site: `finish_current_message` clears
+    /// `streaming_thread_id` on its way out, so a caller that retires first
+    /// and reads second sends an unnamed Stop — which the gateway honours
+    /// only while exactly one turn is running, and silently ignores when
+    /// several are. That is a Stop button that does nothing.
+    pub fn stop_current_turn(&mut self) -> Option<u64> {
+        let thread_id = self.streaming_thread_id;
+        self.finish_current_message();
+        // Stop applies to a turn parked on a question too: the gateway drops
+        // the wait, so the card goes with it.
+        self.clear_user_prompt();
+        thread_id
+    }
+
     /// Handle the end of a response. Finalizes the live view only when the
     /// response targeted the foreground thread; a response that completed in
     /// a backgrounded thread just releases the in-flight marker (its
@@ -1624,6 +1642,31 @@ mod tests {
         assert_eq!(s.foreground_thread_id, Some(3));
         assert_eq!(s.streaming_thread_id, Some(7));
         assert!(!s.stream_targets_foreground());
+    }
+
+    /// Stop names the turn it is stopping.
+    ///
+    /// The id was read *after* `finish_current_message` had already cleared
+    /// it, so every Stop went out unnamed — which the gateway honours only
+    /// while exactly one turn is running and ignores when several are. A Stop
+    /// button that silently does nothing. Reading and retiring are one
+    /// operation now, so the order cannot be got wrong at a call site.
+    #[test]
+    fn stopping_a_turn_reports_the_thread_it_was_in() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(4);
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"));
+
+        let stopped = s.stop_current_turn();
+
+        assert_eq!(stopped, Some(4), "the Stop must name its turn");
+        assert!(!s.is_processing);
+        assert_eq!(s.streaming_thread_id, None);
+        assert!(
+            s.pending_user_prompt.is_none(),
+            "a turn parked on a question loses the card with it"
+        );
     }
 
     /// A turned-away message releases the composer.

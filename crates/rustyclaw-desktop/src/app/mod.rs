@@ -919,13 +919,11 @@ pub fn App() -> Element {
     let on_cancel = move |_| {
         let mut s = state.write();
         s.push_notice(MessageRole::Info, "Cancellation requested…");
-        s.finish_current_message();
-        // Stop applies to a turn parked on a question too: the gateway drops
-        // the wait, so the card must go with it.
-        s.clear_user_prompt();
-        // Stop names the turn it means. With turns running per thread, the
-        // gateway cannot resolve "the current one" for us without guessing.
-        let thread_id = s.streaming_thread_id;
+        // Names the turn it means: the gateway cannot resolve "the current
+        // one" for us once turns run per thread. Read and retire together —
+        // see `stop_current_turn` for why the order is not a call-site
+        // detail.
+        let thread_id = s.stop_current_turn();
         drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
