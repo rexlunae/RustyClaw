@@ -859,7 +859,7 @@ impl App {
                                                     // A client-local flow,
                                                     // owned by no turn.
                                                     let _ = gw_tx2.send(GwEvent::DeviceFlowCode {
-                                                        thread_id: None,
+                                                        owner: crate::app::DeviceFlowOwner::Local,
                                                         provider: pid.clone(),
                                                         url: auth_resp.verification_uri.clone(),
                                                         code: auth_resp.user_code.clone(),
@@ -875,9 +875,10 @@ impl App {
                                                     loop {
                                                         tokio::time::sleep(interval).await;
                                                         if tokio::time::Instant::now() >= deadline {
-                                                            let _ = gw_tx2.send(
-                                                                GwEvent::DeviceFlowDone(None),
-                                                            );
+                                                            let _ = gw_tx2
+                                                                .send(GwEvent::DeviceFlowDone(
+                                                                crate::app::DeviceFlowOwner::Local,
+                                                            ));
                                                             let _ = gw_tx2.send(GwEvent::error(
                                                                 "Device flow timed out — please try again.".to_string(),
                                                             ));
@@ -887,7 +888,7 @@ impl App {
                                                             df_config, &auth_resp.device_code,
                                                         ).await {
                                                             Ok(Some(token)) => {
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(None));
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local));
                                                                 let _ = gw_tx2.send(GwEvent::Success(format!(
                                                                     "✓ {} authenticated!", display
                                                                 )));
@@ -901,7 +902,7 @@ impl App {
                                                                 // Still pending — continue polling
                                                             }
                                                             Err(e) => {
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(None));
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local));
                                                                 let _ = gw_tx2.send(GwEvent::Error {
                                                                     summary: format!("Device flow failed: {:#}", e),
                                                                     details: Some(rustyclaw_core::error_details::render_extended(&e)),

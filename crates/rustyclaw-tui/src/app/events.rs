@@ -6,6 +6,25 @@
 
 use rustyclaw_view::PromptAttachment;
 
+/// Who a device-flow sign-in belongs to.
+///
+/// `None` used to stand for two different owners at once — a gateway too
+/// old to attribute its frames *and* a flow this client started itself
+/// (provider sign-in from `/model`). A local flow finishing then read as
+/// "the flow on screen" and tore down another conversation's dialog, while
+/// its own queued entry was never retired and later resurfaced with an
+/// expired code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceFlowOwner {
+    /// Raised by a turn, attributed to its thread by the core client.
+    Turn(u64),
+    /// From a gateway too old to attribute its frames — such a gateway can
+    /// only run one turn, so it can only have one flow.
+    Unattributed,
+    /// Started by this client itself, with no turn involved.
+    Local,
+}
+
 /// Events pushed from the gateway reader into the iocraft render component.
 #[derive(Debug, Clone)]
 pub(crate) enum GwEvent {
@@ -167,17 +186,18 @@ pub(crate) enum GwEvent {
         help_url: String,
         help_text: String,
     },
-    /// Show the device flow verification dialog. Tagged with the turn that
-    /// started the flow, so completing or ending one conversation's sign-in
-    /// cannot tear down another's.
+    /// Show the device flow verification dialog. Tagged with the flow's
+    /// owner, so completing or ending one sign-in cannot tear down
+    /// another's.
     DeviceFlowCode {
-        thread_id: Option<u64>,
+        owner: DeviceFlowOwner,
         provider: String,
         url: String,
         code: String,
     },
-    /// Device flow completed — dismiss dialog and store token.
-    DeviceFlowDone(Option<u64>),
+    /// Device flow completed — dismiss its dialog and retire its queue
+    /// entry.
+    DeviceFlowDone(DeviceFlowOwner),
     /// Device flow succeeded — store token and proceed to model selection.
     DeviceFlowToken {
         provider: String,

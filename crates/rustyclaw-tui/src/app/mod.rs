@@ -9,4 +9,4 @@ mod app;
 
 pub use app::App;
 pub(crate) use app::UserInput;
-pub(crate) use events::{GwEvent, PanelKind};
+pub(crate) use events::{DeviceFlowOwner, GwEvent, PanelKind};

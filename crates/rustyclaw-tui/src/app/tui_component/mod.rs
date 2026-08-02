@@ -185,9 +185,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     #[allow(clippy::type_complexity)]
     let queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>> =
         hooks.use_state(Vec::new);
-    let queued_device_flows: State<Vec<(Option<u64>, String, String, String)>> =
+    let queued_device_flows: State<Vec<(crate::app::DeviceFlowOwner, String, String, String)>> =
         hooks.use_state(Vec::new);
-    let device_flow_thread: State<Option<u64>> = hooks.use_state(|| None);
+    let device_flow_owner: State<Option<crate::app::DeviceFlowOwner>> = hooks.use_state(|| None);
 
     // ── Command menu (slash-command completions) ────────────────────
     let command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -361,7 +361,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         queued_user_prompts,
         queued_credentials,
         queued_device_flows,
-        device_flow_thread,
+        device_flow_owner,
         command_completions,
         command_selected,
         model_completion_provider,
