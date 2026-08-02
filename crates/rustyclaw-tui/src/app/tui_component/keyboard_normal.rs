@@ -902,15 +902,27 @@ pub(super) fn handle_normal_key(
                             m.push(DisplayMessage::user(&val));
                             m.push(DisplayMessage::info("Running… Press Esc to cancel."));
                             messages.set(m);
+                            // Which thread the in-flight answer belongs to,
+                            // recorded before it starts arriving.
+                            // `StreamStart` gets the last word if the gateway
+                            // picked a different one.
+                            //
+                            // Read before the spinner is set, and only when
+                            // nothing is already streaming. A turn already in
+                            // flight owns `streaming_buf`, and this message
+                            // will be refused rather than started — so
+                            // overwriting the thread here would make the
+                            // refusal's close-out match, and the running
+                            // turn's half-written answer would be filed as
+                            // finished while it kept streaming into a buffer
+                            // that had just been cleared.
+                            if !streaming.get() {
+                                streaming_thread_id.set(foreground_thread_id.get());
+                            }
                             // Start the spinner immediately so the user
                             // sees feedback while waiting for the model.
                             streaming.set(true);
                             stream_start.set(Some(Instant::now()));
-                            // Which thread this answer belongs to, recorded
-                            // before it starts arriving. `StreamStart` gets
-                            // the last word if the gateway picked a
-                            // different one.
-                            streaming_thread_id.set(foreground_thread_id.get());
                             let _ = tx.send(UserInput::Chat {
                                 text: val,
                                 thread_id: foreground_thread_id.get(),
