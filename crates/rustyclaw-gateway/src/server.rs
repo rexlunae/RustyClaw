@@ -802,7 +802,24 @@ pub(crate) async fn handle_connection(
                                             Err(e) => sink.error(format!("{e:#}")).await,
                                         }
                                     });
-                                    active_tasks.lock().await.register(turn_key, turn_id, handle, tool_cancel);
+                                    {
+                                        let mut tasks = active_tasks.lock().await;
+                                        // At most one turn is ever
+                                        // registered. The fast path above can
+                                        // start this one while the previous is
+                                        // still registered — its ResponseDone
+                                        // is out, its task not yet returned —
+                                        // and `register` only displaces an
+                                        // entry for the same thread, so a
+                                        // switch in between would leave two.
+                                        // Stop declines when it cannot tell
+                                        // which turn was meant, and two turns
+                                        // would share this connection's single
+                                        // approval / `ask_user` / credential
+                                        // channels.
+                                        tasks.abort_all();
+                                        tasks.register(turn_key, turn_id, handle, tool_cancel);
+                                    }
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {

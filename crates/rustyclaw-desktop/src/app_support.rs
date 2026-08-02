@@ -123,6 +123,11 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.is_streaming = false;
             s.is_thinking = false;
             s.streaming_thread_id = None;
+            // Including a question it was waiting on: the turn that asked it
+            // is gone, so no tool result will ever retire the card and an
+            // answer would go into a closed connection. Leaving it up would
+            // be an invitation to answer nothing.
+            s.clear_user_prompt();
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;

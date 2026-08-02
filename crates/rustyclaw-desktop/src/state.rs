@@ -1485,6 +1485,27 @@ mod tests {
         );
     }
 
+    /// A question cannot outlive the connection that asked it: the turn is
+    /// gone, no tool result will ever retire the card, and an answer would
+    /// go into a closed socket.
+    #[test]
+    fn a_dropped_connection_retires_the_question() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"));
+
+        // What the Disconnected handler does.
+        s.is_processing = false;
+        s.is_streaming = false;
+        s.is_thinking = false;
+        s.streaming_thread_id = None;
+        s.clear_user_prompt();
+
+        assert!(s.visible_user_prompt().is_none());
+        assert!(s.pending_user_prompt.is_none());
+    }
+
     /// The `ask_user` tool result means the gateway stopped waiting —
     /// answered, cancelled or timed out. The card goes with it, even if the
     /// user is looking at a different thread.

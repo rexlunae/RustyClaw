@@ -435,6 +435,33 @@ mod tests {
         assert!(closed.is_none(), "the task should be gone, not detached");
     }
 
+    /// Only one turn may be registered at a time. A finished-but-not-yet-
+    /// returned turn on another thread would otherwise sit alongside the new
+    /// one, and Stop declines when it cannot tell which was meant.
+    #[tokio::test]
+    async fn starting_a_turn_displaces_a_finished_one_on_another_thread() {
+        let mut tasks = ActiveTasks::new();
+        let stale = flag();
+        tasks.register(ThreadId(1), 1, tokio::spawn(async {}), stale);
+
+        // What the spawn path does before registering.
+        tasks.abort_all();
+        let fresh = flag();
+        tasks.register(
+            ThreadId(2),
+            2,
+            tokio::spawn(std::future::pending()),
+            fresh.clone(),
+        );
+
+        assert_eq!(tasks.running_threads().len(), 1);
+        assert!(
+            tasks.request_cancel_sole(),
+            "Stop must not be left with an ambiguous choice"
+        );
+        assert!(fresh.load(Ordering::Relaxed));
+    }
+
     /// Stop still reaches the turn when the user has navigated to a thread
     /// that is not the one working — as long as there is only one.
     #[tokio::test]
