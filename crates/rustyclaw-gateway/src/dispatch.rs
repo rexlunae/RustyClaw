@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::sync::Mutex;
 use tracing::{debug, trace};
 
 use rustyclaw_core::gateway::{
@@ -148,14 +147,11 @@ async fn execute_user_prompt(
     writer: &mut dyn transport::TransportWriter,
     call_id: &str,
     arguments: &serde_json::Value,
-    user_prompt_rx: &Arc<
-        Mutex<
-            tokio::sync::mpsc::Receiver<(
-                String,
-                bool,
-                rustyclaw_core::user_prompt_types::PromptResponseValue,
-            )>,
-        >,
+    user_prompts: &Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
     >,
     tool_cancel: &ToolCancelFlag,
 ) -> (String, bool) {
@@ -297,6 +293,11 @@ async fn execute_user_prompt(
         prompt_type,
     };
 
+    // Claim the id before the question goes out. A client that answers
+    // instantly would otherwise be answering a call that is not yet waiting,
+    // and its answer would be dropped as unclaimed.
+    let mut pending = user_prompts.register(call_id);
+
     // Send the prompt directly to the TUI (embedded in the binary frame).
     if let Err(e) = protocol::server::send_user_prompt_request(writer, call_id, &prompt).await {
         return (format!("Failed to send user prompt: {}", e), true);
@@ -304,12 +305,10 @@ async fn execute_user_prompt(
 
     // Wait for the user's response (with 5 minute timeout), watching the
     // cancel flag throughout: a question is not a modal, so Stop has to end
-    // the wait instead of the user being forced to answer it first. Responses
-    // for other prompt ids are stale — an answer to a question a previous
-    // Stop already abandoned — and are dropped rather than mistaken for this
-    // one's answer.
+    // the wait instead of the user being forced to answer it first. Only this
+    // call's answer can arrive here — another question's goes to the call
+    // that asked it, rather than being consumed and discarded on the way.
     let rx_result = {
-        let mut rx = user_prompt_rx.lock().await;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
         loop {
             if tool_cancel.load(Ordering::Relaxed) {
@@ -322,18 +321,10 @@ async fn execute_user_prompt(
             // A short poll interval keeps Stop responsive while the wait
             // itself may last minutes.
             let tick = std::time::Duration::from_millis(200).min(deadline - now);
-            match tokio::time::timeout(tick, rx.recv()).await {
-                Ok(Some((id, dismissed, value))) if id == call_id => {
-                    break Ok((dismissed, value));
-                }
-                Ok(Some((id, _, _))) => {
-                    tracing::debug!(
-                        stale_id = %id,
-                        expected_id = %call_id,
-                        "Dropping response for an abandoned user prompt"
-                    );
-                }
-                Ok(None) => break Err(PromptWaitEnd::Closed),
+            match tokio::time::timeout(tick, pending.rx()).await {
+                Ok(Ok(answer)) => break Ok(answer),
+                // The claim was displaced, or the connection went away.
+                Ok(Err(_)) => break Err(PromptWaitEnd::Closed),
                 Err(_) => {} // tick elapsed; re-check cancel and keep waiting
             }
         }
@@ -381,27 +372,25 @@ async fn execute_dom_query(
     writer: &mut dyn transport::TransportWriter,
     call_id: &str,
     arguments: &serde_json::Value,
-    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
+    dom_queries: &Arc<crate::pending::PendingResponses<(String, bool)>>,
 ) -> (String, bool) {
     let js = arguments
         .get("js")
         .and_then(|v| v.as_str())
         .unwrap_or("document.title");
 
+    let mut pending = dom_queries.register(call_id);
     if let Err(e) = protocol::server::send_dom_query(writer, call_id, js).await {
         return (format!("Failed to send DOM query: {}", e), true);
     }
 
-    // Wait for the client's response (30 second timeout).
-    let rx_result = {
-        let mut rx = dom_query_rx.lock().await;
-        tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await
-    };
+    // Wait for the client's response (30 second timeout). Claimed before the
+    // query goes out, so an instant answer is not dropped as unclaimed.
+    let rx_result = tokio::time::timeout(std::time::Duration::from_secs(30), pending.rx()).await;
 
     match rx_result {
-        Ok(Some((id, result, is_error))) if id == call_id => (result, is_error),
-        Ok(Some(_)) => ("Mismatched DOM query response ID.".to_string(), true),
-        Ok(None) => ("DOM query channel closed.".to_string(), true),
+        Ok(Ok((result, is_error))) => (result, is_error),
+        Ok(Err(_)) => ("DOM query was abandoned.".to_string(), true),
         Err(_) => (
             "DOM query timed out after 30 seconds. The client may not support DOM queries."
                 .to_string(),
@@ -464,18 +453,15 @@ pub(crate) async fn dispatch_text_message(
     tool_cancel: &ToolCancelFlag,
     shared_config: &SharedConfig,
     shared_copilot_session: &SharedCopilotSession,
-    approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
-    user_prompt_rx: &Arc<
-        Mutex<
-            tokio::sync::mpsc::Receiver<(
-                String,
-                bool,
-                rustyclaw_core::user_prompt_types::PromptResponseValue,
-            )>,
-        >,
+    approvals: &Arc<crate::pending::PendingResponses<bool>>,
+    user_prompts: &Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
     >,
-    credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
-    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
+    credentials: &Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
+    dom_queries: &Arc<crate::pending::PendingResponses<(String, bool)>>,
     thread_mgr: &SharedThreadMgr,
     // The thread this turn belongs to, pinned by the caller. Every write
     // below targets it by id: the connection loop serves ThreadSwitch frames
@@ -611,7 +597,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -721,7 +707,7 @@ pub(crate) async fn dispatch_text_message(
                         &mut resolved,
                         &mut original_api_key,
                         vault,
-                        credential_rx,
+                        credentials,
                         tool_cancel,
                     )
                     .await;
@@ -779,7 +765,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -797,7 +783,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -944,7 +930,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -962,7 +948,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -1023,23 +1009,31 @@ pub(crate) async fn dispatch_text_message(
                     (msg, true)
                 }
                 tools::ToolPermission::Ask => {
+                    // Claimed before the request goes out, so an instant
+                    // approval is not dropped as belonging to nobody.
+                    let mut pending_approval = approvals.register(&tc.id);
                     // Send approval request to the TUI and wait for response.
                     protocol::server::send_tool_approval_request(
                         writer, &tc.id, &tc.name, &args_str,
                     )
                     .await?;
 
-                    // Wait for the user's response (with timeout).
-                    let approved = {
-                        let mut rx = approval_rx.lock().await;
-                        match tokio::time::timeout(std::time::Duration::from_secs(120), rx.recv())
-                            .await
-                        {
-                            Ok(Some((id, approved))) if id == tc.id => approved,
-                            Ok(Some(_)) => false, // Mismatched ID — treat as denied
-                            Ok(None) => false,    // Channel closed
-                            Err(_) => false,      // Timeout
-                        }
+                    // Wait for the user's response (with timeout). Only this
+                    // call's answer can arrive: an id belonging to another
+                    // call used to land here, be consumed, and be read as a
+                    // denial — refusing a tool in the user's name while
+                    // destroying the answer meant for its own call.
+                    let approved = match tokio::time::timeout(
+                        std::time::Duration::from_secs(120),
+                        pending_approval.rx(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(approved)) => approved,
+                        // Abandoned, or the connection went away. Denying is
+                        // the safe reading of "no answer".
+                        Ok(Err(_)) => false,
+                        Err(_) => false, // Timeout
                     };
 
                     if !approved {
@@ -1059,12 +1053,12 @@ pub(crate) async fn dispatch_text_message(
                                 writer,
                                 &tc.id,
                                 &tc.arguments,
-                                user_prompt_rx,
+                                user_prompts,
                                 tool_cancel,
                             )
                             .await
                         } else if tools::is_dom_query_tool(&tc.name) {
-                            execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
+                            execute_dom_query(writer, &tc.id, &tc.arguments, dom_queries).await
                         } else if tools::is_subagent_run_tool(&tc.name) {
                             let config_snapshot = shared_config.read().await.clone();
                             crate::subagent_runner::execute_subagent_run(
@@ -1100,12 +1094,12 @@ pub(crate) async fn dispatch_text_message(
                             writer,
                             &tc.id,
                             &tc.arguments,
-                            user_prompt_rx,
+                            user_prompts,
                             tool_cancel,
                         )
                         .await
                     } else if tools::is_dom_query_tool(&tc.name) {
-                        execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
+                        execute_dom_query(writer, &tc.id, &tc.arguments, dom_queries).await
                     } else if tools::is_subagent_run_tool(&tc.name) {
                         let config_snapshot = shared_config.read().await.clone();
                         crate::subagent_runner::execute_subagent_run(
@@ -1313,7 +1307,7 @@ pub(crate) async fn dispatch_text_message(
         &mut resolved,
         &mut original_api_key,
         vault,
-        credential_rx,
+        credentials,
         tool_cancel,
     )
     .await?;
@@ -1483,12 +1477,29 @@ mod user_prompt_tests {
         }
     }
 
-    type PromptTx = tokio::sync::mpsc::Sender<(String, bool, PromptResponseValue)>;
-    type PromptRx = Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, PromptResponseValue)>>>;
+    type Prompts = Arc<crate::pending::PendingResponses<(bool, PromptResponseValue)>>;
 
-    fn prompt_channel() -> (PromptTx, PromptRx) {
-        let (tx, rx) = tokio::sync::mpsc::channel(8);
-        (tx, Arc::new(Mutex::new(rx)))
+    fn prompts() -> Prompts {
+        Arc::default()
+    }
+
+    /// Answer `id` once the call has claimed it.
+    ///
+    /// The claim is made inside `execute_user_prompt`, so a test cannot
+    /// deliver up front the way it could when a channel just queued whatever
+    /// was sent: an answer to a call nobody is waiting on now goes nowhere,
+    /// which is the entire point.
+    fn answer_when_claimed(
+        registry: Prompts,
+        id: &'static str,
+        value: (bool, PromptResponseValue),
+    ) {
+        tokio::spawn(async move {
+            while registry.outstanding() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            registry.deliver(id, value);
+        });
     }
 
     fn text_question() -> serde_json::Value {
@@ -1498,19 +1509,17 @@ mod user_prompt_tests {
     /// Answering ends the wait with the user's text.
     #[tokio::test]
     async fn an_answer_ends_the_wait() {
-        let (tx, rx) = prompt_channel();
-        tx.send((
-            "tc1".to_string(),
-            false,
-            PromptResponseValue::Text("blue".into()),
-        ))
-        .await
-        .expect("send answer");
+        let registry = prompts();
+        answer_when_claimed(
+            registry.clone(),
+            "tc1",
+            (false, PromptResponseValue::Text("blue".into())),
+        );
 
         let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
         let (out, is_error) = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &rx, &cancel),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &registry, &cancel),
         )
         .await
         .expect("the wait must end once the answer arrives");
@@ -1523,25 +1532,30 @@ mod user_prompt_tests {
     /// forced to answer it first.
     #[tokio::test]
     async fn stop_ends_the_wait_without_an_answer() {
-        let (_tx, rx) = prompt_channel();
+        let registry = prompts();
         let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(true));
 
         let (out, is_error) = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &rx, &cancel),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &registry, &cancel),
         )
         .await
         .expect("a cancelled wait must not run to the five-minute timeout");
 
         assert!(is_error, "the tool call did not get an answer");
         assert!(out.contains("stopped"), "unhelpful tool result: {out}");
+        assert_eq!(
+            registry.outstanding(),
+            0,
+            "an abandoned question must not leave its id claimed"
+        );
     }
 
     /// A cancel that lands while the question is on screen is observed too,
     /// not just one that beat the question to it.
     #[tokio::test]
     async fn stop_lands_while_the_question_is_on_screen() {
-        let (_tx, rx) = prompt_channel();
+        let registry = prompts();
         let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
         let flag = cancel.clone();
         tokio::spawn(async move {
@@ -1551,7 +1565,7 @@ mod user_prompt_tests {
 
         let (_out, is_error) = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &rx, &cancel),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &registry, &cancel),
         )
         .await
         .expect("the wait must notice a cancel that arrives mid-wait");
@@ -1559,30 +1573,35 @@ mod user_prompt_tests {
         assert!(is_error);
     }
 
-    /// An answer to a question a previous Stop abandoned is stale: it must
-    /// not be handed to the question now waiting.
+    /// An answer to a question a previous Stop abandoned goes nowhere.
+    ///
+    /// It used to be delivered to whichever question happened to be waiting,
+    /// which consumed it and — at the approval site — read the unrecognised
+    /// id as a denial. Now it is simply not delivered, and the question that
+    /// is waiting still gets its own answer.
     #[tokio::test]
     async fn a_stale_answer_does_not_answer_the_current_question() {
-        let (tx, rx) = prompt_channel();
-        tx.send((
-            "old-call".to_string(),
-            false,
-            PromptResponseValue::Text("stale".into()),
-        ))
-        .await
-        .expect("send stale answer");
-        tx.send((
-            "tc2".to_string(),
-            false,
-            PromptResponseValue::Text("fresh".into()),
-        ))
-        .await
-        .expect("send fresh answer");
+        let registry = prompts();
+        let stale = registry.clone();
+        let fresh = registry.clone();
+        tokio::spawn(async move {
+            while stale.outstanding() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            assert!(
+                !stale.deliver(
+                    "old-call",
+                    (false, PromptResponseValue::Text("stale".into()))
+                ),
+                "the abandoned question is not waiting for anything"
+            );
+            fresh.deliver("tc2", (false, PromptResponseValue::Text("fresh".into())));
+        });
 
         let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
         let (out, is_error) = tokio::time::timeout(
             std::time::Duration::from_secs(5),
-            execute_user_prompt(&mut NullWriter, "tc2", &text_question(), &rx, &cancel),
+            execute_user_prompt(&mut NullWriter, "tc2", &text_question(), &registry, &cancel),
         )
         .await
         .expect("a stale answer must be dropped, not mistaken for this one");

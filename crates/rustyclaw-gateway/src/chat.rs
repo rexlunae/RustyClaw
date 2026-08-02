@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::Mutex;
 use tracing::warn;
 
 use rustyclaw_core::config::Config;
@@ -44,18 +43,15 @@ pub(crate) async fn handle_chat_frame(
     shared_config: &SharedConfig,
     shared_model_ctx: &SharedModelCtx,
     shared_copilot_session: &SharedCopilotSession,
-    approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
-    user_prompt_rx: &Arc<
-        Mutex<
-            tokio::sync::mpsc::Receiver<(
-                String,
-                bool,
-                rustyclaw_core::user_prompt_types::PromptResponseValue,
-            )>,
-        >,
+    approvals: &Arc<crate::pending::PendingResponses<bool>>,
+    user_prompts: &Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
     >,
-    credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
-    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
+    credentials: &Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
+    dom_queries: &Arc<crate::pending::PendingResponses<(String, bool)>>,
     thread_mgr: &SharedThreadMgr,
     turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
@@ -323,10 +319,10 @@ pub(crate) async fn handle_chat_frame(
         tool_cancel,
         shared_config,
         shared_copilot_session,
-        approval_rx,
-        user_prompt_rx,
-        credential_rx,
-        dom_query_rx,
+        approvals,
+        user_prompts,
+        credentials,
+        dom_queries,
         thread_mgr,
         active_thread_id,
         threads_path,

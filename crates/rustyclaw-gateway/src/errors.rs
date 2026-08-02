@@ -24,7 +24,6 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::Mutex;
 use tracing::{info, warn};
 
 use super::SharedVault;
@@ -234,9 +233,7 @@ pub async fn handle(
     resolved: &mut ProviderRequest,
     original_api_key: &mut Option<String>,
     vault: &SharedVault,
-    credential_rx: &std::sync::Arc<
-        Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>,
-    >,
+    credentials: &std::sync::Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
     tool_cancel: &Arc<AtomicBool>,
 ) -> anyhow::Result<ControlFlow<(), ()>> {
     // Log the classified error with structured fields and the full cause
@@ -302,7 +299,7 @@ pub async fn handle(
                         resolved,
                         original_api_key,
                         vault,
-                        credential_rx,
+                        credentials,
                         provider,
                         secret_name,
                         display,
@@ -573,9 +570,7 @@ async fn handle_credential_prompt(
     resolved: &mut ProviderRequest,
     original_api_key: &mut Option<String>,
     vault: &SharedVault,
-    credential_rx: &std::sync::Arc<
-        Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>,
-    >,
+    credentials: &std::sync::Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
     provider: &str,
     secret_name: &str,
     display: &str,
@@ -588,17 +583,18 @@ async fn handle_credential_prompt(
     let request_id = format!("cred_{}", uuid::Uuid::new_v4());
     let message = format!("Authentication failed for {}. {}.", display, help_text);
 
+    // Claimed before the request goes out, so an instant answer is not
+    // dropped as belonging to nobody.
+    let mut pending = credentials.register(&request_id);
+
     protocol::server::send_credential_request(writer, &request_id, provider, secret_name, &message)
         .await?;
 
     // Wait for the user's response (with 5 minute timeout).
-    let cred_result = {
-        let mut rx = credential_rx.lock().await;
-        tokio::time::timeout(std::time::Duration::from_secs(300), rx.recv()).await
-    };
+    let cred_result = tokio::time::timeout(std::time::Duration::from_secs(300), pending.rx()).await;
 
     match cred_result {
-        Ok(Some((id, dismissed, value))) if id == request_id && !dismissed => {
+        Ok(Ok((dismissed, value))) if !dismissed => {
             if let Some(key) = value {
                 {
                     let mut v = vault.lock().await;
