@@ -138,8 +138,14 @@ pub(super) struct Ui {
     /// request used to overwrite the dialog's signals — the first was never
     /// shown again, and its timeout was read as a denial of a tool the user
     /// never saw. Each queue drains into its dialog as the dialog frees up.
-    pub queued_tool_approvals: State<Vec<(String, String, String)>>,
-    pub queued_user_prompts: State<Vec<rustyclaw_core::user_prompt_types::UserPrompt>>,
+    pub queued_tool_approvals: State<Vec<(Option<u64>, String, String, String)>>,
+    /// The turn whose request the visible approval dialog shows, so a
+    /// tool result attributed to another turn cannot tear it down.
+    pub tool_approval_thread: State<Option<u64>>,
+    pub queued_user_prompts:
+        State<Vec<(Option<u64>, rustyclaw_core::user_prompt_types::UserPrompt)>>,
+    /// As `tool_approval_thread`, for the visible `ask_user` card.
+    pub user_prompt_thread: State<Option<u64>>,
     #[allow(clippy::type_complexity)]
     pub queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>>,
     /// Device-flow prompts waiting for the dialog, oldest first, tagged with

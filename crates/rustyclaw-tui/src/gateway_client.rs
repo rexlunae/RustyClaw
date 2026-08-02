@@ -120,13 +120,14 @@ pub(crate) fn gateway_event_to_gw_event(
             name,
             arguments,
         } => GwEvent::ToolApprovalRequest {
+            thread_id,
             id,
             name,
             arguments,
         },
 
         // ── Interactive prompts ─────────────────────────────────────────
-        E::UserPromptRequest { prompt, .. } => GwEvent::UserPromptRequest(prompt),
+        E::UserPromptRequest { prompt, .. } => GwEvent::UserPromptRequest { thread_id, prompt },
         E::CredentialRequest {
             id,
             provider,

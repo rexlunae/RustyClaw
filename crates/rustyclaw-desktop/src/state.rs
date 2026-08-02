@@ -323,13 +323,16 @@ pub struct AppState {
     /// Active UI theme.
     pub theme: Theme,
 
-    /// Pending tool approval request (id, name, arguments).
+    /// Pending tool approval request (owner thread, id, name, arguments).
     /// Tool approvals waiting for the user, oldest first. A queue, not a
     /// slot: turns run per thread, and two of them can ask at once. A second
     /// request used to overwrite the first, which was then never shown again
     /// — the gateway's waiter timed out after two minutes and read the
     /// silence as a denial of a tool the user never saw.
-    pub pending_tool_approvals: std::collections::VecDeque<(String, String, String)>,
+    /// The thread tag scopes a `ToolResult` retirement to its own turn's
+    /// entry: ids collide across turns, and an id-only match let one turn's
+    /// result take down another turn's still-unanswered request.
+    pub pending_tool_approvals: std::collections::VecDeque<(Option<u64>, String, String, String)>,
 
     /// Pending user prompt from the agent.
     /// Questions from the agent, each tagged with the thread whose turn
@@ -658,11 +661,20 @@ impl AppState {
     /// id oldest-first. Removing every match would take another turn's
     /// request down with the one that was actually answered — a tool
     /// denied in the user's name that they were never shown.
-    pub fn retire_tool_approval(&mut self, id: &str) {
-        if let Some(pos) = self
-            .pending_tool_approvals
-            .iter()
-            .position(|(queued_id, _, _)| queued_id == id)
+    /// And only a match the caller can speak for: a result attributed to
+    /// a thread retires that thread's entry alone. Its own entry is often
+    /// already gone — answered by the user — and an id-only match would
+    /// then reach across and remove another turn's request instead.
+    /// `None` is either an old gateway, which runs one turn and can speak
+    /// for anything, or the user answering the dialog, which shows the
+    /// oldest holder of the id — the same entry the gateway resolves.
+    pub fn retire_tool_approval(&mut self, thread_id: Option<u64>, id: &str) {
+        if let Some(pos) =
+            self.pending_tool_approvals
+                .iter()
+                .position(|(owner, queued_id, _, _)| {
+                    queued_id == id && (thread_id.is_none() || *owner == thread_id)
+                })
         {
             self.pending_tool_approvals.remove(pos);
         }
@@ -825,12 +837,14 @@ impl AppState {
     /// whether the wait ended in an answer, a cancel, or a timeout — is what
     /// retires a card the user never touched.
     /// Oldest match only, like `retire_tool_approval`: the prompt id is a
-    /// tool-call id, which can collide across concurrent turns.
-    pub fn clear_user_prompt_if(&mut self, id: &str) {
+    /// tool-call id, which can collide across concurrent turns. And owner-
+    /// scoped like it too — see there for why an id-only match lets one
+    /// turn's result discard another turn's unanswered question.
+    pub fn clear_user_prompt_if(&mut self, thread_id: Option<u64>, id: &str) {
         if let Some(pos) = self
             .pending_user_prompts
             .iter()
-            .position(|(_, p)| p.id == id)
+            .position(|(owner, p)| p.id == id && (thread_id.is_none() || *owner == thread_id))
         {
             self.pending_user_prompts.remove(pos);
         }
@@ -1775,10 +1789,10 @@ mod tests {
         s.foreground_thread_id = Some(1);
         s.set_user_prompt(question("call-1"), s.foreground_thread_id);
 
-        s.clear_user_prompt_if("some-other-call");
+        s.clear_user_prompt_if(None, "some-other-call");
         assert!(!s.pending_user_prompts.is_empty());
 
-        s.clear_user_prompt_if("call-1");
+        s.clear_user_prompt_if(None, "call-1");
         assert!(s.pending_user_prompts.is_empty());
     }
 
@@ -1935,7 +1949,7 @@ mod tests {
         );
 
         // Answering thread 2's question leaves thread 1's waiting.
-        s.clear_user_prompt_if("call-2");
+        s.clear_user_prompt_if(None, "call-2");
         assert!(s.visible_user_prompt().is_none());
         s.switch_thread(1);
         assert_eq!(
@@ -2015,20 +2029,25 @@ mod tests {
     fn an_abandoned_approval_unblocks_the_queue() {
         let mut s = idle_state();
         s.pending_tool_approvals.push_back((
+            Some(1),
             "call-1".into(),
             "execute_command".into(),
             "{}".into(),
         ));
-        s.pending_tool_approvals
-            .push_back(("call-2".into(), "write_file".into(), "{}".into()));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call-2".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
 
         // What the ToolResult handler does when the gateway stops waiting.
-        s.retire_tool_approval("call-1");
+        s.retire_tool_approval(Some(1), "call-1");
 
         assert_eq!(
             s.pending_tool_approvals
                 .front()
-                .map(|(id, _, _)| id.as_str()),
+                .map(|(_, id, _, _)| id.as_str()),
             Some("call-2"),
             "the next request must surface"
         );
@@ -2045,21 +2064,75 @@ mod tests {
     fn colliding_call_ids_retire_oldest_first() {
         let mut s = idle_state();
         s.pending_tool_approvals.push_back((
+            Some(1),
             "call_0".into(),
             "execute_command".into(),
             "{}".into(),
         ));
-        s.pending_tool_approvals
-            .push_back(("call_0".into(), "write_file".into(), "{}".into()));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call_0".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
 
-        s.retire_tool_approval("call_0");
+        // What the dialog's answer handler does.
+        s.retire_tool_approval(None, "call_0");
 
         assert_eq!(
             s.pending_tool_approvals
                 .front()
-                .map(|(_, name, _)| name.as_str()),
+                .map(|(_, _, name, _)| name.as_str()),
             Some("write_file"),
             "the younger request with the shared id must survive"
+        );
+    }
+
+    /// An answered approval's tool result does not reach across threads.
+    ///
+    /// After the user approves one turn's `call_0`, that tool's result
+    /// still calls retire — its own entry is already gone. An id-only
+    /// match then removed another turn's still-queued `call_0`, which was
+    /// never shown and timed out as a denial. Scoped by thread, the
+    /// result's second retirement finds nothing.
+    #[test]
+    fn a_finished_tools_result_leaves_another_threads_request() {
+        let mut s = idle_state();
+        s.pending_tool_approvals.push_back((
+            Some(1),
+            "call_0".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call_0".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
+
+        // The user answers the displayed request (thread 1's, oldest)…
+        s.retire_tool_approval(None, "call_0");
+        // …and the approved tool finishes: its ToolResult retires again,
+        // now attributed to thread 1.
+        s.retire_tool_approval(Some(1), "call_0");
+
+        assert_eq!(
+            s.pending_tool_approvals.front().map(|(owner, ..)| *owner),
+            Some(Some(2)),
+            "thread 2's unanswered request must still be waiting"
+        );
+
+        // Same shape for questions: thread 1's answered, its result must
+        // not take thread 2's card.
+        s.set_user_prompt(question("call_0"), Some(1));
+        s.set_user_prompt(question("call_0"), Some(2));
+        s.clear_user_prompt_if(None, "call_0");
+        s.clear_user_prompt_if(Some(1), "call_0");
+        assert_eq!(
+            s.pending_user_prompts.first().map(|(owner, _)| *owner),
+            Some(Some(2)),
+            "thread 2's unanswered question must still be waiting"
         );
     }
 
@@ -2262,7 +2335,7 @@ mod tests {
         s.set_user_prompt(question("call-2"), Some(2));
 
         // What on_prompt_respond does for the visible card.
-        s.clear_user_prompt_if("call-1");
+        s.clear_user_prompt_if(None, "call-1");
 
         s.switch_thread(2);
         assert_eq!(

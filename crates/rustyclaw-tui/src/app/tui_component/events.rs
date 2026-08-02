@@ -98,12 +98,14 @@ fn renders_here(thread_id: Option<u64>, foreground: Option<u64>) -> bool {
 pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     let mut show_tool_approval = ui.show_tool_approval;
     let mut queued_tool_approvals = ui.queued_tool_approvals;
+    let mut tool_approval_thread = ui.tool_approval_thread;
     let mut tool_approval_id = ui.tool_approval_id;
     let mut tool_approval_name = ui.tool_approval_name;
     let mut tool_approval_args = ui.tool_approval_args;
     let mut tool_approval_selected = ui.tool_approval_selected;
     let mut show_user_prompt = ui.show_user_prompt;
     let mut queued_user_prompts = ui.queued_user_prompts;
+    let mut user_prompt_thread = ui.user_prompt_thread;
     let mut user_prompt_id = ui.user_prompt_id;
     let mut user_prompt_title = ui.user_prompt_title;
     let mut user_prompt_desc = ui.user_prompt_desc;
@@ -131,8 +133,9 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     if !show_tool_approval.get() {
         let mut queue = queued_tool_approvals.read().clone();
         if !queue.is_empty() {
-            let (id, name, arguments) = queue.remove(0);
+            let (owner, id, name, arguments) = queue.remove(0);
             queued_tool_approvals.set(queue);
+            tool_approval_thread.set(owner);
             tool_approval_id.set(id);
             tool_approval_name.set(name);
             tool_approval_args.set(arguments);
@@ -143,8 +146,9 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     if !show_user_prompt.get() {
         let mut queue = queued_user_prompts.read().clone();
         if !queue.is_empty() {
-            let prompt = queue.remove(0);
+            let (owner, prompt) = queue.remove(0);
             queued_user_prompts.set(queue);
+            user_prompt_thread.set(owner);
             user_prompt_id.set(prompt.id.clone());
             user_prompt_title.set(prompt.title.clone());
             user_prompt_desc.set(prompt.description.clone().unwrap_or_default());
@@ -248,6 +252,7 @@ pub(super) fn apply_gw_event(
         mut auth_code,
         mut auth_error,
         mut show_tool_approval,
+        mut tool_approval_thread,
         mut tool_approval_id,
         mut tool_approval_name,
         mut tool_approval_args,
@@ -267,6 +272,7 @@ pub(super) fn apply_gw_event(
         mut pairing_port,
         mut pairing_error,
         mut show_user_prompt,
+        mut user_prompt_thread,
         mut user_prompt_id,
         mut user_prompt_title,
         mut user_prompt_desc,
@@ -839,11 +845,23 @@ pub(super) fn apply_gw_event(
             // drained from the head of the queue, so it is older than any
             // queued entry sharing its id — a blanket removal would take a
             // second turn's request down with the one this result ends.
-            if show_tool_approval.get() && *tool_approval_id.read() == id {
+            // …and only within the result's own turn: after the user
+            // answered this turn's request, an id-only match would reach
+            // across and remove another turn's still-unanswered entry.
+            // `None` is an old gateway, which runs one turn and can speak
+            // for anything.
+            let speaks_for = |owner: Option<u64>| thread_id.is_none() || owner == thread_id;
+            if show_tool_approval.get()
+                && *tool_approval_id.read() == id
+                && speaks_for(tool_approval_thread.get())
+            {
                 show_tool_approval.set(false);
             } else {
                 let mut queue = queued_tool_approvals.read().clone();
-                if let Some(pos) = queue.iter().position(|(queued_id, _, _)| queued_id == &id) {
+                if let Some(pos) = queue
+                    .iter()
+                    .position(|(owner, queued_id, ..)| queued_id == &id && speaks_for(*owner))
+                {
                     queue.remove(pos);
                     queued_tool_approvals.set(queue);
                 }
@@ -856,11 +874,17 @@ pub(super) fn apply_gw_event(
             // a prompt is shown.
             // Dialog first, then oldest queued — same FIFO-per-id contract
             // as the approvals above.
-            if show_user_prompt.get() && *user_prompt_id.read() == id {
+            if show_user_prompt.get()
+                && *user_prompt_id.read() == id
+                && speaks_for(user_prompt_thread.get())
+            {
                 show_user_prompt.set(false);
             } else {
                 let mut queue = queued_user_prompts.read().clone();
-                if let Some(pos) = queue.iter().position(|prompt| prompt.id == id) {
+                if let Some(pos) = queue
+                    .iter()
+                    .position(|(owner, prompt)| prompt.id == id && speaks_for(*owner))
+                {
                     queue.remove(pos);
                     queued_user_prompts.set(queue);
                 }
@@ -907,12 +931,13 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::ToolApprovalRequest {
+            thread_id,
             id,
             name,
             arguments,
         } => {
             let mut queue = queued_tool_approvals.read().clone();
-            queue.push((id, name.clone(), arguments));
+            queue.push((thread_id, id, name.clone(), arguments));
             queued_tool_approvals.set(queue);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::system(format!(
@@ -922,9 +947,9 @@ pub(super) fn apply_gw_event(
             messages.set(m);
             drain_queued_dialogs(&ui_for_drain);
         }
-        GwEvent::UserPromptRequest(prompt) => {
+        GwEvent::UserPromptRequest { thread_id, prompt } => {
             let mut queue = queued_user_prompts.read().clone();
-            queue.push(prompt.clone());
+            queue.push((thread_id, prompt.clone()));
             queued_user_prompts.set(queue);
 
             // Build informative message based on prompt type
