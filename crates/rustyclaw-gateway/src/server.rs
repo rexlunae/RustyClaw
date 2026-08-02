@@ -625,6 +625,41 @@ pub(crate) async fn handle_connection(
                                 // first poll would file the message, and the
                                 // reply, in whichever thread the user had
                                 // just opened.
+                                active_tasks.reap_finished();
+                                // One turn per connection, decided *before*
+                                // anything is switched or elected: a refused
+                                // message must not move the user's thread on
+                                // its way to being dropped. The client-response
+                                // channels this turn will wait on — tool
+                                // approvals, `ask_user` answers, credentials,
+                                // DOM queries — are one per connection and are
+                                // consumed by whichever turn holds the lock,
+                                // so a second concurrent turn would swallow
+                                // answers meant for the first (and a swallowed
+                                // approval reads as a denial). Serving frames
+                                // during a turn is what this change is for;
+                                // running two turns at once would need those
+                                // responses routed by call id.
+                                if !active_tasks.running_threads().is_empty() {
+                                    // The note alone would leave the client
+                                    // sending forever: a submitted message is
+                                    // in flight until ResponseDone, so the
+                                    // composer would stay disabled with a
+                                    // "Processing…" row and no way out but
+                                    // Stop. Close the request out too.
+                                    let mut scoped = rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                        &mut *writer,
+                                        stream_id,
+                                    );
+                                    protocol::server::send_info(
+                                        &mut scoped,
+                                        "Still working on the previous message — \
+                                         wait for it to finish or press Stop.",
+                                    )
+                                    .await?;
+                                    providers::send_response_done(&mut scoped).await?;
+                                    continue;
+                                }
                                 let auto_switch = {
                                     let mut tm = agent_session.thread_mgr.lock().await;
                                     messages
@@ -677,37 +712,7 @@ pub(crate) async fn handle_connection(
                                 // never reaches the client.
                                 let turn_key = turn_thread
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
-                                active_tasks.reap_finished();
-                                // One turn per connection. The client-response
-                                // channels this turn will wait on — tool
-                                // approvals, `ask_user` answers, credentials,
-                                // DOM queries — are one per connection and are
-                                // consumed by whichever turn holds the lock,
-                                // so a second concurrent turn would swallow
-                                // answers meant for the first (and a swallowed
-                                // approval reads as a denial). Serving frames
-                                // during a turn is what this change is for;
-                                // running two turns at once would need those
-                                // responses routed by call id.
-                                if !active_tasks.running_threads().is_empty() {
-                                    // The note alone would leave the client
-                                    // sending forever: a submitted message is
-                                    // in flight until ResponseDone, so the
-                                    // composer would stay disabled with a
-                                    // "Processing…" row and no way out but
-                                    // Stop. Close the request out too.
-                                    let mut scoped = rustyclaw_core::gateway::ScopedTransportWriter::new(
-                                        &mut *writer,
-                                        stream_id,
-                                    );
-                                    protocol::server::send_info(
-                                        &mut scoped,
-                                        "Still working on the previous message — \
-                                         wait for it to finish or press Stop.",
-                                    )
-                                    .await?;
-                                    providers::send_response_done(&mut scoped).await?;
-                                } else {
+                                {
                                     // A fresh flag per turn: see ActiveTasks.
                                     let tool_cancel: ToolCancelFlag =
                                         Arc::new(AtomicBool::new(false));
