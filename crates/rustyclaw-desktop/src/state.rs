@@ -820,6 +820,15 @@ impl AppState {
         let Some(id) = thread_id else { return };
         self.in_flight.insert(id);
         self.unowned_turn_in_flight = false;
+        // A stream opening in the on-screen thread means it is working,
+        // whatever the indicator said a moment ago. A message that
+        // displaces a running turn gets that turn's close-out first —
+        // attributed to the same thread, indistinguishable from its own —
+        // which cleared `is_processing` and with it the Stop control and
+        // the composer gate, for a reply that was only just starting.
+        if self.foreground_thread_id == Some(id) {
+            self.is_processing = true;
+        }
         // Nothing was focused, so the gateway elected this thread for the
         // turn. Follow it onto the screen: otherwise every frame that
         // follows is judged to belong to a thread that isn't in view, and
@@ -2476,6 +2485,32 @@ mod tests {
             !s.unowned_turn_in_flight,
             "an adopted turn must not be adopted again"
         );
+    }
+
+    /// A displaced turn's close-out must not silence its replacement.
+    ///
+    /// A second message in a busy conversation makes the gateway close the
+    /// displaced turn out first — attributed to the same thread, so it is
+    /// indistinguishable from the new turn's own close-out and clears the
+    /// working state armed at submit. The new turn's stream opening in the
+    /// on-screen thread is the fact that re-arms it; without that, Stop and
+    /// the composer gate stayed gone for the whole reply.
+    #[test]
+    fn a_displaced_close_out_does_not_silence_the_new_turn() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        // The displaced predecessor's close-out lands first…
+        s.response_done(Some(1));
+        // …then the replacement's stream opens in the same thread.
+        s.adopt_stream_thread(Some(1));
+
+        assert!(
+            s.is_processing,
+            "Stop must be available for the reply now running"
+        );
+        assert!(s.in_flight.contains(&1));
     }
 
     /// A gateway-driven foreground move always swaps the transcript.
