@@ -517,6 +517,10 @@ pub(crate) async fn handle_connection(
     loop {
         tokio::select! {
             _ = cancel.cancelled() => {
+                // Dropping a JoinHandle detaches the task; a turn left
+                // running would keep model calls going and then block
+                // forever on a frame channel nobody drains.
+                active_tasks.abort_all();
                 let _ = writer.close().await;
                 break;
             }
@@ -527,7 +531,8 @@ pub(crate) async fn handle_connection(
                     None => std::future::pending().await,
                 }
             }, if drain_deadline.is_some() => {
-                warn!("A turn was still running when the client went away; abandoning it");
+                warn!("A turn was still running when the client went away; stopping it");
+                active_tasks.abort_all();
                 break;
             }
             msg = frame_rx.recv(), if drain_deadline.is_none() => {
@@ -611,6 +616,59 @@ pub(crate) async fn handle_connection(
                                 // works — or while it sits on an `ask_user`
                                 // question, which used to hold the whole
                                 // connection until the user answered it.
+                                //
+                                // Which thread the message belongs to is
+                                // settled *here*, before the turn is handed
+                                // off, including the auto-switch to a better
+                                // matching thread. Deciding it inside the
+                                // task would race the ThreadSwitch frames
+                                // this loop is now free to serve: a switch
+                                // landing between the spawn and the task's
+                                // first poll would file the message, and the
+                                // reply, in whichever thread the user had
+                                // just opened.
+                                let auto_switch = {
+                                    let mut tm = agent_session.thread_mgr.lock().await;
+                                    messages
+                                        .iter()
+                                        .rev()
+                                        .find(|m| m.role == "user")
+                                        .and_then(|last| tm.find_best_match(&last.content))
+                                        .filter(|better| tm.switch_foreground(*better))
+                                        .map(|better| {
+                                            (
+                                                better,
+                                                tm.foreground()
+                                                    .and_then(|t| t.compact_summary.clone()),
+                                            )
+                                        })
+                                };
+                                if let Some((better, context_summary)) = auto_switch {
+                                    send_frame(
+                                        &mut *writer,
+                                        &ServerFrame {
+                                            frame_type: ServerFrameType::ThreadSwitched,
+                                            payload: ServerPayload::ThreadSwitched {
+                                                thread_id: better.0,
+                                                context_summary,
+                                            },
+                                        },
+                                    )
+                                    .await?;
+                                    send_threads_update(
+                                        &mut *writer,
+                                        &*agent_session.thread_mgr.lock().await,
+                                        &task_mgr,
+                                        None,
+                                    )
+                                    .await?;
+                                    send_thread_messages_update(
+                                        &mut *writer,
+                                        better,
+                                        &*agent_session.thread_mgr.lock().await,
+                                    )
+                                    .await?;
+                                }
                                 let turn_thread = agent_session
                                     .thread_mgr
                                     .lock()
@@ -618,10 +676,18 @@ pub(crate) async fn handle_connection(
                                     .foreground_id()
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
                                 active_tasks.reap_finished();
-                                if active_tasks.is_running(&turn_thread) {
-                                    // Two turns writing to one client would
-                                    // interleave their stream frames into an
-                                    // unreadable transcript. Say so instead.
+                                // One turn per connection. The client-response
+                                // channels this turn will wait on — tool
+                                // approvals, `ask_user` answers, credentials,
+                                // DOM queries — are one per connection and are
+                                // consumed by whichever turn holds the lock,
+                                // so a second concurrent turn would swallow
+                                // answers meant for the first (and a swallowed
+                                // approval reads as a denial). Serving frames
+                                // during a turn is what this change is for;
+                                // running two turns at once would need those
+                                // responses routed by call id.
+                                if !active_tasks.running_threads().is_empty() {
                                     // The note alone would leave the client
                                     // sending forever: a submitted message is
                                     // in flight until ResponseDone, so the
@@ -634,7 +700,7 @@ pub(crate) async fn handle_connection(
                                     );
                                     protocol::server::send_info(
                                         &mut scoped,
-                                        "This thread is already working on a message — \
+                                        "Still working on the previous message — \
                                          wait for it to finish or press Stop.",
                                     )
                                     .await?;
@@ -684,6 +750,7 @@ pub(crate) async fn handle_connection(
                                             &credential_rx,
                                             &dom_query_rx,
                                             &thread_mgr,
+                                            Some(turn_thread),
                                             &threads_path,
                                         )
                                         .await;

@@ -57,47 +57,18 @@ pub(crate) async fn handle_chat_frame(
     credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
     dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
     thread_mgr: &SharedThreadMgr,
+    turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
 ) -> Result<()> {
-    // Check for auto-switch: find better matching thread. Every lock scope
-    // in this function is a single operation that ends before the next
-    // client write — the connection loop needs the manager back between
-    // frames, and a write that blocks while the lock is held would wedge
-    // both sides.
-    if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-        let switched = {
-            let mut tm = thread_mgr.lock().await;
-            match tm.find_best_match(&last_user.content) {
-                Some(better) if tm.switch_foreground(better) => Some((
-                    better,
-                    tm.foreground().and_then(|t| t.compact_summary.clone()),
-                )),
-                _ => None,
-            }
-        };
-        if let Some((better_thread_id, context_summary)) = switched {
-            // Send ThreadSwitched notification
-            let frame = ServerFrame {
-                frame_type: ServerFrameType::ThreadSwitched,
-                payload: ServerPayload::ThreadSwitched {
-                    thread_id: better_thread_id.0,
-                    context_summary,
-                },
-            };
-            send_frame(writer, &frame).await?;
-            // Update thread list
-            send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
-            send_thread_messages_update_shared(writer, better_thread_id, thread_mgr).await?;
-        }
-    }
-
-    // The thread this turn belongs to, resolved once — after any
-    // auto-switch above — and used for every read and write from here on.
-    // Resolving it lazily through `foreground()` would file the answer
-    // wherever the user happened to navigate: the connection loop now
-    // serves ThreadSwitch frames while this turn runs, so the foreground
-    // is no longer pinned for the turn's duration.
-    let active_thread_id = thread_mgr.lock().await.foreground_id();
+    // The thread this turn belongs to. The connection loop settles it —
+    // including the auto-switch to a better-matching thread — before
+    // handing the turn off, because that loop keeps serving ThreadSwitch
+    // frames while this runs: anything resolved here, whether now or
+    // lazily through `foreground()`, would file the message and the reply
+    // in whichever thread the user opened next. Every lock scope below is
+    // a single operation that ends before the next client write, since a
+    // write blocking while the lock is held would wedge both sides.
+    let active_thread_id = turn_thread;
 
     // Add user message to the turn's thread history
     let mut did_auto_label = false;
