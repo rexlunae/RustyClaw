@@ -1320,7 +1320,7 @@ pub(crate) async fn handle_connection(
                                 writer.send_on_stream(stream_id, &frame).await?;
                             }
                         }
-                        concurrent::ModelTaskMessage::Done { thread_id, turn_id, response, closed_out } => {
+                        concurrent::ModelTaskMessage::Done { thread_id, stream_id, turn_id, response, closed_out } => {
                             // Backstop: every turn ends with exactly one
                             // close-out, whatever path ended it. A turn that
                             // reported an error frame and returned Ok — or a
@@ -1328,8 +1328,17 @@ pub(crate) async fn handle_connection(
                             // leave the thread marked in-flight in every
                             // client forever.
                             if !closed_out {
+                                // On the turn's own stream, like every frame
+                                // that preceded it — a close-out on the
+                                // control stream never releases the clients'
+                                // per-stream bookkeeping for the turn.
+                                let mut scoped =
+                                    rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                        &mut *writer,
+                                        stream_id,
+                                    );
                                 protocol::server::send_response_done(
-                                    &mut *writer,
+                                    &mut scoped,
                                     false,
                                     Some(thread_id.0).filter(|id| *id != 0),
                                 )
@@ -1363,7 +1372,7 @@ pub(crate) async fn handle_connection(
                                 break;
                             }
                         }
-                        concurrent::ModelTaskMessage::Error { thread_id, turn_id, message, closed_out } => {
+                        concurrent::ModelTaskMessage::Error { thread_id, stream_id, turn_id, message, closed_out } => {
                             // Same identity check as Done above.
                             active_tasks.lock().await.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
@@ -1392,8 +1401,17 @@ pub(crate) async fn handle_connection(
                             // "no thread" registry key and never goes to the
                             // client.
                             if !closed_out {
+                                // On the turn's own stream, like every frame
+                                // that preceded it — a close-out on the
+                                // control stream never releases the clients'
+                                // per-stream bookkeeping for the turn.
+                                let mut scoped =
+                                    rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                        &mut *writer,
+                                        stream_id,
+                                    );
                                 protocol::server::send_response_done(
-                                    &mut *writer,
+                                    &mut scoped,
                                     false,
                                     Some(thread_id.0).filter(|id| *id != 0),
                                 )

@@ -84,32 +84,38 @@ where
     );
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut rx_open = true;
+    // The process this call is actually waiting on, announced over the sink
+    // when the exec path spawns it. This is the only attribution used: the
+    // registry is process-global and turns run concurrently, so guessing
+    // "the newest child" — as this used to — could pick another
+    // conversation's process, and the pid in a ToolStatus frame is what the
+    // client's pause/stop/kill controls act on. No announcement, no pid.
+    let mut announced_pid: Option<u32> = None;
     let result = loop {
         tokio::select! {
             chunk = rx.recv(), if rx_open => {
                 match chunk {
                     Some(c) => {
-                        protocol::server::send_tool_output_delta(
-                            writer, tool_id, &c.chunk, c.is_stderr,
-                        )
-                        .await?;
+                        if let Some(pid) = c.pid {
+                            announced_pid = Some(pid);
+                        }
+                        if !c.chunk.is_empty() {
+                            protocol::server::send_tool_output_delta(
+                                writer, tool_id, &c.chunk, c.is_stderr,
+                            )
+                            .await?;
+                        }
                     }
                     None => rx_open = false,
                 }
             }
             _ = ticker.tick() => {
                 let elapsed_ms = started.elapsed().as_millis() as u64;
-                // Attribute the newest child spawned since this call began;
-                // tool calls on this connection run sequentially, so that is
-                // the process this call is waiting on. With multiple
-                // concurrent connections the pick is best-effort (stats
-                // could come from another connection's child) — control
-                // stays safe regardless, since the registry allowlists
-                // every PID it hands out.
-                let proc = rustyclaw_core::exec_status::sample_active()
-                    .into_iter()
-                    .filter(|p| p.elapsed_ms <= elapsed_ms.saturating_add(250))
-                    .min_by_key(|p| p.elapsed_ms);
+                let proc = announced_pid.and_then(|pid| {
+                    rustyclaw_core::exec_status::sample_active()
+                        .into_iter()
+                        .find(|p| p.pid == pid)
+                });
                 let (pid, cpu, mem, state) = match proc {
                     Some(p) => (Some(p.pid), p.cpu_percent, p.memory_bytes, p.state),
                     None => (None, None, None, None),
@@ -126,9 +132,13 @@ where
             res = &mut exec => break res,
         }
     };
-    // Drain chunks pushed just before the tool completed.
+    // Drain chunks pushed just before the tool completed. Announcements are
+    // moot by now — the process has exited — so only real output goes out.
     while let Ok(c) = rx.try_recv() {
-        protocol::server::send_tool_output_delta(writer, tool_id, &c.chunk, c.is_stderr).await?;
+        if !c.chunk.is_empty() {
+            protocol::server::send_tool_output_delta(writer, tool_id, &c.chunk, c.is_stderr)
+                .await?;
+        }
     }
     Ok(result)
 }
@@ -1455,6 +1465,57 @@ mod live_status_tests {
                 assert!(*elapsed_ms >= 1_900, "elapsed_ms was {elapsed_ms}");
             }
             other => panic!("expected ToolStatus payload, got {other:?}"),
+        }
+    }
+
+    /// Status frames carry only the pid this call announced.
+    ///
+    /// The ticker used to guess "the newest child in the registry", which
+    /// held only while one tool ran at a time. With turns concurrent, the
+    /// newest child can belong to another conversation — and the pid in a
+    /// ToolStatus frame is what the client's pause/stop/kill acts on, so
+    /// the guess let Stop on one conversation kill the other's process.
+    /// No announcement, no pid; an announcement is not echoed as output.
+    #[tokio::test]
+    async fn status_carries_only_the_announced_pid() {
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // A process this test registers, standing in for a *different*
+        // conversation's child: present in the registry, not announced here.
+        let _other = rustyclaw_core::exec_status::register(std::process::id(), "other turn");
+        let _ = tx.send(rustyclaw_core::tools::ToolOutputChunk {
+            chunk: String::new(),
+            is_stderr: false,
+            pid: None,
+        });
+        let (_out, _is_error) = drive_tool_with_live_frames(
+            &mut writer,
+            "tc3",
+            "execute_command",
+            std::time::Instant::now(),
+            rx,
+            async {
+                tokio::time::sleep(TOOL_STATUS_INITIAL_DELAY + TOOL_STATUS_INTERVAL / 2).await;
+                ("done".to_string(), false)
+            },
+        )
+        .await
+        .expect("drive should succeed");
+
+        assert!(
+            !writer
+                .frames
+                .iter()
+                .any(|f| f.frame_type == ServerFrameType::ToolOutputDelta),
+            "an announcement chunk is not output"
+        );
+        for f in &writer.frames {
+            if let ServerPayload::ToolStatus { pid, .. } = &f.payload {
+                assert_eq!(
+                    *pid, None,
+                    "with no announced pid, the registry must not be guessed from"
+                );
+            }
         }
     }
 }

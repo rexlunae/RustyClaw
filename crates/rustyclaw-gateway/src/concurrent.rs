@@ -41,6 +41,12 @@ pub enum ModelTaskMessage {
     /// The main loop should update thread state.
     Done {
         thread_id: ThreadId,
+        /// The stream the turn's request arrived on. The backstop close-out
+        /// must go out on the same stream as every other frame of the turn —
+        /// clients correlate a turn's frames by stream id, and a close-out
+        /// on the control stream leaves their per-stream bookkeeping for
+        /// the turn unreleased.
+        stream_id: u64,
         /// Whether the turn already sent its own `ResponseDone`. Every turn
         /// must end with exactly one close-out — clients retire their
         /// in-flight tracking on it — and the paths that can end a turn are
@@ -61,6 +67,8 @@ pub enum ModelTaskMessage {
     /// The model task failed with an error
     Error {
         thread_id: ThreadId,
+        /// See [`ModelTaskMessage::Done::stream_id`].
+        stream_id: u64,
         turn_id: u64,
         message: String,
         /// See [`ModelTaskMessage::Done::closed_out`].
@@ -125,6 +133,7 @@ impl ChannelSink {
             .tx
             .send(ModelTaskMessage::Done {
                 thread_id: self.thread_id,
+                stream_id: self.stream_id,
                 closed_out: self.sent_response_done,
                 turn_id: self.turn_id,
                 response,
@@ -138,6 +147,7 @@ impl ChannelSink {
             .tx
             .send(ModelTaskMessage::Error {
                 thread_id: self.thread_id,
+                stream_id: self.stream_id,
                 turn_id: self.turn_id,
                 message,
                 closed_out: self.sent_response_done,
