@@ -696,6 +696,31 @@ impl AppState {
         }
     }
 
+    /// Retire the tool approvals and questions belonging to a turn that
+    /// ended without resolving them.
+    ///
+    /// Normally each request's own `ToolResult` retires it. A turn
+    /// displaced by a newer message in its thread is aborted mid-wait and
+    /// never sends one, so the close-out the gateway emits on its behalf
+    /// is the only signal left — and by close-out time a turn that ended
+    /// normally has resolved all of these, so anything still owned by the
+    /// thread is dead. Untagged entries are handled like
+    /// `retire_credentials_for_thread`'s: a close-out cannot name them,
+    /// but once nothing is in flight nobody is waiting on them either.
+    pub fn retire_requests_for_thread(&mut self, thread_id: Option<u64>) {
+        let Some(thread) = thread_id else { return };
+        self.pending_tool_approvals
+            .retain(|(owner, ..)| *owner != Some(thread));
+        self.pending_user_prompts
+            .retain(|(owner, _)| *owner != Some(thread));
+        if self.in_flight.is_empty() {
+            self.pending_tool_approvals
+                .retain(|(owner, ..)| owner.is_some());
+            self.pending_user_prompts
+                .retain(|(owner, _)| owner.is_some());
+        }
+    }
+
     /// Retire the credential requests belonging to a turn that ended.
     ///
     /// A credential wait ending is what ends its turn, so the turn's
@@ -2189,6 +2214,48 @@ mod tests {
             s.pending_user_prompts.first().map(|(owner, _)| *owner),
             Some(Some(2)),
             "thread 2's unanswered question must still be waiting"
+        );
+    }
+
+    /// A displaced turn's close-out clears the boxes it left behind.
+    ///
+    /// A second message in a conversation displaces the turn still running
+    /// there; aborted mid-wait, it never sends the ToolResult that would
+    /// retire its approval or question. The gateway closes it out on its
+    /// behalf, and that close-out must take the dead requests down —
+    /// leaving another turn's untouched — or the dead approval at the head
+    /// of the queue hides every later request.
+    #[test]
+    fn a_turns_close_out_retires_its_unresolved_requests() {
+        let mut s = idle_state();
+        s.in_flight.insert(2);
+        s.pending_tool_approvals.push_back((
+            Some(1),
+            "call_0".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call_0".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
+        s.set_user_prompt(question("call_1"), Some(1));
+        s.set_user_prompt(question("call_1"), Some(2));
+
+        // What the ResponseDone handler does for the displaced turn.
+        s.retire_requests_for_thread(Some(1));
+
+        assert_eq!(
+            s.pending_tool_approvals.front().map(|(owner, ..)| *owner),
+            Some(Some(2)),
+            "the running turn's approval must survive"
+        );
+        assert_eq!(
+            s.pending_user_prompts.first().map(|(owner, _)| *owner),
+            Some(Some(2)),
+            "the running turn's question must survive"
         );
     }
 

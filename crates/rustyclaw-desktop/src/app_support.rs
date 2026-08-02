@@ -231,6 +231,10 @@ pub(crate) fn handle_gateway_event(
             // flows it was waiting on can no longer be answered.
             s.retire_credentials_for_thread(announced);
             s.retire_device_flows_for_thread(announced);
+            // Nor can approvals and questions it never resolved — a turn
+            // displaced by a newer message dies mid-wait, and this
+            // close-out is the only retirement its requests will get.
+            s.retire_requests_for_thread(announced);
         }
         GatewayEvent::ToolCall {
             id,
