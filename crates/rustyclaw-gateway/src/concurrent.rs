@@ -78,7 +78,12 @@ pub fn channel() -> (ModelTaskTx, ModelTaskRx) {
 /// the main connection handler for dispatch.
 pub struct ChannelSink {
     tx: ModelTaskTx,
+    /// The turn's key in the task registry. This is `ThreadId(0)` when there
+    /// was no thread to elect — a local bookkeeping handle, not a thread.
     thread_id: ThreadId,
+    /// The thread to name on the wire, which is *not* the same thing.
+    /// Resolved once, here, so no frame can leak the sentinel by omission.
+    announced_thread: Option<u64>,
     turn_id: u64,
     stream_id: u64,
 }
@@ -88,6 +93,11 @@ impl ChannelSink {
         Self {
             tx,
             thread_id,
+            // Zero is the wire sentinel for "no thread is focused", and a
+            // client that adopts it as this turn's thread will match it
+            // against nothing — dropping the whole reply on the floor.
+            // A turn with no thread announces no thread.
+            announced_thread: Some(thread_id.0).filter(|id| *id != 0),
             turn_id,
             stream_id,
         }
@@ -133,7 +143,7 @@ impl TransportWriter for ChannelSink {
                 stamped = ServerFrame {
                     frame_type: frame.frame_type,
                     payload: ServerPayload::StreamStart {
-                        thread_id: Some(self.thread_id.0),
+                        thread_id: self.announced_thread,
                     },
                 };
                 &stamped
@@ -143,7 +153,7 @@ impl TransportWriter for ChannelSink {
                     frame_type: frame.frame_type,
                     payload: ServerPayload::ResponseDone {
                         ok: *ok,
-                        thread_id: Some(self.thread_id.0),
+                        thread_id: self.announced_thread,
                     },
                 };
                 &stamped
@@ -343,6 +353,49 @@ mod tests {
 
     fn flag() -> crate::ToolCancelFlag {
         Arc::new(AtomicBool::new(false))
+    }
+
+    /// Open a turn through a sink and read back the thread it announced.
+    async fn announced_thread_of(turn_thread: ThreadId) -> Option<u64> {
+        let (tx, mut rx) = channel();
+        let mut sink = ChannelSink::new(tx, turn_thread, 1, 7);
+        rustyclaw_core::gateway::protocol::server::send_stream_start(&mut sink, None)
+            .await
+            .expect("the sink should accept the frame");
+        let ModelTaskMessage::Frame { data, .. } = rx.recv().await.expect("a frame should arrive")
+        else {
+            panic!("Expected a Frame message");
+        };
+        let frame: ServerFrame =
+            rustyclaw_core::gateway::protocol::frames::deserialize_frame(&data)
+                .expect("the frame should decode");
+        match frame.payload {
+            ServerPayload::StreamStart { thread_id } => thread_id,
+            other => panic!("Expected StreamStart, got {other:?}"),
+        }
+    }
+
+    /// A turn with no thread announces no thread.
+    ///
+    /// `ThreadId(0)` is the registry key for a turn started when there was
+    /// nothing to elect — every thread closed — and it is also the wire
+    /// sentinel for "no thread is focused". Stamping it onto the boundary
+    /// frames handed the desktop a thread it could never be showing, so it
+    /// matched the whole turn against nothing and dropped the reply: text,
+    /// tool calls, the lot, silently. The key stays local; the wire gets
+    /// `None`, which clients already read as "apply this to the view".
+    #[tokio::test]
+    async fn a_turn_with_no_thread_announces_no_thread() {
+        assert_eq!(
+            announced_thread_of(ThreadId(0)).await,
+            None,
+            "the placeholder key must not reach the client"
+        );
+        assert_eq!(
+            announced_thread_of(ThreadId(12)).await,
+            Some(12),
+            "a real thread is still named"
+        );
     }
 
     /// Stop applies to the turn it was aimed at. One flag per connection
