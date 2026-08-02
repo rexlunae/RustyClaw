@@ -173,18 +173,51 @@ impl GatewayClient {
             let mut stream_total_bytes: usize = 0;
             // Turn streams whose close-out has already been forwarded.
             // Stream ids are never reused (the sender allocates a fresh
-            // one per Chat), so anything arriving on one of these is a
-            // displaced turn's leftover output, drained from the
-            // gateway's channel after the abort. By then the thread
+            // one per Chat), so a *turn-scoped* frame arriving on one of
+            // these is a displaced turn's leftover output, drained from
+            // the gateway's channel after the abort. By then the thread
             // mapping is gone, and an unattributed frame renders into
             // whatever conversation the user is looking at.
+            //
+            // Only turn-scoped frames are dropped. The dispatch tail
+            // legitimately sends connection-scoped frames on the turn's
+            // stream *after* its close-out — above all the completion
+            // snapshot (`ThreadMessages`), which is how a background
+            // turn's transcript reaches the client at all. Those carry
+            // their own thread ids and need no stream attribution.
             let mut closed_streams: std::collections::HashSet<u64> =
                 std::collections::HashSet::new();
+            fn turn_scoped(payload: &ServerPayload) -> bool {
+                matches!(
+                    payload,
+                    ServerPayload::StreamStart { .. }
+                        | ServerPayload::Chunk { .. }
+                        | ServerPayload::ThinkingStart
+                        | ServerPayload::ThinkingDelta { .. }
+                        | ServerPayload::ThinkingEnd
+                        | ServerPayload::ToolCall { .. }
+                        | ServerPayload::ToolResult { .. }
+                        | ServerPayload::ToolResultMedia { .. }
+                        | ServerPayload::ToolOutputStart { .. }
+                        | ServerPayload::ToolOutputDelta { .. }
+                        | ServerPayload::ToolOutputEnd { .. }
+                        | ServerPayload::ToolStatus { .. }
+                        | ServerPayload::ResponseDone { .. }
+                        | ServerPayload::ToolApprovalRequest { .. }
+                        | ServerPayload::UserPromptRequest { .. }
+                        | ServerPayload::CredentialRequest { .. }
+                        | ServerPayload::DeviceFlowStart { .. }
+                        | ServerPayload::DeviceFlowComplete
+                        | ServerPayload::DomQuery { .. }
+                )
+            }
 
             loop {
                 match reader.recv_wire().await {
                     Ok(Some(envelope)) => {
-                        if closed_streams.contains(&envelope.stream_id) {
+                        if closed_streams.contains(&envelope.stream_id)
+                            && turn_scoped(&envelope.frame.payload)
+                        {
                             event_log_rx.log_frame(
                                 Direction::Received,
                                 &format!(
