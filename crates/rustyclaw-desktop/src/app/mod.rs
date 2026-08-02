@@ -474,26 +474,38 @@ pub fn App() -> Element {
 
                     {
                         let mut b = buf_w.lock().expect("stream buffer poisoned");
-                        for event in std::iter::once(first).chain(extra) {
-                            match event {
+                        for threaded in std::iter::once(first).chain(extra) {
+                            let thread = threaded.thread_id;
+                            match threaded.event {
                                 GatewayEvent::Chunk { delta } => {
-                                    // Coalesce consecutive chunks into one entry.
-                                    if let Some(BufferEntry::Chunks {
-                                        text, count, bytes, ..
-                                    }) = b.entries.last_mut()
-                                    {
-                                        *count += 1;
-                                        *bytes += delta.len();
-                                        text.push_str(&delta);
-                                    } else {
-                                        b.entries.push(BufferEntry::Chunks {
+                                    // Coalesce consecutive chunks into one
+                                    // entry — but only within a thread. Two
+                                    // turns' chunks arrive interleaved now,
+                                    // and merging by adjacency alone would
+                                    // splice two answers into one string.
+                                    match b.entries.last_mut() {
+                                        Some(BufferEntry::Chunks {
+                                            thread_id,
+                                            text,
+                                            count,
+                                            bytes,
+                                        }) if *thread_id == thread => {
+                                            *count += 1;
+                                            *bytes += delta.len();
+                                            text.push_str(&delta);
+                                        }
+                                        _ => b.entries.push(BufferEntry::Chunks {
+                                            thread_id: thread,
                                             text: delta.clone(),
                                             count: 1,
                                             bytes: delta.len(),
-                                        });
+                                        }),
                                     }
                                 }
-                                other => b.entries.push(BufferEntry::Event(other)),
+                                other => b.entries.push(BufferEntry::Event {
+                                    thread_id: thread,
+                                    event: other,
+                                }),
                             }
                         }
                     }
@@ -529,10 +541,13 @@ pub fn App() -> Element {
                     // is preserved.
                     for entry in entries {
                         match entry {
-                            BufferEntry::Event(GatewayEvent::DomQuery { id, js }) => {
+                            BufferEntry::Event {
+                                event: GatewayEvent::DomQuery { id, js },
+                                ..
+                            } => {
                                 handle_dom_query(&client_ui, id, js).await;
                             }
-                            BufferEntry::Event(event) => {
+                            BufferEntry::Event { thread_id, event } => {
                                 let triggers_refresh = matches!(
                                     event,
                                     GatewayEvent::Connected { .. }
@@ -553,7 +568,7 @@ pub fn App() -> Element {
                                     } => Some(*thread_id),
                                     _ => None,
                                 };
-                                handle_gateway_event(event, state);
+                                handle_gateway_event(thread_id, event, state);
                                 if triggers_refresh && !refreshed_threads_this_connection {
                                     refreshed_threads_this_connection = true;
                                     let _ = client_ui.send(GatewayCommand::ThreadList).await;
@@ -575,12 +590,19 @@ pub fn App() -> Element {
                                     last_foreground_history_request = Some(thread_id);
                                 }
                             }
-                            BufferEntry::Chunks { text, count, bytes } => {
+                            BufferEntry::Chunks {
+                                thread_id,
+                                text,
+                                count,
+                                bytes,
+                            } => {
                                 let mut s = state.write();
-                                // Chunks belong to the thread that submitted
-                                // the request; don't stream into a thread the
-                                // user has switched to in the meantime.
-                                if s.stream_targets_foreground() {
+                                // Chunks belong to the turn that produced
+                                // them, and the turn to its thread. A turn
+                                // running in a thread the user is not looking
+                                // at streams nowhere; its transcript arrives
+                                // whole when it finishes.
+                                if s.frame_targets_view(thread_id) {
                                     s.append_to_current_message(&text);
                                     s.streaming_chunks += count;
                                     s.streaming_bytes += bytes;

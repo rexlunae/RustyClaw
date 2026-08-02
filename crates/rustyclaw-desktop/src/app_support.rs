@@ -19,8 +19,16 @@ use rustyclaw_view::{SecretsDialogData, SwarmAgentData, SwarmData};
 /// are coalesced into a single `Chunks` entry to reduce signal writes,
 /// while preserving the ordering of non-chunk events relative to chunks.
 pub(crate) enum BufferEntry {
-    Event(GatewayEvent),
+    Event {
+        /// The thread whose turn produced this, when it is turn-scoped.
+        thread_id: Option<u64>,
+        event: GatewayEvent,
+    },
     Chunks {
+        /// Coalescing is per thread: with a turn running in each of two
+        /// threads, merging their chunks by adjacency alone would splice two
+        /// different answers into one string.
+        thread_id: Option<u64>,
         text: String,
         count: u32,
         bytes: usize,
@@ -76,7 +84,11 @@ pub(crate) async fn connect_to_gateway(
 }
 
 /// Handle a gateway event.
-pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
+pub(crate) fn handle_gateway_event(
+    thread_id: Option<u64>,
+    event: GatewayEvent,
+    mut state: Signal<AppState>,
+) {
     match event {
         GatewayEvent::Connected {
             agent,
@@ -163,41 +175,45 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         // away from it, they must not touch the on-screen view or its
         // indicators; the backgrounded thread's transcript arrives via the
         // gateway's history snapshot on completion.
-        GatewayEvent::StreamStart { thread_id } => {
+        GatewayEvent::StreamStart {
+            thread_id: announced,
+        } => {
             let mut s = state.write();
             // The gateway's answer to "which thread is this turn in" beats
             // the guess made when the message was sent.
-            s.adopt_stream_thread(thread_id);
-            if s.stream_targets_foreground() {
+            s.adopt_stream_thread(announced);
+            if s.frame_targets_view(announced) {
                 s.start_assistant_message();
             }
         }
         GatewayEvent::ThinkingStart => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.start_thinking_message();
             }
         }
         GatewayEvent::ThinkingEnd => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.end_thinking_message();
             }
         }
         GatewayEvent::Chunk { delta } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.append_to_current_message(&delta);
             }
         }
-        GatewayEvent::ResponseDone { thread_id } => {
+        GatewayEvent::ResponseDone {
+            thread_id: announced,
+        } => {
             let mut s = state.write();
             // Only the turn being tracked can end it. A close-out naming a
             // different thread — a refused message, a turn started from
             // another client on the same agent — would otherwise retire the
             // live response, taking the Stop button and the working
             // indicator with it while the model is still going.
-            if s.frame_is_for_current_turn(thread_id) {
+            if s.frame_is_for_current_turn(announced) {
                 s.response_done();
             }
         }
@@ -207,7 +223,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             arguments,
         } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.add_tool_call(id, name, arguments);
                 // A tool call marks the end of this round's text stream; the
                 // gateway is now executing the tool. Switch the indicator from
@@ -220,7 +236,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::ToolOutput { id, chunk, .. } => {
             // Live output from a running tool: update its panel in place.
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.append_tool_output(&id, &chunk);
             }
         }
@@ -238,7 +254,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.clear_user_prompt_if(&id);
             // A failed tool call already surfaces inline: the tool panel
             // shows Failed status with the full error result. No banner.
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.set_tool_result(&id, result, is_error);
             }
         }
@@ -253,7 +269,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             message,
         } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.set_tool_live_status(
                     &id,
                     rustyclaw_core::ui::ToolLiveStatus {
@@ -551,7 +567,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             // Accumulate the reasoning text into the open thinking block so
             // the transcript can show *why* the agent did what it did.
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.append_thinking(&delta);
             }
         }

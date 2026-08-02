@@ -35,7 +35,7 @@ pub(crate) enum GwEvent {
     /// turn started elsewhere — or a refusal for a thread this client is not
     /// waiting on — can be told apart from the one on screen.
     StreamStart(Option<u64>),
-    Chunk(String),
+    Chunk(Option<u64>, String),
     /// A turn closed, naming its thread. See [`GwEvent::StreamStart`].
     ResponseDone(Option<u64>),
     ThinkingStart,

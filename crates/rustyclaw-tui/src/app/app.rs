@@ -302,8 +302,10 @@ impl App {
         let gw_tx_conn = gw_tx.clone();
         let client_reader = client.clone();
         let _reader_handle = tokio::spawn(async move {
-            while let Some(event) = client_reader.recv().await {
-                if let Some(ev) = gateway_client::gateway_event_to_gw_event(event) {
+            while let Some(threaded) = client_reader.recv().await {
+                if let Some(ev) =
+                    gateway_client::gateway_event_to_gw_event(threaded.thread_id, threaded.event)
+                {
                     if gw_tx_conn.send(ev).is_err() {
                         break;
                     }

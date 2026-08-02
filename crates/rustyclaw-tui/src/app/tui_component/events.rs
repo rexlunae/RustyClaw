@@ -314,7 +314,20 @@ pub(super) fn apply_gw_event(
             }
             streaming_buf.set(String::new());
         }
-        GwEvent::Chunk(text) => {
+        GwEvent::Chunk(thread_id, text) => {
+            // A chunk from a turn running in another thread must not join
+            // this one's answer. The TUI shows one thread at a time and keeps
+            // a single `streaming_buf`, so appending it would splice two
+            // replies into one message and file the merge under whichever
+            // turn closed first. That thread's transcript arrives whole when
+            // its turn completes.
+            let mine = match (thread_id, streaming_thread_id.get()) {
+                (Some(announced), Some(current)) => announced == current,
+                _ => true,
+            };
+            if !mine {
+                return;
+            }
             let mut buf = streaming_buf.read().clone();
             buf.push_str(&text);
             streaming_buf.set(buf);
