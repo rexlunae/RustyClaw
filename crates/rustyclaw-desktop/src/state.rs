@@ -652,9 +652,20 @@ impl AppState {
     /// on. Left in place, an abandoned request sits at the head of the
     /// queue and hides every later one, which then times out unseen: a
     /// tool refused in the user's name that they were never shown.
+    /// Only the oldest match goes: adapters emit colliding call ids
+    /// (`call_0`, `call_1`, …), so two concurrent turns can both be
+    /// waiting on `call_0`, and the gateway resolves its waiters for an
+    /// id oldest-first. Removing every match would take another turn's
+    /// request down with the one that was actually answered — a tool
+    /// denied in the user's name that they were never shown.
     pub fn retire_tool_approval(&mut self, id: &str) {
-        self.pending_tool_approvals
-            .retain(|(queued_id, _, _)| queued_id != id);
+        if let Some(pos) = self
+            .pending_tool_approvals
+            .iter()
+            .position(|(queued_id, _, _)| queued_id == id)
+        {
+            self.pending_tool_approvals.remove(pos);
+        }
     }
 
     /// Retire the credential requests belonging to a turn that ended.
@@ -679,9 +690,16 @@ impl AppState {
     /// Answering must not `pop_front`: the gateway can retire the displayed
     /// entry between render and click, and popping the head would then
     /// discard a request that was never shown.
+    /// Oldest match only, like `retire_tool_approval`: ids can collide
+    /// across concurrent turns, and the gateway answers oldest-first.
     pub fn retire_credential_request(&mut self, id: &str) {
-        self.pending_credential_requests
-            .retain(|(_, queued_id, ..)| queued_id != id);
+        if let Some(pos) = self
+            .pending_credential_requests
+            .iter()
+            .position(|(_, queued_id, ..)| queued_id == id)
+        {
+            self.pending_credential_requests.remove(pos);
+        }
     }
 
     /// Retire the device-flow prompts belonging to a turn's close-out.
@@ -806,8 +824,16 @@ impl AppState {
     /// `ask_user` tool call id, so the tool's result frame — which arrives
     /// whether the wait ended in an answer, a cancel, or a timeout — is what
     /// retires a card the user never touched.
+    /// Oldest match only, like `retire_tool_approval`: the prompt id is a
+    /// tool-call id, which can collide across concurrent turns.
     pub fn clear_user_prompt_if(&mut self, id: &str) {
-        self.pending_user_prompts.retain(|(_, p)| p.id != id);
+        if let Some(pos) = self
+            .pending_user_prompts
+            .iter()
+            .position(|(_, p)| p.id == id)
+        {
+            self.pending_user_prompts.remove(pos);
+        }
     }
 
     /// Start a new assistant message (streaming).
@@ -2005,6 +2031,35 @@ mod tests {
                 .map(|(id, _, _)| id.as_str()),
             Some("call-2"),
             "the next request must surface"
+        );
+    }
+
+    /// Answering one of two same-id requests keeps the other.
+    ///
+    /// Adapters emit colliding call ids (`call_0`, …), so two concurrent
+    /// turns can both be waiting on the same id; the gateway queues a
+    /// waiter per turn and answers oldest-first. Retiring every match took
+    /// the second turn's request down with the first — it vanished unseen
+    /// and its timeout read as a denial.
+    #[test]
+    fn colliding_call_ids_retire_oldest_first() {
+        let mut s = idle_state();
+        s.pending_tool_approvals.push_back((
+            "call_0".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals
+            .push_back(("call_0".into(), "write_file".into(), "{}".into()));
+
+        s.retire_tool_approval("call_0");
+
+        assert_eq!(
+            s.pending_tool_approvals
+                .front()
+                .map(|(_, name, _)| name.as_str()),
+            Some("write_file"),
+            "the younger request with the shared id must survive"
         );
     }
 

@@ -274,6 +274,16 @@ impl GatewayClient {
                                 message: format!("Protocol error: {}", err),
                             }))
                             .await;
+                        // A decode error is fatal — the frame stream cannot
+                        // be resynced, and this loop ends here, so no
+                        // close-out will ever arrive for the turns still
+                        // tracked. Without a Disconnected the UI keeps its
+                        // spinner and gates the composer forever.
+                        let _ = event_tx
+                            .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
+                                reason: Some(format!("Protocol error: {}", err)),
+                            }))
+                            .await;
                         break;
                     }
                 }
