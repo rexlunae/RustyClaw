@@ -22,6 +22,13 @@ pub fn process_manager() -> &'static SharedProcessManager {
 static SANDBOX: OnceLock<Sandbox> = OnceLock::new();
 
 /// Called once from the gateway to initialize the sandbox.
+///
+/// Once means once: the `OnceLock` refuses a second set, and that is now a
+/// logged fact instead of a silent one — a caller hoping to "re-register"
+/// the sandbox was getting a no-op. The workspace baked in here is only the
+/// policy's default; every execution site substitutes the per-command
+/// working directory into its copy of the policy, which is what lets turns
+/// in different projects run under the right confinement at the same time.
 pub fn init_sandbox(
     mode: SandboxMode,
     workspace: PathBuf,
@@ -34,12 +41,9 @@ pub fn init_sandbox(
         policy = policy.deny_read(path.clone()).deny_write(path);
     }
     let sandbox = Sandbox::with_mode(mode, policy);
-    let _ = SANDBOX.set(sandbox);
-}
-
-/// Get the global sandbox instance, if initialized.
-pub fn sandbox() -> Option<&'static Sandbox> {
-    SANDBOX.get()
+    if SANDBOX.set(sandbox).is_err() {
+        warn!("Sandbox already initialized; ignoring re-initialization");
+    }
 }
 
 /// Build the sandbox-wrapped `(program, args)` for running `interpreter` as a
