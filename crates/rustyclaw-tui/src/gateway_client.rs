@@ -140,12 +140,13 @@ pub(crate) fn gateway_event_to_gw_event(
             message,
         },
         E::DeviceFlowStart { url, code, .. } => GwEvent::DeviceFlowCode {
+            thread_id,
             // Provider context is shown via the preceding Info message.
             provider: String::new(),
             url,
             code,
         },
-        E::DeviceFlowComplete => GwEvent::DeviceFlowDone,
+        E::DeviceFlowComplete => GwEvent::DeviceFlowDone(thread_id),
 
         // ── Threads ─────────────────────────────────────────────────────
         // The TUI tab bar renders id/label/is_foreground/message_count only,

@@ -355,7 +355,14 @@ pub struct AppState {
         std::collections::VecDeque<(Option<u64>, String, String, String, String)>,
 
     /// Pending device flow (url, code, message).
-    pub pending_device_flow: Option<(String, String, Option<String>)>,
+    /// Device-flow sign-in prompts, oldest first, each tagged with the
+    /// thread whose turn started the flow. The last of the single slots: a
+    /// second sign-in overwrote the first, whose code was never shown and
+    /// whose flow waited out its whole window — and completing one flow
+    /// tore down the other's dialog.
+    #[allow(clippy::type_complexity)]
+    pub pending_device_flows:
+        std::collections::VecDeque<(Option<u64>, String, String, Option<String>)>,
 
     /// Number of streaming chunks received in the current response.
     pub streaming_chunks: u32,
@@ -540,7 +547,7 @@ impl Default for AppState {
             pending_tool_approvals: std::collections::VecDeque::new(),
             pending_user_prompts: Vec::new(),
             pending_credential_requests: std::collections::VecDeque::new(),
-            pending_device_flow: None,
+            pending_device_flows: std::collections::VecDeque::new(),
             streaming_chunks: 0,
             streaming_bytes: 0,
             agent_access: false,
@@ -658,6 +665,24 @@ impl AppState {
         let Some(thread) = thread_id else { return };
         self.pending_credential_requests
             .retain(|(owner, ..)| *owner != Some(thread));
+    }
+
+    /// Retire the device-flow prompts belonging to a turn.
+    ///
+    /// Called both when a flow completes (`DeviceFlowComplete`, attributed
+    /// to its turn) and when the turn ends any other way — expiry and
+    /// cancellation both end the turn, so its close-out is the fallback
+    /// retirement. An unattributed completion (older gateway) retires the
+    /// prompt on screen, which is all such a gateway can have.
+    pub fn retire_device_flows_for_thread(&mut self, thread_id: Option<u64>) {
+        match thread_id {
+            Some(thread) => self
+                .pending_device_flows
+                .retain(|(owner, ..)| *owner != Some(thread)),
+            None => {
+                self.pending_device_flows.pop_front();
+            }
+        }
     }
 
     /// Whether a turn-scoped frame from `thread_id` should render into the
@@ -1857,6 +1882,40 @@ mod tests {
             s.visible_user_prompt().map(|p| p.id).as_deref(),
             Some("call-1")
         );
+    }
+
+    /// One conversation's sign-in does not tear down another's.
+    ///
+    /// The device flow was the last single slot: a second sign-in overwrote
+    /// the first, whose code was never shown, and completing one flow took
+    /// down the other's dialog. Completion and close-out both retire only
+    /// their own turn's flow.
+    #[test]
+    fn one_sign_in_does_not_tear_down_anothers() {
+        let mut s = idle_state();
+        s.pending_device_flows.push_back((
+            Some(1),
+            "https://example.com/a".into(),
+            "AAAA-1111".into(),
+            None,
+        ));
+        s.pending_device_flows.push_back((
+            Some(2),
+            "https://example.com/b".into(),
+            "BBBB-2222".into(),
+            None,
+        ));
+
+        // Thread 1's flow completes; thread 2's is untouched and surfaces.
+        s.retire_device_flows_for_thread(Some(1));
+        assert_eq!(
+            s.pending_device_flows.front().map(|(owner, ..)| *owner),
+            Some(Some(2))
+        );
+
+        // An unattributed completion (older gateway) retires the visible one.
+        s.retire_device_flows_for_thread(None);
+        assert!(s.pending_device_flows.is_empty());
     }
 
     /// An abandoned approval does not block the queue behind it.

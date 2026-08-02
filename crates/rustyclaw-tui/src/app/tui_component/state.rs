@@ -138,6 +138,12 @@ pub(super) struct Ui {
     pub queued_user_prompts: State<Vec<rustyclaw_core::user_prompt_types::UserPrompt>>,
     #[allow(clippy::type_complexity)]
     pub queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>>,
+    /// Device-flow prompts waiting for the dialog, oldest first, tagged with
+    /// the turn that started each flow.
+    pub queued_device_flows: State<Vec<(Option<u64>, String, String, String)>>,
+    /// The turn whose flow the visible device dialog belongs to, so a
+    /// completion or close-out for another turn cannot tear it down.
+    pub device_flow_thread: State<Option<u64>>,
     pub command_completions: State<Vec<String>>,
     pub command_selected: State<Option<usize>>,
     pub model_completion_provider: State<Option<String>>,

@@ -168,14 +168,17 @@ pub(crate) enum GwEvent {
         help_url: String,
         help_text: String,
     },
-    /// Show the device flow verification dialog.
+    /// Show the device flow verification dialog. Tagged with the turn that
+    /// started the flow, so completing or ending one conversation's sign-in
+    /// cannot tear down another's.
     DeviceFlowCode {
+        thread_id: Option<u64>,
         provider: String,
         url: String,
         code: String,
     },
     /// Device flow completed — dismiss dialog and store token.
-    DeviceFlowDone,
+    DeviceFlowDone(Option<u64>),
     /// Device flow succeeded — store token and proceed to model selection.
     DeviceFlowToken {
         provider: String,

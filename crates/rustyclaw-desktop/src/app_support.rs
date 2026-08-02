@@ -114,6 +114,7 @@ pub(crate) fn handle_gateway_event(
             s.clear_user_prompt();
             s.pending_tool_approvals.clear();
             s.pending_credential_requests.clear();
+            s.pending_device_flows.clear();
             // The gateway repoints the workspace at the restored foreground
             // thread's directory on connect, which need not be where the
             // previous session's editor cache came from.
@@ -147,6 +148,7 @@ pub(crate) fn handle_gateway_event(
             s.clear_user_prompt();
             s.pending_tool_approvals.clear();
             s.pending_credential_requests.clear();
+            s.pending_device_flows.clear();
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -223,9 +225,10 @@ pub(crate) fn handle_gateway_event(
             if s.frame_is_for_current_turn(announced) {
                 s.response_done(announced);
             }
-            // The turn is over either way; credential requests it was
-            // waiting on can no longer be answered.
+            // The turn is over either way; credential requests and sign-in
+            // flows it was waiting on can no longer be answered.
             s.retire_credentials_for_thread(announced);
+            s.retire_device_flows_for_thread(announced);
         }
         GatewayEvent::ToolCall {
             id,
@@ -527,10 +530,17 @@ pub(crate) fn handle_gateway_event(
             ));
         }
         GatewayEvent::DeviceFlowStart { url, code, message } => {
-            state.write().pending_device_flow = Some((url, code, message));
+            // Tagged with the turn that started the flow, and queued: two
+            // conversations can both need to sign in, and dismissing this
+            // dialog aims a Cancel at the flow's own turn — not at whatever
+            // happens to be on screen.
+            state
+                .write()
+                .pending_device_flows
+                .push_back((thread_id, url, code, message));
         }
         GatewayEvent::DeviceFlowComplete => {
-            state.write().pending_device_flow = None;
+            state.write().retire_device_flows_for_thread(thread_id);
         }
         GatewayEvent::SecretsListResult { ok, entries } => {
             if ok {
