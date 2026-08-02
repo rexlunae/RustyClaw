@@ -831,16 +831,20 @@ pub(super) fn apply_gw_event(
             // the head of the queue would hide every later request, each of
             // which then times out unseen as a denial. Retired before the
             // render gate: a background turn's approvals die too.
-            {
-                let mut queue = queued_tool_approvals.read().clone();
-                let before = queue.len();
-                queue.retain(|(queued_id, _, _)| queued_id != &id);
-                if queue.len() != before {
-                    queued_tool_approvals.set(queue);
-                }
-            }
+            // Oldest holder of the id first, and only one: call ids like
+            // `call_0` collide across concurrent turns, and the gateway
+            // resolves its waiters oldest-first. The displayed request was
+            // drained from the head of the queue, so it is older than any
+            // queued entry sharing its id — a blanket removal would take a
+            // second turn's request down with the one this result ends.
             if show_tool_approval.get() && *tool_approval_id.read() == id {
                 show_tool_approval.set(false);
+            } else {
+                let mut queue = queued_tool_approvals.read().clone();
+                if let Some(pos) = queue.iter().position(|(queued_id, _, _)| queued_id == &id) {
+                    queue.remove(pos);
+                    queued_tool_approvals.set(queue);
+                }
             }
             // Same contract for `ask_user`: the prompt id is its tool-call
             // id, and this result arrives whether the user answered, Stop
@@ -848,16 +852,16 @@ pub(super) fn apply_gw_event(
             // left up would block every question queued behind it — and
             // swallow the keyboard, since normal input is suppressed while
             // a prompt is shown.
-            {
-                let mut queue = queued_user_prompts.read().clone();
-                let before = queue.len();
-                queue.retain(|prompt| prompt.id != id);
-                if queue.len() != before {
-                    queued_user_prompts.set(queue);
-                }
-            }
+            // Dialog first, then oldest queued — same FIFO-per-id contract
+            // as the approvals above.
             if show_user_prompt.get() && *user_prompt_id.read() == id {
                 show_user_prompt.set(false);
+            } else {
+                let mut queue = queued_user_prompts.read().clone();
+                if let Some(pos) = queue.iter().position(|prompt| prompt.id == id) {
+                    queue.remove(pos);
+                    queued_user_prompts.set(queue);
+                }
             }
             if !renders_here(thread_id, foreground_thread_id.get()) {
                 return;
