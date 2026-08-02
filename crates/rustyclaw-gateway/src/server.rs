@@ -660,20 +660,15 @@ pub(crate) async fn handle_connection(
                                 // during a turn is what this change is for;
                                 // running two turns at once would need those
                                 // responses routed by call id.
-                                let busy = !active_tasks.lock().await.running_threads().is_empty();
-                                if busy && !turn_done_for_client {
-                                    // A note, and deliberately nothing else.
-                                    // `ResponseDone` carries no request or
-                                    // thread identity, so a client that
-                                    // tracks one in-flight response cannot
-                                    // tell this close-out from the real one:
-                                    // it would retire the turn that is still
-                                    // running, taking the Stop button and the
-                                    // working indicator with it. The client's
-                                    // in-flight state belongs to that turn —
-                                    // a refusal can only happen while one is
-                                    // running — and its own completion is
-                                    // what clears it.
+                                // Bound to a local: the running turn's thread
+                                // decides whether the refusal can be closed
+                                // out, and a guard taken in an `if` scrutinee
+                                // would outlive the block.
+                                let running_thread = {
+                                    let tasks = active_tasks.lock().await;
+                                    tasks.running_threads().first().copied()
+                                };
+                                if running_thread.is_some() && !turn_done_for_client {
                                     let mut scoped = rustyclaw_core::gateway::ScopedTransportWriter::new(
                                         &mut *writer,
                                         stream_id,
@@ -685,6 +680,37 @@ pub(crate) async fn handle_connection(
                                          then send this again.",
                                     )
                                     .await?;
+                                    // The client set itself busy when it sent
+                                    // this, and nothing else will ever clear
+                                    // it: the running turn's close-out names
+                                    // a different thread, so a client routing
+                                    // by thread ignores it and sits on a
+                                    // spinner with its composer disabled —
+                                    // unable to send the very message that
+                                    // would unstick it.
+                                    //
+                                    // Only when the two threads differ. A
+                                    // second message typed into the *same*
+                                    // thread is the case this close-out used
+                                    // to break: the client's busy state there
+                                    // does belong to the running turn, and
+                                    // retiring it would take the Stop button
+                                    // and the working indicator away mid
+                                    // response. That turn's own completion
+                                    // clears it. A client that names no
+                                    // thread cannot be told apart either way,
+                                    // and keeps that same behaviour.
+                                    if let Some(named) = thread_id
+                                        && running_thread
+                                            != Some(rustyclaw_core::threads::ThreadId(named))
+                                    {
+                                        protocol::server::send_response_done(
+                                            &mut scoped,
+                                            false,
+                                            Some(named),
+                                        )
+                                        .await?;
+                                    }
                                     continue;
                                 }
                                 // The client names the thread it typed into,
