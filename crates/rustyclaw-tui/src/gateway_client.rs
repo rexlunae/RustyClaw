@@ -54,9 +54,9 @@ pub(crate) fn gateway_event_to_gw_event(
 
         // ── Streaming ───────────────────────────────────────────────────
         E::StreamStart { thread_id } => GwEvent::StreamStart(thread_id),
-        E::ThinkingStart => GwEvent::ThinkingStart,
-        E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(delta),
-        E::ThinkingEnd => GwEvent::ThinkingEnd,
+        E::ThinkingStart => GwEvent::ThinkingStart(thread_id),
+        E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(thread_id, delta),
+        E::ThinkingEnd => GwEvent::ThinkingEnd(thread_id),
         // Tagged with the turn that produced it. The TUI renders one thread
         // at a time and shares a single streaming buffer, so a chunk from a
         // turn running elsewhere has to be recognisable — appending it here
@@ -70,6 +70,7 @@ pub(crate) fn gateway_event_to_gw_event(
             name,
             arguments,
         } => GwEvent::ToolCall {
+            thread_id,
             id,
             name,
             arguments,
@@ -80,6 +81,7 @@ pub(crate) fn gateway_event_to_gw_event(
             result,
             is_error,
         } => GwEvent::ToolResult {
+            thread_id,
             id,
             name,
             result,
@@ -95,6 +97,7 @@ pub(crate) fn gateway_event_to_gw_event(
             state,
             message,
         } => GwEvent::ToolStatus {
+            thread_id,
             id,
             status: rustyclaw_core::ui::ToolLiveStatus {
                 elapsed_ms,
@@ -107,7 +110,11 @@ pub(crate) fn gateway_event_to_gw_event(
         },
         // stderr chunks merge into the same tail a terminal would show;
         // the flag isn't currently surfaced in either client.
-        E::ToolOutput { id, chunk, .. } => GwEvent::ToolOutput { id, chunk },
+        E::ToolOutput { id, chunk, .. } => GwEvent::ToolOutput {
+            thread_id,
+            id,
+            chunk,
+        },
         E::ToolApprovalRequest {
             id,
             name,
@@ -657,7 +664,7 @@ mod tests {
             },
         };
         match adapt(frame) {
-            Some(GwEvent::ToolStatus { id, status }) => {
+            Some(GwEvent::ToolStatus { id, status, .. }) => {
                 assert_eq!(id, "call_001");
                 assert_eq!(status.elapsed_ms, 5_000);
                 assert_eq!(status.pid, Some(1234));
@@ -748,7 +755,7 @@ mod tests {
             frame_type: ServerFrameType::ThinkingStart,
             payload: ServerPayload::ThinkingStart,
         };
-        assert!(matches!(adapt(thinking), Some(GwEvent::ThinkingStart)));
+        assert!(matches!(adapt(thinking), Some(GwEvent::ThinkingStart(_))));
 
         let done = ServerFrame {
             frame_type: ServerFrameType::ResponseDone,

@@ -38,16 +38,22 @@ pub(crate) enum GwEvent {
     Chunk(Option<u64>, String),
     /// A turn closed, naming its thread. See [`GwEvent::StreamStart`].
     ResponseDone(Option<u64>),
-    ThinkingStart,
+    // Every frame of a turn is tagged with the thread it is running in.
+    // With a turn per thread, reasoning text and tool panels from a
+    // conversation the user is not reading would otherwise be drawn into —
+    // and appended to — the one they are.
+    ThinkingStart(Option<u64>),
     /// A chunk of the model's reasoning text.
-    ThinkingDelta(String),
-    ThinkingEnd,
+    ThinkingDelta(Option<u64>, String),
+    ThinkingEnd(Option<u64>),
     ToolCall {
+        thread_id: Option<u64>,
         id: String,
         name: String,
         arguments: String,
     },
     ToolResult {
+        thread_id: Option<u64>,
         id: String,
         name: String,
         result: String,
@@ -55,11 +61,13 @@ pub(crate) enum GwEvent {
     },
     /// Live status for a still-running tool call (elapsed + process stats).
     ToolStatus {
+        thread_id: Option<u64>,
         id: String,
         status: rustyclaw_core::ui::ToolLiveStatus,
     },
     /// A chunk of live stdout/stderr from a still-running tool.
     ToolOutput {
+        thread_id: Option<u64>,
         id: String,
         chunk: String,
     },
