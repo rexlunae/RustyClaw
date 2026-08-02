@@ -672,11 +672,19 @@ pub(crate) async fn handle_connection(
                                     )
                                     .await?;
                                 }
-                                let turn_thread = agent_session
-                                    .thread_mgr
-                                    .lock()
-                                    .await
-                                    .foreground_id()
+                                // A message needs a thread to live in. If
+                                // none is focused — the client backgrounded
+                                // it — elect one rather than filing the turn
+                                // under `ThreadId(0)`: zero is the wire
+                                // sentinel for "nothing is focused", and a
+                                // frame carrying it tells the desktop to
+                                // clear the transcript.
+                                let turn_thread =
+                                    agent_session.thread_mgr.lock().await.ensure_foreground();
+                                // A key for tracking the turn even when
+                                // there is no thread at all to elect. It
+                                // never reaches the client.
+                                let turn_key = turn_thread
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
                                 active_tasks.reap_finished();
                                 // One turn per connection. The client-response
@@ -716,7 +724,7 @@ pub(crate) async fn handle_connection(
                                     let turn_id = next_turn_id;
                                     let mut sink = concurrent::ChannelSink::new(
                                         model_task_tx.clone(),
-                                        turn_thread,
+                                        turn_key,
                                         turn_id,
                                         stream_id,
                                     );
@@ -756,7 +764,7 @@ pub(crate) async fn handle_connection(
                                             &credential_rx,
                                             &dom_query_rx,
                                             &thread_mgr,
-                                            Some(turn_thread),
+                                            turn_thread,
                                             &threads_path,
                                         )
                                         .await;
@@ -769,7 +777,7 @@ pub(crate) async fn handle_connection(
                                             Err(e) => sink.error(format!("{e:#}")).await,
                                         }
                                     });
-                                    active_tasks.register(turn_thread, turn_id, handle, tool_cancel);
+                                    active_tasks.register(turn_key, turn_id, handle, tool_cancel);
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {
@@ -808,12 +816,13 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 thread_handler::handle_thread_switch(
                                     &mut *writer,
-                                    &mut *agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     &shared_model_ctx,
                                     &http,
                                     thread_id,
+                                    active_tasks.running_threads().first().copied(),
                                 )
                                 .await?;
                                 // Repoint the workspace at the new foreground

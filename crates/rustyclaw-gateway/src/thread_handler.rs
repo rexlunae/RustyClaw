@@ -14,7 +14,10 @@ use rustyclaw_core::gateway::{
 };
 use rustyclaw_core::threads::ThreadId;
 
-use crate::thread_updates::{send_thread_messages_update, send_threads_update};
+use crate::thread_updates::{
+    send_thread_messages_update, send_thread_messages_update_shared, send_threads_update,
+    send_threads_update_shared,
+};
 use crate::{SharedModelCtx, SharedTaskManager, providers};
 
 /// Handle a `TasksRequest`: send the current task list.
@@ -85,21 +88,31 @@ pub(crate) async fn handle_thread_create(
 /// Handle a `ThreadSwitch`: compact the current thread, switch foreground.
 ///
 /// `thread_id == 0` is a sentinel meaning "background the current thread".
+///
+/// Takes the shared manager rather than a borrow, because compaction calls
+/// the model: a guard held across that call would freeze a turn running in
+/// parallel — which is exactly the thing a user is doing when they switch
+/// threads mid-answer — for as long as the provider takes. Each lock scope
+/// below is one operation, and the model call happens between them.
 pub(crate) async fn handle_thread_switch(
     writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
     shared_model_ctx: &SharedModelCtx,
     http: &reqwest::Client,
     thread_id: u64,
+    // The thread with a turn running, if any. Its history is still being
+    // written, so summarising it now would both miss the answer in flight
+    // and drop messages that answer is building on.
+    busy_thread: Option<ThreadId>,
 ) -> Result<()> {
     debug!("Thread switch request: {}", thread_id);
 
     // thread_id == 0 is a sentinel meaning "background current thread"
     if thread_id == 0 {
         // Clear foreground — no thread is active
-        thread_mgr.clear_foreground();
+        thread_mgr.lock().await.clear_foreground();
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadSwitched,
             payload: ServerPayload::ThreadSwitched {
@@ -108,7 +121,7 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+        send_threads_update(writer, &*thread_mgr.lock().await, task_mgr, None).await?;
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadMessages,
             payload: ServerPayload::ThreadMessages {
@@ -117,69 +130,68 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        crate::helpers::persist_threads(thread_mgr, threads_path);
+        crate::helpers::persist_threads(&*thread_mgr.lock().await, threads_path);
         return Ok(());
     }
 
     let target_id = ThreadId(thread_id);
 
-    // Get current foreground thread for compaction
-    let current_fg_id = thread_mgr.foreground().map(|t| t.task_id());
+    // Compact the outgoing thread if it has enough history to be worth
+    // summarising. The prompt is taken under the lock and the summary
+    // applied under it again; the provider round trip in between holds
+    // nothing.
+    let to_compact = {
+        let tm = thread_mgr.lock().await;
+        tm.foreground()
+            .map(|t| t.task_id())
+            .filter(|fg_id| *fg_id != target_id && Some(*fg_id) != busy_thread)
+            .and_then(|fg_id| tm.get(fg_id))
+            .filter(|thread| thread.messages.len() > 3 && thread.compact_summary.is_none())
+            .map(|thread| (thread.id, thread.label.clone(), thread.compaction_prompt()))
+    };
+    if let Some((fg_id, label, prompt)) = to_compact {
+        // Notify client about compaction
+        send_info(writer, &format!("Compacting thread '{}'...", label)).await?;
 
-    // Compact the current thread if it has messages
-    if let Some(fg_id) = current_fg_id {
-        if fg_id != target_id {
-            if let Some(thread) = thread_mgr.get_mut(fg_id) {
-                if thread.messages.len() > 3 && thread.compact_summary.is_none() {
-                    // Generate compaction prompt
-                    let prompt = thread.compaction_prompt();
+        let current_model_ctx = shared_model_ctx.read().await.clone();
+        if let Some(ref ctx) = current_model_ctx {
+            let summary_req = ProviderRequest {
+                messages: vec![ChatMessage::text("user", &prompt)],
+                model: ctx.model.clone(),
+                provider: ctx.provider.clone(),
+                base_url: ctx.base_url.clone(),
+                api_key: ctx.api_key.clone(),
+                // Summarisation never needs tools.
+                allowed_tools: Some(Vec::new()),
+            };
 
-                    // Notify client about compaction
-                    send_info(writer, &format!("Compacting thread '{}'...", thread.label)).await?;
-
-                    // Call LLM to summarize
-                    let current_model_ctx = shared_model_ctx.read().await.clone();
-                    if let Some(ref ctx) = current_model_ctx {
-                        let summary_req = ProviderRequest {
-                            messages: vec![ChatMessage::text("user", &prompt)],
-                            model: ctx.model.clone(),
-                            provider: ctx.provider.clone(),
-                            base_url: ctx.base_url.clone(),
-                            api_key: ctx.api_key.clone(),
-                            // Summarisation never needs tools.
-                            allowed_tools: Some(Vec::new()),
-                        };
-
-                        let summary_result =
-                            providers::call_with_tools(http, &summary_req, None).await;
-
-                        match summary_result {
-                            Ok(resp) if !resp.text.is_empty() => {
-                                thread.apply_compaction(resp.text);
-                                debug!(thread = %thread.label, "Thread compacted");
-                            }
-                            Ok(_) => {
-                                debug!(thread = %thread.label, "Empty summary from LLM");
-                            }
-                            Err(e) => {
-                                debug!(thread = %thread.label, error = %e, "Compaction failed");
-                            }
-                        }
+            match providers::call_with_tools(http, &summary_req, None).await {
+                Ok(resp) if !resp.text.is_empty() => {
+                    if let Some(thread) = thread_mgr.lock().await.get_mut(fg_id) {
+                        thread.apply_compaction(resp.text);
+                        debug!(thread = %label, "Thread compacted");
                     }
+                }
+                Ok(_) => {
+                    debug!(thread = %label, "Empty summary from LLM");
+                }
+                Err(e) => {
+                    debug!(thread = %label, error = %e, "Compaction failed");
                 }
             }
         }
     }
 
-    // Get summary of thread being switched to
-    let context_summary = thread_mgr
-        .get(target_id)
-        .and_then(|t| t.compact_summary.clone());
-
     // Perform the switch (use switch_foreground which returns bool,
     // not switch_to which returns old foreground ID — the latter
     // returns None when there is no previous foreground, e.g. after /thread bg)
-    if thread_mgr.switch_foreground(target_id) {
+    let switched = {
+        let mut tm = thread_mgr.lock().await;
+        // Get summary of thread being switched to
+        let context_summary = tm.get(target_id).and_then(|t| t.compact_summary.clone());
+        tm.switch_foreground(target_id).then_some(context_summary)
+    };
+    if let Some(context_summary) = switched {
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadSwitched,
             payload: ServerPayload::ThreadSwitched {
@@ -189,10 +201,10 @@ pub(crate) async fn handle_thread_switch(
         };
         send_frame(writer, &frame).await?;
         // Send updated thread list
-        send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-        send_thread_messages_update(writer, target_id, thread_mgr).await?;
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+        send_thread_messages_update_shared(writer, target_id, thread_mgr).await?;
         // Persist thread state (includes compaction summary)
-        crate::helpers::persist_threads(thread_mgr, threads_path);
+        crate::helpers::persist_threads(&*thread_mgr.lock().await, threads_path);
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -413,6 +425,8 @@ mod tests {
     use rustyclaw_core::config::Config;
     use rustyclaw_core::projects::ProjectManager;
     use rustyclaw_core::threads::ThreadManager;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
 
     struct CapturingWriter {
         frames: Vec<ServerFrame>,
@@ -632,6 +646,127 @@ mod tests {
             threads.get(id).unwrap().label,
             "Original",
             "a rejected edit changes nothing"
+        );
+    }
+
+    /// A writer that needs the thread manager, standing in for the running
+    /// turn: it takes the same lock at every persistence point.
+    struct ThreadTouchingWriter {
+        thread_mgr: crate::SharedThreadMgr,
+        frames: usize,
+    }
+
+    #[async_trait]
+    impl transport::TransportWriter for ThreadTouchingWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, _frame: &ServerFrame) -> Result<()> {
+            let _ = self.thread_mgr.lock().await.list_info();
+            self.frames += 1;
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Switching threads must not hold the thread lock across its client
+    /// writes — or, in the compaction path, across the model call between
+    /// them. A turn running in parallel takes that same lock at every
+    /// persistence point, so a guard held for the length of this handler
+    /// freezes the answer in flight for as long as the provider takes.
+    #[tokio::test]
+    async fn switching_threads_does_not_hold_the_thread_lock() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut manager = ThreadManager::new();
+        let outgoing = manager.create_chat("outgoing");
+        let target = manager.create_chat("target");
+        manager.switch_foreground(outgoing);
+        // Enough history that the compaction path is taken.
+        for i in 0..5 {
+            manager.add_message(
+                outgoing,
+                rustyclaw_core::threads::MessageRole::User,
+                format!("message {i}"),
+            );
+        }
+
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        // No model context: the provider round trip is skipped, but every
+        // lock scope and client write around it still runs.
+        let shared_model_ctx: SharedModelCtx = Arc::new(tokio::sync::RwLock::new(None));
+        let mut writer = ThreadTouchingWriter {
+            thread_mgr: thread_mgr.clone(),
+            frames: 0,
+        };
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_thread_switch(
+                &mut writer,
+                &thread_mgr,
+                &task_mgr,
+                &threads_path,
+                &shared_model_ctx,
+                &reqwest::Client::new(),
+                target.0,
+                None,
+            ),
+        )
+        .await
+        .expect("switching threads must not deadlock against a running turn")
+        .expect("the switch should succeed");
+
+        assert!(writer.frames > 0, "the switch should have told the client");
+        assert_eq!(thread_mgr.lock().await.foreground_id(), Some(target));
+    }
+
+    /// A thread with a turn in flight is not summarised out from under it:
+    /// the summary would miss the answer being written and drop the
+    /// messages that answer is building on.
+    #[tokio::test]
+    async fn a_thread_with_a_turn_running_is_not_compacted() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut manager = ThreadManager::new();
+        let busy = manager.create_chat("busy");
+        let target = manager.create_chat("target");
+        manager.switch_foreground(busy);
+        for i in 0..5 {
+            manager.add_message(
+                busy,
+                rustyclaw_core::threads::MessageRole::User,
+                format!("message {i}"),
+            );
+        }
+
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let shared_model_ctx: SharedModelCtx = Arc::new(tokio::sync::RwLock::new(None));
+        let mut writer = CapturingWriter { frames: Vec::new() };
+
+        handle_thread_switch(
+            &mut writer,
+            &thread_mgr,
+            &task_mgr,
+            &threads_path,
+            &shared_model_ctx,
+            &reqwest::Client::new(),
+            target.0,
+            Some(busy),
+        )
+        .await
+        .expect("the switch should succeed");
+
+        assert!(
+            !writer
+                .frames
+                .iter()
+                .any(|f| format!("{:?}", f.payload).contains("Compacting")),
+            "the busy thread must not be compacted mid-turn"
         );
     }
 }
