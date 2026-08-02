@@ -94,7 +94,7 @@ impl GatewayClient {
                         active_stream_id_tx.store(id, Ordering::Relaxed);
                         id
                     }
-                    GatewayCommand::Cancel => active_stream_id_tx.load(Ordering::Relaxed),
+                    GatewayCommand::Cancel { .. } => active_stream_id_tx.load(Ordering::Relaxed),
                     _ => 0,
                 };
 

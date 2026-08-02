@@ -460,7 +460,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::Cancel).await;
+                            let _ = client.send(GatewayCommand::Cancel { thread_id: None }).await;
                         });
                     }
                 },
