@@ -408,6 +408,9 @@ pub(crate) async fn handle_connection(
 
     // Track active model tasks per thread.
     let mut active_tasks = concurrent::ActiveTasks::new();
+    // Counter for turn ids, so a turn's completion cannot retire the turn
+    // that replaced it.
+    let mut next_turn_id: u64 = 0;
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
@@ -709,9 +712,12 @@ pub(crate) async fn handle_connection(
                                     // A fresh flag per turn: see ActiveTasks.
                                     let tool_cancel: ToolCancelFlag =
                                         Arc::new(AtomicBool::new(false));
+                                    next_turn_id += 1;
+                                    let turn_id = next_turn_id;
                                     let mut sink = concurrent::ChannelSink::new(
                                         model_task_tx.clone(),
                                         turn_thread,
+                                        turn_id,
                                         stream_id,
                                     );
                                     let http = http.clone();
@@ -763,7 +769,7 @@ pub(crate) async fn handle_connection(
                                             Err(e) => sink.error(format!("{e:#}")).await,
                                         }
                                     });
-                                    active_tasks.register(turn_thread, handle, tool_cancel);
+                                    active_tasks.register(turn_thread, turn_id, handle, tool_cancel);
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {
@@ -1125,9 +1131,11 @@ pub(crate) async fn handle_connection(
                                 writer.send_on_stream(stream_id, &frame).await?;
                             }
                         }
-                        concurrent::ModelTaskMessage::Done { thread_id, response } => {
-                            // Task completed - remove from active tasks
-                            active_tasks.remove(&thread_id);
+                        concurrent::ModelTaskMessage::Done { thread_id, turn_id, response } => {
+                            // Retire this turn — unless the client's next
+                            // message already started another one on this
+                            // thread, which `reap_finished` allows.
+                            active_tasks.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
                                 drain_deadline.is_some() && active_tasks.running_threads().is_empty();
 
@@ -1149,9 +1157,9 @@ pub(crate) async fn handle_connection(
                                 break;
                             }
                         }
-                        concurrent::ModelTaskMessage::Error { thread_id, message } => {
-                            // Task failed - remove from active tasks
-                            active_tasks.remove(&thread_id);
+                        concurrent::ModelTaskMessage::Error { thread_id, turn_id, message } => {
+                            // Same identity check as Done above.
+                            active_tasks.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
                                 drain_deadline.is_some() && active_tasks.running_threads().is_empty();
 
