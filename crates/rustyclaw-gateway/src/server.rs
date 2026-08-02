@@ -407,15 +407,29 @@ pub(crate) async fn handle_connection(
     let (model_task_tx, mut model_task_rx) = concurrent::channel();
 
     // Track active model tasks per thread.
-    let mut active_tasks = concurrent::ActiveTasks::new();
+    //
+    // Shared with the reader task so a Stop is acted on the moment it is
+    // decoded. The loop is free while a turn runs, but it still awaits
+    // handlers that take their time — thread switching summarises through
+    // the model, engine and provider calls go to the network — and a Stop
+    // queued behind one of those is the "Stop does nothing" symptom this
+    // branch set out to remove. The reader holds a `Weak`: the loop's `Arc`
+    // is the only owner, so dropping it still runs the abort in `Drop` even
+    // if the reader outlives the connection handler.
+    let active_tasks = Arc::new(Mutex::new(concurrent::ActiveTasks::new()));
+    let reader_tasks = Arc::downgrade(&active_tasks);
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
     let mut next_turn_id: u64 = 0;
-    // Set when a turn's `ResponseDone` has gone out. The turn is still
-    // registered until its task returns and its `Done` is drained, but the
-    // client has already been told its request finished — so it is free to
+    // Set when the *current* turn's `ResponseDone` has gone out. That turn is
+    // still registered until its task returns and its `Done` is drained, but
+    // the client has already been told its request finished — so it is free to
     // send another, and refusing that one would leave it waiting for a
-    // terminal frame that has already been spent.
+    // terminal frame that has already been spent. Matched against the turn id
+    // on the frame: an older turn's `ResponseDone`, drained after the next
+    // turn started, would otherwise wave a third message past the one-at-a-
+    // time guard and abort the turn that is running.
+    let mut current_turn_id: Option<u64> = None;
     let mut turn_done_for_client = false;
 
     // ── Send initial thread list ───────────────────────────────────
@@ -449,12 +463,22 @@ pub(crate) async fn handle_connection(
                             let stream_id = envelope.stream_id;
                             let frame = envelope.frame.clone();
                             trace!(stream_id, frame_type = ?frame.frame_type, "Received client frame");
-                            // Cancel is *not* intercepted here. It used to
-                            // be, because the main loop was blocked for the
-                            // length of a turn; now that turns run in their
-                            // own tasks, the loop can route a Stop to the
-                            // turn it was meant for instead of setting one
-                            // flag that stops every turn at once.
+                            // Stop, handled here rather than queued behind
+                            // whatever the loop is currently awaiting. One
+                            // turn runs at a time, so "the running turn" is
+                            // unambiguous — no need to consult the thread
+                            // manager for which one the user meant.
+                            if frame.frame_type == ClientFrameType::Cancel {
+                                match reader_tasks.upgrade() {
+                                    Some(tasks) => {
+                                        if !tasks.lock().await.request_cancel_sole() {
+                                            trace!("Cancel with no turn running");
+                                        }
+                                    }
+                                    None => trace!("Cancel after the connection ended"),
+                                }
+                                continue;
+                            }
                             // Process control must be handled here, in the
                             // reader task, so it works while the main loop is
                             // blocked awaiting the very tool being controlled.
@@ -524,7 +548,7 @@ pub(crate) async fn handle_connection(
                 // Dropping a JoinHandle detaches the task; a turn left
                 // running would keep model calls going and then block
                 // forever on a frame channel nobody drains.
-                active_tasks.abort_all();
+                active_tasks.lock().await.abort_all();
                 let _ = writer.close().await;
                 break;
             }
@@ -536,7 +560,7 @@ pub(crate) async fn handle_connection(
                 }
             }, if drain_deadline.is_some() => {
                 warn!("A turn was still running when the client went away; stopping it");
-                active_tasks.abort_all();
+                active_tasks.lock().await.abort_all();
                 break;
             }
             msg = frame_rx.recv(), if drain_deadline.is_none() => {
@@ -546,10 +570,13 @@ pub(crate) async fn handle_connection(
                         // Reader exited. Ask the running turn to stop and
                         // give it a moment to flush; nothing here waits on a
                         // model call for a client that has left.
-                        if active_tasks.running_threads().is_empty() {
+                        // Bound first: a guard taken in an `if` scrutinee
+                        // outlives the body, and this mutex is not reentrant.
+                        let idle = active_tasks.lock().await.running_threads().is_empty();
+                        if idle {
                             break;
                         }
-                        active_tasks.request_cancel_all();
+                        active_tasks.lock().await.request_cancel_all();
                         drain_deadline = Some(tokio::time::Instant::now() + TURN_DRAIN_GRACE);
                         continue;
                     }
@@ -558,25 +585,6 @@ pub(crate) async fn handle_connection(
                 let frame = envelope.frame;
 
                 trace!(stream_id, frame_type = ?frame.frame_type, "Handling client frame");
-
-                // Stop: aimed at the turn running for the thread on screen.
-                // Each turn owns its cancel flag, so this cannot disturb a
-                // turn running for a different thread — and nothing resets
-                // another turn's flag, which is what made a Stop vanish when
-                // any other command followed it.
-                if frame.frame_type == ClientFrameType::Cancel {
-                    active_tasks.reap_finished();
-                    let target = agent_session.thread_mgr.lock().await.foreground_id();
-                    let stopped = target.is_some_and(|id| active_tasks.request_cancel(&id))
-                        // Switched away from the working thread: the client
-                        // still shows Stop, and with one turn running there
-                        // is only one thing it can mean.
-                        || active_tasks.request_cancel_sole();
-                    if !stopped {
-                        trace!(?target, "Cancel with no turn running for the foreground thread");
-                    }
-                    continue;
-                }
 
                         // Handle the frame based on type
                         match frame.payload {
@@ -631,7 +639,7 @@ pub(crate) async fn handle_connection(
                                 // first poll would file the message, and the
                                 // reply, in whichever thread the user had
                                 // just opened.
-                                active_tasks.reap_finished();
+                                active_tasks.lock().await.reap_finished();
                                 // One turn per connection, decided *before*
                                 // anything is switched or elected: a refused
                                 // message must not move the user's thread on
@@ -646,7 +654,8 @@ pub(crate) async fn handle_connection(
                                 // during a turn is what this change is for;
                                 // running two turns at once would need those
                                 // responses routed by call id.
-                                if !active_tasks.running_threads().is_empty() && !turn_done_for_client {
+                                let busy = !active_tasks.lock().await.running_threads().is_empty();
+                                if busy && !turn_done_for_client {
                                     // A note, and deliberately nothing else.
                                     // `ResponseDone` carries no request or
                                     // thread identity, so a client that
@@ -731,6 +740,7 @@ pub(crate) async fn handle_connection(
                                         Arc::new(AtomicBool::new(false));
                                     next_turn_id += 1;
                                     let turn_id = next_turn_id;
+                                    current_turn_id = Some(turn_id);
                                     let mut sink = concurrent::ChannelSink::new(
                                         model_task_tx.clone(),
                                         turn_key,
@@ -786,7 +796,7 @@ pub(crate) async fn handle_connection(
                                             Err(e) => sink.error(format!("{e:#}")).await,
                                         }
                                     });
-                                    active_tasks.register(turn_key, turn_id, handle, tool_cancel);
+                                    active_tasks.lock().await.register(turn_key, turn_id, handle, tool_cancel);
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {
@@ -831,7 +841,7 @@ pub(crate) async fn handle_connection(
                                     &shared_model_ctx,
                                     &http,
                                     thread_id,
-                                    active_tasks.running_threads().first().copied(),
+                                    active_tasks.lock().await.running_threads().first().copied(),
                                 )
                                 .await?;
                                 // Repoint the workspace at the new foreground
@@ -882,9 +892,11 @@ pub(crate) async fn handle_connection(
                                 // by id, so it would keep calling the model
                                 // and dropping the results, while staying
                                 // registered and holding the connection busy.
-                                if active_tasks
-                                    .request_cancel(&rustyclaw_core::threads::ThreadId(thread_id))
-                                {
+                                let stopped = active_tasks
+                                    .lock()
+                                    .await
+                                    .request_cancel(&rustyclaw_core::threads::ThreadId(thread_id));
+                                if stopped {
                                     trace!(thread_id, "Stopping the turn for a closed thread");
                                 }
                                 thread_handler::handle_thread_close(
@@ -1161,11 +1173,13 @@ pub(crate) async fn handle_connection(
             model_msg = model_task_rx.recv() => {
                 if let Some(task_msg) = model_msg {
                     match task_msg {
-                        concurrent::ModelTaskMessage::Frame { stream_id, data } => {
+                        concurrent::ModelTaskMessage::Frame { stream_id, turn_id, data } => {
                             // Deserialize and forward frame to client, on the
                             // stream its request came in on.
                             if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
-                                if frame.frame_type == ServerFrameType::ResponseDone {
+                                if frame.frame_type == ServerFrameType::ResponseDone
+                                    && current_turn_id == Some(turn_id)
+                                {
                                     turn_done_for_client = true;
                                 }
                                 writer.send_on_stream(stream_id, &frame).await?;
@@ -1175,9 +1189,9 @@ pub(crate) async fn handle_connection(
                             // Retire this turn — unless the client's next
                             // message already started another one on this
                             // thread, which `reap_finished` allows.
-                            active_tasks.remove_if(&thread_id, turn_id);
+                            active_tasks.lock().await.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
-                                drain_deadline.is_some() && active_tasks.running_threads().is_empty();
+                                drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
 
                             // Record assistant response in thread history if provided
                             if let Some(text) = response {
@@ -1202,9 +1216,9 @@ pub(crate) async fn handle_connection(
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, turn_id, message } => {
                             // Same identity check as Done above.
-                            active_tasks.remove_if(&thread_id, turn_id);
+                            active_tasks.lock().await.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
-                                drain_deadline.is_some() && active_tasks.running_threads().is_empty();
+                                drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
 
                             // Send error frame
                             let error_frame = ServerFrame {
