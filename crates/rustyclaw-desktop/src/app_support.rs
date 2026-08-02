@@ -135,11 +135,13 @@ pub(crate) fn handle_gateway_event(
             s.is_streaming = false;
             s.is_thinking = false;
             s.in_flight.clear();
-            // Including a question it was waiting on: the turn that asked it
-            // is gone, so no tool result will ever retire the card and an
-            // answer would go into a closed connection. Leaving it up would
-            // be an invitation to answer nothing.
+            // Including anything it was waiting on: the turns that asked
+            // are gone, so no tool result will ever retire these and an
+            // answer would go into a closed connection. Leaving them up
+            // would be an invitation to answer nothing.
             s.clear_user_prompt();
+            s.pending_tool_approvals.clear();
+            s.pending_credential_requests.clear();
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -288,7 +290,14 @@ pub(crate) fn handle_gateway_event(
             name,
             arguments,
         } => {
-            state.write().pending_tool_approval = Some((id, name, arguments));
+            // Queued, not overwritten: a second turn's request while one is on
+            // screen waits its turn. Overwriting meant the first was never
+            // shown again, and its two-minute timeout read as a denial of a
+            // tool the user never saw.
+            state
+                .write()
+                .pending_tool_approvals
+                .push_back((id, name, arguments));
         }
         GatewayEvent::ThreadsUpdate {
             threads,
@@ -494,7 +503,12 @@ pub(crate) fn handle_gateway_event(
             secret_name,
             message,
         } => {
-            state.write().pending_credential_request = Some((id, provider, secret_name, message));
+            state.write().pending_credential_requests.push_back((
+                id,
+                provider,
+                secret_name,
+                message,
+            ));
         }
         GatewayEvent::DeviceFlowStart { url, code, message } => {
             state.write().pending_device_flow = Some((url, code, message));
@@ -595,7 +609,16 @@ pub(crate) fn handle_gateway_event(
         GatewayEvent::Error { message } => {
             let mut s = state.write();
             s.push_notice(MessageRole::Error, message);
-            s.is_processing = false;
+            // Fallback for gateways that never name their turns: with no
+            // tracked turns there is no close-out coming, and this is the
+            // only thing standing between an error and a stuck composer.
+            // When turns are tracked, retirement belongs to the error's own
+            // `ResponseDone` — clearing here would take the working state
+            // off a conversation that is still answering whenever some
+            // *other* turn errors.
+            if s.in_flight.is_empty() {
+                s.is_processing = false;
+            }
         }
         GatewayEvent::Info { message } => {
             state.write().push_notice(MessageRole::Info, message);

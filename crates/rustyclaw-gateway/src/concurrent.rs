@@ -41,6 +41,12 @@ pub enum ModelTaskMessage {
     /// The main loop should update thread state.
     Done {
         thread_id: ThreadId,
+        /// Whether the turn already sent its own `ResponseDone`. Every turn
+        /// must end with exactly one close-out — clients retire their
+        /// in-flight tracking on it — and the paths that can end a turn are
+        /// many. The sink watches, and the loop makes up the difference, so
+        /// a future early return cannot leak a stuck spinner by forgetting.
+        closed_out: bool,
         /// Which turn this is from. A turn's completion travels the same
         /// channel as its frames, so the loop can read the client's next
         /// message — and start the *next* turn on this thread — before
@@ -57,6 +63,8 @@ pub enum ModelTaskMessage {
         thread_id: ThreadId,
         turn_id: u64,
         message: String,
+        /// See [`ModelTaskMessage::Done::closed_out`].
+        closed_out: bool,
     },
 }
 
@@ -84,6 +92,8 @@ pub struct ChannelSink {
     /// The thread to name on the wire, which is *not* the same thing.
     /// Resolved once, here, so no frame can leak the sentinel by omission.
     announced_thread: Option<u64>,
+    /// Whether a `ResponseDone` has passed through this sink.
+    sent_response_done: bool,
     turn_id: u64,
     stream_id: u64,
 }
@@ -98,9 +108,15 @@ impl ChannelSink {
             // against nothing — dropping the whole reply on the floor.
             // A turn with no thread announces no thread.
             announced_thread: Some(thread_id.0).filter(|id| *id != 0),
+            sent_response_done: false,
             turn_id,
             stream_id,
         }
+    }
+
+    /// The thread this sink names on turn-scoped frames.
+    pub fn announced_thread(&self) -> Option<u64> {
+        self.announced_thread
     }
 
     /// Signal that the task completed successfully.
@@ -109,6 +125,7 @@ impl ChannelSink {
             .tx
             .send(ModelTaskMessage::Done {
                 thread_id: self.thread_id,
+                closed_out: self.sent_response_done,
                 turn_id: self.turn_id,
                 response,
             })
@@ -123,6 +140,7 @@ impl ChannelSink {
                 thread_id: self.thread_id,
                 turn_id: self.turn_id,
                 message,
+                closed_out: self.sent_response_done,
             })
             .await;
     }
@@ -149,6 +167,7 @@ impl TransportWriter for ChannelSink {
                 &stamped
             }
             ServerPayload::ResponseDone { ok, .. } => {
+                self.sent_response_done = true;
                 stamped = ServerFrame {
                     frame_type: frame.frame_type,
                     payload: ServerPayload::ResponseDone {

@@ -1320,7 +1320,21 @@ pub(crate) async fn handle_connection(
                                 writer.send_on_stream(stream_id, &frame).await?;
                             }
                         }
-                        concurrent::ModelTaskMessage::Done { thread_id, turn_id, response } => {
+                        concurrent::ModelTaskMessage::Done { thread_id, turn_id, response, closed_out } => {
+                            // Backstop: every turn ends with exactly one
+                            // close-out, whatever path ended it. A turn that
+                            // reported an error frame and returned Ok — or a
+                            // future early return nobody audited — must not
+                            // leave the thread marked in-flight in every
+                            // client forever.
+                            if !closed_out {
+                                protocol::server::send_response_done(
+                                    &mut *writer,
+                                    false,
+                                    Some(thread_id.0).filter(|id| *id != 0),
+                                )
+                                .await?;
+                            }
                             // Retire this turn — unless the client's next
                             // message already started another one on this
                             // thread, which `reap_finished` allows.
@@ -1349,7 +1363,7 @@ pub(crate) async fn handle_connection(
                                 break;
                             }
                         }
-                        concurrent::ModelTaskMessage::Error { thread_id, turn_id, message } => {
+                        concurrent::ModelTaskMessage::Error { thread_id, turn_id, message, closed_out } => {
                             // Same identity check as Done above.
                             active_tasks.lock().await.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
@@ -1364,6 +1378,27 @@ pub(crate) async fn handle_connection(
                                 },
                             };
                             send_frame(&mut *writer, &error_frame).await?;
+
+                            // A turn that fails still ends, and its ending
+                            // must say which turn. The success path closes
+                            // out through the turn's own sink, which stamps
+                            // the thread; this path bypasses the sink, so it
+                            // stamps by hand — unless the turn already sent
+                            // its own close-out before the error surfaced.
+                            // Without one the clients keep the errored
+                            // thread marked in-flight forever — a stuck
+                            // spinner if it is on screen, a phantom one when
+                            // the user comes back to it. Zero is the
+                            // "no thread" registry key and never goes to the
+                            // client.
+                            if !closed_out {
+                                protocol::server::send_response_done(
+                                    &mut *writer,
+                                    false,
+                                    Some(thread_id.0).filter(|id| *id != 0),
+                                )
+                                .await?;
+                            }
 
                             // Send updated thread list
                             send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
@@ -2062,6 +2097,75 @@ mod tests {
                 ServerPayload::Info { message, .. } if message.contains("Still working")
             )),
             "the second message must not be turned away"
+        );
+
+        Ok(())
+    }
+
+    /// A turn that fails still ends, and its ending names its thread.
+    ///
+    /// The success path closes out through the turn's sink, which stamps the
+    /// thread. The error path bypasses the sink — and used to send an Error
+    /// frame and nothing else, leaving the thread marked in-flight in every
+    /// client forever. "No model configured" is enough to reach it.
+    #[tokio::test]
+    async fn an_errored_turn_closes_out_naming_its_thread() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, _beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let chat = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", "hello?")],
+                thread_id: Some(alpha.0),
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames
+                .iter()
+                .any(|f| matches!(f.frame_type, ServerFrameType::Error)),
+            "No model is configured, so the turn must fail"
+        );
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::ResponseDone { ok, thread_id }
+                    if !*ok && *thread_id == Some(alpha.0)
+            )),
+            "The failure must close out the turn, naming its thread"
         );
 
         Ok(())

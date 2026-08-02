@@ -618,7 +618,7 @@ pub fn App() -> Element {
     // Sync pending events from state into dialog signals
     use_effect(move || {
         let s = state.read();
-        if let Some((id, name, args)) = &s.pending_tool_approval {
+        if let Some((id, name, args)) = s.pending_tool_approvals.front() {
             tool_approval_id.set(id.clone());
             tool_approval_name.set(name.clone());
             tool_approval_args.set(args.clone());
@@ -633,7 +633,7 @@ pub fn App() -> Element {
             show_vault_unlock.set(false);
         }
 
-        if let Some((id, provider, secret, msg)) = &s.pending_credential_request {
+        if let Some((id, provider, secret, msg)) = s.pending_credential_requests.front() {
             cred_request_id.set(id.clone());
             cred_request_provider.set(provider.clone());
             cred_request_secret.set(secret.clone());

@@ -178,6 +178,11 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let foreground_thread_id: State<Option<u64>> = hooks.use_state(|| None);
     let in_flight: State<std::collections::HashSet<u64>> =
         hooks.use_state(std::collections::HashSet::new);
+    let queued_tool_approvals: State<Vec<(String, String, String)>> = hooks.use_state(Vec::new);
+    let queued_user_prompts: State<Vec<rustyclaw_core::user_prompt_types::UserPrompt>> =
+        hooks.use_state(Vec::new);
+    let queued_credentials: State<Vec<(String, String, String, String)>> =
+        hooks.use_state(Vec::new);
 
     // ── Command menu (slash-command completions) ────────────────────
     let command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -346,6 +351,9 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         thread_messages_cache,
         foreground_thread_id,
         in_flight,
+        queued_tool_approvals,
+        queued_user_prompts,
+        queued_credentials,
         command_completions,
         command_selected,
         model_completion_provider,
