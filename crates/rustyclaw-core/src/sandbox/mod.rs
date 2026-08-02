@@ -151,7 +151,12 @@ pub struct SandboxPolicy {
     pub deny_exec: Vec<PathBuf>,
     /// Allowed paths (whitelist mode) — if non-empty, only these are allowed
     pub allow_paths: Vec<PathBuf>,
-    /// Working directory for the agent
+    /// Working directory the sandbox grants access to.
+    ///
+    /// In the global policy this is only a default: every execution site
+    /// clones the policy and substitutes the actual per-command working
+    /// directory before wrapping, so confinement follows the turn that is
+    /// running, not the directory the gateway happened to start in.
     pub workspace: PathBuf,
 }
 

@@ -15,7 +15,6 @@ use rustyclaw_core::gateway::protocol;
 use rustyclaw_core::gateway::protocol::server::send_reload_result;
 use rustyclaw_core::gateway::{ModelContext, StatusType, transport};
 use rustyclaw_core::providers as crate_providers;
-use rustyclaw_core::tools;
 
 use crate::session::init_copilot_session;
 use crate::{SharedConfig, SharedCopilotSession, SharedModelCtx, SharedModelRegistry, SharedVault};
@@ -188,22 +187,17 @@ pub(crate) async fn handle_set_agent_name(
     config.agent_name = name;
 }
 
-/// Handle a `SetWorkingDirectory`: repoint the workspace and re-register the
-/// sandbox so tool access controls apply to the new location.
+/// Handle a `SetWorkingDirectory`: repoint the workspace.
+///
+/// The sandbox is deliberately *not* re-initialised here. It never could be —
+/// it lives in a `OnceLock` set once at gateway startup, so the re-init this
+/// used to attempt was a silent no-op with a comment claiming otherwise. Nor
+/// does it need to be: the policy's denies (credentials dir, configured deny
+/// paths) are directory-independent, and every execution site substitutes the
+/// per-command working directory into its copy of the policy — which, with a
+/// turn per thread, is also the only shape that works, since two turns in
+/// different projects need different workspaces at the same time.
 pub(crate) fn handle_set_working_directory(config: &mut Config, path: std::path::PathBuf) {
     debug!("Working directory change: {}", path.display());
-    let new_dir = path;
-    config.workspace_dir = Some(new_dir.clone());
-    // Re-register sandbox with the new workspace dir so tool
-    // access controls apply to the new location.
-    let sandbox_mode = config.sandbox.mode.parse().unwrap_or_else(|e| {
-        tracing::warn!(mode = %config.sandbox.mode, error = %e, "Invalid sandbox mode in config; falling back to auto-detection");
-        Default::default()
-    });
-    tools::init_sandbox(
-        sandbox_mode,
-        new_dir,
-        config.credentials_dir(),
-        config.sandbox.deny_paths.clone(),
-    );
+    config.workspace_dir = Some(path);
 }
