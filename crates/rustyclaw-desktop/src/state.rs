@@ -1626,6 +1626,36 @@ mod tests {
         assert!(!s.stream_targets_foreground());
     }
 
+    /// A turned-away message releases the composer.
+    ///
+    /// Sending into a second thread while the first is still running sets
+    /// this client busy for the second thread, and the gateway refuses the
+    /// message. The running turn's close-out then names the *first* thread,
+    /// so routing by thread ignores it — and `is_processing` gates the
+    /// composer, so the user is left on a spinner unable to send the one
+    /// message that would unstick it. The refusal has to close itself out.
+    #[test]
+    fn a_turned_away_message_releases_the_composer() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        // The user switches to thread 2 and sends there.
+        s.switch_thread(2);
+        s.mark_request_started();
+        assert!(s.is_processing);
+        assert_eq!(s.streaming_thread_id, Some(2));
+
+        // Thread 1's turn finishes. Not this client's turn any more.
+        assert!(!s.frame_is_for_current_turn(Some(1)));
+        assert!(s.is_processing, "the composer stays gated on the refusal");
+
+        // The refusal closes itself out, naming the thread it refused.
+        assert!(s.frame_is_for_current_turn(Some(2)));
+        s.response_done();
+        assert!(!s.is_processing, "the composer must come back");
+    }
+
     /// Only the turn being tracked can end it.
     ///
     /// A close-out for another thread — a message refused because its thread
