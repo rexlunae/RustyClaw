@@ -347,7 +347,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     // By id, not pop_front: the gateway can retire the displayed
                     // entry between render and click, and popping the head
                     // would discard a request that was never shown.
-                    state.write().retire_tool_approval(&id);
+                    state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -359,7 +359,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     // By id, not pop_front: the gateway can retire the displayed
                     // entry between render and click, and popping the head
                     // would discard a request that was never shown.
-                    state.write().retire_tool_approval(&id);
+                    state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {

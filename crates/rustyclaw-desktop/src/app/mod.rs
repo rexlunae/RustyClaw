@@ -618,7 +618,7 @@ pub fn App() -> Element {
     // Sync pending events from state into dialog signals
     use_effect(move || {
         let s = state.read();
-        if let Some((id, name, args)) = s.pending_tool_approvals.front() {
+        if let Some((_, id, name, args)) = s.pending_tool_approvals.front() {
             tool_approval_id.set(id.clone());
             tool_approval_name.set(name.clone());
             tool_approval_args.set(args.clone());
@@ -961,7 +961,7 @@ pub fn App() -> Element {
         // thread now, and clearing the lot would discard another turn's
         // question unanswered — it would wait out its five-minute window
         // on a card the user was never shown again.
-        state.write().clear_user_prompt_if(&id);
+        state.write().clear_user_prompt_if(None, &id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -978,7 +978,7 @@ pub fn App() -> Element {
 
     let on_prompt_dismiss = move |id: String| {
         // Dismissal is an answer too: it retires its own card only.
-        state.write().clear_user_prompt_if(&id);
+        state.write().clear_user_prompt_if(None, &id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {

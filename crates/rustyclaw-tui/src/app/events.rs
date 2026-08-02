@@ -90,14 +90,21 @@ pub(crate) enum GwEvent {
         id: String,
         chunk: String,
     },
-    /// Gateway requests user approval for a tool call (Ask mode).
+    /// Gateway requests user approval for a tool call (Ask mode). Tagged
+    /// with the asking turn's thread: call ids collide across turns, so
+    /// the tool's result retires its own turn's entry by (thread, id).
     ToolApprovalRequest {
+        thread_id: Option<u64>,
         id: String,
         name: String,
         arguments: String,
     },
-    /// Gateway requests structured user input (ask_user tool).
-    UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
+    /// Gateway requests structured user input (ask_user tool). Thread-
+    /// tagged like `ToolApprovalRequest`, and for the same reason.
+    UserPromptRequest {
+        thread_id: Option<u64>,
+        prompt: rustyclaw_core::user_prompt_types::UserPrompt,
+    },
     /// Gateway requests an API key or credential from the user. Tagged with
     /// the asking turn's thread: a credential wait ending is what ends its
     /// turn, so the turn's close-out retires requests it left behind.

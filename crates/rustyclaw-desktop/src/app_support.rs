@@ -263,12 +263,15 @@ pub(crate) fn handle_gateway_event(
             // The `ask_user` tool's result means the gateway has stopped
             // waiting — answered, cancelled, or timed out. Retire the card
             // even if the user never touched it, and regardless of which
-            // thread is on screen.
-            s.clear_user_prompt_if(&id);
+            // thread is on screen. Scoped to the result's own thread: the
+            // id is a colliding call id, and after the user answered this
+            // entry an id-only match would discard another turn's
+            // still-unanswered request instead.
+            s.clear_user_prompt_if(thread_id, &id);
             // Same contract for approvals: this result arrives whether the
             // user answered or the gateway gave up, and an abandoned entry
             // at the head of the queue would hide every later request.
-            s.retire_tool_approval(&id);
+            s.retire_tool_approval(thread_id, &id);
             // A failed tool call already surfaces inline: the tool panel
             // shows Failed status with the full error result. No banner.
             if s.frame_targets_view(thread_id) {
@@ -312,7 +315,7 @@ pub(crate) fn handle_gateway_event(
             state
                 .write()
                 .pending_tool_approvals
-                .push_back((id, name, arguments));
+                .push_back((thread_id, id, name, arguments));
         }
         GatewayEvent::ThreadsUpdate {
             threads,
