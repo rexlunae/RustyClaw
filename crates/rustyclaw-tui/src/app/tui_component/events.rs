@@ -1215,6 +1215,23 @@ pub(super) fn apply_gw_event(
             thread_id,
             messages: thread_messages,
         } => {
+            // `thread_id == 0` is the gateway's "nothing is focused"
+            // sentinel: it carries an empty list to blank the view after
+            // backgrounding, and no real thread ever has id 0. It cannot
+            // be cached — the key names nothing — and it cannot be matched
+            // against the foreground: the `ThreadsUpdate` preceding it
+            // already set the foreground to `None`, so the equality below
+            // would drop it and leave the stale transcript on screen. A
+            // reply still streaming into the view (a turn sent before any
+            // thread existed) keeps its words; the sentinel is not a
+            // close-out.
+            if thread_id == 0 {
+                if !streaming.get() {
+                    messages.set(Vec::new());
+                    scroll_offset.set(0);
+                }
+                return;
+            }
             let converted: Vec<DisplayMessage> = thread_messages
                 .into_iter()
                 .map(display_message_from_gateway)
