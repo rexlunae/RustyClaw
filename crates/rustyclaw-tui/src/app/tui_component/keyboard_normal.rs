@@ -118,7 +118,6 @@ pub(super) fn handle_normal_key(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
-        mut streaming_thread_id,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -695,7 +694,10 @@ pub(super) fn handle_normal_key(
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
                     let _ = tx.send(UserInput::CancelCurrentRequest {
-                        thread_id: streaming_thread_id.get(),
+                        // Stop what the user is looking at. With a turn
+                        // running in several threads, the one on screen is
+                        // the only one they can have meant.
+                        thread_id: foreground_thread_id.get(),
                     });
                 }
             }
@@ -904,23 +906,6 @@ pub(super) fn handle_normal_key(
                             m.push(DisplayMessage::user(&val));
                             m.push(DisplayMessage::info("Running… Press Esc to cancel."));
                             messages.set(m);
-                            // Which thread the in-flight answer belongs to,
-                            // recorded before it starts arriving.
-                            // `StreamStart` gets the last word if the gateway
-                            // picked a different one.
-                            //
-                            // Read before the spinner is set, and only when
-                            // nothing is already streaming. A turn already in
-                            // flight owns `streaming_buf`, and this message
-                            // will be refused rather than started — so
-                            // overwriting the thread here would make the
-                            // refusal's close-out match, and the running
-                            // turn's half-written answer would be filed as
-                            // finished while it kept streaming into a buffer
-                            // that had just been cleared.
-                            if !streaming.get() {
-                                streaming_thread_id.set(foreground_thread_id.get());
-                            }
                             // Start the spinner immediately so the user
                             // sees feedback while waiting for the model.
                             streaming.set(true);

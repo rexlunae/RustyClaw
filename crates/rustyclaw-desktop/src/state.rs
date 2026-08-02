@@ -290,7 +290,14 @@ pub struct AppState {
     /// cleared on completion). Stream events carry no thread id on the wire,
     /// so this is how the client knows whether live stream events target the
     /// thread currently on screen or one the user has switched away from.
-    pub streaming_thread_id: Option<u64>,
+    /// Threads with a turn this client is waiting on.
+    ///
+    /// A set, not one id: the gateway runs a turn per thread, so sending in
+    /// one conversation and then another leaves two in flight. A single slot
+    /// held whichever started last — which made Stop cancel the wrong
+    /// conversation, discarded the older turn's close-out so its bubble never
+    /// finished, and filed its questions under the newer thread.
+    pub in_flight: std::collections::HashSet<u64>,
 
     /// Agent name from hatching
     pub agent_name: Option<String>,
@@ -506,7 +513,7 @@ impl Default for AppState {
             active_project_id: 0,
             threads: Vec::new(),
             foreground_thread_id: None,
-            streaming_thread_id: None,
+            in_flight: std::collections::HashSet::new(),
             agent_name: None,
             vault_locked: false,
             needs_hatching,
@@ -599,7 +606,9 @@ impl AppState {
     /// only while that thread stays in the foreground.
     pub fn mark_request_started(&mut self) {
         self.is_processing = true;
-        self.streaming_thread_id = self.foreground_thread_id;
+        if let Some(thread) = self.foreground_thread_id {
+            self.in_flight.insert(thread);
+        }
     }
 
     /// Whether live stream events (StreamStart/Chunk/Thinking/ToolCall…)
@@ -607,7 +616,12 @@ impl AppState {
     /// thread is unknown (e.g. submitted before any thread existed) and
     /// events apply to whatever is in the foreground.
     pub fn stream_targets_foreground(&self) -> bool {
-        self.streaming_thread_id.is_none() || self.streaming_thread_id == self.foreground_thread_id
+        match self.foreground_thread_id {
+            Some(thread) => self.in_flight.contains(&thread),
+            // Nothing focused: a turn was submitted before any thread
+            // existed, and its frames apply to whatever comes into view.
+            None => true,
+        }
     }
 
     /// Whether a turn-scoped frame from `thread_id` should render into the
@@ -638,7 +652,7 @@ impl AppState {
     /// turn: chunks, tool calls, the question card, the completion.
     pub fn adopt_stream_thread(&mut self, thread_id: Option<u64>) {
         let Some(id) = thread_id else { return };
-        self.streaming_thread_id = Some(id);
+        self.in_flight.insert(id);
         // Nothing was focused, so the gateway elected this thread for the
         // turn. Follow it onto the screen: otherwise every frame that
         // follows is judged to belong to a thread that isn't in view, and
@@ -650,9 +664,9 @@ impl AppState {
         // channels agreeing on their order, and the whole point of naming
         // the thread on the turn is not having to depend on that.
         //
-        // Set `streaming_thread_id` first: with the two now agreed, the
-        // turn counts as in flight, and cached history won't replace the
-        // live view underneath it.
+        // Recorded as in flight first: with the two now agreed, the turn
+        // counts as running here, and cached history won't replace the live
+        // view underneath it.
         if self.foreground_thread_id.is_none() {
             self.set_foreground_thread(Some(id));
         }
@@ -664,16 +678,17 @@ impl AppState {
     /// on one; a mismatch is another thread's turn and must not retire this
     /// one's in-flight state.
     pub fn frame_is_for_current_turn(&self, thread_id: Option<u64>) -> bool {
-        match (thread_id, self.streaming_thread_id) {
-            (Some(announced), Some(current)) => announced == current,
-            _ => true,
+        match thread_id {
+            Some(announced) => self.in_flight.contains(&announced),
+            // An older gateway, which cannot say. Trusted as before.
+            None => true,
         }
     }
 
     /// Record a question from the agent, tagged with the thread whose turn
     /// asked it (the streaming thread, else whatever is in the foreground).
-    pub fn set_user_prompt(&mut self, prompt: UserPrompt) {
-        self.pending_user_prompt_thread = self.streaming_thread_id.or(self.foreground_thread_id);
+    pub fn set_user_prompt(&mut self, prompt: UserPrompt, asked_by: Option<u64>) {
+        self.pending_user_prompt_thread = asked_by.or(self.foreground_thread_id);
         self.pending_user_prompt = Some(prompt);
     }
 
@@ -751,20 +766,20 @@ impl AppState {
         self.is_processing = false;
         self.streaming_chunks = 0;
         self.streaming_bytes = 0;
-        self.streaming_thread_id = None;
     }
 
     /// Retire the in-flight turn on Stop, returning the thread it was running
     /// in so the request can name it.
     ///
-    /// Reading and retiring are one operation because the order matters and
-    /// is invisible at the call site: `finish_current_message` clears
-    /// `streaming_thread_id` on its way out, so a caller that retires first
-    /// and reads second sends an unnamed Stop — which the gateway honours
-    /// only while exactly one turn is running, and silently ignores when
-    /// several are. That is a Stop button that does nothing.
+    /// Stop means the conversation on screen. With a turn running in each of
+    /// several threads, that is the only one the user can have meant — naming
+    /// the most recently started instead would interrupt a conversation they
+    /// are not even looking at.
     pub fn stop_current_turn(&mut self) -> Option<u64> {
-        let thread_id = self.streaming_thread_id;
+        let thread_id = self.foreground_thread_id;
+        if let Some(thread) = thread_id {
+            self.in_flight.remove(&thread);
+        }
         self.finish_current_message();
         // Stop applies to a turn parked on a question too: the gateway drops
         // the wait, so the card goes with it.
@@ -776,11 +791,18 @@ impl AppState {
     /// response targeted the foreground thread; a response that completed in
     /// a backgrounded thread just releases the in-flight marker (its
     /// transcript arrives via the gateway's history snapshot).
-    pub fn response_done(&mut self) {
-        if self.stream_targets_foreground() {
+    pub fn response_done(&mut self, thread_id: Option<u64>) {
+        // Each turn retires its own. Clearing the lot would take the working
+        // indicator off a conversation that is still answering.
+        match thread_id {
+            Some(thread) => {
+                self.in_flight.remove(&thread);
+            }
+            None => self.in_flight.clear(),
+        }
+        let on_screen = thread_id.is_none() || thread_id == self.foreground_thread_id;
+        if on_screen {
             self.finish_current_message();
-        } else {
-            self.streaming_thread_id = None;
         }
     }
 
@@ -965,7 +987,7 @@ impl AppState {
                     is_processing = self.is_processing,
                     is_streaming = self.is_streaming,
                     is_thinking = self.is_thinking,
-                    streaming_thread = ?self.streaming_thread_id,
+                    in_flight = ?self.in_flight,
                     "{level_msg}"
                 );
             } else {
@@ -1219,7 +1241,7 @@ mod tests {
         s.end_thinking_message(); // ThinkingEnd (first chunk imminent)
         s.append_to_current_message("Hello"); // Chunk
         s.append_to_current_message(", world");
-        s.response_done();
+        s.response_done(s.foreground_thread_id);
 
         let roles: Vec<MessageRole> = s.messages.iter().map(|m| m.role).collect();
         assert_eq!(roles, vec![MessageRole::Thinking, MessageRole::Assistant]);
@@ -1540,7 +1562,7 @@ mod tests {
         s.foreground_thread_id = Some(1);
         s.mark_request_started();
 
-        s.set_user_prompt(question("call-1"));
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
         assert_eq!(
             s.visible_user_prompt().map(|p| p.id).as_deref(),
             Some("call-1")
@@ -1571,13 +1593,13 @@ mod tests {
         let mut s = idle_state();
         s.foreground_thread_id = Some(1);
         s.mark_request_started();
-        s.set_user_prompt(question("call-1"));
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
 
         // What the Disconnected handler does.
         s.is_processing = false;
         s.is_streaming = false;
         s.is_thinking = false;
-        s.streaming_thread_id = None;
+        s.in_flight.clear();
         s.clear_user_prompt();
 
         assert!(s.visible_user_prompt().is_none());
@@ -1591,7 +1613,7 @@ mod tests {
     fn a_tool_result_retires_the_question_it_belongs_to() {
         let mut s = idle_state();
         s.foreground_thread_id = Some(1);
-        s.set_user_prompt(question("call-1"));
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
 
         s.clear_user_prompt_if("some-other-call");
         assert!(s.pending_user_prompt.is_some());
@@ -1612,14 +1634,14 @@ mod tests {
         let mut s = idle_state();
         s.foreground_thread_id = None;
         s.mark_request_started();
-        assert_eq!(s.streaming_thread_id, None);
+        assert!(s.in_flight.is_empty());
 
         s.adopt_stream_thread(Some(7));
-        assert_eq!(s.streaming_thread_id, Some(7));
+        assert!(s.in_flight.contains(&7));
 
-        // An older gateway announces nothing; the guess stands.
+        // An older gateway announces nothing; nothing is added.
         s.adopt_stream_thread(None);
-        assert_eq!(s.streaming_thread_id, Some(7));
+        assert_eq!(s.in_flight.len(), 1);
     }
 
     /// A thread elected for the turn comes onto the screen with it.
@@ -1658,9 +1680,76 @@ mod tests {
 
         s.adopt_stream_thread(Some(7));
 
-        assert_eq!(s.foreground_thread_id, Some(3));
-        assert_eq!(s.streaming_thread_id, Some(7));
-        assert!(!s.stream_targets_foreground());
+        assert_eq!(
+            s.foreground_thread_id,
+            Some(3),
+            "a turn opening elsewhere must not move the view"
+        );
+        assert!(s.in_flight.contains(&7), "the other turn is tracked too");
+    }
+
+    /// Each turn's completion retires only its own.
+    ///
+    /// Sending in one conversation and then another leaves two turns in
+    /// flight. A single "the turn" slot held whichever started last, so the
+    /// first turn's close-out was discarded as somebody else's — its bubble
+    /// never finished and the working indicator never cleared. And the slot
+    /// decided what Stop named, so Stop cancelled the newer conversation
+    /// while the user was looking at the older one.
+    #[test]
+    fn two_turns_in_flight_retire_independently() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        // The user switches to thread 2 and sends there; thread 1 is still
+        // answering.
+        s.switch_thread(2);
+        s.mark_request_started();
+        assert!(s.in_flight.contains(&1) && s.in_flight.contains(&2));
+
+        // Thread 1 finishes. It is a real turn of this client's, so its
+        // close-out is its own — but it must not finish the bubble on screen,
+        // which belongs to thread 2.
+        assert!(s.frame_is_for_current_turn(Some(1)));
+        s.response_done(Some(1));
+        assert!(!s.in_flight.contains(&1));
+        assert!(
+            s.is_processing,
+            "thread 2 is still answering; the indicator stays"
+        );
+
+        // Thread 2 finishes, and that is the one on screen.
+        s.response_done(Some(2));
+        assert!(s.in_flight.is_empty());
+        assert!(!s.is_processing);
+    }
+
+    /// Stop interrupts the conversation on screen.
+    ///
+    /// Named from the most recently started turn, it would cancel a
+    /// conversation the user is not even looking at while the one they meant
+    /// keeps running.
+    #[test]
+    fn stop_targets_the_conversation_on_screen() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.switch_thread(2);
+        s.mark_request_started();
+
+        // Back to the older conversation, which is still answering.
+        s.switch_thread(1);
+        assert_eq!(
+            s.stop_current_turn(),
+            Some(1),
+            "Stop must name what the user is reading, not the newest turn"
+        );
+        assert!(!s.in_flight.contains(&1));
+        assert!(
+            s.in_flight.contains(&2),
+            "the other conversation keeps running"
+        );
     }
 
     /// Stop names the turn it is stopping.
@@ -1675,47 +1764,17 @@ mod tests {
         let mut s = idle_state();
         s.foreground_thread_id = Some(4);
         s.mark_request_started();
-        s.set_user_prompt(question("call-1"));
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
 
         let stopped = s.stop_current_turn();
 
         assert_eq!(stopped, Some(4), "the Stop must name its turn");
         assert!(!s.is_processing);
-        assert_eq!(s.streaming_thread_id, None);
+        assert!(!s.in_flight.contains(&4));
         assert!(
             s.pending_user_prompt.is_none(),
             "a turn parked on a question loses the card with it"
         );
-    }
-
-    /// A turned-away message releases the composer.
-    ///
-    /// Sending into a second thread while the first is still running sets
-    /// this client busy for the second thread, and the gateway refuses the
-    /// message. The running turn's close-out then names the *first* thread,
-    /// so routing by thread ignores it — and `is_processing` gates the
-    /// composer, so the user is left on a spinner unable to send the one
-    /// message that would unstick it. The refusal has to close itself out.
-    #[test]
-    fn a_turned_away_message_releases_the_composer() {
-        let mut s = idle_state();
-        s.foreground_thread_id = Some(1);
-        s.mark_request_started();
-
-        // The user switches to thread 2 and sends there.
-        s.switch_thread(2);
-        s.mark_request_started();
-        assert!(s.is_processing);
-        assert_eq!(s.streaming_thread_id, Some(2));
-
-        // Thread 1's turn finishes. Not this client's turn any more.
-        assert!(!s.frame_is_for_current_turn(Some(1)));
-        assert!(s.is_processing, "the composer stays gated on the refusal");
-
-        // The refusal closes itself out, naming the thread it refused.
-        assert!(s.frame_is_for_current_turn(Some(2)));
-        s.response_done();
-        assert!(!s.is_processing, "the composer must come back");
     }
 
     /// Only the turn being tracked can end it.
@@ -1738,7 +1797,7 @@ mod tests {
 
         // What the ResponseDone handler does when it matches.
         if s.frame_is_for_current_turn(Some(1)) {
-            s.response_done();
+            s.response_done(s.foreground_thread_id);
         }
         assert!(!s.is_processing);
     }

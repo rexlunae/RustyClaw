@@ -112,7 +112,6 @@ pub(super) fn apply_key_event(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
-        mut streaming_thread_id,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,

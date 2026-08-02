@@ -102,10 +102,14 @@ pub(crate) async fn handle_thread_switch(
     shared_model_ctx: &SharedModelCtx,
     http: &reqwest::Client,
     thread_id: u64,
-    // The thread with a turn running, if any. Its history is still being
-    // written, so summarising it now would both miss the answer in flight
-    // and drop messages that answer is building on.
-    busy_thread: Option<ThreadId>,
+    // Threads with a turn running. Their history is still being written, so
+    // summarising one now would both miss the answer in flight and drop
+    // messages that answer is building on.
+    //
+    // A set, not one id: several turns run at once, and asking "is the
+    // thread I am about to compact busy" of a single arbitrarily-chosen
+    // entry answers a different question.
+    busy_threads: &[ThreadId],
 ) -> Result<()> {
     debug!("Thread switch request: {}", thread_id);
 
@@ -144,7 +148,7 @@ pub(crate) async fn handle_thread_switch(
         let tm = thread_mgr.lock().await;
         tm.foreground()
             .map(|t| t.task_id())
-            .filter(|fg_id| *fg_id != target_id && Some(*fg_id) != busy_thread)
+            .filter(|fg_id| *fg_id != target_id && !busy_threads.contains(fg_id))
             .and_then(|fg_id| tm.get(fg_id))
             .filter(|thread| thread.messages.len() > 3 && thread.compact_summary.is_none())
             .map(|thread| (thread.id, thread.label.clone(), thread.compaction_prompt()))
@@ -738,7 +742,7 @@ mod tests {
                 &shared_model_ctx,
                 &reqwest::Client::new(),
                 target.0,
-                None,
+                &[],
             ),
         )
         .await
@@ -782,7 +786,7 @@ mod tests {
             &shared_model_ctx,
             &reqwest::Client::new(),
             target.0,
-            Some(busy),
+            &[busy],
         )
         .await
         .expect("the switch should succeed");

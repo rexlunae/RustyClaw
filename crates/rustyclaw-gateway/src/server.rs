@@ -967,8 +967,8 @@ pub(crate) async fn handle_connection(
                                 // would stall every inbound frame — Stop,
                                 // tool approvals, `ask_user` answers — for as
                                 // long as the provider took.
-                                let busy_thread =
-                                    active_tasks.lock().await.running_threads().first().copied();
+                                let busy_threads =
+                                    active_tasks.lock().await.running_threads();
                                 thread_handler::handle_thread_switch(
                                     &mut *writer,
                                     &agent_session.thread_mgr,
@@ -977,7 +977,7 @@ pub(crate) async fn handle_connection(
                                     &shared_model_ctx,
                                     &http,
                                     thread_id,
-                                    busy_thread,
+                                    &busy_threads,
                                 )
                                 .await?;
                                 // Repoint the workspace at the new foreground
