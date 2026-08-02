@@ -211,6 +211,9 @@ struct RunningTurn {
     /// Distinguishes this turn from an earlier one on the same thread whose
     /// completion message has not been drained yet.
     id: u64,
+    /// The stream the turn's frames travel on, kept so a displaced turn's
+    /// close-out can go out where clients are tracking it.
+    stream_id: u64,
     handle: tokio::task::JoinHandle<()>,
     cancel: crate::ToolCancelFlag,
 }
@@ -233,11 +236,14 @@ impl ActiveTasks {
     }
 
     /// Register a new task for a thread, with the flag that cancels it.
-    /// If there's already a task for this thread, it will be aborted.
+    /// If there's already a task for this thread, it will be aborted —
+    /// though the Chat handler displaces it explicitly first, so it can
+    /// close the old turn out to clients before the new one exists.
     pub fn register(
         &mut self,
         thread_id: ThreadId,
         turn_id: u64,
+        stream_id: u64,
         handle: tokio::task::JoinHandle<()>,
         cancel: crate::ToolCancelFlag,
     ) {
@@ -245,12 +251,32 @@ impl ActiveTasks {
             thread_id,
             RunningTurn {
                 id: turn_id,
+                stream_id,
                 handle,
                 cancel,
             },
         ) {
             old.handle.abort();
         }
+    }
+
+    /// Abort and remove the turn running for a thread, returning the stream
+    /// its close-out belongs on.
+    ///
+    /// An aborted turn dies at its next await — often the very wait for a
+    /// tool approval or `ask_user` answer — and never reaches its own
+    /// close-out. Nothing downstream speaks for it: no `ToolResult` for
+    /// the request it left on the user's screen, no `ResponseDone` for the
+    /// client's in-flight tracking. The caller must send that close-out,
+    /// which is why the stream comes back. A turn that already finished
+    /// returns `None` — its completion message is queued and will close
+    /// the turn out on its own, and a second close-out would end the
+    /// *next* turn's tracking in clients' eyes.
+    pub fn displace(&mut self, thread_id: &ThreadId) -> Option<u64> {
+        let turn = self.tasks.remove(thread_id)?;
+        let was_running = !turn.handle.is_finished();
+        turn.handle.abort();
+        was_running.then_some(turn.stream_id)
     }
 
     /// Retire a turn once its completion message is handled — but only if it
@@ -427,6 +453,35 @@ mod tests {
         );
     }
 
+    /// A displaced turn hands back its stream so its close-out can be sent
+    /// on the displaced turn's behalf — aborted mid-wait, it will never
+    /// send its own, and the approval or question box it left on screen
+    /// has no other retirement. A turn that already finished returns
+    /// nothing: its queued completion message closes it out, and a second
+    /// close-out would end the next turn's tracking.
+    #[tokio::test]
+    async fn displacing_a_running_turn_returns_its_stream() {
+        let mut tasks = ActiveTasks::new();
+        let thread = ThreadId(1);
+        tasks.register(thread, 1, 41, tokio::spawn(std::future::pending()), flag());
+        assert_eq!(
+            tasks.displace(&thread),
+            Some(41),
+            "a running turn needs its close-out sent for it"
+        );
+        assert_eq!(tasks.displace(&thread), None, "nothing is left to displace");
+
+        tasks.register(thread, 2, 42, tokio::spawn(async {}), flag());
+        while !tasks.is_finished_for_test(&thread) {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            tasks.displace(&thread),
+            None,
+            "a finished turn closes itself out through its completion message"
+        );
+    }
+
     /// Stop applies to the turn it was aimed at. One flag per connection
     /// would cancel every running turn and would be cleared by the next
     /// turn to start, throwing away a Stop the user had just pressed.
@@ -435,8 +490,20 @@ mod tests {
         let mut tasks = ActiveTasks::new();
         let (a, b) = (ThreadId(1), ThreadId(2));
         let (flag_a, flag_b) = (flag(), flag());
-        tasks.register(a, 1, tokio::spawn(std::future::pending()), flag_a.clone());
-        tasks.register(b, 2, tokio::spawn(std::future::pending()), flag_b.clone());
+        tasks.register(
+            a,
+            1,
+            1,
+            tokio::spawn(std::future::pending()),
+            flag_a.clone(),
+        );
+        tasks.register(
+            b,
+            2,
+            2,
+            tokio::spawn(std::future::pending()),
+            flag_b.clone(),
+        );
 
         assert!(tasks.request_cancel(&a));
         assert!(
@@ -449,7 +516,7 @@ mod tests {
         );
 
         // Starting a third turn cannot disturb the Stop already recorded.
-        tasks.register(ThreadId(3), 3, tokio::spawn(async {}), flag());
+        tasks.register(ThreadId(3), 3, 3, tokio::spawn(async {}), flag());
         assert!(flag_a.load(Ordering::Relaxed));
 
         assert!(
@@ -476,7 +543,7 @@ mod tests {
         let thread = ThreadId(7);
 
         // Turn A finishes and is reaped when the follow-up message arrives.
-        tasks.register(thread, 1, tokio::spawn(async {}), flag());
+        tasks.register(thread, 1, 1, tokio::spawn(async {}), flag());
         while !tasks.is_finished_for_test(&thread) {
             tokio::task::yield_now().await;
         }
@@ -486,6 +553,7 @@ mod tests {
         let b_cancel = flag();
         tasks.register(
             thread,
+            2,
             2,
             tokio::spawn(std::future::pending()),
             b_cancel.clone(),
@@ -514,7 +582,7 @@ mod tests {
         let handle = tokio::spawn(std::future::pending::<()>());
         let watch = tokio::spawn(async {});
         drop(watch);
-        tasks.register(ThreadId(1), 1, handle, flag());
+        tasks.register(ThreadId(1), 1, 1, handle, flag());
 
         tasks.abort_all();
 
@@ -537,7 +605,7 @@ mod tests {
         });
 
         let mut tasks = ActiveTasks::new();
-        tasks.register(ThreadId(1), 1, handle, flag());
+        tasks.register(ThreadId(1), 1, 1, handle, flag());
         drop(tasks);
 
         let closed = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
@@ -553,13 +621,14 @@ mod tests {
     async fn starting_a_turn_displaces_a_finished_one_on_another_thread() {
         let mut tasks = ActiveTasks::new();
         let stale = flag();
-        tasks.register(ThreadId(1), 1, tokio::spawn(async {}), stale);
+        tasks.register(ThreadId(1), 1, 1, tokio::spawn(async {}), stale);
 
         // What the spawn path does before registering.
         tasks.abort_all();
         let fresh = flag();
         tasks.register(
             ThreadId(2),
+            2,
             2,
             tokio::spawn(std::future::pending()),
             fresh.clone(),
@@ -582,6 +651,7 @@ mod tests {
         tasks.register(
             ThreadId(1),
             1,
+            1,
             tokio::spawn(std::future::pending()),
             only.clone(),
         );
@@ -597,6 +667,7 @@ mod tests {
         let second = flag();
         tasks.register(
             ThreadId(2),
+            2,
             2,
             tokio::spawn(std::future::pending()),
             second.clone(),
@@ -614,7 +685,7 @@ mod tests {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(7);
         let handle = tokio::spawn(async {});
-        tasks.register(thread, 1, handle, flag());
+        tasks.register(thread, 1, 1, handle, flag());
 
         // Let the task run to completion without touching the channel the
         // connection loop would normally drain.

@@ -841,6 +841,35 @@ pub(crate) async fn handle_connection(
                                 // never reaches the client.
                                 let turn_key = turn_thread
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
+                                // A second message in this conversation
+                                // displaces the turn still running there —
+                                // and a displaced turn is aborted at its
+                                // next await, often the very wait for a
+                                // tool approval or `ask_user` answer. It
+                                // will never send the `ToolResult` that
+                                // retires the box it left on the user's
+                                // screen, nor its own close-out; unsent,
+                                // the dead box hides every later request
+                                // behind it. Close the old turn out here,
+                                // before the new turn exists, so the
+                                // retirement can never race the new
+                                // turn's own requests — and on the old
+                                // turn's stream, where clients track it.
+                                if let Some(old_stream) =
+                                    active_tasks.lock().await.displace(&turn_key)
+                                {
+                                    let mut scoped =
+                                        rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                            &mut *writer,
+                                            old_stream,
+                                        );
+                                    protocol::server::send_response_done(
+                                        &mut scoped,
+                                        false,
+                                        Some(turn_key.0).filter(|id| *id != 0),
+                                    )
+                                    .await?;
+                                }
                                 {
                                     // A fresh flag per turn: see ActiveTasks.
                                     let tool_cancel: ToolCancelFlag =
@@ -903,11 +932,10 @@ pub(crate) async fn handle_connection(
                                         }
                                     });
                                     // One turn per thread, any number of
-                                    // threads. `register` displaces the entry
-                                    // for this thread only, so a second
-                                    // message in the same conversation still
-                                    // replaces its predecessor while turns
-                                    // elsewhere keep running.
+                                    // threads. The predecessor for this
+                                    // thread was displaced and closed out
+                                    // above, before this turn existed;
+                                    // turns elsewhere keep running.
                                     //
                                     // This used to `abort_all()` first: with
                                     // one shared response channel per kind,
@@ -919,6 +947,7 @@ pub(crate) async fn handle_connection(
                                     active_tasks.lock().await.register(
                                         turn_key,
                                         turn_id,
+                                        stream_id,
                                         handle,
                                         tool_cancel,
                                     );

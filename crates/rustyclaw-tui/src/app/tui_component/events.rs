@@ -634,6 +634,30 @@ pub(super) fn apply_gw_event(
                     show_credential_request.set(false);
                     credential_request_thread.set(None);
                 }
+                // Approvals and questions the ended turn never resolved die
+                // with it too. Normally their own ToolResult retires them; a
+                // turn displaced by a newer message in its thread is aborted
+                // mid-wait and never sends one, so the close-out the gateway
+                // emits on its behalf is the only retirement they will get —
+                // queued or already on screen.
+                let mut approvals = queued_tool_approvals.read().clone();
+                let before = approvals.len();
+                approvals.retain(|(owner, ..)| *owner != Some(thread));
+                if approvals.len() != before {
+                    queued_tool_approvals.set(approvals);
+                }
+                if show_tool_approval.get() && tool_approval_thread.get() == Some(thread) {
+                    show_tool_approval.set(false);
+                }
+                let mut prompts = queued_user_prompts.read().clone();
+                let before = prompts.len();
+                prompts.retain(|(owner, _)| *owner != Some(thread));
+                if prompts.len() != before {
+                    queued_user_prompts.set(prompts);
+                }
+                if show_user_prompt.get() && user_prompt_thread.get() == Some(thread) {
+                    show_user_prompt.set(false);
+                }
             }
             // Only the turn on screen can end what is on screen. A close-out
             // from a turn running elsewhere would stop the spinner and file
