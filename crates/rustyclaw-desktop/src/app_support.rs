@@ -108,7 +108,7 @@ pub(crate) fn handle_gateway_event(
             s.is_processing = false;
             s.is_streaming = false;
             s.is_thinking = false;
-            s.streaming_thread_id = None;
+            s.in_flight.clear();
             // The gateway repoints the workspace at the restored foreground
             // thread's directory on connect, which need not be where the
             // previous session's editor cache came from.
@@ -134,7 +134,7 @@ pub(crate) fn handle_gateway_event(
             s.is_processing = false;
             s.is_streaming = false;
             s.is_thinking = false;
-            s.streaming_thread_id = None;
+            s.in_flight.clear();
             // Including a question it was waiting on: the turn that asked it
             // is gone, so no tool result will ever retire the card and an
             // answer would go into a closed connection. Leaving it up would
@@ -214,7 +214,7 @@ pub(crate) fn handle_gateway_event(
             // live response, taking the Stop button and the working
             // indicator with it while the model is still going.
             if s.frame_is_for_current_turn(announced) {
-                s.response_done();
+                s.response_done(announced);
             }
         }
         GatewayEvent::ToolCall {
@@ -483,7 +483,10 @@ pub(crate) fn handle_gateway_event(
             state.write().hydrate_thread_messages(thread_id, messages);
         }
         GatewayEvent::UserPromptRequest { id: _, prompt } => {
-            state.write().set_user_prompt(prompt);
+            // Tagged with the turn that asked it, so a question from a
+            // conversation the user is not looking at waits there rather
+            // than appearing in the one they are.
+            state.write().set_user_prompt(prompt, thread_id);
         }
         GatewayEvent::CredentialRequest {
             id,

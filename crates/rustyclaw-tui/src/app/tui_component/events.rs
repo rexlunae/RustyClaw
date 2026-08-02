@@ -36,6 +36,23 @@ fn close_open_thinking(m: &mut Vec<DisplayMessage>, duration_ms: Option<u64>) ->
     true
 }
 
+/// Whether a turn-scoped frame from `thread_id` belongs to the thread on
+/// screen.
+///
+/// The TUI shows one thread at a time and keeps a single streaming buffer, so
+/// "which turn should render" has exactly one right answer: the one running
+/// in the foreground thread. Tracking it in a separate slot could only ever
+/// disagree — the slot followed whichever turn started last, so opening a
+/// second turn elsewhere silently stole the screen from the first.
+///
+/// `None` is a gateway too old to attribute its frames, and is trusted.
+fn renders_here(thread_id: Option<u64>, foreground: Option<u64>) -> bool {
+    match (thread_id, foreground) {
+        (Some(announced), Some(on_screen)) => announced == on_screen,
+        _ => true,
+    }
+}
+
 /// Apply a single gateway event to the UI state bundle.
 pub(super) fn apply_gw_event(
     ev: GwEvent,
@@ -133,7 +150,6 @@ pub(super) fn apply_gw_event(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
-        mut streaming_thread_id,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -300,11 +316,18 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::StreamStart(thread_id) => {
-            // The gateway's answer to "which thread is this turn in" beats
-            // the one recorded at submit time, which is wrong whenever the
-            // gateway elected a thread instead of being told one.
-            if thread_id.is_some() {
-                streaming_thread_id.set(thread_id);
+            // Nothing focused means the gateway elected a thread for this
+            // turn; follow it onto the screen. Otherwise the thread on
+            // screen is the answer to "which turn should render", and a
+            // turn opening anywhere else must not move it — that is what a
+            // second slot got wrong: adopting every announcement in turn,
+            // it ended up naming whichever turn started last rather than
+            // the one the user is reading.
+            if foreground_thread_id.get().is_none() && thread_id.is_some() {
+                foreground_thread_id.set(thread_id);
+            }
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
             }
             streaming.set(true);
             // Keep the earlier start time if we already
@@ -315,17 +338,12 @@ pub(super) fn apply_gw_event(
             streaming_buf.set(String::new());
         }
         GwEvent::Chunk(thread_id, text) => {
-            // A chunk from a turn running in another thread must not join
-            // this one's answer. The TUI shows one thread at a time and keeps
-            // a single `streaming_buf`, so appending it would splice two
-            // replies into one message and file the merge under whichever
-            // turn closed first. That thread's transcript arrives whole when
-            // its turn completes.
-            let mine = match (thread_id, streaming_thread_id.get()) {
-                (Some(announced), Some(current)) => announced == current,
-                _ => true,
-            };
-            if !mine {
+            // A chunk from a turn running in a thread that is not on screen
+            // must not join this answer: one `streaming_buf` is shared, so
+            // appending it would splice two replies into one message. That
+            // thread's transcript arrives whole when the user switches to
+            // it.
+            if !renders_here(thread_id, foreground_thread_id.get()) {
                 return;
             }
             let mut buf = streaming_buf.read().clone();
@@ -345,21 +363,13 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::ResponseDone(thread_id) => {
-            // Only the turn being tracked can end it. The gateway sends a
-            // close-out to refuse a message typed into another thread while
-            // one is running; acting on that would stop the spinner and file
-            // the half-streamed answer as if it were finished, while the
-            // real turn keeps writing into a buffer that has just been
-            // cleared. An unannounced thread is an older gateway, and is
-            // trusted as before.
-            let mine = match (thread_id, streaming_thread_id.get()) {
-                (Some(announced), Some(current)) => announced == current,
-                _ => true,
-            };
-            if !mine {
+            // Only the turn on screen can end what is on screen. A close-out
+            // from a turn running elsewhere would stop the spinner and file
+            // this half-streamed answer as finished while it is still being
+            // written.
+            if !renders_here(thread_id, foreground_thread_id.get()) {
                 return;
             }
-            streaming_thread_id.set(None);
             // Capture the accumulated assistant text and
             // send it back to the tokio loop so it gets
             // appended to the conversation history.

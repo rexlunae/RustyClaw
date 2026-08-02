@@ -664,7 +664,7 @@ pub fn App() -> Element {
         // Name the thread on the wire. The message was typed into *this*
         // thread and belongs to it however long the frame takes to arrive,
         // and whatever the gateway's foreground is doing meanwhile.
-        let turn_thread = state.read().streaming_thread_id;
+        let turn_thread = state.read().foreground_thread_id;
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
