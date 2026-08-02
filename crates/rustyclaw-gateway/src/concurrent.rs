@@ -27,8 +27,15 @@ use tokio::sync::mpsc;
 pub enum ModelTaskMessage {
     /// A serialized frame to send to the client, on the stream the request
     /// arrived on — clients correlate a turn's frames by stream id, so the
-    /// task's own id has to survive the trip through this channel.
-    Frame { stream_id: u64, data: Vec<u8> },
+    /// task's own id has to survive the trip through this channel. The turn
+    /// id travels with it because the loop may drain a turn's frames after
+    /// the next turn has already started, and "whose frame is this" then
+    /// stops being answerable from context.
+    Frame {
+        stream_id: u64,
+        turn_id: u64,
+        data: Vec<u8>,
+    },
 
     /// The model task completed successfully.
     /// The main loop should update thread state.
@@ -118,6 +125,7 @@ impl TransportWriter for ChannelSink {
         self.tx
             .send(ModelTaskMessage::Frame {
                 stream_id: self.stream_id,
+                turn_id: self.turn_id,
                 data,
             })
             .await
