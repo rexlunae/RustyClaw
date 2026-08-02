@@ -398,12 +398,12 @@ pub enum StatusType {
 /// Protocol version for multiplexed SSH/stdin wire envelopes.
 ///
 /// Bumped to 2 when `Chat`, `StreamStart` and `ResponseDone` gained explicit
-/// thread ids. Frames are bincode-encoded positionally — `#[serde(default)]`
+/// thread ids, and to 3 when `Cancel` did. Frames are bincode-encoded positionally — `#[serde(default)]`
 /// does nothing here, since there is no field to be missing, only bytes to
 /// be misread — so a peer at version 1 cannot decode these. Mismatched peers
 /// fail at the first affected frame rather than mis-parsing one into another;
 /// the version is what lets an envelope-carrying transport say so plainly.
-pub const WIRE_PROTOCOL_VERSION: u16 = 2;
+pub const WIRE_PROTOCOL_VERSION: u16 = 3;
 
 /// Stream ID used for connection-level control frames.
 pub const CONTROL_STREAM_ID: u64 = 0;
@@ -915,6 +915,27 @@ pub enum ClientPayload {
         path: PathBuf,
         content: String,
         expected_root: PathBuf,
+    },
+
+    /// Stop a running turn.
+    ///
+    /// `thread_id` names which one. With turns running per thread, "the
+    /// current turn" is not a thing the gateway can resolve on the client's
+    /// behalf — it would have to guess, and guessing which conversation the
+    /// user meant to interrupt is worse than the guesses this whole change
+    /// set exists to remove.
+    ///
+    /// `None` means the client did not say. It is honoured only when exactly
+    /// one turn is running, which is the case every pre-existing client was
+    /// written against; with several running it stops nothing rather than
+    /// stopping the wrong one.
+    ///
+    /// Appended at the end of the enum on purpose: bincode encodes variants
+    /// positionally, so adding here leaves every existing variant's index
+    /// alone.
+    Cancel {
+        #[serde(default)]
+        thread_id: Option<u64>,
     },
 }
 

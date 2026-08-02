@@ -421,16 +421,6 @@ pub(crate) async fn handle_connection(
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
     let mut next_turn_id: u64 = 0;
-    // Set when the *current* turn's `ResponseDone` has gone out. That turn is
-    // still registered until its task returns and its `Done` is drained, but
-    // the client has already been told its request finished — so it is free to
-    // send another, and refusing that one would leave it waiting for a
-    // terminal frame that has already been spent. Matched against the turn id
-    // on the frame: an older turn's `ResponseDone`, drained after the next
-    // turn started, would otherwise wave a third message past the one-at-a-
-    // time guard and abort the turn that is running.
-    let mut current_turn_id: Option<u64> = None;
-    let mut turn_done_for_client = false;
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
@@ -464,19 +454,37 @@ pub(crate) async fn handle_connection(
                             let frame = envelope.frame.clone();
                             trace!(stream_id, frame_type = ?frame.frame_type, "Received client frame");
                             // Stop, handled here rather than queued behind
-                            // whatever the loop is currently awaiting. One
-                            // turn runs at a time, so "the running turn" is
-                            // unambiguous — no need to consult the thread
-                            // manager for which one the user meant.
+                            // whatever the loop is currently awaiting.
+                            //
+                            // The client names the turn it means. It has to:
+                            // with turns running per thread, "the running
+                            // turn" is not something the gateway can resolve
+                            // on the user's behalf, and stopping the wrong
+                            // conversation is worse than stopping none.
+                            // A client that names nothing gets the old
+                            // behaviour, which is correct exactly while one
+                            // turn is running.
                             if frame.frame_type == ClientFrameType::Cancel {
+                                let named = match &frame.payload {
+                                    ClientPayload::Cancel { thread_id } => *thread_id,
+                                    // Pre-3 clients send `Empty` here.
+                                    _ => None,
+                                };
                                 match reader_tasks.upgrade() {
                                     Some(tasks) => {
                                         // Bound, not held across the body:
                                         // the connection loop wants this lock
                                         // too, and this task must go straight
                                         // back to decoding frames.
-                                        let stopped =
-                                            tasks.lock().await.request_cancel_sole();
+                                        let stopped = {
+                                            let tasks = tasks.lock().await;
+                                            match named {
+                                                Some(id) => tasks.request_cancel(
+                                                    &rustyclaw_core::threads::ThreadId(id),
+                                                ),
+                                                None => tasks.request_cancel_sole(),
+                                            }
+                                        };
                                         if !stopped {
                                             trace!("Cancel with no turn running");
                                         }
@@ -622,6 +630,11 @@ pub(crate) async fn handle_connection(
                                 )
                                 .await?;
                             }
+                            // Answered in the reader task, which is the whole
+                            // point of it: a Stop queued behind whatever the
+                            // loop is awaiting is a Stop that does nothing.
+                            // It never reaches here.
+                            ClientPayload::Cancel { .. } => {}
                             ClientPayload::Reload => {
                                 admin::handle_reload(
                                     &mut *writer,
@@ -654,73 +667,6 @@ pub(crate) async fn handle_connection(
                                 // reply, in whichever thread the user had
                                 // just opened.
                                 active_tasks.lock().await.reap_finished();
-                                // One turn per connection, decided *before*
-                                // anything is switched or elected: a refused
-                                // message must not move the user's thread on
-                                // its way to being dropped. The client-response
-                                // channels this turn will wait on — tool
-                                // approvals, `ask_user` answers, credentials,
-                                // DOM queries — are one per connection and are
-                                // consumed by whichever turn holds the lock,
-                                // so a second concurrent turn would swallow
-                                // answers meant for the first (and a swallowed
-                                // approval reads as a denial). Serving frames
-                                // during a turn is what this change is for;
-                                // running two turns at once would need those
-                                // responses routed by call id.
-                                // Bound to a local: the running turn's thread
-                                // decides whether the refusal can be closed
-                                // out, and a guard taken in an `if` scrutinee
-                                // would outlive the block.
-                                let running_thread = {
-                                    let tasks = active_tasks.lock().await;
-                                    tasks.running_threads().first().copied()
-                                };
-                                if running_thread.is_some() && !turn_done_for_client {
-                                    let mut scoped = rustyclaw_core::gateway::ScopedTransportWriter::new(
-                                        &mut *writer,
-                                        stream_id,
-                                    );
-                                    protocol::server::send_info(
-                                        &mut scoped,
-                                        "Still working on the previous message — \
-                                         wait for it to finish or press Stop, \
-                                         then send this again.",
-                                    )
-                                    .await?;
-                                    // The client set itself busy when it sent
-                                    // this, and nothing else will ever clear
-                                    // it: the running turn's close-out names
-                                    // a different thread, so a client routing
-                                    // by thread ignores it and sits on a
-                                    // spinner with its composer disabled —
-                                    // unable to send the very message that
-                                    // would unstick it.
-                                    //
-                                    // Only when the two threads differ. A
-                                    // second message typed into the *same*
-                                    // thread is the case this close-out used
-                                    // to break: the client's busy state there
-                                    // does belong to the running turn, and
-                                    // retiring it would take the Stop button
-                                    // and the working indicator away mid
-                                    // response. That turn's own completion
-                                    // clears it. A client that names no
-                                    // thread cannot be told apart either way,
-                                    // and keeps that same behaviour.
-                                    if let Some(named) = thread_id
-                                        && running_thread
-                                            != Some(rustyclaw_core::threads::ThreadId(named))
-                                    {
-                                        protocol::server::send_response_done(
-                                            &mut scoped,
-                                            false,
-                                            Some(named),
-                                        )
-                                        .await?;
-                                    }
-                                    continue;
-                                }
                                 // The client names the thread it typed into,
                                 // and that name wins. The gateway's own
                                 // foreground is only a cache of what a client
@@ -896,13 +842,11 @@ pub(crate) async fn handle_connection(
                                 let turn_key = turn_thread
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
                                 {
-                                    turn_done_for_client = false;
                                     // A fresh flag per turn: see ActiveTasks.
                                     let tool_cancel: ToolCancelFlag =
                                         Arc::new(AtomicBool::new(false));
                                     next_turn_id += 1;
                                     let turn_id = next_turn_id;
-                                    current_turn_id = Some(turn_id);
                                     let mut sink = concurrent::ChannelSink::new(
                                         model_task_tx.clone(),
                                         turn_key,
@@ -958,24 +902,26 @@ pub(crate) async fn handle_connection(
                                             Err(e) => sink.error(format!("{e:#}")).await,
                                         }
                                     });
-                                    {
-                                        let mut tasks = active_tasks.lock().await;
-                                        // At most one turn is ever
-                                        // registered. The fast path above can
-                                        // start this one while the previous is
-                                        // still registered — its ResponseDone
-                                        // is out, its task not yet returned —
-                                        // and `register` only displaces an
-                                        // entry for the same thread, so a
-                                        // switch in between would leave two.
-                                        // Stop declines when it cannot tell
-                                        // which turn was meant, and two turns
-                                        // would share this connection's single
-                                        // approval / `ask_user` / credential
-                                        // channels.
-                                        tasks.abort_all();
-                                        tasks.register(turn_key, turn_id, handle, tool_cancel);
-                                    }
+                                    // One turn per thread, any number of
+                                    // threads. `register` displaces the entry
+                                    // for this thread only, so a second
+                                    // message in the same conversation still
+                                    // replaces its predecessor while turns
+                                    // elsewhere keep running.
+                                    //
+                                    // This used to `abort_all()` first: with
+                                    // one shared response channel per kind,
+                                    // two turns would take each other's tool
+                                    // approvals and `ask_user` answers, and a
+                                    // stolen approval read as a denial. Those
+                                    // are routed by call id now, so the
+                                    // reason is gone.
+                                    active_tasks.lock().await.register(
+                                        turn_key,
+                                        turn_id,
+                                        handle,
+                                        tool_cancel,
+                                    );
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {
@@ -1363,15 +1309,14 @@ pub(crate) async fn handle_connection(
             model_msg = model_task_rx.recv() => {
                 if let Some(task_msg) = model_msg {
                     match task_msg {
-                        concurrent::ModelTaskMessage::Frame { stream_id, turn_id, data } => {
+                        concurrent::ModelTaskMessage::Frame {
+                            stream_id,
+                            turn_id: _,
+                            data,
+                        } => {
                             // Deserialize and forward frame to client, on the
                             // stream its request came in on.
                             if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
-                                if frame.frame_type == ServerFrameType::ResponseDone
-                                    && current_turn_id == Some(turn_id)
-                                {
-                                    turn_done_for_client = true;
-                                }
                                 writer.send_on_stream(stream_id, &frame).await?;
                             }
                         }
@@ -2043,6 +1988,80 @@ mod tests {
             last_foreground,
             Some(alpha.0),
             "The named thread should be the one in use"
+        );
+
+        Ok(())
+    }
+
+    /// Two messages in different threads both start a turn.
+    ///
+    /// The second used to be refused with "still working on the previous
+    /// message" — not because two turns could not run, but because the four
+    /// client-response channels were one per connection and whichever turn
+    /// held the lock consumed the other's mail. Now that answers are routed
+    /// by call id, both run.
+    ///
+    /// No model is configured here, so each turn fails fast; what is being
+    /// asserted is that the *second message was accepted* — the refusal
+    /// notice is gone, and both threads got a turn of their own.
+    #[tokio::test]
+    async fn two_threads_can_both_be_working() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let chat = |thread: rustyclaw_core::threads::ThreadId, text: &str| ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", text)],
+                thread_id: Some(thread.0),
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(
+            peer,
+            vec![Some(chat(alpha, "first")), Some(chat(beta, "second")), None],
+        );
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            handle_transport_connection(
+                Box::new(mock_transport),
+                Arc::new(RwLock::new(cfg)),
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(None)),
+                vault,
+                skill_mgr,
+                task_mgr,
+                model_registry,
+                None,
+                auth::new_rate_limiter(),
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("two concurrent turns must not wedge the connection")?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            !frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::Info { message, .. } if message.contains("Still working")
+            )),
+            "the second message must not be turned away"
         );
 
         Ok(())

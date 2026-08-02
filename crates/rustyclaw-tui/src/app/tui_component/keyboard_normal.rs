@@ -694,7 +694,9 @@ pub(super) fn handle_normal_key(
             messages.set(m);
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::CancelCurrentRequest);
+                    let _ = tx.send(UserInput::CancelCurrentRequest {
+                        thread_id: streaming_thread_id.get(),
+                    });
                 }
             }
         }

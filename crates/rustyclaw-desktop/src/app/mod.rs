@@ -923,11 +923,14 @@ pub fn App() -> Element {
         // Stop applies to a turn parked on a question too: the gateway drops
         // the wait, so the card must go with it.
         s.clear_user_prompt();
+        // Stop names the turn it means. With turns running per thread, the
+        // gateway cannot resolve "the current one" for us without guessing.
+        let thread_id = s.streaming_thread_id;
         drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let _ = client.send(GatewayCommand::Cancel).await;
+                let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
             });
         }
     };

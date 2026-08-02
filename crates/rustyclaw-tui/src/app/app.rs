@@ -40,6 +40,11 @@ pub(crate) enum UserInput {
         text: String,
         thread_id: Option<u64>,
     },
+    /// Stop the turn running in `thread_id`. Named, because the gateway can
+    /// no longer resolve "the current one" once turns run per thread.
+    CancelCurrentRequest {
+        thread_id: Option<u64>,
+    },
     Command(String),
     AuthResponse(String),
     /// User approved or denied a tool call
@@ -61,8 +66,6 @@ pub(crate) enum UserInput {
         dismissed: bool,
         value: Option<String>,
     },
-    /// Cancel the active model/tool run.
-    CancelCurrentRequest,
     /// Pause/resume/stop/kill the process behind the running tool call.
     ProcessControl {
         pid: u32,
@@ -401,8 +404,8 @@ impl App {
                         })
                         .await;
                 }
-                Ok(UserInput::CancelCurrentRequest) => {
-                    let _ = client.send(GatewayCommand::Cancel).await;
+                Ok(UserInput::CancelCurrentRequest { thread_id }) => {
+                    let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
                 }
                 Ok(UserInput::ProcessControl { pid, action }) => {
                     let _ = client

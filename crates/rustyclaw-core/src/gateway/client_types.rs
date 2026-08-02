@@ -564,9 +564,11 @@ pub enum GatewayCommand {
     #[serde(rename = "secrets_list")]
     SecretsList,
 
-    /// Cancel current operation
+    /// Cancel current operation. `thread_id` names the turn to stop; `None`
+    /// is honoured only when exactly one is running, since the gateway would
+    /// otherwise have to guess which conversation the user meant.
     #[serde(rename = "cancel")]
-    Cancel,
+    Cancel { thread_id: Option<u64> },
 
     /// Control a running exec process (pause/resume/stop/kill)
     #[serde(rename = "process_control")]
@@ -978,9 +980,9 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::SecretsList,
                 payload: ClientPayload::SecretsList,
             },
-            GatewayCommand::Cancel => ClientFrame {
+            GatewayCommand::Cancel { thread_id } => ClientFrame {
                 frame_type: ClientFrameType::Cancel,
-                payload: ClientPayload::Empty,
+                payload: ClientPayload::Cancel { thread_id },
             },
             GatewayCommand::ProcessControl { pid, action } => ClientFrame {
                 frame_type: ClientFrameType::ProcessControl,
