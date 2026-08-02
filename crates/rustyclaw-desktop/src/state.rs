@@ -299,6 +299,15 @@ pub struct AppState {
     /// finished, and filed its questions under the newer thread.
     pub in_flight: std::collections::HashSet<u64>,
 
+    /// A turn submitted before any thread existed, still waiting to learn
+    /// which thread the gateway elects for it. It cannot sit in `in_flight`
+    /// — there is no id yet — but it is running all the same, and the
+    /// election's `ThreadsUpdate` must adopt it rather than derive the
+    /// working state from an `in_flight` set it was never in, which took
+    /// the Stop control off a reply still streaming and unlocked the
+    /// composer over it.
+    pub unowned_turn_in_flight: bool,
+
     /// Agent name from hatching
     pub agent_name: Option<String>,
 
@@ -539,6 +548,7 @@ impl Default for AppState {
             threads: Vec::new(),
             foreground_thread_id: None,
             in_flight: std::collections::HashSet::new(),
+            unowned_turn_in_flight: false,
             agent_name: None,
             vault_locked: false,
             needs_hatching,
@@ -630,8 +640,14 @@ impl AppState {
     /// only while that thread stays in the foreground.
     pub fn mark_request_started(&mut self) {
         self.is_processing = true;
-        if let Some(thread) = self.foreground_thread_id {
-            self.in_flight.insert(thread);
+        match self.foreground_thread_id {
+            Some(thread) => {
+                self.in_flight.insert(thread);
+            }
+            // No thread exists yet; the gateway will elect one and announce
+            // it. Remembered so the announcement adopts this turn instead
+            // of reading the empty `in_flight` set as "nothing running".
+            None => self.unowned_turn_in_flight = true,
         }
     }
 
@@ -778,6 +794,7 @@ impl AppState {
     pub fn adopt_stream_thread(&mut self, thread_id: Option<u64>) {
         let Some(id) = thread_id else { return };
         self.in_flight.insert(id);
+        self.unowned_turn_in_flight = false;
         // Nothing was focused, so the gateway elected this thread for the
         // turn. Follow it onto the screen: otherwise every frame that
         // follows is judged to belong to a thread that isn't in view, and
@@ -836,6 +853,25 @@ impl AppState {
     /// `ask_user` tool call id, so the tool's result frame — which arrives
     /// whether the wait ended in an answer, a cancel, or a timeout — is what
     /// retires a card the user never touched.
+    /// Retire the question the visible card shows, on the user answering
+    /// or dismissing it.
+    ///
+    /// By the same filter that picked the card for rendering — owner
+    /// unknown or on the foreground thread — not oldest-by-id like the
+    /// approvals: their dialog always shows the queue head, so the oldest
+    /// holder of an id is what is on screen, but the visible card skips
+    /// other threads' questions, and with a colliding id the oldest holder
+    /// can be a hidden question the user did not answer. Removing that one
+    /// left the answered card on screen and silently ran another turn's
+    /// wait out.
+    pub fn answer_user_prompt(&mut self, id: &str) {
+        if let Some(pos) = self.pending_user_prompts.iter().position(|(owner, p)| {
+            p.id == id && (owner.is_none() || *owner == self.foreground_thread_id)
+        }) {
+            self.pending_user_prompts.remove(pos);
+        }
+    }
+
     /// Oldest match only, like `retire_tool_approval`: the prompt id is a
     /// tool-call id, which can collide across concurrent turns. And owner-
     /// scoped like it too — see there for why an id-only match lets one
@@ -909,6 +945,11 @@ impl AppState {
         if let Some(thread) = thread_id {
             self.in_flight.remove(&thread);
         }
+        // Stopping before the gateway named the turn's thread stops that
+        // unowned turn: nothing else can be running.
+        if thread_id.is_none() {
+            self.unowned_turn_in_flight = false;
+        }
         self.finish_current_message();
         // Stop applies to a turn parked on a question too: the gateway
         // drops the wait, so the card goes with it — but only the cards
@@ -934,6 +975,11 @@ impl AppState {
             }
             None => self.in_flight.clear(),
         }
+        // However the turn was tracked, it is over. An unowned turn that
+        // finished before any announcement named its thread must not leave
+        // this armed, or the next election would adopt a turn that no
+        // longer exists.
+        self.unowned_turn_in_flight = false;
         let on_screen = thread_id.is_none() || thread_id == self.foreground_thread_id;
         if on_screen {
             self.finish_current_message();
@@ -1188,10 +1234,19 @@ impl AppState {
         // snapshot* may replace the live view, in
         // `history_should_take_the_view`.
         if labelling_unowned_view {
-            if let Some(id) = thread_id
-                && !self.messages.is_empty()
-            {
-                self.thread_messages.insert(id, self.messages.clone());
+            if let Some(id) = thread_id {
+                // The elected thread is the unowned turn's own: adopt it
+                // before the indicators are re-derived below, or the still-
+                // running reply reads as finished — Stop gone, composer
+                // open over it. `StreamStart` says the same thing and either
+                // announcement can arrive first.
+                if self.unowned_turn_in_flight {
+                    self.unowned_turn_in_flight = false;
+                    self.in_flight.insert(id);
+                }
+                if !self.messages.is_empty() {
+                    self.thread_messages.insert(id, self.messages.clone());
+                }
             }
         } else {
             self.messages = thread_id
@@ -2125,9 +2180,10 @@ mod tests {
 
         // Same shape for questions: thread 1's answered, its result must
         // not take thread 2's card.
+        s.foreground_thread_id = Some(1);
         s.set_user_prompt(question("call_0"), Some(1));
         s.set_user_prompt(question("call_0"), Some(2));
-        s.clear_user_prompt_if(None, "call_0");
+        s.answer_user_prompt("call_0");
         s.clear_user_prompt_if(Some(1), "call_0");
         assert_eq!(
             s.pending_user_prompts.first().map(|(owner, _)| *owner),
@@ -2290,6 +2346,71 @@ mod tests {
         );
     }
 
+    /// Answering the visible question retires it — not a hidden namesake.
+    ///
+    /// The visible card is foreground-filtered, so with colliding call ids
+    /// the oldest holder of the answered id can be another thread's hidden
+    /// question. Retiring oldest-by-id removed that one: the answered card
+    /// stayed on screen and the hidden turn's wait quietly expired.
+    #[test]
+    fn answering_the_visible_question_spares_a_hidden_namesake() {
+        let mut s = idle_state();
+        s.set_user_prompt(question("call_0"), Some(1));
+        s.set_user_prompt(question("call_0"), Some(2));
+        s.foreground_thread_id = Some(2);
+        assert!(s.visible_user_prompt().is_some());
+
+        // What on_prompt_respond does for the card on screen (thread 2's).
+        s.answer_user_prompt("call_0");
+
+        assert!(
+            s.visible_user_prompt().is_none(),
+            "the answered card must leave the screen"
+        );
+        s.switch_thread(1);
+        assert!(
+            s.visible_user_prompt().is_some(),
+            "thread 1's unanswered question must still be waiting"
+        );
+    }
+
+    /// Labelling an unowned view keeps its turn's working state.
+    ///
+    /// A turn sent before any thread exists has no id to sit in
+    /// `in_flight`. When the election arrives as a `ThreadsUpdate` (which
+    /// beats `StreamStart` in practice), the labelling re-derived the
+    /// indicators from that empty set — Stop vanished and the composer
+    /// unlocked over a reply still streaming. The election must adopt the
+    /// pending turn, whichever announcement carries it first.
+    #[test]
+    fn labelling_the_view_with_its_elected_thread_keeps_it_working() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.add_user_message("sent before any thread existed".to_string());
+        s.mark_request_started();
+
+        // What the ThreadsUpdate handler does when the election's
+        // Foregrounded event arrives before StreamStart.
+        s.set_foreground_thread(Some(7));
+
+        assert!(
+            s.is_processing,
+            "the reply is still streaming and must say so"
+        );
+        assert!(
+            s.in_flight.contains(&7),
+            "the elected thread carries the adopted turn"
+        );
+
+        // The turn's close-out still lands: nothing left armed behind it.
+        s.response_done(Some(7));
+        assert!(!s.is_processing && s.in_flight.is_empty());
+        assert!(
+            !s.unowned_turn_in_flight,
+            "an adopted turn must not be adopted again"
+        );
+    }
+
     /// A gateway-driven foreground move always swaps the transcript.
     ///
     /// The old early return, guarding a live streaming bubble, fired for
@@ -2335,7 +2456,7 @@ mod tests {
         s.set_user_prompt(question("call-2"), Some(2));
 
         // What on_prompt_respond does for the visible card.
-        s.clear_user_prompt_if(None, "call-1");
+        s.answer_user_prompt("call-1");
 
         s.switch_thread(2);
         assert_eq!(
