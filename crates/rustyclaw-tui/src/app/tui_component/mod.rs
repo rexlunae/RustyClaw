@@ -176,6 +176,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>> =
         hooks.use_state(HashMap::new);
     let foreground_thread_id: State<Option<u64>> = hooks.use_state(|| None);
+    let in_flight: State<std::collections::HashSet<u64>> =
+        hooks.use_state(std::collections::HashSet::new);
 
     // ── Command menu (slash-command completions) ────────────────────
     let command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -343,6 +345,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         tab_selected,
         thread_messages_cache,
         foreground_thread_id,
+        in_flight,
         command_completions,
         command_selected,
         model_completion_provider,

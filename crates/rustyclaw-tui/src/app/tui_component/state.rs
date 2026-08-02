@@ -121,6 +121,13 @@ pub(super) struct Ui {
     pub tab_selected: State<usize>,
     pub thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>>,
     pub foreground_thread_id: State<Option<u64>>,
+    /// Threads with a turn still running.
+    ///
+    /// The spinner and Esc are gated on `streaming`, which describes the
+    /// view and is cleared whenever the view moves. Without a record of what
+    /// is actually running, coming back to a conversation that is still
+    /// answering showed no indicator and Esc did nothing.
+    pub in_flight: State<std::collections::HashSet<u64>>,
     pub command_completions: State<Vec<String>>,
     pub command_selected: State<Option<usize>>,
     pub model_completion_provider: State<Option<String>>,

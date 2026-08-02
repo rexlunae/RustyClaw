@@ -37,21 +37,33 @@ fn close_open_thinking(m: &mut Vec<DisplayMessage>, duration_ms: Option<u64>) ->
     true
 }
 
-/// Clear the indicators that describe the conversation on screen.
+/// Point the view's streaming indicators at `incoming`.
 ///
 /// `streaming`, the elapsed timer and `streaming_buf` are one set shared by
 /// the whole view, so they only ever describe the thread being shown. When
-/// the view moves to another thread they are stale, and nothing else will
-/// clear them — a close-out for the thread that left is ignored precisely
-/// because it is no longer on screen.
-fn reset_view_streaming(
+/// the view moves they are stale — nothing else clears them, since a
+/// close-out for the thread that left is ignored precisely because it is no
+/// longer on screen, and the spinner would run forever.
+///
+/// Clearing alone is not enough either: `streaming` is what Esc is gated on,
+/// so a conversation still answering when the user returns to it would show
+/// no progress and could not be stopped at all. The flag is set from what is
+/// actually running.
+///
+/// The partial text is dropped in both directions — the answer so far lives
+/// in the transcript, and the gateway's history snapshot is what makes a
+/// returned-to conversation whole.
+fn rebase_view_streaming(
+    incoming: Option<u64>,
+    in_flight: &std::collections::HashSet<u64>,
     streaming: &mut State<bool>,
     stream_start: &mut State<Option<Instant>>,
     elapsed: &mut State<String>,
     streaming_buf: &mut State<String>,
 ) {
-    streaming.set(false);
-    stream_start.set(None);
+    let still_answering = incoming.is_some_and(|thread| in_flight.contains(&thread));
+    streaming.set(still_answering);
+    stream_start.set(still_answering.then(Instant::now));
     elapsed.set(String::new());
     streaming_buf.set(String::new());
 }
@@ -170,6 +182,7 @@ pub(super) fn apply_gw_event(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
+        mut in_flight,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -346,6 +359,14 @@ pub(super) fn apply_gw_event(
             if foreground_thread_id.get().is_none() && thread_id.is_some() {
                 foreground_thread_id.set(thread_id);
             }
+            // Recorded whether or not it is on screen: coming back to a
+            // conversation that is still answering has to restore its
+            // spinner, and Esc is gated on that same flag.
+            if let Some(thread) = thread_id {
+                let mut running = in_flight.read().clone();
+                running.insert(thread);
+                in_flight.set(running);
+            }
             if !renders_here(thread_id, foreground_thread_id.get()) {
                 return;
             }
@@ -383,6 +404,14 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::ResponseDone(thread_id) => {
+            // Retired before the render gate: a turn that finished off-screen
+            // is no longer running, and returning to it must not show a
+            // spinner for an answer that is already complete.
+            if let Some(thread) = thread_id {
+                let mut running = in_flight.read().clone();
+                running.remove(&thread);
+                in_flight.set(running);
+            }
             // Only the turn on screen can end what is on screen. A close-out
             // from a turn running elsewhere would stop the spinner and file
             // this half-streamed answer as finished while it is still being
@@ -832,7 +861,9 @@ pub(super) fn apply_gw_event(
                 // conversation that is no longer being shown, and nothing
                 // will ever clear them: a close-out for that thread is
                 // correctly ignored now, so the spinner would run forever.
-                reset_view_streaming(
+                rebase_view_streaming(
+                    foreground_id,
+                    &in_flight.read().clone(),
                     &mut streaming,
                     &mut stream_start,
                     &mut elapsed,
@@ -966,7 +997,9 @@ pub(super) fn apply_gw_event(
             foreground_thread_id.set(Some(thread_id));
             // See the `ThreadsUpdate` arm: the streaming indicators belong
             // to whatever is on screen, and the screen just changed.
-            reset_view_streaming(
+            rebase_view_streaming(
+                Some(thread_id),
+                &in_flight.read().clone(),
                 &mut streaming,
                 &mut stream_start,
                 &mut elapsed,
