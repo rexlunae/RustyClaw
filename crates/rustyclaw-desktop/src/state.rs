@@ -324,20 +324,30 @@ pub struct AppState {
     pub theme: Theme,
 
     /// Pending tool approval request (id, name, arguments).
-    pub pending_tool_approval: Option<(String, String, String)>,
+    /// Tool approvals waiting for the user, oldest first. A queue, not a
+    /// slot: turns run per thread, and two of them can ask at once. A second
+    /// request used to overwrite the first, which was then never shown again
+    /// — the gateway's waiter timed out after two minutes and read the
+    /// silence as a denial of a tool the user never saw.
+    pub pending_tool_approvals: std::collections::VecDeque<(String, String, String)>,
 
     /// Pending user prompt from the agent.
-    pub pending_user_prompt: Option<UserPrompt>,
+    /// Questions from the agent, each tagged with the thread whose turn
+    /// asked it. One card renders at a time — the first belonging to the
+    /// thread on screen — and the rest wait their turn instead of being
+    /// overwritten and lost.
+    pub pending_user_prompts: Vec<(Option<u64>, UserPrompt)>,
 
     /// The thread the pending question belongs to. Questions are per-thread,
     /// not per-window: switching to another thread hides the card, switching
     /// back restores it, so a question never holds the whole app hostage.
     /// `None` means the owning thread is unknown (the question arrived before
     /// any thread existed), in which case the card shows wherever the user is.
-    pub pending_user_prompt_thread: Option<u64>,
 
     /// Pending credential request (id, provider, secret_name, message).
-    pub pending_credential_request: Option<(String, String, String, String)>,
+    /// Credential requests waiting for the user, oldest first. See
+    /// `pending_tool_approvals` for why this is a queue.
+    pub pending_credential_requests: std::collections::VecDeque<(String, String, String, String)>,
 
     /// Pending device flow (url, code, message).
     pub pending_device_flow: Option<(String, String, Option<String>)>,
@@ -522,10 +532,9 @@ impl Default for AppState {
             prompt_attachments: Vec::new(),
             sidebar_collapsed: false,
             theme: Theme::default(),
-            pending_tool_approval: None,
-            pending_user_prompt: None,
-            pending_user_prompt_thread: None,
-            pending_credential_request: None,
+            pending_tool_approvals: std::collections::VecDeque::new(),
+            pending_user_prompts: Vec::new(),
+            pending_credential_requests: std::collections::VecDeque::new(),
             pending_device_flow: None,
             streaming_chunks: 0,
             streaming_bytes: 0,
@@ -688,23 +697,23 @@ impl AppState {
     /// Record a question from the agent, tagged with the thread whose turn
     /// asked it (the streaming thread, else whatever is in the foreground).
     pub fn set_user_prompt(&mut self, prompt: UserPrompt, asked_by: Option<u64>) {
-        self.pending_user_prompt_thread = asked_by.or(self.foreground_thread_id);
-        self.pending_user_prompt = Some(prompt);
+        let owner = asked_by.or(self.foreground_thread_id);
+        self.pending_user_prompts.push((owner, prompt));
     }
 
     /// The question to render in the chat stream: `Some` only while the
     /// thread that asked it is the one on screen.
     pub fn visible_user_prompt(&self) -> Option<UserPrompt> {
-        let prompt = self.pending_user_prompt.as_ref()?;
-        let owner = self.pending_user_prompt_thread;
-        (owner.is_none() || owner == self.foreground_thread_id).then(|| prompt.clone())
+        self.pending_user_prompts
+            .iter()
+            .find(|(owner, _)| owner.is_none() || *owner == self.foreground_thread_id)
+            .map(|(_, prompt)| prompt.clone())
     }
 
     /// Drop the pending question. Used when it is answered or dismissed, and
     /// when the gateway stops waiting for it (cancel, timeout, tool result).
     pub fn clear_user_prompt(&mut self) {
-        self.pending_user_prompt = None;
-        self.pending_user_prompt_thread = None;
+        self.pending_user_prompts.clear();
     }
 
     /// Drop the pending question if `id` identifies it. The prompt id is the
@@ -712,13 +721,7 @@ impl AppState {
     /// whether the wait ended in an answer, a cancel, or a timeout — is what
     /// retires a card the user never touched.
     pub fn clear_user_prompt_if(&mut self, id: &str) {
-        if self
-            .pending_user_prompt
-            .as_ref()
-            .is_some_and(|p| p.id == id)
-        {
-            self.clear_user_prompt();
-        }
+        self.pending_user_prompts.retain(|(_, p)| p.id != id);
     }
 
     /// Start a new assistant message (streaming).
@@ -781,9 +784,14 @@ impl AppState {
             self.in_flight.remove(&thread);
         }
         self.finish_current_message();
-        // Stop applies to a turn parked on a question too: the gateway drops
-        // the wait, so the card goes with it.
-        self.clear_user_prompt();
+        // Stop applies to a turn parked on a question too: the gateway
+        // drops the wait, so the card goes with it — but only the cards
+        // belonging to the turn being stopped. A question asked by a turn
+        // in another thread is still live, and wiping it would leave that
+        // turn waiting out its full window on an answer the user can no
+        // longer give.
+        self.pending_user_prompts
+            .retain(|(owner, _)| owner.is_some() && *owner != thread_id);
         thread_id
     }
 
@@ -1042,8 +1050,10 @@ impl AppState {
             && let Some(cached) = self.thread_messages.get(&id)
         {
             self.messages = cached.clone();
-            self.reset_streaming_indicators();
         }
+        // Derived, not cleared: the gateway can move the foreground onto a
+        // thread whose turn is still running, and the view must say so.
+        self.derive_view_indicators();
     }
 
     /// Replace a thread's messages with canonical history from the gateway.
@@ -1111,12 +1121,29 @@ impl AppState {
         // matched against this id, and the sidebar highlight moves at once.
         self.foreground_thread_id = Some(target_id);
 
-        // Reset ALL indicators so the foreground_request_in_flight() guard
-        // in hydrate_thread_messages / apply_thread_history won't block the
-        // authoritative history snapshot from the gateway. The streaming
-        // bubble from the previous view was already lost when we swapped
-        // self.messages above; the full text arrives via the snapshot.
-        self.is_processing = false;
+        // The indicators describe the view, so they are derived from what is
+        // actually running in the incoming thread — not blanket-cleared.
+        // Clearing unconditionally re-opened the composer and hid the
+        // working state of a conversation still mid-answer, which also made
+        // Stop unreachable for it; leaving them set would show a phantom
+        // spinner over an idle thread and block its history snapshot. The
+        // streaming bubble from the previous view was already lost when we
+        // swapped `self.messages` above; an in-flight thread's full text
+        // arrives via the completion snapshot.
+        self.derive_view_indicators();
+    }
+
+    /// Point the working indicators at the thread now in the foreground.
+    ///
+    /// `is_processing` doubles as the composer gate, and that is wanted: a
+    /// message sent into a thread whose turn is running would displace that
+    /// turn, so while one is running the way to intervene is Stop — which
+    /// this is what keeps reachable. Chunk/thinking arrivals re-arm the
+    /// finer-grained flags on their own.
+    fn derive_view_indicators(&mut self) {
+        self.is_processing = self
+            .foreground_thread_id
+            .is_some_and(|thread| self.in_flight.contains(&thread));
         self.is_streaming = false;
         self.is_thinking = false;
         self.streaming_chunks = 0;
@@ -1574,7 +1601,7 @@ mod tests {
             "another thread's question must not be on screen"
         );
         assert!(
-            s.pending_user_prompt.is_some(),
+            !s.pending_user_prompts.is_empty(),
             "switching away parks the question, it does not answer it"
         );
 
@@ -1603,7 +1630,7 @@ mod tests {
         s.clear_user_prompt();
 
         assert!(s.visible_user_prompt().is_none());
-        assert!(s.pending_user_prompt.is_none());
+        assert!(s.pending_user_prompts.is_empty());
     }
 
     /// The `ask_user` tool result means the gateway stopped waiting —
@@ -1616,11 +1643,10 @@ mod tests {
         s.set_user_prompt(question("call-1"), s.foreground_thread_id);
 
         s.clear_user_prompt_if("some-other-call");
-        assert!(s.pending_user_prompt.is_some());
+        assert!(!s.pending_user_prompts.is_empty());
 
         s.clear_user_prompt_if("call-1");
-        assert!(s.pending_user_prompt.is_none());
-        assert!(s.pending_user_prompt_thread.is_none());
+        assert!(s.pending_user_prompts.is_empty());
     }
 
     /// The gateway has the last word on which thread a turn is running in.
@@ -1752,6 +1778,93 @@ mod tests {
         );
     }
 
+    /// Two conversations' questions each render in their own thread.
+    ///
+    /// A second question used to overwrite the first, which was never shown
+    /// again — its five-minute wait expired on an answer the user was never
+    /// offered. Now each card waits with its thread, and answering one
+    /// retires only it.
+    #[test]
+    fn two_threads_questions_each_render_in_their_own() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call-1"), Some(1));
+        s.set_user_prompt(question("call-2"), Some(2));
+
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+        s.switch_thread(2);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-2")
+        );
+
+        // Answering thread 2's question leaves thread 1's waiting.
+        s.clear_user_prompt_if("call-2");
+        assert!(s.visible_user_prompt().is_none());
+        s.switch_thread(1);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+    }
+
+    /// Stop leaves another conversation's question alone.
+    ///
+    /// Questions are thread-scoped; Stop is too. Wiping the card
+    /// unconditionally left the asking turn waiting out its five-minute
+    /// window on an answer the user could no longer give.
+    #[test]
+    fn stop_leaves_another_threads_question_alone() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"), Some(1));
+
+        // The user switches to thread 2, starts a turn there, and stops it.
+        s.switch_thread(2);
+        s.mark_request_started();
+        s.stop_current_turn();
+
+        assert!(
+            !s.pending_user_prompts.is_empty(),
+            "thread 1's question is still waiting for its answer"
+        );
+
+        // Stopping thread 1 itself does retire its question.
+        s.switch_thread(1);
+        s.stop_current_turn();
+        assert!(s.pending_user_prompts.is_empty());
+    }
+
+    /// Returning to a conversation that is still answering shows it working.
+    ///
+    /// The indicators are derived from `in_flight` on every switch, in both
+    /// directions. Blanket-clearing re-opened the composer over a running
+    /// turn — a send there displaces the turn, so the honest offer is Stop,
+    /// and Stop is gated on the same flag. Leaving them set showed a phantom
+    /// spinner over idle threads.
+    #[test]
+    fn returning_to_a_busy_thread_restores_its_working_state() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        s.switch_thread(2);
+        assert!(!s.is_processing, "thread 2 has no turn running");
+
+        s.switch_thread(1);
+        assert!(
+            s.is_processing,
+            "thread 1 is still answering; the working state and Stop come back"
+        );
+
+        s.response_done(Some(1));
+        assert!(!s.is_processing);
+    }
+
     /// Stop names the turn it is stopping.
     ///
     /// The id was read *after* `finish_current_message` had already cleared
@@ -1772,7 +1885,7 @@ mod tests {
         assert!(!s.is_processing);
         assert!(!s.in_flight.contains(&4));
         assert!(
-            s.pending_user_prompt.is_none(),
+            s.pending_user_prompts.is_empty(),
             "a turn parked on a question loses the card with it"
         );
     }

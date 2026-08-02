@@ -483,6 +483,10 @@ pub(crate) async fn dispatch_text_message(
             send_frame(writer, &error_frame)
                 .await
                 .context("Failed to send error frame")?;
+            // The turn ends here, and its ending must say so: the sink
+            // stamps the thread onto this close-out, and without one the
+            // clients keep the thread marked in-flight forever.
+            protocol::server::send_response_done(writer, false, None).await?;
             return Ok(());
         }
     };

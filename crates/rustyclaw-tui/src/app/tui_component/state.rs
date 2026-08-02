@@ -128,6 +128,15 @@ pub(super) struct Ui {
     /// is actually running, coming back to a conversation that is still
     /// answering showed no indicator and Esc did nothing.
     pub in_flight: State<std::collections::HashSet<u64>>,
+    /// Requests waiting for a dialog that is already occupied, oldest first.
+    ///
+    /// Turns run per thread, so two of them can ask at once. A second
+    /// request used to overwrite the dialog's signals — the first was never
+    /// shown again, and its timeout was read as a denial of a tool the user
+    /// never saw. Each queue drains into its dialog as the dialog frees up.
+    pub queued_tool_approvals: State<Vec<(String, String, String)>>,
+    pub queued_user_prompts: State<Vec<rustyclaw_core::user_prompt_types::UserPrompt>>,
+    pub queued_credentials: State<Vec<(String, String, String, String)>>,
     pub command_completions: State<Vec<String>>,
     pub command_selected: State<Option<usize>>,
     pub model_completion_provider: State<Option<String>>,

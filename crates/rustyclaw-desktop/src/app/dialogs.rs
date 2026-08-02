@@ -344,7 +344,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     selected_allow: true,
                 },
                 on_approve: move |id: String| {
-                    state.write().pending_tool_approval = None;
+                    state.write().pending_tool_approvals.pop_front();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -353,7 +353,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_deny: move |id: String| {
-                    state.write().pending_tool_approval = None;
+                    state.write().pending_tool_approvals.pop_front();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -395,7 +395,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     input_len: 0,
                 },
                 on_submit: move |(id, value): (String, String)| {
-                    state.write().pending_credential_request = None;
+                    state.write().pending_credential_requests.pop_front();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -408,7 +408,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_dismiss: move |id: String| {
-                    state.write().pending_credential_request = None;
+                    state.write().pending_credential_requests.pop_front();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -458,9 +458,15 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         .write()
                         .push_notice(MessageRole::Info, "Device flow cancelled.");
                     let gw = gateway.read().clone();
+                    // The device flow polls inside the foreground thread's
+                    // turn, and an unnamed Cancel is honoured only while
+                    // exactly one turn runs — with a second conversation
+                    // busy, dismissing the dialog would stop nothing and
+                    // the poll would run until the code expired.
+                    let thread_id = state.read().foreground_thread_id;
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::Cancel { thread_id: None }).await;
+                            let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
                         });
                     }
                 },
