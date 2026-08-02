@@ -14,10 +14,7 @@ use rustyclaw_core::gateway::{
 };
 use rustyclaw_core::threads::ThreadId;
 
-use crate::thread_updates::{
-    send_thread_messages_update, send_thread_messages_update_shared, send_threads_update,
-    send_threads_update_shared,
-};
+use crate::thread_updates::{send_thread_messages_update_shared, send_threads_update_shared};
 use crate::{SharedModelCtx, SharedTaskManager, providers};
 
 /// Handle a `TasksRequest`: send the current task list.
@@ -57,19 +54,24 @@ pub(crate) async fn handle_tasks_request(
 /// Handle a `ThreadCreate`: create a new thread and broadcast the new list.
 pub(crate) async fn handle_thread_create(
     writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
     project_id: rustyclaw_core::projects::ProjectId,
     label: String,
 ) -> Result<()> {
-    let label = if label.is_empty() {
-        format!("Session #{}", thread_mgr.list().len() + 1)
-    } else {
-        label
+    let (thread_id, label) = {
+        let mut tm = thread_mgr.lock().await;
+        let label = if label.is_empty() {
+            format!("Session #{}", tm.list().len() + 1)
+        } else {
+            label
+        };
+        debug!("Thread create request: {} (project {})", label, project_id);
+        let thread_id = tm.create_chat_in(project_id, &label);
+        crate::helpers::persist_threads(&tm, threads_path);
+        (thread_id, label)
     };
-    debug!("Thread create request: {} (project {})", label, project_id);
-    let thread_id = thread_mgr.create_chat_in(project_id, &label);
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThreadCreated,
         payload: ServerPayload::ThreadCreated {
@@ -79,9 +81,7 @@ pub(crate) async fn handle_thread_create(
     };
     send_frame(writer, &frame).await?;
     // Send updated thread list
-    send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-    // Persist thread state
-    crate::helpers::persist_threads(thread_mgr, threads_path);
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
     Ok(())
 }
 
@@ -121,7 +121,7 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        send_threads_update(writer, &*thread_mgr.lock().await, task_mgr, None).await?;
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
         let frame = ServerFrame {
             frame_type: ServerFrameType::ThreadMessages,
             payload: ServerPayload::ThreadMessages {
@@ -221,14 +221,14 @@ pub(crate) async fn handle_thread_switch(
 /// Handle a `ThreadList`: broadcast the thread list and foreground history.
 pub(crate) async fn handle_thread_list(
     writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     task_mgr: &SharedTaskManager,
 ) -> Result<()> {
     debug!("Thread list request");
-    send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-    let fg_id = thread_mgr.foreground().map(|t| t.id);
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
+    let fg_id = thread_mgr.lock().await.foreground().map(|t| t.id);
     if let Some(id) = fg_id {
-        send_thread_messages_update(writer, id, thread_mgr).await?;
+        send_thread_messages_update_shared(writer, id, thread_mgr).await?;
     }
     Ok(())
 }
@@ -236,12 +236,13 @@ pub(crate) async fn handle_thread_list(
 /// Handle a `ThreadHistoryRequest`: reply with one thread's full message log.
 pub(crate) async fn handle_thread_history(
     writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     thread_id: u64,
 ) -> Result<()> {
     debug!("Thread history request: {}", thread_id);
     let target_id = ThreadId(thread_id);
-    let (ok, messages, error) = match thread_mgr.get(target_id) {
+    let tm = thread_mgr.lock().await;
+    let (ok, messages, error) = match tm.get(target_id) {
         Some(thread) => {
             let wire: Vec<ChatMessage> = thread
                 .messages
@@ -276,6 +277,7 @@ pub(crate) async fn handle_thread_history(
             Some(format!("Thread {} not found", thread_id)),
         ),
     };
+    drop(tm);
     let frame = ServerFrame {
         frame_type: ServerFrameType::ThreadHistoryReply,
         payload: ServerPayload::ThreadHistoryReply {
@@ -292,24 +294,28 @@ pub(crate) async fn handle_thread_history(
 /// Handle a `ThreadClose`: remove a thread and broadcast the new list.
 pub(crate) async fn handle_thread_close(
     writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
     thread_id: u64,
 ) -> Result<()> {
     debug!("Thread close request: {}", thread_id);
     let task_id = ThreadId(thread_id);
-    thread_mgr.remove(task_id);
+    let foreground = {
+        let mut tm = thread_mgr.lock().await;
+        tm.remove(task_id);
+        // Persist thread state
+        crate::helpers::persist_threads(&tm, threads_path);
+        tm.foreground().map(|t| t.id)
+    };
     // Send updated thread list
-    send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
     // Closing the foreground thread hands the foreground to another one, so
     // follow up with that thread's history — otherwise the client's sidebar
     // highlight moves while its transcript still shows the closed thread.
-    if let Some(fg) = thread_mgr.foreground().map(|t| t.id) {
-        send_thread_messages_update(writer, fg, thread_mgr).await?;
+    if let Some(fg) = foreground {
+        send_thread_messages_update_shared(writer, fg, thread_mgr).await?;
     }
-    // Persist thread state
-    crate::helpers::persist_threads(thread_mgr, threads_path);
     Ok(())
 }
 
@@ -324,7 +330,7 @@ pub(crate) async fn handle_thread_close(
 pub(crate) async fn handle_thread_update(
     writer: &mut dyn transport::TransportWriter,
     config: &mut rustyclaw_core::config::Config,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     project_mgr: &rustyclaw_core::projects::ProjectManager,
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
@@ -340,7 +346,7 @@ pub(crate) async fn handle_thread_update(
     );
     let id = ThreadId(thread_id);
 
-    if thread_mgr.get(id).is_none() {
+    if thread_mgr.lock().await.get(id).is_none() {
         return send_error(writer, format!("Cannot edit thread {thread_id}: not found")).await;
     }
 
@@ -365,17 +371,20 @@ pub(crate) async fn handle_thread_update(
         None => None,
     };
 
-    thread_mgr.rename(id, &label);
-    thread_mgr.set_working_dir(id, working_dir);
-    crate::helpers::persist_threads(thread_mgr, threads_path);
+    {
+        let mut tm = thread_mgr.lock().await;
+        tm.rename(id, &label);
+        tm.set_working_dir(id, working_dir);
+        crate::helpers::persist_threads(&tm, threads_path);
 
-    // Editing the foreground thread's directory has to take effect right away,
-    // otherwise the next tool call still runs in the old one.
-    if thread_mgr.foreground_id() == Some(id) {
-        crate::project_handler::repoint_workspace(config, project_mgr, thread_mgr);
+        // Editing the foreground thread's directory has to take effect right
+        // away, otherwise the next tool call still runs in the old one.
+        if tm.foreground_id() == Some(id) {
+            crate::project_handler::repoint_workspace(config, project_mgr, &tm);
+        }
     }
 
-    send_threads_update(writer, thread_mgr, task_mgr, None).await
+    send_threads_update_shared(writer, thread_mgr, task_mgr, None).await
 }
 
 /// Send an `Error` frame. Edits fail loudly: the client shows the reason
@@ -391,7 +400,7 @@ async fn send_error(writer: &mut dyn transport::TransportWriter, message: String
 /// Handle a `ThreadRename`: relabel a thread and broadcast the new list.
 pub(crate) async fn handle_thread_rename(
     writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     task_mgr: &SharedTaskManager,
     threads_path: &std::path::Path,
     thread_id: u64,
@@ -399,11 +408,18 @@ pub(crate) async fn handle_thread_rename(
 ) -> Result<()> {
     debug!("Thread rename request: {} -> {}", thread_id, new_label);
     let task_id = ThreadId(thread_id);
-    if thread_mgr.rename(task_id, &new_label) {
+    let renamed = {
+        let mut tm = thread_mgr.lock().await;
+        let renamed = tm.rename(task_id, &new_label);
+        if renamed {
+            // Persist thread state
+            crate::helpers::persist_threads(&tm, threads_path);
+        }
+        renamed
+    };
+    if renamed {
         // Send updated thread list
-        send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-        // Persist thread state
-        crate::helpers::persist_threads(thread_mgr, threads_path);
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -457,7 +473,9 @@ mod tests {
     }
 
     /// Fixture: one project with one foreground thread in it.
-    fn fixture(tmp: &std::path::Path) -> (Config, ProjectManager, ThreadManager, ThreadId) {
+    fn fixture(
+        tmp: &std::path::Path,
+    ) -> (Config, ProjectManager, crate::SharedThreadMgr, ThreadId) {
         let config = Config {
             settings_dir: tmp.join("state"),
             ..Config::default()
@@ -471,13 +489,13 @@ mod tests {
         let id = threads.create_chat("Original");
         threads.set_project(id, api);
 
-        (config, projects, threads, id)
+        (config, projects, Arc::new(Mutex::new(threads)), id)
     }
 
     #[tokio::test]
     async fn thread_update_sets_the_caption_and_override_and_repoints() {
         let tmp = tempfile::tempdir().unwrap();
-        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let (mut config, projects, threads, id) = fixture(tmp.path());
         let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let threads_path = tmp.path().join("threads.json");
         let override_dir = tmp.path().join("worktree");
@@ -486,7 +504,7 @@ mod tests {
         handle_thread_update(
             &mut writer,
             &mut config,
-            &mut threads,
+            &threads,
             &projects,
             &task_mgr,
             &threads_path,
@@ -498,9 +516,13 @@ mod tests {
         .unwrap();
 
         assert!(writer.errors().is_empty(), "{:?}", writer.errors());
-        assert_eq!(threads.get(id).unwrap().label, "Renamed", "caption trimmed");
         assert_eq!(
-            threads.get(id).unwrap().working_dir,
+            threads.lock().await.get(id).unwrap().label,
+            "Renamed",
+            "caption trimmed"
+        );
+        assert_eq!(
+            threads.lock().await.get(id).unwrap().working_dir,
             Some(override_dir.clone())
         );
         assert!(override_dir.is_dir(), "the override directory is created");
@@ -512,7 +534,7 @@ mod tests {
         handle_thread_update(
             &mut writer,
             &mut config,
-            &mut threads,
+            &threads,
             &projects,
             &task_mgr,
             &threads_path,
@@ -522,7 +544,7 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(threads.get(id).unwrap().working_dir, None);
+        assert_eq!(threads.lock().await.get(id).unwrap().working_dir, None);
         assert_eq!(config.workspace_dir(), tmp.path().join("api"));
     }
 
@@ -530,7 +552,7 @@ mod tests {
     #[tokio::test]
     async fn blank_override_means_inherit() {
         let tmp = tempfile::tempdir().unwrap();
-        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let (mut config, projects, threads, id) = fixture(tmp.path());
         let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let threads_path = tmp.path().join("threads.json");
         let mut writer = CapturingWriter { frames: Vec::new() };
@@ -538,7 +560,7 @@ mod tests {
         handle_thread_update(
             &mut writer,
             &mut config,
-            &mut threads,
+            &threads,
             &projects,
             &task_mgr,
             &threads_path,
@@ -550,7 +572,7 @@ mod tests {
         .unwrap();
 
         assert!(writer.errors().is_empty());
-        assert_eq!(threads.get(id).unwrap().working_dir, None);
+        assert_eq!(threads.lock().await.get(id).unwrap().working_dir, None);
     }
 
     /// A path that isn't valid UTF-8 is refused at the edit, naming the path,
@@ -563,7 +585,7 @@ mod tests {
         use std::os::unix::ffi::OsStrExt;
 
         let tmp = tempfile::tempdir().unwrap();
-        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let (mut config, projects, threads, id) = fixture(tmp.path());
         let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let threads_path = tmp.path().join("threads.json");
         let mut writer = CapturingWriter { frames: Vec::new() };
@@ -572,7 +594,7 @@ mod tests {
         handle_thread_update(
             &mut writer,
             &mut config,
-            &mut threads,
+            &threads,
             &projects,
             &task_mgr,
             &threads_path,
@@ -590,7 +612,7 @@ mod tests {
             writer.errors()
         );
         assert_eq!(
-            threads.get(id).unwrap().working_dir,
+            threads.lock().await.get(id).unwrap().working_dir,
             None,
             "a refused path is not stored"
         );
@@ -601,7 +623,7 @@ mod tests {
     #[tokio::test]
     async fn invalid_edits_send_error_frames() {
         let tmp = tempfile::tempdir().unwrap();
-        let (mut config, projects, mut threads, id) = fixture(tmp.path());
+        let (mut config, projects, threads, id) = fixture(tmp.path());
         let task_mgr = std::sync::Arc::new(rustyclaw_core::tasks::TaskManager::new());
         let threads_path = tmp.path().join("threads.json");
 
@@ -609,7 +631,7 @@ mod tests {
         handle_thread_update(
             &mut writer,
             &mut config,
-            &mut threads,
+            &threads,
             &projects,
             &task_mgr,
             &threads_path,
@@ -630,7 +652,7 @@ mod tests {
         handle_thread_update(
             &mut writer,
             &mut config,
-            &mut threads,
+            &threads,
             &projects,
             &task_mgr,
             &threads_path,
@@ -643,7 +665,7 @@ mod tests {
         assert_eq!(writer.errors().len(), 1);
         assert!(writer.errors()[0].contains("cannot be empty"));
         assert_eq!(
-            threads.get(id).unwrap().label,
+            threads.lock().await.get(id).unwrap().label,
             "Original",
             "a rejected edit changes nothing"
         );

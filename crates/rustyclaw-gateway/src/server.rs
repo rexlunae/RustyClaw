@@ -22,7 +22,7 @@ use rustyclaw_core::providers as crate_providers;
 use protocol::server::send_frame;
 
 use crate::thread_updates::{
-    send_projects_update, send_thread_messages_update, send_threads_update,
+    send_projects_update, send_thread_messages_update_shared, send_threads_update_shared,
 };
 use crate::{
     SharedConfig, SharedCopilotSession, SharedModelCtx, SharedModelRegistry, SharedObserver,
@@ -414,13 +414,8 @@ pub(crate) async fn handle_connection(
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
-    if let Err(e) = send_threads_update(
-        &mut *writer,
-        &*agent_session.thread_mgr.lock().await,
-        &task_mgr,
-        None,
-    )
-    .await
+    if let Err(e) =
+        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await
     {
         warn!(error = %e, "Failed to send initial thread list");
     }
@@ -658,18 +653,14 @@ pub(crate) async fn handle_connection(
                                         },
                                     )
                                     .await?;
-                                    send_threads_update(
+                                    send_threads_update_shared(
                                         &mut *writer,
-                                        &*agent_session.thread_mgr.lock().await,
+                                        &agent_session.thread_mgr,
                                         &task_mgr,
                                         None,
                                     )
                                     .await?;
-                                    send_thread_messages_update(
-                                        &mut *writer,
-                                        better,
-                                        &*agent_session.thread_mgr.lock().await,
-                                    )
+                                    send_thread_messages_update_shared(&mut *writer, better, &agent_session.thread_mgr)
                                     .await?;
                                 }
                                 // A message needs a thread to live in. If
@@ -797,7 +788,7 @@ pub(crate) async fn handle_connection(
                                         &mut *writer,
                                         &mut config,
                                         &mut agent_session.project_mgr,
-                                        &*agent_session.thread_mgr.lock().await,
+                                        &agent_session.thread_mgr,
                                         &agent_session.projects_path,
                                         pid,
                                     )
@@ -805,7 +796,7 @@ pub(crate) async fn handle_connection(
                                 }
                                 thread_handler::handle_thread_create(
                                     &mut *writer,
-                                    &mut *agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     pid,
@@ -838,7 +829,7 @@ pub(crate) async fn handle_connection(
                                             &mut *writer,
                                             &mut config,
                                             &mut agent_session.project_mgr,
-                                            &*agent_session.thread_mgr.lock().await,
+                                            &agent_session.thread_mgr,
                                             &agent_session.projects_path,
                                             pid,
                                         )
@@ -853,15 +844,15 @@ pub(crate) async fn handle_connection(
                                 }
                             }
                             ClientPayload::ThreadList => {
-                                thread_handler::handle_thread_list(&mut *writer, &mut *agent_session.thread_mgr.lock().await, &task_mgr).await?;
+                                thread_handler::handle_thread_list(&mut *writer, &agent_session.thread_mgr, &task_mgr).await?;
                             }
                             ClientPayload::ThreadHistoryRequest { thread_id } => {
-                                thread_handler::handle_thread_history(&mut *writer, &*agent_session.thread_mgr.lock().await, thread_id).await?;
+                                thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 thread_handler::handle_thread_close(
                                     &mut *writer,
-                                    &mut *agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     thread_id,
@@ -871,7 +862,7 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadRename { thread_id, new_label } => {
                                 thread_handler::handle_thread_rename(
                                     &mut *writer,
-                                    &mut *agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     thread_id,
@@ -883,7 +874,7 @@ pub(crate) async fn handle_connection(
                                 thread_handler::handle_thread_update(
                                     &mut *writer,
                                     &mut config,
-                                    &mut *agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &agent_session.project_mgr,
                                     &task_mgr,
                                     &agent_session.threads_path,
@@ -937,7 +928,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &*agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     name,
                                     path,
@@ -959,7 +950,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &*agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
                                     name,
@@ -983,20 +974,20 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &*agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
                                 )
                                 .await?;
                                 crate::helpers::persist_threads(&*agent_session.thread_mgr.lock().await, &agent_session.threads_path);
-                                send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
+                                send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                             }
                             ClientPayload::ProjectSwitch { project_id } => {
                                 project_handler::handle_project_switch(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &*agent_session.thread_mgr.lock().await,
+                                    &agent_session.thread_mgr,
                                     &agent_session.projects_path,
                                     project_id,
                                 )
@@ -1153,11 +1144,11 @@ pub(crate) async fn handle_connection(
                                 if let Some(thread) = agent_session.thread_mgr.lock().await.get_mut(thread_id) {
                                     thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
                                 }
-                                send_thread_messages_update(&mut *writer, thread_id, &*agent_session.thread_mgr.lock().await).await?;
+                                send_thread_messages_update_shared(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
                             }
 
                             // Send updated thread list (status may have changed)
-                            send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
+                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
 
                             // Persist thread state
                             crate::helpers::persist_threads(&*agent_session.thread_mgr.lock().await, &agent_session.threads_path);
@@ -1183,7 +1174,7 @@ pub(crate) async fn handle_connection(
                             send_frame(&mut *writer, &error_frame).await?;
 
                             // Send updated thread list
-                            send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
+                            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
 
                             if last_turn_drained {
                                 break;
@@ -1197,7 +1188,7 @@ pub(crate) async fn handle_connection(
                 if let Ok(event) = thread_event {
                     // Only send updates for events that affect sidebar display
                     if event.triggers_sidebar_update() {
-                        send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
+                        send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                     }
                 }
             }

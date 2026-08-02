@@ -21,7 +21,7 @@ use rustyclaw_core::projects::ProjectManager;
 use rustyclaw_core::threads::ThreadManager;
 
 use crate::project_handler;
-use crate::thread_updates::{send_projects_update, send_threads_update};
+use crate::thread_updates::{send_projects_update, send_threads_update_shared};
 use crate::{SharedTaskManager, SharedThreadMgr};
 
 /// Everything about the connection that is scoped to one agent. Swapped
@@ -164,12 +164,12 @@ pub(crate) async fn handle_agent_switch(
         writer,
         config,
         &mut session.project_mgr,
-        &*session.thread_mgr.lock().await,
+        &session.thread_mgr,
         &session.projects_path,
         active_project,
     )
     .await?;
-    send_threads_update(writer, &*session.thread_mgr.lock().await, task_mgr, None).await?;
+    send_threads_update_shared(writer, &session.thread_mgr, task_mgr, None).await?;
     send_projects_update(writer, &session.project_mgr).await?;
 
     Ok(true)
