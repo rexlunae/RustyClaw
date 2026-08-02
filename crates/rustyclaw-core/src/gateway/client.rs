@@ -171,10 +171,31 @@ impl GatewayClient {
             // Streaming stats for the event log.
             let mut stream_chunk_count: u32 = 0;
             let mut stream_total_bytes: usize = 0;
+            // Turn streams whose close-out has already been forwarded.
+            // Stream ids are never reused (the sender allocates a fresh
+            // one per Chat), so anything arriving on one of these is a
+            // displaced turn's leftover output, drained from the
+            // gateway's channel after the abort. By then the thread
+            // mapping is gone, and an unattributed frame renders into
+            // whatever conversation the user is looking at.
+            let mut closed_streams: std::collections::HashSet<u64> =
+                std::collections::HashSet::new();
 
             loop {
                 match reader.recv_wire().await {
                     Ok(Some(envelope)) => {
+                        if closed_streams.contains(&envelope.stream_id) {
+                            event_log_rx.log_frame(
+                                Direction::Received,
+                                &format!(
+                                    "{:?} (dropped: stream closed)",
+                                    envelope.frame.frame_type
+                                ),
+                                envelope.stream_id,
+                                0,
+                            );
+                            continue;
+                        }
                         let len = 0; // wire already consumed, len not available here
                         let frame_type_name = format!("{:?}", envelope.frame.frame_type);
                         event_log_rx.log_frame(
@@ -249,11 +270,20 @@ impl GatewayClient {
                         }
                         // Released only after its close-out has been stamped,
                         // so the frame that ends the turn still names it.
-                        if closing {
-                            stream_threads_rx
+                        // A stream the map was tracking is a turn's, and a
+                        // turn's stream carries nothing after its close-out
+                        // — so it is closed for good, and later arrivals
+                        // are dropped above. Streams the map never knew
+                        // (an old gateway that attributes nothing) keep
+                        // the old behaviour.
+                        if closing
+                            && stream_threads_rx
                                 .lock()
                                 .expect("stream thread map poisoned")
-                                .remove(&stream_id);
+                                .remove(&stream_id)
+                                .is_some()
+                        {
+                            closed_streams.insert(stream_id);
                         }
                     }
                     Ok(None) => {
