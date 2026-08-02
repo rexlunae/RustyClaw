@@ -821,9 +821,17 @@ pub(crate) async fn handle_connection(
                                 // when it has one, else its project's directory.
                                 // Threads in the active project still need this —
                                 // an override differs from the project dir.
-                                if let Some(pid) =
-                                    agent_session.thread_mgr.lock().await.foreground().map(|t| t.project_id)
-                                {
+                                // Bound to a local first: a guard produced in
+                                // the scrutinee of an `if let` lives for the
+                                // whole success block, and both arms below
+                                // take this lock again. `tokio::sync::Mutex`
+                                // is not reentrant, so that is a hang, not a
+                                // slow path.
+                                let foreground_project = {
+                                    let tm = agent_session.thread_mgr.lock().await;
+                                    tm.foreground().map(|t| t.project_id)
+                                };
+                                if let Some(pid) = foreground_project {
                                     if pid != agent_session.project_mgr.active_id() {
                                         project_handler::activate_project(
                                             &mut *writer,
@@ -1141,8 +1149,11 @@ pub(crate) async fn handle_connection(
 
                             // Record assistant response in thread history if provided
                             if let Some(text) = response {
-                                if let Some(thread) = agent_session.thread_mgr.lock().await.get_mut(thread_id) {
-                                    thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
+                                {
+                                    let mut tm = agent_session.thread_mgr.lock().await;
+                                    if let Some(thread) = tm.get_mut(thread_id) {
+                                        thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
+                                    }
                                 }
                                 send_thread_messages_update_shared(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
                             }
@@ -1543,6 +1554,100 @@ mod tests {
             )
         });
         assert!(delete_refused, "Expected error deleting the active agent");
+
+        Ok(())
+    }
+
+    /// Switching threads must not wedge the connection.
+    ///
+    /// The follow-up that repoints the workspace reads the new foreground
+    /// thread and then, in both branches, touches the thread manager again.
+    /// Taking the lock in the `if let` scrutinee kept its guard alive across
+    /// the whole block, and `tokio::sync::Mutex` is not reentrant — so the
+    /// first thread switch a user made hung the connection loop for good,
+    /// taking any running turn with it. This drives a real `ThreadSwitch`
+    /// through `handle_transport_connection` and fails on its timeout if
+    /// that ever comes back.
+    #[tokio::test]
+    async fn switching_threads_does_not_wedge_the_connection() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+
+        // Seed a thread so the switch has somewhere to land — the deadlock
+        // needed a foreground thread to exist afterwards.
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+        let target = {
+            let mut manager = rustyclaw_core::threads::ThreadManager::new();
+            let id = manager.create_chat("seeded");
+            manager.save_to_file(&threads_path)?;
+            id
+        };
+
+        let switch = ClientFrame {
+            frame_type: ClientFrameType::ThreadSwitch,
+            payload: ClientPayload::ThreadSwitch {
+                thread_id: target.0,
+            },
+        };
+        // A follow-up frame proves the loop kept serving after the switch.
+        let list = ClientFrame {
+            frame_type: ClientFrameType::ThreadList,
+            payload: ClientPayload::ThreadList,
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) =
+            MockTransport::with_frames(peer, vec![Some(switch), Some(list), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(20),
+            handle_transport_connection(
+                Box::new(mock_transport),
+                Arc::new(RwLock::new(cfg)),
+                Arc::new(RwLock::new(None)),
+                Arc::new(RwLock::new(None)),
+                vault,
+                skill_mgr,
+                task_mgr,
+                model_registry,
+                None,
+                auth::new_rate_limiter(),
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("a thread switch must not deadlock the connection loop")?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames
+                .iter()
+                .any(|f| matches!(f.frame_type, ServerFrameType::ThreadSwitched)),
+            "Expected the switch to be acknowledged"
+        );
+        assert!(
+            frames
+                .iter()
+                .filter(|f| matches!(f.frame_type, ServerFrameType::ThreadsUpdate))
+                .count()
+                >= 2,
+            "Expected the loop to still answer the frame after the switch"
+        );
 
         Ok(())
     }

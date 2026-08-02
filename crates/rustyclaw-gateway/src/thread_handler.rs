@@ -167,7 +167,11 @@ pub(crate) async fn handle_thread_switch(
 
             match providers::call_with_tools(http, &summary_req, None).await {
                 Ok(resp) if !resp.text.is_empty() => {
-                    if let Some(thread) = thread_mgr.lock().await.get_mut(fg_id) {
+                    // Scoped explicitly: a guard taken in an `if let`
+                    // scrutinee outlives the block, and this mutex is not
+                    // reentrant.
+                    let mut tm = thread_mgr.lock().await;
+                    if let Some(thread) = tm.get_mut(fg_id) {
                         thread.apply_compaction(resp.text);
                         debug!(thread = %label, "Thread compacted");
                     }
