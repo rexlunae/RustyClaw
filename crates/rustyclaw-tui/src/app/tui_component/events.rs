@@ -118,6 +118,14 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     let mut credential_request_secret_name = ui.credential_request_secret_name;
     let mut credential_request_message = ui.credential_request_message;
     let mut credential_request_input = ui.credential_request_input;
+    let mut show_device_flow = ui.show_device_flow;
+    let mut queued_device_flows = ui.queued_device_flows;
+    let mut device_flow_thread = ui.device_flow_thread;
+    let mut device_flow_provider = ui.device_flow_provider;
+    let mut device_flow_url = ui.device_flow_url;
+    let mut device_flow_code = ui.device_flow_code;
+    let mut device_flow_tick = ui.device_flow_tick;
+    let mut device_flow_browser_opened = ui.device_flow_browser_opened;
 
     if !show_tool_approval.get() {
         let mut queue = queued_tool_approvals.read().clone();
@@ -185,6 +193,24 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
             credential_request_message.set(message);
             credential_request_input.set(String::new());
             show_credential_request.set(true);
+        }
+    }
+    if !show_device_flow.get() {
+        let mut queue = queued_device_flows.read().clone();
+        if !queue.is_empty() {
+            let (thread, provider, url, code) = queue.remove(0);
+            queued_device_flows.set(queue);
+            device_flow_thread.set(thread);
+            device_flow_provider.set(provider);
+            device_flow_url.set(url.clone());
+            device_flow_code.set(code);
+            device_flow_tick.set(0);
+            // Opened when the dialog surfaces, not when the request was
+            // queued — the user should meet the browser tab and the code
+            // together.
+            crate::components::device_flow_dialog::open_url_in_browser(&url);
+            device_flow_browser_opened.set(true);
+            show_device_flow.set(true);
         }
     }
 }
@@ -291,6 +317,8 @@ pub(super) fn apply_gw_event(
         mut queued_tool_approvals,
         mut queued_user_prompts,
         mut queued_credentials,
+        mut queued_device_flows,
+        mut device_flow_thread,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -374,6 +402,8 @@ pub(super) fn apply_gw_event(
             queued_tool_approvals.set(Vec::new());
             queued_user_prompts.set(Vec::new());
             queued_credentials.set(Vec::new());
+            queued_device_flows.set(Vec::new());
+            device_flow_thread.set(None);
             streaming.set(false);
             stream_start.set(None);
             elapsed.set(String::new());
@@ -547,14 +577,25 @@ pub(super) fn apply_gw_event(
                 let mut running = in_flight.read().clone();
                 running.remove(&thread);
                 in_flight.set(running);
-                // Credential requests the ended turn was waiting on can no
-                // longer be answered — a credential wait ending is what
-                // ends its turn, so this close-out is their retirement.
+                // Credential requests and sign-in flows the ended turn was
+                // waiting on can no longer be answered — their waits ending
+                // is what ends the turn, so this close-out retires them.
                 let mut queue = queued_credentials.read().clone();
                 let before = queue.len();
                 queue.retain(|(owner, ..)| *owner != Some(thread));
                 if queue.len() != before {
                     queued_credentials.set(queue);
+                }
+                let mut flows = queued_device_flows.read().clone();
+                let before = flows.len();
+                flows.retain(|(owner, ..)| *owner != Some(thread));
+                if flows.len() != before {
+                    queued_device_flows.set(flows);
+                }
+                if show_device_flow.get() && device_flow_thread.get() == Some(thread) {
+                    show_device_flow.set(false);
+                    device_flow_browser_opened.set(false);
+                    device_flow_thread.set(None);
                 }
             }
             // Only the turn on screen can end what is on screen. A close-out
@@ -771,6 +812,23 @@ pub(super) fn apply_gw_event(
             }
             if show_tool_approval.get() && *tool_approval_id.read() == id {
                 show_tool_approval.set(false);
+            }
+            // Same contract for `ask_user`: the prompt id is its tool-call
+            // id, and this result arrives whether the user answered, Stop
+            // was pressed, or the five-minute wait expired. A dead card
+            // left up would block every question queued behind it — and
+            // swallow the keyboard, since normal input is suppressed while
+            // a prompt is shown.
+            {
+                let mut queue = queued_user_prompts.read().clone();
+                let before = queue.len();
+                queue.retain(|prompt| prompt.id != id);
+                if queue.len() != before {
+                    queued_user_prompts.set(queue);
+                }
+            }
+            if show_user_prompt.get() && *user_prompt_id.read() == id {
+                show_user_prompt.set(false);
             }
             if !renders_here(thread_id, foreground_thread_id.get()) {
                 return;
@@ -1222,22 +1280,38 @@ pub(super) fn apply_gw_event(
             show_api_key_dialog.set(true);
         }
         GwEvent::DeviceFlowCode {
+            thread_id,
             provider,
             url,
             code,
         } => {
-            device_flow_provider.set(provider);
-            device_flow_url.set(url.clone());
-            device_flow_code.set(code);
-            device_flow_tick.set(0);
-            // Auto-open the verification URL in the browser
-            crate::components::device_flow_dialog::open_url_in_browser(&url);
-            device_flow_browser_opened.set(true);
-            show_device_flow.set(true);
+            // Queued like every other request two turns can raise at once:
+            // a second sign-in must not overwrite the first, whose code
+            // would never be shown while its flow waited out its window.
+            let mut queue = queued_device_flows.read().clone();
+            queue.push((thread_id, provider, url, code));
+            queued_device_flows.set(queue);
+            drain_queued_dialogs(&ui_for_drain);
         }
-        GwEvent::DeviceFlowDone => {
-            show_device_flow.set(false);
-            device_flow_browser_opened.set(false);
+        GwEvent::DeviceFlowDone(thread_id) => {
+            // Only this flow's completion takes the dialog down; another
+            // turn finishing its sign-in must not tear away a code the
+            // user is still typing. An unattributed completion is an older
+            // gateway, which can only have one flow.
+            let mine = thread_id.is_none() || device_flow_thread.get() == thread_id;
+            if mine && show_device_flow.get() {
+                show_device_flow.set(false);
+                device_flow_browser_opened.set(false);
+                device_flow_thread.set(None);
+            }
+            if let Some(thread) = thread_id {
+                let mut queue = queued_device_flows.read().clone();
+                let before = queue.len();
+                queue.retain(|(owner, ..)| *owner != Some(thread));
+                if queue.len() != before {
+                    queued_device_flows.set(queue);
+                }
+            }
         }
         GwEvent::DeviceFlowToken { provider, token } => {
             // Forward the obtained token to the tokio loop
