@@ -140,13 +140,19 @@ pub(crate) fn gateway_event_to_gw_event(
             message,
         },
         E::DeviceFlowStart { url, code, .. } => GwEvent::DeviceFlowCode {
-            thread_id,
+            owner: thread_id
+                .map(crate::app::DeviceFlowOwner::Turn)
+                .unwrap_or(crate::app::DeviceFlowOwner::Unattributed),
             // Provider context is shown via the preceding Info message.
             provider: String::new(),
             url,
             code,
         },
-        E::DeviceFlowComplete => GwEvent::DeviceFlowDone(thread_id),
+        E::DeviceFlowComplete => GwEvent::DeviceFlowDone(
+            thread_id
+                .map(crate::app::DeviceFlowOwner::Turn)
+                .unwrap_or(crate::app::DeviceFlowOwner::Unattributed),
+        ),
 
         // ── Threads ─────────────────────────────────────────────────────
         // The TUI tab bar renders id/label/is_foreground/message_count only,
@@ -647,6 +653,32 @@ mod tests {
                 assert_eq!(name, "read_file");
             }
             other => panic!("expected ToolCall, got {other:?}"),
+        }
+    }
+
+    /// A gateway flow's owner is its turn — or Unattributed from an old
+    /// gateway — never Local, which is reserved for flows this client
+    /// starts itself. Overloading one value for both is what let a local
+    /// sign-in finishing tear down a turn's dialog.
+    #[test]
+    fn gateway_device_flows_are_never_owned_by_the_client() {
+        fn complete() -> ServerFrame {
+            ServerFrame {
+                frame_type: ServerFrameType::DeviceFlowComplete,
+                payload: ServerPayload::DeviceFlowComplete,
+            }
+        }
+        match adapt_for(Some(5), complete()) {
+            Some(GwEvent::DeviceFlowDone(owner)) => {
+                assert_eq!(owner, crate::app::DeviceFlowOwner::Turn(5));
+            }
+            other => panic!("expected DeviceFlowDone, got {other:?}"),
+        }
+        match adapt(complete()) {
+            Some(GwEvent::DeviceFlowDone(owner)) => {
+                assert_eq!(owner, crate::app::DeviceFlowOwner::Unattributed);
+            }
+            other => panic!("expected DeviceFlowDone, got {other:?}"),
         }
     }
 

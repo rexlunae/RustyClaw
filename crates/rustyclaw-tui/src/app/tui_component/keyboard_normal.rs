@@ -124,7 +124,7 @@ pub(super) fn handle_normal_key(
         queued_user_prompts: _,
         queued_credentials: _,
         queued_device_flows: _,
-        device_flow_thread: _,
+        device_flow_owner: _,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,

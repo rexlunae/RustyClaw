@@ -10,7 +10,7 @@ use rustyclaw_view::tracing;
 
 use super::display_message_from_gateway;
 use super::state;
-use crate::app::{GwEvent, PanelKind, UserInput};
+use crate::app::{DeviceFlowOwner, GwEvent, PanelKind, UserInput};
 use crate::types::DisplayMessage;
 
 type UserTx = Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>>;
@@ -121,7 +121,7 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     let mut credential_request_thread = ui.credential_request_thread;
     let mut show_device_flow = ui.show_device_flow;
     let mut queued_device_flows = ui.queued_device_flows;
-    let mut device_flow_thread = ui.device_flow_thread;
+    let mut device_flow_owner = ui.device_flow_owner;
     let mut device_flow_provider = ui.device_flow_provider;
     let mut device_flow_url = ui.device_flow_url;
     let mut device_flow_code = ui.device_flow_code;
@@ -200,9 +200,9 @@ pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
     if !show_device_flow.get() {
         let mut queue = queued_device_flows.read().clone();
         if !queue.is_empty() {
-            let (thread, provider, url, code) = queue.remove(0);
+            let (owner, provider, url, code) = queue.remove(0);
             queued_device_flows.set(queue);
-            device_flow_thread.set(thread);
+            device_flow_owner.set(Some(owner));
             device_flow_provider.set(provider);
             device_flow_url.set(url.clone());
             device_flow_code.set(code);
@@ -321,7 +321,7 @@ pub(super) fn apply_gw_event(
         mut queued_user_prompts,
         mut queued_credentials,
         mut queued_device_flows,
-        mut device_flow_thread,
+        mut device_flow_owner,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -406,7 +406,7 @@ pub(super) fn apply_gw_event(
             queued_user_prompts.set(Vec::new());
             queued_credentials.set(Vec::new());
             queued_device_flows.set(Vec::new());
-            device_flow_thread.set(None);
+            device_flow_owner.set(None);
             // The requests already drained into dialogs died with their
             // turns too; a box left on screen would swallow keyboard input
             // for an answer that has nowhere to go.
@@ -433,7 +433,7 @@ pub(super) fn apply_gw_event(
             queued_user_prompts.set(Vec::new());
             queued_credentials.set(Vec::new());
             queued_device_flows.set(Vec::new());
-            device_flow_thread.set(None);
+            device_flow_owner.set(None);
             show_tool_approval.set(false);
             show_user_prompt.set(false);
             show_credential_request.set(false);
@@ -608,14 +608,16 @@ pub(super) fn apply_gw_event(
                 }
                 let mut flows = queued_device_flows.read().clone();
                 let before = flows.len();
-                flows.retain(|(owner, ..)| *owner != Some(thread));
+                flows.retain(|(owner, ..)| *owner != DeviceFlowOwner::Turn(thread));
                 if flows.len() != before {
                     queued_device_flows.set(flows);
                 }
-                if show_device_flow.get() && device_flow_thread.get() == Some(thread) {
+                if show_device_flow.get()
+                    && device_flow_owner.get() == Some(DeviceFlowOwner::Turn(thread))
+                {
                     show_device_flow.set(false);
                     device_flow_browser_opened.set(false);
-                    device_flow_thread.set(None);
+                    device_flow_owner.set(None);
                 }
                 // The displayed credential request left the queue when the
                 // dialog drained it, so the retain above cannot reach it —
@@ -1325,7 +1327,7 @@ pub(super) fn apply_gw_event(
             show_api_key_dialog.set(true);
         }
         GwEvent::DeviceFlowCode {
-            thread_id,
+            owner,
             provider,
             url,
             code,
@@ -1334,28 +1336,31 @@ pub(super) fn apply_gw_event(
             // a second sign-in must not overwrite the first, whose code
             // would never be shown while its flow waited out its window.
             let mut queue = queued_device_flows.read().clone();
-            queue.push((thread_id, provider, url, code));
+            queue.push((owner, provider, url, code));
             queued_device_flows.set(queue);
             drain_queued_dialogs(&ui_for_drain);
         }
-        GwEvent::DeviceFlowDone(thread_id) => {
+        GwEvent::DeviceFlowDone(owner) => {
             // Only this flow's completion takes the dialog down; another
-            // turn finishing its sign-in must not tear away a code the
-            // user is still typing. An unattributed completion is an older
-            // gateway, which can only have one flow.
-            let mine = thread_id.is_none() || device_flow_thread.get() == thread_id;
-            if mine && show_device_flow.get() {
+            // sign-in finishing — another turn's, or one this client
+            // started itself — must not tear away a code the user is
+            // still typing. Owners compare exactly: an old gateway's
+            // Unattributed flow was drained with that same owner, and a
+            // local flow with Local, so every completion finds precisely
+            // the flow it refers to.
+            if show_device_flow.get() && device_flow_owner.get() == Some(owner) {
                 show_device_flow.set(false);
                 device_flow_browser_opened.set(false);
-                device_flow_thread.set(None);
+                device_flow_owner.set(None);
             }
-            if let Some(thread) = thread_id {
-                let mut queue = queued_device_flows.read().clone();
-                let before = queue.len();
-                queue.retain(|(owner, ..)| *owner != Some(thread));
-                if queue.len() != before {
-                    queued_device_flows.set(queue);
-                }
+            // Whether displayed or still queued, the flow is over — a
+            // queued entry left behind would later drain into the dialog
+            // with a code that already expired.
+            let mut queue = queued_device_flows.read().clone();
+            let before = queue.len();
+            queue.retain(|(o, ..)| *o != owner);
+            if queue.len() != before {
+                queued_device_flows.set(queue);
             }
         }
         GwEvent::DeviceFlowToken { provider, token } => {
