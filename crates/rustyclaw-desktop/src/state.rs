@@ -610,6 +610,31 @@ impl AppState {
         self.streaming_thread_id.is_none() || self.streaming_thread_id == self.foreground_thread_id
     }
 
+    /// Take the gateway at its word about which thread the turn is running
+    /// in. The client's own guess at submit time can be wrong — no thread
+    /// was focused and the gateway elected one, or an older client let it
+    /// auto-switch — and the announcement on `StreamStart` is the first
+    /// point where the two can be reconciled. Everything downstream routes
+    /// off `streaming_thread_id`, so correcting it here corrects the whole
+    /// turn: chunks, tool calls, the question card, the completion.
+    pub fn adopt_stream_thread(&mut self, thread_id: Option<u64>) {
+        if let Some(id) = thread_id {
+            self.streaming_thread_id = Some(id);
+        }
+    }
+
+    /// Whether a turn-scoped frame announcing `thread_id` belongs to the
+    /// response this client is tracking. An unannounced thread (`None`) is
+    /// an older gateway and is trusted, as is a client that never settled
+    /// on one; a mismatch is another thread's turn and must not retire this
+    /// one's in-flight state.
+    pub fn frame_is_for_current_turn(&self, thread_id: Option<u64>) -> bool {
+        match (thread_id, self.streaming_thread_id) {
+            (Some(announced), Some(current)) => announced == current,
+            _ => true,
+        }
+    }
+
     /// Record a question from the agent, tagged with the thread whose turn
     /// asked it (the streaming thread, else whatever is in the foreground).
     pub fn set_user_prompt(&mut self, prompt: UserPrompt) {
@@ -1521,5 +1546,51 @@ mod tests {
         s.clear_user_prompt_if("call-1");
         assert!(s.pending_user_prompt.is_none());
         assert!(s.pending_user_prompt_thread.is_none());
+    }
+
+    /// The gateway has the last word on which thread a turn is running in.
+    ///
+    /// The client guesses at submit time from its own foreground, and that
+    /// guess can be wrong — nothing was focused and the gateway elected a
+    /// thread, or an older client let it auto-switch. `StreamStart` names
+    /// the real one, and everything downstream routes off it.
+    #[test]
+    fn the_announced_thread_corrects_the_clients_guess() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.mark_request_started();
+        assert_eq!(s.streaming_thread_id, None);
+
+        s.adopt_stream_thread(Some(7));
+        assert_eq!(s.streaming_thread_id, Some(7));
+
+        // An older gateway announces nothing; the guess stands.
+        s.adopt_stream_thread(None);
+        assert_eq!(s.streaming_thread_id, Some(7));
+    }
+
+    /// Only the turn being tracked can end it.
+    ///
+    /// A close-out for another thread — a message refused because its thread
+    /// had gone, a turn from another client on the same agent — used to be
+    /// indistinguishable from this turn's own, and retiring on it took the
+    /// Stop button and the working indicator away while the model was still
+    /// running.
+    #[test]
+    fn a_close_out_for_another_thread_leaves_this_turn_running() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        assert!(!s.frame_is_for_current_turn(Some(2)));
+        assert!(s.frame_is_for_current_turn(Some(1)));
+        // Unannounced: an older gateway, and trusted as before.
+        assert!(s.frame_is_for_current_turn(None));
+
+        // What the ResponseDone handler does when it matches.
+        if s.frame_is_for_current_turn(Some(1)) {
+            s.response_done();
+        }
+        assert!(!s.is_processing);
     }
 }

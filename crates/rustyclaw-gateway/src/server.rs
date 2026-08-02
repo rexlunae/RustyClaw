@@ -626,7 +626,7 @@ pub(crate) async fn handle_connection(
                                 )
                                 .await?;
                             }
-                            ClientPayload::Chat { messages } => {
+                            ClientPayload::Chat { messages, thread_id } => {
                                 // A turn runs in its own task. The loop goes
                                 // straight back to serving frames, so thread
                                 // switches, history requests and project
@@ -687,7 +687,83 @@ pub(crate) async fn handle_connection(
                                     .await?;
                                     continue;
                                 }
-                                let auto_switch = {
+                                // The client names the thread it typed into,
+                                // and that name wins. The gateway's own
+                                // foreground is only a cache of what a client
+                                // last asked for, and it moves on its own
+                                // now: a `ThreadSwitch` served while the user
+                                // was still typing, an auto-switch from the
+                                // previous turn, another connection on the
+                                // same agent. Reading it at processing time
+                                // is exactly how a message lands in a
+                                // transcript the user was not looking at.
+                                //
+                                // `None` means the client has no opinion —
+                                // older clients, and the CLI — so the old
+                                // behaviour (elect, and auto-switch on a
+                                // label match) still applies there.
+                                let requested =
+                                    thread_id.map(rustyclaw_core::threads::ThreadId);
+                                if let Some(want) = requested {
+                                    // Adopt it as the foreground too: the
+                                    // rest of the turn's setup — workspace
+                                    // dir, model context, history — reads
+                                    // from there, and leaving the two
+                                    // disagreeing is the confusion this is
+                                    // meant to end.
+                                    let adopted = {
+                                        let mut tm = agent_session.thread_mgr.lock().await;
+                                        tm.switch_foreground(want)
+                                    };
+                                    if !adopted {
+                                        // The thread went away between the
+                                        // client composing and this frame
+                                        // arriving. Say so and drop the
+                                        // message: filing it under some other
+                                        // thread would put the user's words
+                                        // somewhere they never chose.
+                                        let mut scoped =
+                                            rustyclaw_core::gateway::ScopedTransportWriter::new(
+                                                &mut *writer,
+                                                stream_id,
+                                            );
+                                        protocol::server::send_error(
+                                            &mut scoped,
+                                            &format!(
+                                                "Thread {} no longer exists — \
+                                                 the message was not sent.",
+                                                want.0
+                                            ),
+                                        )
+                                        .await?;
+                                        // Correlated by thread id, so a
+                                        // client tracking several threads
+                                        // retires the right one.
+                                        protocol::server::send_response_done(
+                                            &mut scoped,
+                                            false,
+                                            Some(want.0),
+                                        )
+                                        .await?;
+                                        send_threads_update_shared(
+                                            &mut *writer,
+                                            &agent_session.thread_mgr,
+                                            &task_mgr,
+                                            None,
+                                        )
+                                        .await?;
+                                        continue;
+                                    }
+                                }
+                                let auto_switch = if requested.is_some() {
+                                    // Never second-guess an explicit thread.
+                                    // `find_best_match` moves the foreground
+                                    // whenever another thread's *label* shows
+                                    // up anywhere in the message text, which
+                                    // is a guess, and a guess must not
+                                    // override a statement.
+                                    None
+                                } else {
                                     let mut tm = agent_session.thread_mgr.lock().await;
                                     messages
                                         .iter()
@@ -732,8 +808,14 @@ pub(crate) async fn handle_connection(
                                 // sentinel for "nothing is focused", and a
                                 // frame carrying it tells the desktop to
                                 // clear the transcript.
-                                let turn_thread =
-                                    agent_session.thread_mgr.lock().await.ensure_foreground();
+                                let turn_thread = match requested {
+                                    Some(want) => Some(want),
+                                    None => agent_session
+                                        .thread_mgr
+                                        .lock()
+                                        .await
+                                        .ensure_foreground(),
+                                };
                                 // A key for tracking the turn even when
                                 // there is no thread at all to elect. It
                                 // never reaches the client.
@@ -1741,6 +1823,7 @@ mod tests {
             frame_type: ClientFrameType::Chat,
             payload: ClientPayload::Chat {
                 messages: vec![ChatMessage::text("user", "Hello?")],
+                thread_id: None,
             },
         };
 
@@ -1787,6 +1870,240 @@ mod tests {
                 .iter()
                 .any(|f| matches!(f.frame_type, ServerFrameType::Error)),
             "Expected chat request to be processed and produce an error frame when model context is missing"
+        );
+
+        Ok(())
+    }
+
+    /// Seed two chat threads and leave `first` in the foreground.
+    fn seed_two_threads(
+        cfg: &Config,
+        first: &str,
+        second: &str,
+    ) -> Result<(
+        rustyclaw_core::threads::ThreadId,
+        rustyclaw_core::threads::ThreadId,
+    )> {
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+        let a = manager.create_chat(first);
+        let b = manager.create_chat(second);
+        manager.switch_foreground(a);
+        manager.save_to_file(&threads_path)?;
+        Ok((a, b))
+    }
+
+    /// A message that names its thread stays in it.
+    ///
+    /// `find_best_match` moves the foreground whenever another thread's label
+    /// turns up anywhere in the message text — "how does the parser work?"
+    /// with a thread called "parser" is enough. That guess used to run on
+    /// every message, so a user talking *about* another thread had their
+    /// words filed in it. A client that names the thread it typed into has
+    /// stated the answer, and a guess must not overrule a statement.
+    #[tokio::test]
+    async fn a_named_thread_beats_the_auto_switch_guess() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let chat = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                // Mentions the other thread by name: bait for the guess.
+                messages: vec![ChatMessage::text("user", "remind me what beta was for")],
+                thread_id: Some(alpha.0),
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            !frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::ThreadSwitched { thread_id, .. } if *thread_id == beta.0
+            )),
+            "The named thread must not be second-guessed by a label match"
+        );
+        let last_foreground = frames
+            .iter()
+            .rev()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadsUpdate { foreground_id, .. } => Some(*foreground_id),
+                _ => None,
+            })
+            .expect("Expected at least one ThreadsUpdate");
+        assert_eq!(
+            last_foreground,
+            Some(alpha.0),
+            "The named thread should be the one in use"
+        );
+
+        Ok(())
+    }
+
+    /// With no thread named, the old behaviour is untouched.
+    ///
+    /// Clients that predate this — and the headless one-shot, which has no
+    /// thread of its own — send `None`, and the gateway still elects and
+    /// auto-switches for them.
+    #[tokio::test]
+    async fn an_unnamed_thread_still_auto_switches() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (_alpha, beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let chat = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", "remind me what beta was for")],
+                thread_id: None,
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::ThreadSwitched { thread_id, .. } if *thread_id == beta.0
+            )),
+            "Without a named thread the gateway should still pick by label match"
+        );
+
+        Ok(())
+    }
+
+    /// A message for a thread that no longer exists is refused, not re-homed.
+    ///
+    /// The thread can go away between the user typing and the frame landing —
+    /// closed in another window, deleted with its project. Falling back to
+    /// "whatever is in the foreground" would put the user's words in a
+    /// conversation they never chose; saying so and dropping the message is
+    /// the only honest option. The refusal names the thread so a client
+    /// tracking several can retire the right one.
+    #[tokio::test]
+    async fn a_message_for_a_vanished_thread_is_refused() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, _beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+        // An id that was never minted: nothing to file the message under.
+        let missing = alpha.0 + 4_000;
+
+        let chat = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", "still there?")],
+                thread_id: Some(missing),
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::Error { message, .. } if message.contains("no longer exists")
+            )),
+            "Expected the vanished thread to be reported"
+        );
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::ResponseDone { ok, thread_id }
+                    if !*ok && *thread_id == Some(missing)
+            )),
+            "Expected a close-out naming the thread the client was waiting on"
         );
 
         Ok(())

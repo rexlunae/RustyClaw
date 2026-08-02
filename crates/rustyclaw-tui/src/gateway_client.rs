@@ -50,12 +50,14 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         E::ModelReloaded { provider, model } => GwEvent::ModelReloaded { provider, model },
 
         // ── Streaming ───────────────────────────────────────────────────
-        E::StreamStart => GwEvent::StreamStart,
+        // The TUI renders one thread at a time and drops the rest, so the
+        // announced thread is not needed to route the frame here.
+        E::StreamStart { .. } => GwEvent::StreamStart,
         E::ThinkingStart => GwEvent::ThinkingStart,
         E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(delta),
         E::ThinkingEnd => GwEvent::ThinkingEnd,
         E::Chunk { delta } => GwEvent::Chunk(delta),
-        E::ResponseDone => GwEvent::ResponseDone,
+        E::ResponseDone { .. } => GwEvent::ResponseDone,
 
         // ── Tool calls ──────────────────────────────────────────────────
         E::ToolCall {
@@ -706,7 +708,7 @@ mod tests {
     fn streaming_frames_map_to_streaming_events() {
         let start = ServerFrame {
             frame_type: ServerFrameType::StreamStart,
-            payload: ServerPayload::StreamStart,
+            payload: ServerPayload::StreamStart { thread_id: Some(4) },
         };
         assert!(matches!(adapt(start), Some(GwEvent::StreamStart)));
 
@@ -718,7 +720,10 @@ mod tests {
 
         let done = ServerFrame {
             frame_type: ServerFrameType::ResponseDone,
-            payload: ServerPayload::ResponseDone { ok: true },
+            payload: ServerPayload::ResponseDone {
+                ok: true,
+                thread_id: Some(4),
+            },
         };
         assert!(matches!(adapt(done), Some(GwEvent::ResponseDone)));
     }

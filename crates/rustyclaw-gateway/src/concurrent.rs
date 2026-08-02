@@ -17,7 +17,7 @@
 
 use anyhow::Result;
 use async_trait::async_trait;
-use rustyclaw_core::gateway::protocol::frames::{ServerFrame, serialize_frame};
+use rustyclaw_core::gateway::protocol::frames::{ServerFrame, ServerPayload, serialize_frame};
 use rustyclaw_core::gateway::transport::TransportWriter;
 use rustyclaw_core::threads::ThreadId;
 use tokio::sync::mpsc;
@@ -121,6 +121,35 @@ impl ChannelSink {
 #[async_trait]
 impl TransportWriter for ChannelSink {
     async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
+        // Stamp the turn's thread onto the frames that open and close it.
+        // The layers that emit these — the provider streaming loop, the
+        // dispatch tail — have no thread context, and this writer is the one
+        // object that does: it exists per turn and was handed the thread the
+        // connection loop settled on. Doing it here means no caller has to
+        // remember, and none can name a different thread by mistake.
+        let stamped;
+        let frame = match &frame.payload {
+            ServerPayload::StreamStart { .. } => {
+                stamped = ServerFrame {
+                    frame_type: frame.frame_type,
+                    payload: ServerPayload::StreamStart {
+                        thread_id: Some(self.thread_id.0),
+                    },
+                };
+                &stamped
+            }
+            ServerPayload::ResponseDone { ok, .. } => {
+                stamped = ServerFrame {
+                    frame_type: frame.frame_type,
+                    payload: ServerPayload::ResponseDone {
+                        ok: *ok,
+                        thread_id: Some(self.thread_id.0),
+                    },
+                };
+                &stamped
+            }
+            _ => frame,
+        };
         let data = serialize_frame(frame).map_err(|e| anyhow::anyhow!(e))?;
         self.tx
             .send(ModelTaskMessage::Frame {

@@ -157,13 +157,17 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 .write()
                 .push_notice(MessageRole::Error, format!("Model error: {}", message));
         }
-        // Live stream events carry no thread id; they belong to the thread
-        // that submitted the request (`streaming_thread_id`). When the user
-        // has switched away from it, they must not touch the on-screen view
-        // or its indicators — the backgrounded thread's transcript arrives
-        // via the gateway's history snapshot on completion.
-        GatewayEvent::StreamStart => {
+        // A turn opens by naming its thread, and closes the same way. The
+        // frames in between carry no id — they belong to the turn, and the
+        // turn's thread is `streaming_thread_id`. When the user has switched
+        // away from it, they must not touch the on-screen view or its
+        // indicators; the backgrounded thread's transcript arrives via the
+        // gateway's history snapshot on completion.
+        GatewayEvent::StreamStart { thread_id } => {
             let mut s = state.write();
+            // The gateway's answer to "which thread is this turn in" beats
+            // the guess made when the message was sent.
+            s.adopt_stream_thread(thread_id);
             if s.stream_targets_foreground() {
                 s.start_assistant_message();
             }
@@ -186,8 +190,16 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 s.append_to_current_message(&delta);
             }
         }
-        GatewayEvent::ResponseDone => {
-            state.write().response_done();
+        GatewayEvent::ResponseDone { thread_id } => {
+            let mut s = state.write();
+            // Only the turn being tracked can end it. A close-out naming a
+            // different thread — a refused message, a turn started from
+            // another client on the same agent — would otherwise retire the
+            // live response, taking the Stop button and the working
+            // indicator with it while the model is still going.
+            if s.frame_is_for_current_turn(thread_id) {
+                s.response_done();
+            }
         }
         GatewayEvent::ToolCall {
             id,

@@ -950,6 +950,7 @@ mod serialization {
                 messages: vec![crate::gateway::protocol::types::ChatMessage::text(
                     "user", "hello",
                 )],
+                thread_id: Some(12),
             },
         };
         let wire = WireFrame::new(7, frame);
@@ -963,5 +964,50 @@ mod serialization {
         assert_eq!(decoded.sequence, 0);
         assert_eq!(decoded.flags, 0);
         assert_eq!(decoded.frame.frame_type, ClientFrameType::Chat);
+        // The thread the message was typed into has to survive the trip, or
+        // the gateway is back to guessing from its own foreground.
+        match decoded.frame.payload {
+            ClientPayload::Chat { thread_id, .. } => assert_eq!(thread_id, Some(12)),
+            other => panic!("Expected Chat payload, got {other:?}"),
+        }
+    }
+
+    /// A turn announces its thread when it opens and when it closes.
+    ///
+    /// Everything between those two frames is unlabelled and belongs to the
+    /// turn, so these are the only two chances a client gets to learn where
+    /// the response is going — and the only way it can tell a close-out for
+    /// its own turn from one for somebody else's.
+    #[test]
+    fn turn_boundary_frames_carry_their_thread() {
+        let start = ServerFrame {
+            frame_type: ServerFrameType::StreamStart,
+            payload: ServerPayload::StreamStart {
+                thread_id: Some(31),
+            },
+        };
+        let bytes = serialize_frame(&start).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::StreamStart { thread_id } => assert_eq!(thread_id, Some(31)),
+            other => panic!("Expected StreamStart payload, got {other:?}"),
+        }
+
+        let done = ServerFrame {
+            frame_type: ServerFrameType::ResponseDone,
+            payload: ServerPayload::ResponseDone {
+                ok: true,
+                thread_id: Some(31),
+            },
+        };
+        let bytes = serialize_frame(&done).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::ResponseDone { ok, thread_id } => {
+                assert!(ok);
+                assert_eq!(thread_id, Some(31));
+            }
+            other => panic!("Expected ResponseDone payload, got {other:?}"),
+        }
     }
 }

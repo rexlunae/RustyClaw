@@ -33,7 +33,13 @@ use super::tui_component::TuiRoot;
 /// Messages from the iocraft render component back to tokio.
 #[derive(Debug, Clone)]
 pub(crate) enum UserInput {
-    Chat(String),
+    /// The text, and the thread the user typed it into. The id travels with
+    /// the message so the gateway files it where the user was looking, not
+    /// wherever its foreground has drifted to by the time the frame lands.
+    Chat {
+        text: String,
+        thread_id: Option<u64>,
+    },
     Command(String),
     AuthResponse(String),
     /// User approved or denied a tool call
@@ -343,13 +349,18 @@ impl App {
         loop {
             // Poll user_rx (non-blocking on tokio side)
             match user_rx.try_recv() {
-                Ok(UserInput::Chat(text)) => {
+                Ok(UserInput::Chat { text, thread_id }) => {
                     let prompt = build_prompt_with_attachments(&text, &prompt_attachments);
                     prompt_attachments.clear();
                     let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
                         attachments: prompt_attachments.clone(),
                     });
-                    let _ = client.send(GatewayCommand::Chat { message: prompt }).await;
+                    let _ = client
+                        .send(GatewayCommand::Chat {
+                            message: prompt,
+                            thread_id,
+                        })
+                        .await;
                 }
                 Ok(UserInput::AuthResponse(code)) => {
                     let _ = client.send(GatewayCommand::Auth { code }).await;
