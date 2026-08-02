@@ -79,8 +79,11 @@ pub(crate) enum GwEvent {
     },
     /// Gateway requests structured user input (ask_user tool).
     UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
-    /// Gateway requests an API key or credential from the user.
+    /// Gateway requests an API key or credential from the user. Tagged with
+    /// the asking turn's thread: a credential wait ending is what ends its
+    /// turn, so the turn's close-out retires requests it left behind.
     CredentialRequest {
+        thread_id: Option<u64>,
         id: String,
         provider: String,
         secret_name: String,

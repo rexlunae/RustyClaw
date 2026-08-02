@@ -133,6 +133,7 @@ pub(crate) fn gateway_event_to_gw_event(
             secret_name,
             message,
         } => GwEvent::CredentialRequest {
+            thread_id,
             id,
             provider,
             secret_name,

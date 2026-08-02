@@ -136,7 +136,8 @@ pub(super) struct Ui {
     /// never saw. Each queue drains into its dialog as the dialog frees up.
     pub queued_tool_approvals: State<Vec<(String, String, String)>>,
     pub queued_user_prompts: State<Vec<rustyclaw_core::user_prompt_types::UserPrompt>>,
-    pub queued_credentials: State<Vec<(String, String, String, String)>>,
+    #[allow(clippy::type_complexity)]
+    pub queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>>,
     pub command_completions: State<Vec<String>>,
     pub command_selected: State<Option<usize>>,
     pub model_completion_provider: State<Option<String>>,
