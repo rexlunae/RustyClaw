@@ -109,6 +109,11 @@ pub(crate) fn handle_gateway_event(
             s.is_streaming = false;
             s.is_thinking = false;
             s.in_flight.clear();
+            // Requests queued under the old connection can never be
+            // answered on this one.
+            s.clear_user_prompt();
+            s.pending_tool_approvals.clear();
+            s.pending_credential_requests.clear();
             // The gateway repoints the workspace at the restored foreground
             // thread's directory on connect, which need not be where the
             // previous session's editor cache came from.

@@ -338,6 +338,13 @@ pub(super) fn apply_gw_event(
             // re-arms the spinner — and the Esc gate — for replies that can
             // never arrive, on every later visit to those threads.
             in_flight.set(std::collections::HashSet::new());
+            // The queued requests died with their turns: nothing will ever
+            // retire them, and an answer would go into a closed connection.
+            // Left in place, the first event after reconnect would drain a
+            // stale request into a dialog.
+            queued_tool_approvals.set(Vec::new());
+            queued_user_prompts.set(Vec::new());
+            queued_credentials.set(Vec::new());
             streaming.set(false);
             stream_start.set(None);
             elapsed.set(String::new());
@@ -351,6 +358,9 @@ pub(super) fn apply_gw_event(
             // A fresh session has nothing in flight, whatever the previous
             // one left behind.
             in_flight.set(std::collections::HashSet::new());
+            queued_tool_approvals.set(Vec::new());
+            queued_user_prompts.set(Vec::new());
+            queued_credentials.set(Vec::new());
             let mut m = messages.read().clone();
             m.push(DisplayMessage::info("Gateway connected."));
             messages.set(m);

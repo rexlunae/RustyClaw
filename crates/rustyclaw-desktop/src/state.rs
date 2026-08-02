@@ -1043,14 +1043,20 @@ impl AppState {
             );
         }
 
-        if self.foreground_request_in_flight() {
-            return;
-        }
-        if let Some(id) = thread_id
-            && let Some(cached) = self.thread_messages.get(&id)
-        {
-            self.messages = cached.clone();
-        }
+        // The view always follows the foreground. This used to bail out
+        // while a request was in flight — written when the in-flight test
+        // meant "the turn being tracked is the one on screen", where it
+        // protected a live streaming bubble. The test now asks whether the
+        // *incoming* thread is busy, and with turns running per thread that
+        // is true for any busy destination: bailing left the outgoing
+        // thread's transcript on screen under the incoming thread's
+        // identity, with the incoming turn's chunks appended to it. The
+        // in-flight guard's remaining job is deciding whether a *history
+        // snapshot* may replace the live view, in
+        // `history_should_take_the_view`.
+        self.messages = thread_id
+            .and_then(|id| self.thread_messages.get(&id).cloned())
+            .unwrap_or_default();
         // Derived, not cleared: the gateway can move the foreground onto a
         // thread whose turn is still running, and the view must say so.
         self.derive_view_indicators();
@@ -1808,6 +1814,38 @@ mod tests {
         assert_eq!(
             s.visible_user_prompt().map(|p| p.id).as_deref(),
             Some("call-1")
+        );
+    }
+
+    /// A gateway-driven foreground move always swaps the transcript.
+    ///
+    /// The old early return, guarding a live streaming bubble, fired for
+    /// any busy destination once the in-flight test became per-thread —
+    /// leaving the outgoing thread's messages on screen under the incoming
+    /// thread's identity, with the incoming turn's chunks appended to them.
+    #[test]
+    fn a_foreground_move_onto_a_busy_thread_swaps_the_view() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.add_user_message("thread one's words".to_string());
+        // Thread 2 is mid-answer with cached history.
+        s.in_flight.insert(2);
+        s.thread_messages.insert(
+            2,
+            VecDeque::from(vec![ChatMessage::user("thread two's words")]),
+        );
+
+        s.set_foreground_thread(Some(2));
+
+        assert!(
+            s.messages
+                .back()
+                .is_some_and(|m| m.content.contains("thread two")),
+            "the view must show the thread it claims to"
+        );
+        assert!(
+            s.is_processing,
+            "the incoming thread is still answering and must say so"
         );
     }
 
