@@ -382,26 +382,20 @@ pub(crate) async fn handle_connection(
     // below through a channel.
     let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<WireFrame<ClientFrame>>(32);
 
-    // Channel for tool-approval responses (used by the Ask permission flow).
-    let (approval_tx, approval_rx) = tokio::sync::mpsc::channel::<(String, bool)>(4);
-    let approval_rx = Arc::new(Mutex::new(approval_rx));
-
-    // Channel for user-prompt responses (used by the ask_user tool).
-    let (user_prompt_tx, user_prompt_rx) = tokio::sync::mpsc::channel::<(
-        String,
-        bool,
-        rustyclaw_core::user_prompt_types::PromptResponseValue,
-    )>(4);
-    let user_prompt_rx = Arc::new(Mutex::new(user_prompt_rx));
-
-    // Channel for credential responses (used when auth fails mid-conversation).
-    let (credential_tx, credential_rx) =
-        tokio::sync::mpsc::channel::<(String, bool, Option<String>)>(4);
-    let credential_rx = Arc::new(Mutex::new(credential_rx));
-
-    // Channel for DOM query responses (used by the client_dom_query tool).
-    let (dom_query_tx, dom_query_rx) = tokio::sync::mpsc::channel::<(String, String, bool)>(4);
-    let dom_query_rx = Arc::new(Mutex::new(dom_query_rx));
+    // Everything the client answers by call id, routed to the call that
+    // asked. Not one shared channel each: a waiter that received an id it
+    // did not recognise had already consumed it, destroying another call's
+    // answer — and the approval site read the unrecognised id as a *denial*,
+    // refusing a tool in the user's name. See `pending`.
+    let approvals: Arc<crate::pending::PendingResponses<bool>> = Arc::default();
+    let user_prompts: Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
+    > = Arc::default();
+    let credentials: Arc<crate::pending::PendingResponses<(bool, Option<String>)>> = Arc::default();
+    let dom_queries: Arc<crate::pending::PendingResponses<(String, bool)>> = Arc::default();
 
     // Channel for model task responses (concurrent execution).
     let (model_task_tx, mut model_task_rx) = concurrent::channel();
@@ -418,6 +412,12 @@ pub(crate) async fn handle_connection(
     // if the reader outlives the connection handler.
     let active_tasks = Arc::new(Mutex::new(concurrent::ActiveTasks::new()));
     let reader_tasks = Arc::downgrade(&active_tasks);
+    // The reader delivers answers; the turns claim the ids. Both sides hold
+    // the same registries.
+    let reader_approvals = approvals.clone();
+    let reader_user_prompts = user_prompts.clone();
+    let reader_credentials = credentials.clone();
+    let reader_dom_queries = dom_queries.clone();
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
     let mut next_turn_id: u64 = 0;
@@ -499,25 +499,33 @@ pub(crate) async fn handle_connection(
                             }
                             if frame.frame_type == ClientFrameType::ToolApprovalResponse {
                                 if let ClientPayload::ToolApprovalResponse { id, approved } = frame.payload {
-                                    let _ = approval_tx.send((id, approved)).await;
+                                    if !reader_approvals.deliver(&id, approved) {
+                                        trace!(%id, "Approval for a call nobody is waiting on");
+                                    }
                                     continue;
                                 }
                             }
                             if frame.frame_type == ClientFrameType::UserPromptResponse {
                                 if let ClientPayload::UserPromptResponse { id, dismissed, value } = frame.payload {
-                                    let _ = user_prompt_tx.send((id, dismissed, value)).await;
+                                    if !reader_user_prompts.deliver(&id, (dismissed, value)) {
+                                        trace!(%id, "Answer to a question nobody is waiting on");
+                                    }
                                     continue;
                                 }
                             }
                             if frame.frame_type == ClientFrameType::CredentialResponse {
                                 if let ClientPayload::CredentialResponse { id, dismissed, value } = frame.payload {
-                                    let _ = credential_tx.send((id, dismissed, value)).await;
+                                    if !reader_credentials.deliver(&id, (dismissed, value)) {
+                                        trace!(%id, "Credential for a call nobody is waiting on");
+                                    }
                                     continue;
                                 }
                             }
                             if frame.frame_type == ClientFrameType::DomQueryResponse {
                                 if let ClientPayload::DomQueryResponse { id, result, is_error } = frame.payload {
-                                    let _ = dom_query_tx.send((id, result, is_error)).await;
+                                    if !reader_dom_queries.deliver(&id, (result, is_error)) {
+                                        trace!(%id, "DOM result for a call nobody is waiting on");
+                                    }
                                     continue;
                                 }
                             }
@@ -911,10 +919,10 @@ pub(crate) async fn handle_connection(
                                     let shared_config = shared_config.clone();
                                     let shared_model_ctx = shared_model_ctx.clone();
                                     let shared_copilot_session = shared_copilot_session.clone();
-                                    let approval_rx = approval_rx.clone();
-                                    let user_prompt_rx = user_prompt_rx.clone();
-                                    let credential_rx = credential_rx.clone();
-                                    let dom_query_rx = dom_query_rx.clone();
+                                    let approvals = approvals.clone();
+                                    let user_prompts = user_prompts.clone();
+                                    let credentials = credentials.clone();
+                                    let dom_queries = dom_queries.clone();
                                     let thread_mgr = agent_session.thread_mgr.clone();
                                     let threads_path = agent_session.threads_path.clone();
                                     let handle = tokio::spawn(async move {
@@ -932,10 +940,10 @@ pub(crate) async fn handle_connection(
                                             &shared_config,
                                             &shared_model_ctx,
                                             &shared_copilot_session,
-                                            &approval_rx,
-                                            &user_prompt_rx,
-                                            &credential_rx,
-                                            &dom_query_rx,
+                                            &approvals,
+                                            &user_prompts,
+                                            &credentials,
+                                            &dom_queries,
                                             &thread_mgr,
                                             turn_thread,
                                             &threads_path,
