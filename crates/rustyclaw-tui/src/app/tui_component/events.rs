@@ -334,12 +334,23 @@ pub(super) fn apply_gw_event(
             gw_status.set(rustyclaw_core::types::GatewayStatus::Disconnected);
             show_auth_dialog.set(false);
             active_process.set(None);
+            // Every turn died with the connection. Leaving them recorded
+            // re-arms the spinner — and the Esc gate — for replies that can
+            // never arrive, on every later visit to those threads.
+            in_flight.set(std::collections::HashSet::new());
+            streaming.set(false);
+            stream_start.set(None);
+            elapsed.set(String::new());
+            streaming_buf.set(String::new());
             let mut m = messages.read().clone();
             m.push(DisplayMessage::warning(format!("Disconnected: {}", reason)));
             messages.set(m);
         }
         GwEvent::Connected => {
             gw_status.set(rustyclaw_core::types::GatewayStatus::Connected);
+            // A fresh session has nothing in flight, whatever the previous
+            // one left behind.
+            in_flight.set(std::collections::HashSet::new());
             let mut m = messages.read().clone();
             m.push(DisplayMessage::info("Gateway connected."));
             messages.set(m);

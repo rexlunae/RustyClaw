@@ -995,7 +995,7 @@ impl AppState {
                     is_processing = self.is_processing,
                     is_streaming = self.is_streaming,
                     is_thinking = self.is_thinking,
-                    in_flight = ?self.in_flight,
+                    in_flight_threads = ?self.in_flight,
                     "{level_msg}"
                 );
             } else {

@@ -140,6 +140,16 @@ pub async fn exec_execute_command_streaming(
     // (pause/stop/kill); the guard deregisters it when the wait ends.
     let child_pid = child.id();
     let _exec_guard = child_pid.map(|pid| crate::exec_status::register(pid, command));
+    // Tell the caller which process this call is waiting on. The status
+    // ticker attributes pause/stop/kill by this announcement; guessing from
+    // the registry instead would pick up another conversation's child.
+    if let (Some(sink), Some(pid)) = (&sink, child_pid) {
+        let _ = sink.send(super::ToolOutputChunk {
+            chunk: String::new(),
+            is_stderr: false,
+            pid: Some(pid),
+        });
+    }
 
     let mut yield_deadline = Instant::now() + Duration::from_millis(yield_ms);
     let mut timeout_deadline = Instant::now() + Duration::from_secs(timeout_secs);
@@ -257,6 +267,7 @@ where
                     let _ = sink.send(super::ToolOutputChunk {
                         chunk: String::from_utf8_lossy(&chunk[..n]).into_owned(),
                         is_stderr,
+                        pid: None,
                     });
                 }
             }

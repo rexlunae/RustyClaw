@@ -694,6 +694,13 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
 pub struct ToolOutputChunk {
     pub chunk: String,
     pub is_stderr: bool,
+    /// The child process this tool call spawned, announced once when it is
+    /// known (with an empty `chunk`). This is the only trustworthy tie
+    /// between a tool call and a pid: the exec-status registry is process-
+    /// global, and with turns running concurrently, "the newest child" can
+    /// belong to another conversation — whose process a pause/stop/kill
+    /// aimed at this one would then hit.
+    pub pid: Option<u32>,
 }
 
 /// Sink a tool can use to stream live output while it runs. Sending is
