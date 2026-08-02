@@ -19,12 +19,39 @@ use crate::gateway::protocol::event_log::{
 };
 use crate::gateway::{ServerPayload, SshConnection, SshReader, SshWriter};
 
+/// An event, and the thread whose turn produced it.
+///
+/// Turn-scoped frames — chunks, thinking, tool calls — carry no thread of
+/// their own on the wire; they belong to the turn, and the turn's thread is
+/// announced once on `StreamStart`. Resolving that here means every client
+/// gets the attribution without reimplementing the stream bookkeeping, and
+/// none of them can forget to.
+///
+/// `thread_id` is `None` for connection-scoped events (`Hello`,
+/// `ThreadsUpdate`, transport errors) and for turns from a gateway too old to
+/// announce one.
+#[derive(Clone, Debug)]
+pub struct ThreadEvent {
+    pub thread_id: Option<u64>,
+    pub event: GatewayEvent,
+}
+
+impl ThreadEvent {
+    /// An event that belongs to the connection rather than to any turn.
+    pub fn untargeted(event: GatewayEvent) -> Self {
+        Self {
+            thread_id: None,
+            event,
+        }
+    }
+}
+
 /// Client for communicating with the RustyClaw gateway.
 pub struct GatewayClient {
     /// Channel to send commands to the gateway.
     cmd_tx: mpsc::Sender<GatewayCommand>,
     /// Channel to receive events from the gateway.
-    event_rx: Arc<Mutex<mpsc::Receiver<GatewayEvent>>>,
+    event_rx: Arc<Mutex<mpsc::Receiver<ThreadEvent>>>,
     /// Whether we're connected.
     connected: Arc<std::sync::atomic::AtomicBool>,
     /// The underlying SSH connection, held to keep the transport alive for the
@@ -65,7 +92,7 @@ impl GatewayClient {
     ) -> Self {
         // Channels for communication.
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
-        let (event_tx, event_rx) = mpsc::channel::<GatewayEvent>(1024);
+        let (event_tx, event_rx) = mpsc::channel::<ThreadEvent>(1024);
 
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let connected_clone = connected.clone();
@@ -110,9 +137,9 @@ impl GatewayClient {
                         error: err.to_string(),
                     });
                     let _ = event_tx_clone
-                        .send(GatewayEvent::Disconnected {
+                        .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                             reason: Some(err.to_string()),
-                        })
+                        }))
                         .await;
                     break;
                 }
@@ -125,6 +152,11 @@ impl GatewayClient {
             // Streaming stats for the event log.
             let mut stream_chunk_count: u32 = 0;
             let mut stream_total_bytes: usize = 0;
+            // Which thread each in-flight turn is running in, keyed by the
+            // stream its request went out on. Several entries at once is the
+            // normal case now: the gateway runs a turn per thread.
+            let mut stream_threads: std::collections::HashMap<u64, u64> =
+                std::collections::HashMap::new();
 
             loop {
                 match reader.recv_wire().await {
@@ -165,10 +197,36 @@ impl GatewayClient {
                             }
                         }
 
+                        // Attribute the frame to a thread before anyone
+                        // sees it. Every frame of a turn shares the stream id
+                        // its request went out on, and `StreamStart` says
+                        // which thread that stream is running in — so the
+                        // mapping is learnable here, once, instead of in each
+                        // client. Without it a chunk is just text, and two
+                        // turns' text interleaves into one message.
+                        let stream_id = envelope.stream_id;
+                        if let ServerPayload::StreamStart {
+                            thread_id: Some(thread),
+                        } = &envelope.frame.payload
+                        {
+                            stream_threads.insert(stream_id, *thread);
+                        }
+                        let thread_id = stream_threads.get(&stream_id).copied();
+                        let closing =
+                            matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. });
                         if let Some(event) = GatewayEvent::from_server_frame(envelope.frame) {
-                            if event_tx.send(event).await.is_err() {
+                            if event_tx
+                                .send(ThreadEvent { thread_id, event })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
+                        }
+                        // Released only after its close-out has been stamped,
+                        // so the frame that ends the turn still names it.
+                        if closing {
+                            stream_threads.remove(&stream_id);
                         }
                     }
                     Ok(None) => {
@@ -176,18 +234,18 @@ impl GatewayClient {
                         let ssh_err = reader.drain_stderr().await;
                         let reason = crate::gateway::parse_ssh_error(&ssh_err);
                         let _ = event_tx
-                            .send(GatewayEvent::Disconnected {
+                            .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                                 reason: Some(reason),
-                            })
+                            }))
                             .await;
                         break;
                     }
                     Err(err) => {
                         event_log_rx.log_decode_error(Direction::Received, 0, &err.to_string());
                         let _ = event_tx
-                            .send(GatewayEvent::Error {
+                            .send(ThreadEvent::untargeted(GatewayEvent::Error {
                                 message: format!("Protocol error: {}", err),
-                            })
+                            }))
                             .await;
                         break;
                     }
@@ -214,13 +272,13 @@ impl GatewayClient {
     }
 
     /// Receive the next event from the gateway (blocks until one arrives).
-    pub async fn recv(&self) -> Option<GatewayEvent> {
+    pub async fn recv(&self) -> Option<ThreadEvent> {
         let mut rx = self.event_rx.lock().await;
         rx.recv().await
     }
 
     /// Drain all currently-buffered events without blocking.
-    pub async fn drain_available(&self) -> Vec<GatewayEvent> {
+    pub async fn drain_available(&self) -> Vec<ThreadEvent> {
         let mut rx = self.event_rx.lock().await;
         let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {

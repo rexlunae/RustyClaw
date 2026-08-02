@@ -15,7 +15,10 @@ use rustyclaw_core::gateway::GatewayEvent;
 ///
 /// Returns `None` for events the TUI does not surface (e.g. DOM queries, which
 /// require a webview the TUI does not have).
-pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> {
+pub(crate) fn gateway_event_to_gw_event(
+    thread_id: Option<u64>,
+    event: GatewayEvent,
+) -> Option<GwEvent> {
     use GatewayEvent as E;
 
     let ev = match event {
@@ -54,7 +57,11 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         E::ThinkingStart => GwEvent::ThinkingStart,
         E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(delta),
         E::ThinkingEnd => GwEvent::ThinkingEnd,
-        E::Chunk { delta } => GwEvent::Chunk(delta),
+        // Tagged with the turn that produced it. The TUI renders one thread
+        // at a time and shares a single streaming buffer, so a chunk from a
+        // turn running elsewhere has to be recognisable — appending it here
+        // would splice two answers together.
+        E::Chunk { delta } => GwEvent::Chunk(thread_id, delta),
         E::ResponseDone { thread_id } => GwEvent::ResponseDone(thread_id),
 
         // ── Tool calls ──────────────────────────────────────────────────
@@ -550,7 +557,13 @@ mod tests {
     /// Run a server frame through the shared parser and the TUI adapter, the
     /// same path the gateway reader takes at runtime.
     fn adapt(frame: ServerFrame) -> Option<GwEvent> {
-        GatewayEvent::from_server_frame(frame).and_then(gateway_event_to_gw_event)
+        adapt_for(None, frame)
+    }
+
+    /// As `adapt`, for a frame the core client attributed to `thread_id`.
+    fn adapt_for(thread_id: Option<u64>, frame: ServerFrame) -> Option<GwEvent> {
+        GatewayEvent::from_server_frame(frame)
+            .and_then(|event| gateway_event_to_gw_event(thread_id, event))
     }
 
     #[test]
@@ -604,7 +617,7 @@ mod tests {
             },
         };
         match adapt(frame) {
-            Some(GwEvent::Chunk(t)) => assert_eq!(t, "Hello"),
+            Some(GwEvent::Chunk(_, t)) => assert_eq!(t, "Hello"),
             other => panic!("expected Chunk, got {other:?}"),
         }
     }
@@ -700,6 +713,27 @@ mod tests {
             },
         };
         assert!(matches!(adapt(frame), Some(GwEvent::AuthChallenge)));
+    }
+
+    /// A chunk carries the turn it came from.
+    ///
+    /// `Chunk` has no thread on the wire — it belongs to its turn, and the
+    /// turn announced its thread on `StreamStart`. The core client resolves
+    /// that and hands the attribution down, so the TUI can tell a chunk of
+    /// the answer it is showing from a chunk of one running elsewhere.
+    /// Without it, two concurrent turns splice into a single message.
+    #[test]
+    fn a_chunk_carries_the_turn_it_came_from() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Chunk,
+            payload: ServerPayload::Chunk {
+                delta: "half an answer".into(),
+            },
+        };
+        match adapt_for(Some(9), frame) {
+            Some(GwEvent::Chunk(Some(9), text)) => assert_eq!(text, "half an answer"),
+            other => panic!("Expected a chunk attributed to thread 9, got {other:?}"),
+        }
     }
 
     #[test]

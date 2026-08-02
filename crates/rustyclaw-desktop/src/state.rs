@@ -610,6 +610,25 @@ impl AppState {
         self.streaming_thread_id.is_none() || self.streaming_thread_id == self.foreground_thread_id
     }
 
+    /// Whether a turn-scoped frame from `thread_id` should render into the
+    /// view on screen.
+    ///
+    /// Routed by the frame's *own* thread rather than by a single "the turn
+    /// in flight" slot. With a turn running in each of two threads, that slot
+    /// holds whichever started last, so the other turn's chunks would be
+    /// appended to the wrong transcript — two answers spliced into one.
+    ///
+    /// A frame from any other thread belongs to a turn the user is not
+    /// looking at, and is dropped: that thread's transcript arrives whole via
+    /// the gateway's history snapshot when its turn completes. `None` is a
+    /// gateway too old to attribute its frames, and is trusted as before.
+    pub fn frame_targets_view(&self, thread_id: Option<u64>) -> bool {
+        match thread_id {
+            Some(id) => self.foreground_thread_id == Some(id),
+            None => true,
+        }
+    }
+
     /// Take the gateway at its word about which thread the turn is running
     /// in. The client's own guess at submit time can be wrong — no thread
     /// was focused and the gateway elected one, or an older client let it
