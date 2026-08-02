@@ -201,6 +201,18 @@ impl ActiveTasks {
         }
     }
 
+    /// Stop every running turn outright.
+    ///
+    /// Dropping a `JoinHandle` detaches its task rather than ending it, so a
+    /// turn left behind on shutdown would keep making model calls and then
+    /// block forever writing into a frame channel nobody drains — holding
+    /// its share of the connection's state alive with it.
+    pub fn abort_all(&mut self) {
+        for (_, turn) in self.tasks.drain() {
+            turn.handle.abort();
+        }
+    }
+
     /// Ask every running turn to stop. Used when the client goes away.
     pub fn request_cancel_all(&self) {
         for turn in self.tasks.values() {
@@ -285,6 +297,24 @@ mod tests {
             flag_b.load(Ordering::Relaxed),
             "disconnect stops everything"
         );
+    }
+
+    /// Shutdown must end running turns, not detach them. A dropped
+    /// `JoinHandle` leaves the task alive with nothing draining its
+    /// frames, so it would block forever holding connection state.
+    #[tokio::test]
+    async fn shutdown_ends_running_turns() {
+        let mut tasks = ActiveTasks::new();
+        let handle = tokio::spawn(std::future::pending::<()>());
+        let watch = tokio::spawn(async {});
+        drop(watch);
+        tasks.register(ThreadId(1), handle, flag());
+
+        tasks.abort_all();
+
+        assert!(tasks.running_threads().is_empty());
+        // Give the runtime a chance to process the abort.
+        tokio::task::yield_now().await;
     }
 
     /// Stop still reaches the turn when the user has navigated to a thread
