@@ -5,6 +5,7 @@ use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
+use iocraft::prelude::State;
 use rustyclaw_view::tracing;
 
 use super::display_message_from_gateway;
@@ -34,6 +35,25 @@ fn close_open_thinking(m: &mut Vec<DisplayMessage>, duration_ms: Option<u64>) ->
         m[idx].collapsed = true;
     }
     true
+}
+
+/// Clear the indicators that describe the conversation on screen.
+///
+/// `streaming`, the elapsed timer and `streaming_buf` are one set shared by
+/// the whole view, so they only ever describe the thread being shown. When
+/// the view moves to another thread they are stale, and nothing else will
+/// clear them — a close-out for the thread that left is ignored precisely
+/// because it is no longer on screen.
+fn reset_view_streaming(
+    streaming: &mut State<bool>,
+    stream_start: &mut State<Option<Instant>>,
+    elapsed: &mut State<String>,
+    streaming_buf: &mut State<String>,
+) {
+    streaming.set(false);
+    stream_start.set(None);
+    elapsed.set(String::new());
+    streaming_buf.set(String::new());
 }
 
 /// Whether a turn-scoped frame from `thread_id` belongs to the thread on
@@ -400,7 +420,11 @@ pub(super) fn apply_gw_event(
                 }
             }
         }
-        GwEvent::ThinkingStart => {
+        GwEvent::ThinkingStart(thread_id) => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Thinking is a form of streaming — show spinner
             streaming.set(true);
             if stream_start.get().is_none() {
@@ -414,7 +438,11 @@ pub(super) fn apply_gw_event(
             m.push(DisplayMessage::thinking(""));
             messages.set(m);
         }
-        GwEvent::ThinkingDelta(delta) => {
+        GwEvent::ThinkingDelta(thread_id, delta) => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Accumulate the reasoning text into the open thinking block
             // so the user can expand it later and see *why* the agent did
             // what it did.
@@ -431,7 +459,11 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ThinkingEnd => {
+        GwEvent::ThinkingEnd(thread_id) => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Thinking done, but streaming may continue with chunks.
             // Don't clear streaming here — just close out the thinking
             // block: stamp its duration and fold it to a one-line gist
@@ -473,10 +505,14 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::ToolCall {
+            thread_id,
             id,
             name,
             arguments,
         } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             let mut started = tool_started.read().clone();
             started.insert(id.clone(), Instant::now());
             tool_started.set(started);
@@ -495,7 +531,15 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ToolStatus { id, status } => {
+        GwEvent::ToolStatus {
+            thread_id,
+            id,
+            status,
+        } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Track the controllable process (if any) behind the running
             // call so the inline pause/stop/kill keys know their target.
             active_process.set(status.pid.map(|pid| super::state::ActiveProcess {
@@ -511,7 +555,15 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ToolOutput { id, chunk } => {
+        GwEvent::ToolOutput {
+            thread_id,
+            id,
+            chunk,
+        } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Live output from a running tool: fold it into that tool's
             // panel so the row updates in place while the process runs.
             let mut m = messages.read().clone();
@@ -523,11 +575,15 @@ pub(super) fn apply_gw_event(
             }
         }
         GwEvent::ToolResult {
+            thread_id,
             id,
             name,
             result,
             is_error,
         } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             let mut started = tool_started.read().clone();
             let duration_ms = started.remove(&id).map(|t| t.elapsed().as_millis() as u64);
             tool_started.set(started);
@@ -770,6 +826,18 @@ pub(super) fn apply_gw_event(
             // a new foreground (including initial load).
             if foreground_id != previous_foreground {
                 foreground_thread_id.set(foreground_id);
+                // The spinner, the timer and the streaming buffer describe
+                // the view, not a turn — there is one set of them and one
+                // thread on screen. When the view moves, they belong to a
+                // conversation that is no longer being shown, and nothing
+                // will ever clear them: a close-out for that thread is
+                // correctly ignored now, so the spinner would run forever.
+                reset_view_streaming(
+                    &mut streaming,
+                    &mut stream_start,
+                    &mut elapsed,
+                    &mut streaming_buf,
+                );
                 if let Some(thread_id) = foreground_id {
                     tracing::debug!(
                         thread_id,
@@ -896,6 +964,14 @@ pub(super) fn apply_gw_event(
             };
             messages.set(std::mem::take(&mut m));
             foreground_thread_id.set(Some(thread_id));
+            // See the `ThreadsUpdate` arm: the streaming indicators belong
+            // to whatever is on screen, and the screen just changed.
+            reset_view_streaming(
+                &mut streaming,
+                &mut stream_start,
+                &mut elapsed,
+                &mut streaming_buf,
+            );
             // Ask the gateway for the authoritative,
             // cross-session history for this thread so
             // the local cache stays consistent with
