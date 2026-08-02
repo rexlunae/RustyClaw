@@ -411,6 +411,12 @@ pub(crate) async fn handle_connection(
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
     let mut next_turn_id: u64 = 0;
+    // Set when a turn's `ResponseDone` has gone out. The turn is still
+    // registered until its task returns and its `Done` is drained, but the
+    // client has already been told its request finished — so it is free to
+    // send another, and refusing that one would leave it waiting for a
+    // terminal frame that has already been spent.
+    let mut turn_done_for_client = false;
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
@@ -640,7 +646,7 @@ pub(crate) async fn handle_connection(
                                 // during a turn is what this change is for;
                                 // running two turns at once would need those
                                 // responses routed by call id.
-                                if !active_tasks.running_threads().is_empty() {
+                                if !active_tasks.running_threads().is_empty() && !turn_done_for_client {
                                     // A note, and deliberately nothing else.
                                     // `ResponseDone` carries no request or
                                     // thread identity, so a client that
@@ -719,6 +725,7 @@ pub(crate) async fn handle_connection(
                                 let turn_key = turn_thread
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
                                 {
+                                    turn_done_for_client = false;
                                     // A fresh flag per turn: see ActiveTasks.
                                     let tool_cancel: ToolCancelFlag =
                                         Arc::new(AtomicBool::new(false));
@@ -869,6 +876,17 @@ pub(crate) async fn handle_connection(
                                 thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
+                                // The turn writing to this thread has nowhere
+                                // to put its answer once the thread is gone:
+                                // every persistence point resolves the thread
+                                // by id, so it would keep calling the model
+                                // and dropping the results, while staying
+                                // registered and holding the connection busy.
+                                if active_tasks
+                                    .request_cancel(&rustyclaw_core::threads::ThreadId(thread_id))
+                                {
+                                    trace!(thread_id, "Stopping the turn for a closed thread");
+                                }
                                 thread_handler::handle_thread_close(
                                     &mut *writer,
                                     &agent_session.thread_mgr,
@@ -1147,6 +1165,9 @@ pub(crate) async fn handle_connection(
                             // Deserialize and forward frame to client, on the
                             // stream its request came in on.
                             if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
+                                if frame.frame_type == ServerFrameType::ResponseDone {
+                                    turn_done_for_client = true;
+                                }
                                 writer.send_on_stream(stream_id, &frame).await?;
                             }
                         }
