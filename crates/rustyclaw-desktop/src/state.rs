@@ -1019,6 +1019,13 @@ impl AppState {
         if self.foreground_thread_id == thread_id {
             return;
         }
+        // A view with no thread is not moving anywhere — it is being
+        // labelled with the thread it was always in, elected by the gateway
+        // for a message sent before any thread existed. Its messages (the
+        // user's own words, the streaming bubble) belong to the adopted
+        // thread and must survive the labelling; there is no cache to swap
+        // in yet, only one to seed.
+        let labelling_unowned_view = self.foreground_thread_id.is_none();
         if let Some(outgoing) = self.foreground_thread_id
             && !self.messages.is_empty()
         {
@@ -1054,9 +1061,17 @@ impl AppState {
         // in-flight guard's remaining job is deciding whether a *history
         // snapshot* may replace the live view, in
         // `history_should_take_the_view`.
-        self.messages = thread_id
-            .and_then(|id| self.thread_messages.get(&id).cloned())
-            .unwrap_or_default();
+        if labelling_unowned_view {
+            if let Some(id) = thread_id
+                && !self.messages.is_empty()
+            {
+                self.thread_messages.insert(id, self.messages.clone());
+            }
+        } else {
+            self.messages = thread_id
+                .and_then(|id| self.thread_messages.get(&id).cloned())
+                .unwrap_or_default();
+        }
         // Derived, not cleared: the gateway can move the foreground onto a
         // thread whose turn is still running, and the view must say so.
         self.derive_view_indicators();
@@ -1814,6 +1829,38 @@ mod tests {
         assert_eq!(
             s.visible_user_prompt().map(|p| p.id).as_deref(),
             Some("call-1")
+        );
+    }
+
+    /// Labelling an unowned view keeps the words already in it.
+    ///
+    /// A message sent before any thread exists renders immediately; the
+    /// gateway then elects a thread and announces it. That announcement
+    /// labels the view — it does not move it — and the unconditional swap
+    /// treated it as a move, replacing the user's just-sent message with
+    /// the elected thread's empty cache until the completion snapshot.
+    #[test]
+    fn labelling_the_view_with_its_elected_thread_keeps_its_words() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.add_user_message("sent before any thread existed".to_string());
+        s.mark_request_started();
+
+        // What StreamStart's adoption does.
+        s.adopt_stream_thread(Some(7));
+
+        assert_eq!(s.foreground_thread_id, Some(7));
+        assert!(
+            s.messages
+                .back()
+                .is_some_and(|m| m.content.contains("before any thread")),
+            "the user's message must survive the labelling"
+        );
+        assert!(
+            s.thread_messages
+                .get(&7)
+                .is_some_and(|cache| !cache.is_empty()),
+            "the adopted thread's cache is seeded from the view"
         );
     }
 
