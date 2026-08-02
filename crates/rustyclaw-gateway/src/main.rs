@@ -85,6 +85,16 @@ pub type SharedCopilotSession = Arc<RwLock<Option<Arc<CopilotSession>>>>;
 /// Shared task manager for first-class task orchestration.
 pub type SharedTaskManager = Arc<rustyclaw_core::tasks::TaskManager>;
 
+/// The connection's thread manager, shared with the model task.
+///
+/// A turn runs in its own task so the connection loop stays free to answer
+/// everything else — thread switches, history requests, project changes —
+/// while the model works or waits on an `ask_user` question. Both sides
+/// touch the thread list, so it lives behind a mutex rather than being
+/// borrowed exclusively for the length of a turn. Hold the guard for single
+/// operations only: never across a model call.
+pub type SharedThreadMgr = Arc<Mutex<rustyclaw_core::threads::ThreadManager>>;
+
 /// Shared model registry for model management.
 pub type SharedModelRegistry = rustyclaw_core::models::SharedModelRegistry;
 

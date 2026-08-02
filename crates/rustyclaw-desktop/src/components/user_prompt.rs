@@ -139,6 +139,17 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
     // space bar toggles, which the browser already does for a focused
     // checkbox, so only single-select needs the movement wired up.
     let is_select = matches!(prompt.prompt_type, PromptType::Select { .. });
+    // Enter on a focused button belongs to that button. Without this, keydown
+    // bubbles to the card handler below, which prevents the default
+    // activation and submits the *default* answer instead — so tabbing to
+    // "Dismiss" or "No" and pressing Enter would answer "yes". Rows holding
+    // buttons stop Enter here; Escape still bubbles, so it dismisses from
+    // anywhere in the card.
+    let button_row_keydown = |evt: KeyboardEvent| {
+        if evt.key() == Key::Enter {
+            evt.stop_propagation();
+        }
+    };
     let on_card_keydown = move |evt: KeyboardEvent| match evt.key() {
         Key::Enter => {
             evt.prevent_default();
@@ -217,18 +228,20 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                     let id_yes = prompt_id_confirm.clone();
                     let id_no = prompt_id_confirm.clone();
                     rsx! {
-                        Buttons { class: "rc-inline-prompt-confirm",
-                            Button {
-                                color: BulmaColor::Primary,
-                                onclick: move |_| on_respond
-                                    .call((id_yes.clone(), PromptResponseValue::Confirm(true))),
-                                "Yes"
-                            }
-                            Button {
-                                color: BulmaColor::Light,
-                                onclick: move |_| on_respond
-                                    .call((id_no.clone(), PromptResponseValue::Confirm(false))),
-                                "No"
+                        div { onkeydown: button_row_keydown,
+                            Buttons { class: "rc-inline-prompt-confirm",
+                                Button {
+                                    color: BulmaColor::Primary,
+                                    onclick: move |_| on_respond
+                                        .call((id_yes.clone(), PromptResponseValue::Confirm(true))),
+                                    "Yes"
+                                }
+                                Button {
+                                    color: BulmaColor::Light,
+                                    onclick: move |_| on_respond
+                                        .call((id_no.clone(), PromptResponseValue::Confirm(false))),
+                                    "No"
+                                }
                             }
                         }
                     }
@@ -313,7 +326,7 @@ pub fn UserPromptCard(props: UserPromptCardProps) -> Element {
                 },
             }}
 
-            div { class: "rc-inline-prompt-actions",
+            div { class: "rc-inline-prompt-actions", onkeydown: button_row_keydown,
                 span { class: "rc-inline-prompt-hint",
                     if is_confirm {
                         "Enter to accept the default · Esc to dismiss"

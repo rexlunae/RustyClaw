@@ -74,14 +74,14 @@ pub(crate) async fn handle_connection(
     project_handler::repoint_workspace(
         &mut config,
         &agent_session.project_mgr,
-        &agent_session.thread_mgr,
+        &*agent_session.thread_mgr.lock().await,
     );
 
     // Local engine registry for model management.
     let engine_registry = rustyclaw_core::engines::EngineRegistry::new();
 
     // Subscribe to thread events for push-based sidebar updates
-    let mut thread_events_rx = agent_session.thread_mgr.subscribe();
+    let mut thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
 
     // ── TOTP authentication challenge ───────────────────────────────
     //
@@ -404,15 +404,20 @@ pub(crate) async fn handle_connection(
     let dom_query_rx = Arc::new(Mutex::new(dom_query_rx));
 
     // Channel for model task responses (concurrent execution).
-    let (_model_task_tx, mut model_task_rx) = concurrent::channel();
+    let (model_task_tx, mut model_task_rx) = concurrent::channel();
 
     // Track active model tasks per thread.
     let mut active_tasks = concurrent::ActiveTasks::new();
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
-    if let Err(e) =
-        send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await
+    if let Err(e) = send_threads_update(
+        &mut *writer,
+        &*agent_session.thread_mgr.lock().await,
+        &task_mgr,
+        None,
+    )
+    .await
     {
         warn!(error = %e, "Failed to send initial thread list");
     }
@@ -498,6 +503,16 @@ pub(crate) async fn handle_connection(
         }
     });
 
+    // How long a turn gets to wind down after the reader ends before the
+    // connection stops waiting for it.
+    const TURN_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
+    // Set when the reader ends (client disconnected, or the transport ran
+    // out of frames). The loop keeps running until in-flight turns finish so
+    // their last frames still reach the writer — a turn no longer completes
+    // before this point, now that it runs in its own task.
+    let mut drain_deadline: Option<tokio::time::Instant> = None;
+
     // Main message handling loop — receives from channel
     loop {
         tokio::select! {
@@ -505,17 +520,41 @@ pub(crate) async fn handle_connection(
                 let _ = writer.close().await;
                 break;
             }
-            msg = frame_rx.recv() => {
+            _ = async {
+                match drain_deadline {
+                    Some(at) => tokio::time::sleep_until(at).await,
+                    // Unreachable: the arm is disabled without a deadline.
+                    None => std::future::pending().await,
+                }
+            }, if drain_deadline.is_some() => {
+                warn!("A turn was still running when the client went away; abandoning it");
+                break;
+            }
+            msg = frame_rx.recv(), if drain_deadline.is_none() => {
                 let envelope = match msg {
                     Some(f) => f,
-                    None => break, // Channel closed (reader exited)
+                    None => {
+                        // Reader exited. Ask the running turn to stop and
+                        // give it a moment to flush; nothing here waits on a
+                        // model call for a client that has left.
+                        if active_tasks.running_threads().is_empty() {
+                            break;
+                        }
+                        tool_cancel.store(true, Ordering::Relaxed);
+                        drain_deadline = Some(tokio::time::Instant::now() + TURN_DRAIN_GRACE);
+                        continue;
+                    }
                 };
                 let stream_id = envelope.stream_id;
                 let frame = envelope.frame;
 
                 trace!(stream_id, frame_type = ?frame.frame_type, "Handling client frame");
-                // Reset cancel flag for new request
-                tool_cancel.store(false, Ordering::Relaxed);
+                // The cancel flag is reset where a turn *starts* (the Chat
+                // arm below), not on every frame. Resetting here used to
+                // discard a Stop the moment any other command arrived — and
+                // now that the loop keeps serving commands while a turn
+                // runs, that race would be the common case rather than a
+                // rare one.
 
                         // Handle the frame based on type
                         match frame.payload {
@@ -552,28 +591,87 @@ pub(crate) async fn handle_connection(
                                 .await?;
                             }
                             ClientPayload::Chat { messages } => {
-                                crate::chat::handle_chat_frame(
-                                    &http,
-                                    messages,
-                                    stream_id,
-                                    &mut *writer,
-                                    &config,
-                                    &vault,
-                                    &skill_mgr,
-                                    &task_mgr,
-                                    observer.as_ref(),
-                                    &tool_cancel,
-                                    &shared_config,
-                                    &shared_model_ctx,
-                                    &shared_copilot_session,
-                                    &approval_rx,
-                                    &user_prompt_rx,
-                                    &credential_rx,
-                                    &dom_query_rx,
-                                    &mut agent_session.thread_mgr,
-                                    &agent_session.threads_path,
-                                )
-                                .await?;
+                                // A turn runs in its own task. The loop goes
+                                // straight back to serving frames, so thread
+                                // switches, history requests and project
+                                // changes all still answer while the model
+                                // works — or while it sits on an `ask_user`
+                                // question, which used to hold the whole
+                                // connection until the user answered it.
+                                let turn_thread = agent_session
+                                    .thread_mgr
+                                    .lock()
+                                    .await
+                                    .foreground_id()
+                                    .unwrap_or(rustyclaw_core::threads::ThreadId(0));
+                                active_tasks.reap_finished();
+                                if active_tasks.is_running(&turn_thread) {
+                                    // Two turns writing to one client would
+                                    // interleave their stream frames into an
+                                    // unreadable transcript. Say so instead.
+                                    protocol::server::send_info(
+                                        &mut *writer,
+                                        "This thread is already working on a message — \
+                                         wait for it to finish or press Stop.",
+                                    )
+                                    .await?;
+                                } else {
+                                    tool_cancel.store(false, Ordering::Relaxed);
+                                    let mut sink = concurrent::ChannelSink::new(
+                                        model_task_tx.clone(),
+                                        turn_thread,
+                                        stream_id,
+                                    );
+                                    let http = http.clone();
+                                    let config = config.clone();
+                                    let vault = vault.clone();
+                                    let skill_mgr = skill_mgr.clone();
+                                    let task_mgr = task_mgr.clone();
+                                    let observer = observer.clone();
+                                    let tool_cancel = tool_cancel.clone();
+                                    let shared_config = shared_config.clone();
+                                    let shared_model_ctx = shared_model_ctx.clone();
+                                    let shared_copilot_session = shared_copilot_session.clone();
+                                    let approval_rx = approval_rx.clone();
+                                    let user_prompt_rx = user_prompt_rx.clone();
+                                    let credential_rx = credential_rx.clone();
+                                    let dom_query_rx = dom_query_rx.clone();
+                                    let thread_mgr = agent_session.thread_mgr.clone();
+                                    let threads_path = agent_session.threads_path.clone();
+                                    let handle = tokio::spawn(async move {
+                                        let result = crate::chat::handle_chat_frame(
+                                            &http,
+                                            messages,
+                                            stream_id,
+                                            &mut sink,
+                                            &config,
+                                            &vault,
+                                            &skill_mgr,
+                                            &task_mgr,
+                                            observer.as_ref(),
+                                            &tool_cancel,
+                                            &shared_config,
+                                            &shared_model_ctx,
+                                            &shared_copilot_session,
+                                            &approval_rx,
+                                            &user_prompt_rx,
+                                            &credential_rx,
+                                            &dom_query_rx,
+                                            &thread_mgr,
+                                            &threads_path,
+                                        )
+                                        .await;
+                                        match result {
+                                            // The turn already recorded its
+                                            // own assistant message; `None`
+                                            // keeps the loop from adding a
+                                            // second copy.
+                                            Ok(()) => sink.done(None).await,
+                                            Err(e) => sink.error(format!("{e:#}")).await,
+                                        }
+                                    });
+                                    active_tasks.register(turn_thread, handle);
+                                }
                             }
                             ClientPayload::TasksRequest { session } => {
                                 thread_handler::handle_tasks_request(&mut *writer, &task_mgr, session).await?;
@@ -592,7 +690,7 @@ pub(crate) async fn handle_connection(
                                         &mut *writer,
                                         &mut config,
                                         &mut agent_session.project_mgr,
-                                        &agent_session.thread_mgr,
+                                        &*agent_session.thread_mgr.lock().await,
                                         &agent_session.projects_path,
                                         pid,
                                     )
@@ -600,7 +698,7 @@ pub(crate) async fn handle_connection(
                                 }
                                 thread_handler::handle_thread_create(
                                     &mut *writer,
-                                    &mut agent_session.thread_mgr,
+                                    &mut *agent_session.thread_mgr.lock().await,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     pid,
@@ -611,7 +709,7 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadSwitch { thread_id } => {
                                 thread_handler::handle_thread_switch(
                                     &mut *writer,
-                                    &mut agent_session.thread_mgr,
+                                    &mut *agent_session.thread_mgr.lock().await,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     &shared_model_ctx,
@@ -625,14 +723,14 @@ pub(crate) async fn handle_connection(
                                 // Threads in the active project still need this —
                                 // an override differs from the project dir.
                                 if let Some(pid) =
-                                    agent_session.thread_mgr.foreground().map(|t| t.project_id)
+                                    agent_session.thread_mgr.lock().await.foreground().map(|t| t.project_id)
                                 {
                                     if pid != agent_session.project_mgr.active_id() {
                                         project_handler::activate_project(
                                             &mut *writer,
                                             &mut config,
                                             &mut agent_session.project_mgr,
-                                            &agent_session.thread_mgr,
+                                            &*agent_session.thread_mgr.lock().await,
                                             &agent_session.projects_path,
                                             pid,
                                         )
@@ -641,21 +739,21 @@ pub(crate) async fn handle_connection(
                                         project_handler::repoint_workspace(
                                             &mut config,
                                             &agent_session.project_mgr,
-                                            &agent_session.thread_mgr,
+                                            &*agent_session.thread_mgr.lock().await,
                                         );
                                     }
                                 }
                             }
                             ClientPayload::ThreadList => {
-                                thread_handler::handle_thread_list(&mut *writer, &mut agent_session.thread_mgr, &task_mgr).await?;
+                                thread_handler::handle_thread_list(&mut *writer, &mut *agent_session.thread_mgr.lock().await, &task_mgr).await?;
                             }
                             ClientPayload::ThreadHistoryRequest { thread_id } => {
-                                thread_handler::handle_thread_history(&mut *writer, &agent_session.thread_mgr, thread_id).await?;
+                                thread_handler::handle_thread_history(&mut *writer, &*agent_session.thread_mgr.lock().await, thread_id).await?;
                             }
                             ClientPayload::ThreadClose { thread_id } => {
                                 thread_handler::handle_thread_close(
                                     &mut *writer,
-                                    &mut agent_session.thread_mgr,
+                                    &mut *agent_session.thread_mgr.lock().await,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     thread_id,
@@ -665,7 +763,7 @@ pub(crate) async fn handle_connection(
                             ClientPayload::ThreadRename { thread_id, new_label } => {
                                 thread_handler::handle_thread_rename(
                                     &mut *writer,
-                                    &mut agent_session.thread_mgr,
+                                    &mut *agent_session.thread_mgr.lock().await,
                                     &task_mgr,
                                     &agent_session.threads_path,
                                     thread_id,
@@ -677,7 +775,7 @@ pub(crate) async fn handle_connection(
                                 thread_handler::handle_thread_update(
                                     &mut *writer,
                                     &mut config,
-                                    &mut agent_session.thread_mgr,
+                                    &mut *agent_session.thread_mgr.lock().await,
                                     &agent_session.project_mgr,
                                     &task_mgr,
                                     &agent_session.threads_path,
@@ -731,7 +829,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
+                                    &*agent_session.thread_mgr.lock().await,
                                     &agent_session.projects_path,
                                     name,
                                     path,
@@ -753,7 +851,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
+                                    &*agent_session.thread_mgr.lock().await,
                                     &agent_session.projects_path,
                                     project_id,
                                     name,
@@ -766,9 +864,9 @@ pub(crate) async fn handle_connection(
                                 // so they aren't orphaned, then delete + repoint.
                                 let pid = rustyclaw_core::projects::ProjectId(project_id);
                                 let orphans: Vec<_> =
-                                    agent_session.thread_mgr.threads_for(pid).iter().map(|t| t.id).collect();
+                                    agent_session.thread_mgr.lock().await.threads_for(pid).iter().map(|t| t.id).collect();
                                 for tid in orphans {
-                                    agent_session.thread_mgr.set_project(
+                                    agent_session.thread_mgr.lock().await.set_project(
                                         tid,
                                         rustyclaw_core::projects::DEFAULT_PROJECT_ID,
                                     );
@@ -777,20 +875,20 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
+                                    &*agent_session.thread_mgr.lock().await,
                                     &agent_session.projects_path,
                                     project_id,
                                 )
                                 .await?;
-                                crate::helpers::persist_threads(&agent_session.thread_mgr, &agent_session.threads_path);
-                                send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                                crate::helpers::persist_threads(&*agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+                                send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
                             }
                             ClientPayload::ProjectSwitch { project_id } => {
                                 project_handler::handle_project_switch(
                                     &mut *writer,
                                     &mut config,
                                     &mut agent_session.project_mgr,
-                                    &agent_session.thread_mgr,
+                                    &*agent_session.thread_mgr.lock().await,
                                     &agent_session.projects_path,
                                     project_id,
                                 )
@@ -817,7 +915,7 @@ pub(crate) async fn handle_connection(
                                 if switched {
                                     // The thread manager was replaced — follow
                                     // the new one's sidebar events.
-                                    thread_events_rx = agent_session.thread_mgr.subscribe();
+                                    thread_events_rx = agent_session.thread_mgr.lock().await.subscribe();
                                 }
                             }
                             ClientPayload::AgentCreate { name, agent_id, description } => {
@@ -927,33 +1025,42 @@ pub(crate) async fn handle_connection(
             model_msg = model_task_rx.recv() => {
                 if let Some(task_msg) = model_msg {
                     match task_msg {
-                        concurrent::ModelTaskMessage::Frame(data) => {
-                            // Deserialize and forward frame to client
+                        concurrent::ModelTaskMessage::Frame { stream_id, data } => {
+                            // Deserialize and forward frame to client, on the
+                            // stream its request came in on.
                             if let Ok(frame) = deserialize_frame::<ServerFrame>(&data) {
-                                send_frame(&mut *writer, &frame).await?;
+                                writer.send_on_stream(stream_id, &frame).await?;
                             }
                         }
                         concurrent::ModelTaskMessage::Done { thread_id, response } => {
                             // Task completed - remove from active tasks
                             active_tasks.remove(&thread_id);
+                            let last_turn_drained =
+                                drain_deadline.is_some() && active_tasks.running_threads().is_empty();
 
                             // Record assistant response in thread history if provided
                             if let Some(text) = response {
-                                if let Some(thread) = agent_session.thread_mgr.get_mut(thread_id) {
+                                if let Some(thread) = agent_session.thread_mgr.lock().await.get_mut(thread_id) {
                                     thread.add_message(rustyclaw_core::threads::MessageRole::Assistant, &text);
                                 }
-                                send_thread_messages_update(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
+                                send_thread_messages_update(&mut *writer, thread_id, &*agent_session.thread_mgr.lock().await).await?;
                             }
 
                             // Send updated thread list (status may have changed)
-                            send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                            send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
 
                             // Persist thread state
-                            crate::helpers::persist_threads(&agent_session.thread_mgr, &agent_session.threads_path);
+                            crate::helpers::persist_threads(&*agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+
+                            if last_turn_drained {
+                                break;
+                            }
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, message } => {
                             // Task failed - remove from active tasks
                             active_tasks.remove(&thread_id);
+                            let last_turn_drained =
+                                drain_deadline.is_some() && active_tasks.running_threads().is_empty();
 
                             // Send error frame
                             let error_frame = ServerFrame {
@@ -966,7 +1073,11 @@ pub(crate) async fn handle_connection(
                             send_frame(&mut *writer, &error_frame).await?;
 
                             // Send updated thread list
-                            send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                            send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
+
+                            if last_turn_drained {
+                                break;
+                            }
                         }
                     }
                 }
@@ -976,7 +1087,7 @@ pub(crate) async fn handle_connection(
                 if let Ok(event) = thread_event {
                     // Only send updates for events that affect sidebar display
                     if event.triggers_sidebar_update() {
-                        send_threads_update(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
+                        send_threads_update(&mut *writer, &*agent_session.thread_mgr.lock().await, &task_mgr, None).await?;
                     }
                 }
             }
@@ -989,7 +1100,10 @@ pub(crate) async fn handle_connection(
     // Persist thread state on disconnect. This is the last write of the
     // session and carries everything said during it, so a failure here is
     // the most expensive one to lose silently.
-    crate::helpers::persist_threads(&agent_session.thread_mgr, &agent_session.threads_path);
+    crate::helpers::persist_threads(
+        &*agent_session.thread_mgr.lock().await,
+        &agent_session.threads_path,
+    );
 
     Ok(())
 }

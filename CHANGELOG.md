@@ -169,6 +169,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A turn held the whole gateway connection, so nothing else could be
+  answered until it finished.** `handle_chat_frame` was awaited inline in
+  the connection loop, so every other client frame — thread switch, history
+  request, project change, model switch — sat in the queue behind the
+  running turn. Switching threads mid-turn moved the sidebar highlight and
+  showed cached messages, but the authoritative history only arrived once
+  the model was done, and a turn parked on an `ask_user` question could
+  hold the connection for the full five-minute wait. Each turn now runs in
+  its own task, writing through the `ChannelSink`/`ActiveTasks` plumbing
+  that was already built for it (and had been left half-wired), while the
+  connection loop goes straight back to serving frames. The thread manager
+  moved behind a shared mutex to make that possible; every lock scope is a
+  single operation, and the two client-bound thread senders snapshot under
+  the lock and release it before writing, since holding it across a frame
+  write would deadlock the turn against the connection loop as soon as the
+  frame channel filled. A second message to a thread that is already
+  working is refused with a note rather than interleaved into an
+  unreadable transcript, a turn still running when the client disconnects
+  is cancelled and given ten seconds to flush instead of being orphaned,
+  and the cancel flag is now reset when a turn *starts* rather than on
+  every inbound frame — which previously threw away a Stop the moment any
+  other command arrived.
+
 - **An agent question was inline in looks only — everything else stopped
   until you answered it.** The desktop's `ask_user` card rendered in the
   chat stream, but it replaced the composer, which took the **Stop**
@@ -186,10 +209,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handling is on the card as a whole rather than only its text field:
   **Enter** submits from anywhere in it — including select, multi-select
   and multi-field forms, which had no Enter handler at all — **Esc**
-  dismisses, and ↑/↓ move the selection in a single-select. The card also
-  takes focus explicitly when it mounts, since a webview ignores
-  `autofocus` on nodes inserted after page load, which is every one of
-  these cards.
+  dismisses, and ↑/↓ move the selection in a single-select. Rows of
+  buttons stop Enter before it reaches that handler, so tabbing to
+  **Dismiss** or **No** and pressing Enter does what the button says
+  instead of submitting the default answer. The card also takes focus
+  explicitly when it mounts, since a webview ignores `autofocus` on nodes
+  inserted after page load, which is every one of these cards.
 
 - **Creating a project meant typing a path from memory, and failing at it
   on macOS.** The New Project dialog had no folder picker (unlike the
