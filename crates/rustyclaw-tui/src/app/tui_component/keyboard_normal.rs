@@ -118,6 +118,7 @@ pub(super) fn handle_normal_key(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
+        mut streaming_thread_id,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -905,6 +906,11 @@ pub(super) fn handle_normal_key(
                             // sees feedback while waiting for the model.
                             streaming.set(true);
                             stream_start.set(Some(Instant::now()));
+                            // Which thread this answer belongs to, recorded
+                            // before it starts arriving. `StreamStart` gets
+                            // the last word if the gateway picked a
+                            // different one.
+                            streaming_thread_id.set(foreground_thread_id.get());
                             let _ = tx.send(UserInput::Chat {
                                 text: val,
                                 thread_id: foreground_thread_id.get(),

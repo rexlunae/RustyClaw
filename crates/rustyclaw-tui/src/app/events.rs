@@ -31,9 +31,13 @@ pub(crate) enum GwEvent {
         summary: String,
         details: Option<String>,
     },
-    StreamStart,
+    /// A turn opened. Carries the thread the gateway is running it in, so a
+    /// turn started elsewhere — or a refusal for a thread this client is not
+    /// waiting on — can be told apart from the one on screen.
+    StreamStart(Option<u64>),
     Chunk(String),
-    ResponseDone,
+    /// A turn closed, naming its thread. See [`GwEvent::StreamStart`].
+    ResponseDone(Option<u64>),
     ThinkingStart,
     /// A chunk of the model's reasoning text.
     ThinkingDelta(String),

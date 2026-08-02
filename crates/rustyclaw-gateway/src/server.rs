@@ -842,6 +842,46 @@ pub(crate) async fn handle_connection(
                                         .await
                                         .ensure_foreground(),
                                 };
+                                // Settling the thread is only half of it. The
+                                // turn's file and command tools run in the
+                                // workspace directory, and that is global
+                                // config state — `switch_foreground` flips a
+                                // flag and nothing else. `ThreadSwitch`
+                                // repoints explicitly right after switching;
+                                // a turn that settles its own thread has to
+                                // do the same, whether the client named it or
+                                // the label match picked it.
+                                //
+                                // Otherwise this is the same race one layer
+                                // down, and worse: a `ThreadSwitch` to B
+                                // served while the user was typing into A
+                                // leaves the turn correctly filed under A but
+                                // writing files into B's directory. Right
+                                // conversation, wrong project on disk.
+                                if let Some(pid) = {
+                                    let tm = agent_session.thread_mgr.lock().await;
+                                    tm.foreground().map(|t| t.project_id)
+                                } {
+                                    if pid != agent_session.project_mgr.active_id() {
+                                        project_handler::activate_project(
+                                            &mut *writer,
+                                            &mut config,
+                                            &mut agent_session.project_mgr,
+                                            &agent_session.thread_mgr,
+                                            &agent_session.projects_path,
+                                            pid,
+                                        )
+                                        .await?;
+                                    } else {
+                                        // Synchronous, so the guard in the
+                                        // argument list never spans an await.
+                                        project_handler::repoint_workspace(
+                                            &mut config,
+                                            &agent_session.project_mgr,
+                                            &*agent_session.thread_mgr.lock().await,
+                                        );
+                                    }
+                                }
                                 // A key for tracking the turn even when
                                 // there is no thread at all to elect. It
                                 // never reaches the client.
