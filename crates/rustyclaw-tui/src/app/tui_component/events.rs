@@ -133,6 +133,7 @@ pub(super) fn apply_gw_event(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
+        mut streaming_thread_id,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -298,7 +299,13 @@ pub(super) fn apply_gw_event(
             m.push(msg);
             messages.set(m);
         }
-        GwEvent::StreamStart => {
+        GwEvent::StreamStart(thread_id) => {
+            // The gateway's answer to "which thread is this turn in" beats
+            // the one recorded at submit time, which is wrong whenever the
+            // gateway elected a thread instead of being told one.
+            if thread_id.is_some() {
+                streaming_thread_id.set(thread_id);
+            }
             streaming.set(true);
             // Keep the earlier start time if we already
             // began timing on user submit.
@@ -324,7 +331,22 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ResponseDone => {
+        GwEvent::ResponseDone(thread_id) => {
+            // Only the turn being tracked can end it. The gateway sends a
+            // close-out to refuse a message typed into another thread while
+            // one is running; acting on that would stop the spinner and file
+            // the half-streamed answer as if it were finished, while the
+            // real turn keeps writing into a buffer that has just been
+            // cleared. An unannounced thread is an older gateway, and is
+            // trusted as before.
+            let mine = match (thread_id, streaming_thread_id.get()) {
+                (Some(announced), Some(current)) => announced == current,
+                _ => true,
+            };
+            if !mine {
+                return;
+            }
+            streaming_thread_id.set(None);
             // Capture the accumulated assistant text and
             // send it back to the tokio loop so it gets
             // appended to the conversation history.

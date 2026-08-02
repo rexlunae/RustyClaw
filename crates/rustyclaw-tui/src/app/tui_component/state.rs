@@ -121,6 +121,11 @@ pub(super) struct Ui {
     pub tab_selected: State<usize>,
     pub thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>>,
     pub foreground_thread_id: State<Option<u64>>,
+    /// The thread the in-flight turn belongs to, settled when the message is
+    /// sent and corrected by the thread `StreamStart` announces. Distinct
+    /// from `foreground_thread_id`: the user can switch away mid-answer, and
+    /// a close-out for somebody else's thread must not end this turn.
+    pub streaming_thread_id: State<Option<u64>>,
     pub command_completions: State<Vec<String>>,
     pub command_selected: State<Option<usize>>,
     pub model_completion_provider: State<Option<String>>,
