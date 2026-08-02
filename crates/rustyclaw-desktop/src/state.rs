@@ -1811,6 +1811,29 @@ mod tests {
         );
     }
 
+    /// Answering one question leaves the others queued.
+    ///
+    /// The respond handler used the clear-everything path, so answering the
+    /// card on screen silently discarded every other thread's question with
+    /// it. Retirement is by call id.
+    #[test]
+    fn answering_one_question_leaves_the_others_queued() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call-1"), Some(1));
+        s.set_user_prompt(question("call-2"), Some(2));
+
+        // What on_prompt_respond does for the visible card.
+        s.clear_user_prompt_if("call-1");
+
+        s.switch_thread(2);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-2"),
+            "the other thread's question must still be waiting"
+        );
+    }
+
     /// Stop leaves another conversation's question alone.
     ///
     /// Questions are thread-scoped; Stop is too. Wiping the card
