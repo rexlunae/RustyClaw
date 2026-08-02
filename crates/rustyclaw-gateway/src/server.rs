@@ -641,12 +641,18 @@ pub(crate) async fn handle_connection(
                                 // running two turns at once would need those
                                 // responses routed by call id.
                                 if !active_tasks.running_threads().is_empty() {
-                                    // The note alone would leave the client
-                                    // sending forever: a submitted message is
-                                    // in flight until ResponseDone, so the
-                                    // composer would stay disabled with a
-                                    // "Processing…" row and no way out but
-                                    // Stop. Close the request out too.
+                                    // A note, and deliberately nothing else.
+                                    // `ResponseDone` carries no request or
+                                    // thread identity, so a client that
+                                    // tracks one in-flight response cannot
+                                    // tell this close-out from the real one:
+                                    // it would retire the turn that is still
+                                    // running, taking the Stop button and the
+                                    // working indicator with it. The client's
+                                    // in-flight state belongs to that turn —
+                                    // a refusal can only happen while one is
+                                    // running — and its own completion is
+                                    // what clears it.
                                     let mut scoped = rustyclaw_core::gateway::ScopedTransportWriter::new(
                                         &mut *writer,
                                         stream_id,
@@ -654,10 +660,10 @@ pub(crate) async fn handle_connection(
                                     protocol::server::send_info(
                                         &mut scoped,
                                         "Still working on the previous message — \
-                                         wait for it to finish or press Stop.",
+                                         wait for it to finish or press Stop, \
+                                         then send this again.",
                                     )
                                     .await?;
-                                    providers::send_response_done(&mut scoped).await?;
                                     continue;
                                 }
                                 let auto_switch = {

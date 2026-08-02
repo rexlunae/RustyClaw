@@ -281,6 +281,23 @@ impl ActiveTasks {
     }
 }
 
+/// Stop every turn when the registry goes away.
+///
+/// The connection handler returns through `?` from a dozen writer-backed
+/// calls — a client vanishing mid-write is the ordinary case — and those
+/// exits do not run the explicit `abort_all`. Dropping a `JoinHandle`
+/// detaches its task rather than ending it, so without this a turn would
+/// outlive its connection: still calling the model, still holding the
+/// thread manager and vault, and, if parked on an `ask_user` question,
+/// sitting there for the full five-minute wait with nobody left to answer.
+impl Drop for ActiveTasks {
+    fn drop(&mut self) {
+        for turn in self.tasks.values() {
+            turn.handle.abort();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -385,6 +402,29 @@ mod tests {
         assert!(tasks.running_threads().is_empty());
         // Give the runtime a chance to process the abort.
         tokio::task::yield_now().await;
+    }
+
+    /// Every exit from the connection handler must stop its turns, not just
+    /// the two that call `abort_all` — a write failure returns through `?`
+    /// with the registry merely dropped, and a dropped `JoinHandle` detaches
+    /// its task rather than ending it. The task here holds a sender, so the
+    /// channel closing is proof it was actually dropped.
+    #[tokio::test]
+    async fn dropping_the_registry_stops_its_turns() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(1);
+        let handle = tokio::spawn(async move {
+            let _tx = tx;
+            std::future::pending::<()>().await;
+        });
+
+        let mut tasks = ActiveTasks::new();
+        tasks.register(ThreadId(1), 1, handle, flag());
+        drop(tasks);
+
+        let closed = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("a turn left running after its connection ended");
+        assert!(closed.is_none(), "the task should be gone, not detached");
     }
 
     /// Stop still reaches the turn when the user has navigated to a thread
