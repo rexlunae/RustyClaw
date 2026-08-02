@@ -117,11 +117,23 @@ impl TransportWriter for ChannelSink {
     }
 }
 
+/// One running turn: the task itself, and the flag that stops it.
+#[derive(Debug)]
+struct RunningTurn {
+    handle: tokio::task::JoinHandle<()>,
+    cancel: crate::ToolCancelFlag,
+}
+
 /// Tracks active model tasks per thread.
+///
+/// Each turn owns its cancel flag rather than sharing one per connection.
+/// With turns for different threads able to run at once, a single flag
+/// would mean a Stop aimed at one turn stopped the others, and starting a
+/// turn would clear a Stop the user had just pressed for another.
 #[derive(Debug, Default)]
 pub struct ActiveTasks {
-    /// Map of thread ID to task handle (for cancellation)
-    tasks: std::collections::HashMap<ThreadId, tokio::task::JoinHandle<()>>,
+    /// Map of thread ID to the turn running for it.
+    tasks: std::collections::HashMap<ThreadId, RunningTurn>,
 }
 
 impl ActiveTasks {
@@ -129,11 +141,16 @@ impl ActiveTasks {
         Self::default()
     }
 
-    /// Register a new task for a thread.
+    /// Register a new task for a thread, with the flag that cancels it.
     /// If there's already a task for this thread, it will be aborted.
-    pub fn register(&mut self, thread_id: ThreadId, handle: tokio::task::JoinHandle<()>) {
-        if let Some(old_handle) = self.tasks.insert(thread_id, handle) {
-            old_handle.abort();
+    pub fn register(
+        &mut self,
+        thread_id: ThreadId,
+        handle: tokio::task::JoinHandle<()>,
+        cancel: crate::ToolCancelFlag,
+    ) {
+        if let Some(old) = self.tasks.insert(thread_id, RunningTurn { handle, cancel }) {
+            old.handle.abort();
         }
     }
 
@@ -144,11 +161,51 @@ impl ActiveTasks {
 
     /// Cancel a task for a specific thread.
     pub fn cancel(&mut self, thread_id: &ThreadId) -> bool {
-        if let Some(handle) = self.tasks.remove(thread_id) {
-            handle.abort();
+        if let Some(turn) = self.tasks.remove(thread_id) {
+            turn.handle.abort();
             true
         } else {
             false
+        }
+    }
+
+    /// Ask this thread's turn to stop at its next cancellation check, which
+    /// lets it unwind and report rather than being torn down mid-write.
+    /// Returns whether there was a turn to ask.
+    pub fn request_cancel(&self, thread_id: &ThreadId) -> bool {
+        match self.tasks.get(thread_id) {
+            Some(turn) => {
+                turn.cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Ask the only running turn to stop, if exactly one is running.
+    ///
+    /// Stop is aimed at the thread on screen, but a user who switched away
+    /// from a working thread still means "stop that" — the client shows the
+    /// button for as long as anything is in flight. With one turn running
+    /// there is nothing to be ambiguous about; with several, this declines
+    /// rather than guessing.
+    pub fn request_cancel_sole(&self) -> bool {
+        match self.tasks.values().next() {
+            Some(turn) if self.tasks.len() == 1 => {
+                turn.cancel
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Ask every running turn to stop. Used when the client goes away.
+    pub fn request_cancel_all(&self) {
+        for turn in self.tasks.values() {
+            turn.cancel
+                .store(true, std::sync::atomic::Ordering::Relaxed);
         }
     }
 
@@ -165,14 +222,16 @@ impl ActiveTasks {
     /// this, the follow-up message would be refused as "already working" by
     /// a turn that has in fact finished.
     pub fn reap_finished(&mut self) {
-        self.tasks.retain(|_, handle| !handle.is_finished());
+        self.tasks.retain(|_, turn| !turn.handle.is_finished());
     }
 
     /// Whether this thread's task has returned. Test-only view of the same
     /// state [`Self::reap_finished`] acts on.
     #[cfg(test)]
     pub fn is_finished_for_test(&self, thread_id: &ThreadId) -> bool {
-        self.tasks.get(thread_id).is_some_and(|h| h.is_finished())
+        self.tasks
+            .get(thread_id)
+            .is_some_and(|turn| turn.handle.is_finished())
     }
 
     /// Get IDs of all threads with active tasks.
@@ -184,6 +243,79 @@ impl ActiveTasks {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    fn flag() -> crate::ToolCancelFlag {
+        Arc::new(AtomicBool::new(false))
+    }
+
+    /// Stop applies to the turn it was aimed at. One flag per connection
+    /// would cancel every running turn and would be cleared by the next
+    /// turn to start, throwing away a Stop the user had just pressed.
+    #[tokio::test]
+    async fn stopping_one_turn_leaves_the_others_running() {
+        let mut tasks = ActiveTasks::new();
+        let (a, b) = (ThreadId(1), ThreadId(2));
+        let (flag_a, flag_b) = (flag(), flag());
+        tasks.register(a, tokio::spawn(std::future::pending()), flag_a.clone());
+        tasks.register(b, tokio::spawn(std::future::pending()), flag_b.clone());
+
+        assert!(tasks.request_cancel(&a));
+        assert!(
+            flag_a.load(Ordering::Relaxed),
+            "the target must be asked to stop"
+        );
+        assert!(
+            !flag_b.load(Ordering::Relaxed),
+            "another thread's turn must keep running"
+        );
+
+        // Starting a third turn cannot disturb the Stop already recorded.
+        tasks.register(ThreadId(3), tokio::spawn(async {}), flag());
+        assert!(flag_a.load(Ordering::Relaxed));
+
+        assert!(
+            !tasks.request_cancel(&ThreadId(9)),
+            "a thread with no turn has nothing to stop"
+        );
+
+        tasks.request_cancel_all();
+        assert!(
+            flag_b.load(Ordering::Relaxed),
+            "disconnect stops everything"
+        );
+    }
+
+    /// Stop still reaches the turn when the user has navigated to a thread
+    /// that is not the one working — as long as there is only one.
+    #[tokio::test]
+    async fn stop_falls_back_to_the_sole_running_turn() {
+        let mut tasks = ActiveTasks::new();
+        let only = flag();
+        tasks.register(
+            ThreadId(1),
+            tokio::spawn(std::future::pending()),
+            only.clone(),
+        );
+
+        assert!(
+            !tasks.request_cancel(&ThreadId(2)),
+            "the thread on screen has no turn of its own"
+        );
+        assert!(tasks.request_cancel_sole());
+        assert!(only.load(Ordering::Relaxed));
+
+        // With more than one running, guessing would be wrong.
+        let second = flag();
+        tasks.register(
+            ThreadId(2),
+            tokio::spawn(std::future::pending()),
+            second.clone(),
+        );
+        assert!(!tasks.request_cancel_sole());
+        assert!(!second.load(Ordering::Relaxed));
+    }
 
     /// A finished turn must not block the next message. The `Done` message
     /// that normally retires a task shares a channel with the turn's frames,
@@ -194,7 +326,7 @@ mod tests {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(7);
         let handle = tokio::spawn(async {});
-        tasks.register(thread, handle);
+        tasks.register(thread, handle, flag());
 
         // Let the task run to completion without touching the channel the
         // connection loop would normally drain.

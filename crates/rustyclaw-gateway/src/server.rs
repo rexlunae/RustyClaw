@@ -8,7 +8,7 @@
 
 use anyhow::{Context, Result};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::AtomicBool;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tracing::{trace, warn};
@@ -374,12 +374,12 @@ pub(crate) async fn handle_connection(
         }
     }
 
-    // ── Spawn reader task with cancel flag ─────────────────────────
+    // ── Spawn reader task ──────────────────────────────────────────
     //
-    // The reader runs in a separate task so it can receive cancel messages
-    // even while dispatch_text_message is running. Messages are forwarded
-    // through a channel; cancel requests set a shared flag.
-    let tool_cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+    // The reader runs in a separate task so responses the running turn is
+    // waiting on — tool approvals, `ask_user` answers, credentials — reach
+    // it while it is mid-flight. Everything else is forwarded to the loop
+    // below through a channel.
     let (frame_tx, mut frame_rx) = tokio::sync::mpsc::channel::<WireFrame<ClientFrame>>(32);
 
     // Channel for tool-approval responses (used by the Ask permission flow).
@@ -435,7 +435,6 @@ pub(crate) async fn handle_connection(
     }
 
     let reader_cancel = cancel.clone();
-    let reader_tool_cancel = tool_cancel.clone();
     let reader_handle = tokio::spawn(async move {
         loop {
             tokio::select! {
@@ -446,11 +445,12 @@ pub(crate) async fn handle_connection(
                             let stream_id = envelope.stream_id;
                             let frame = envelope.frame.clone();
                             trace!(stream_id, frame_type = ?frame.frame_type, "Received client frame");
-                            // Intercept cancel, approval, and prompt responses
-                            if frame.frame_type == ClientFrameType::Cancel {
-                                reader_tool_cancel.store(true, Ordering::Relaxed);
-                                continue;
-                            }
+                            // Cancel is *not* intercepted here. It used to
+                            // be, because the main loop was blocked for the
+                            // length of a turn; now that turns run in their
+                            // own tasks, the loop can route a Stop to the
+                            // turn it was meant for instead of setting one
+                            // flag that stops every turn at once.
                             // Process control must be handled here, in the
                             // reader task, so it works while the main loop is
                             // blocked awaiting the very tool being controlled.
@@ -540,7 +540,7 @@ pub(crate) async fn handle_connection(
                         if active_tasks.running_threads().is_empty() {
                             break;
                         }
-                        tool_cancel.store(true, Ordering::Relaxed);
+                        active_tasks.request_cancel_all();
                         drain_deadline = Some(tokio::time::Instant::now() + TURN_DRAIN_GRACE);
                         continue;
                     }
@@ -549,12 +549,25 @@ pub(crate) async fn handle_connection(
                 let frame = envelope.frame;
 
                 trace!(stream_id, frame_type = ?frame.frame_type, "Handling client frame");
-                // The cancel flag is reset where a turn *starts* (the Chat
-                // arm below), not on every frame. Resetting here used to
-                // discard a Stop the moment any other command arrived — and
-                // now that the loop keeps serving commands while a turn
-                // runs, that race would be the common case rather than a
-                // rare one.
+
+                // Stop: aimed at the turn running for the thread on screen.
+                // Each turn owns its cancel flag, so this cannot disturb a
+                // turn running for a different thread — and nothing resets
+                // another turn's flag, which is what made a Stop vanish when
+                // any other command followed it.
+                if frame.frame_type == ClientFrameType::Cancel {
+                    active_tasks.reap_finished();
+                    let target = agent_session.thread_mgr.lock().await.foreground_id();
+                    let stopped = target.is_some_and(|id| active_tasks.request_cancel(&id))
+                        // Switched away from the working thread: the client
+                        // still shows Stop, and with one turn running there
+                        // is only one thing it can mean.
+                        || active_tasks.request_cancel_sole();
+                    if !stopped {
+                        trace!(?target, "Cancel with no turn running for the foreground thread");
+                    }
+                    continue;
+                }
 
                         // Handle the frame based on type
                         match frame.payload {
@@ -609,14 +622,27 @@ pub(crate) async fn handle_connection(
                                     // Two turns writing to one client would
                                     // interleave their stream frames into an
                                     // unreadable transcript. Say so instead.
-                                    protocol::server::send_info(
+                                    // The note alone would leave the client
+                                    // sending forever: a submitted message is
+                                    // in flight until ResponseDone, so the
+                                    // composer would stay disabled with a
+                                    // "Processing…" row and no way out but
+                                    // Stop. Close the request out too.
+                                    let mut scoped = rustyclaw_core::gateway::ScopedTransportWriter::new(
                                         &mut *writer,
+                                        stream_id,
+                                    );
+                                    protocol::server::send_info(
+                                        &mut scoped,
                                         "This thread is already working on a message — \
                                          wait for it to finish or press Stop.",
                                     )
                                     .await?;
+                                    providers::send_response_done(&mut scoped).await?;
                                 } else {
-                                    tool_cancel.store(false, Ordering::Relaxed);
+                                    // A fresh flag per turn: see ActiveTasks.
+                                    let tool_cancel: ToolCancelFlag =
+                                        Arc::new(AtomicBool::new(false));
                                     let mut sink = concurrent::ChannelSink::new(
                                         model_task_tx.clone(),
                                         turn_thread,
@@ -628,7 +654,7 @@ pub(crate) async fn handle_connection(
                                     let skill_mgr = skill_mgr.clone();
                                     let task_mgr = task_mgr.clone();
                                     let observer = observer.clone();
-                                    let tool_cancel = tool_cancel.clone();
+                                    let turn_cancel = tool_cancel.clone();
                                     let shared_config = shared_config.clone();
                                     let shared_model_ctx = shared_model_ctx.clone();
                                     let shared_copilot_session = shared_copilot_session.clone();
@@ -649,7 +675,7 @@ pub(crate) async fn handle_connection(
                                             &skill_mgr,
                                             &task_mgr,
                                             observer.as_ref(),
-                                            &tool_cancel,
+                                            &turn_cancel,
                                             &shared_config,
                                             &shared_model_ctx,
                                             &shared_copilot_session,
@@ -670,7 +696,7 @@ pub(crate) async fn handle_connection(
                                             Err(e) => sink.error(format!("{e:#}")).await,
                                         }
                                     });
-                                    active_tasks.register(turn_thread, handle);
+                                    active_tasks.register(turn_thread, handle, tool_cancel);
                                 }
                             }
                             ClientPayload::TasksRequest { session } => {
