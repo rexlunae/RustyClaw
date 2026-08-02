@@ -42,8 +42,14 @@ fn thread_dtos(
     (threads, foreground_id)
 }
 
-/// [`send_threads_update`] for callers holding the shared manager: snapshot
-/// under the lock, release it, then send.
+/// Send a threads update frame to the client: chat threads, running tasks,
+/// and active sub-agent sessions.
+///
+/// Takes the shared manager rather than a borrow so the snapshot is taken
+/// under the lock and the lock released before anything is written. A
+/// caller holding a guard across the write would block every turn running
+/// in parallel — they take the same lock at each persistence point — for
+/// as long as the transport takes.
 pub(crate) async fn send_threads_update_shared(
     writer: &mut dyn transport::TransportWriter,
     thread_mgr: &SharedThreadMgr,
@@ -54,22 +60,6 @@ pub(crate) async fn send_threads_update_shared(
         let tm = thread_mgr.lock().await;
         thread_dtos(&tm)
     };
-    send_threads_update_from(writer, threads, foreground_id, task_mgr, session_key).await
-}
-
-/// Send a threads update frame to the client.
-///
-/// This includes:
-/// - Chat threads (from ThreadManager)
-/// - Running tasks (from TaskManager)
-/// - Active sub-agent sessions (from SessionManager)
-pub(crate) async fn send_threads_update(
-    writer: &mut dyn transport::TransportWriter,
-    thread_mgr: &rustyclaw_core::threads::ThreadManager,
-    task_mgr: &SharedTaskManager,
-    session_key: Option<&str>,
-) -> Result<()> {
-    let (threads, foreground_id) = thread_dtos(thread_mgr);
     send_threads_update_from(writer, threads, foreground_id, task_mgr, session_key).await
 }
 
@@ -243,7 +233,8 @@ pub(crate) fn thread_history_messages(
         .collect()
 }
 
-/// [`send_thread_messages_update`] for callers holding the shared manager.
+/// Send one thread's transcript, on the same snapshot-then-write terms as
+/// [`send_threads_update_shared`].
 pub(crate) async fn send_thread_messages_update_shared(
     writer: &mut dyn transport::TransportWriter,
     thread_id: rustyclaw_core::threads::ThreadId,
@@ -254,19 +245,6 @@ pub(crate) async fn send_thread_messages_update_shared(
         tm.get(thread_id).map(thread_history_messages)
     };
     send_thread_messages_from(writer, thread_id, messages).await
-}
-
-pub(crate) async fn send_thread_messages_update(
-    writer: &mut dyn transport::TransportWriter,
-    thread_id: rustyclaw_core::threads::ThreadId,
-    thread_mgr: &rustyclaw_core::threads::ThreadManager,
-) -> Result<()> {
-    send_thread_messages_from(
-        writer,
-        thread_id,
-        thread_mgr.get(thread_id).map(thread_history_messages),
-    )
-    .await
 }
 
 /// Send a thread's transcript. `None` means the thread is not in this
