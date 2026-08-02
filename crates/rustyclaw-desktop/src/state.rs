@@ -618,8 +618,24 @@ impl AppState {
     /// off `streaming_thread_id`, so correcting it here corrects the whole
     /// turn: chunks, tool calls, the question card, the completion.
     pub fn adopt_stream_thread(&mut self, thread_id: Option<u64>) {
-        if let Some(id) = thread_id {
-            self.streaming_thread_id = Some(id);
+        let Some(id) = thread_id else { return };
+        self.streaming_thread_id = Some(id);
+        // Nothing was focused, so the gateway elected this thread for the
+        // turn. Follow it onto the screen: otherwise every frame that
+        // follows is judged to belong to a thread that isn't in view, and
+        // the reply — text, tool calls, all of it — renders nowhere.
+        //
+        // A `ThreadsUpdate` says the same thing (electing emits a
+        // `Foregrounded` event, which the connection loop turns into one)
+        // and would arrive first in practice. But that is two independent
+        // channels agreeing on their order, and the whole point of naming
+        // the thread on the turn is not having to depend on that.
+        //
+        // Set `streaming_thread_id` first: with the two now agreed, the
+        // turn counts as in flight, and cached history won't replace the
+        // live view underneath it.
+        if self.foreground_thread_id.is_none() {
+            self.set_foreground_thread(Some(id));
         }
     }
 
@@ -1567,6 +1583,47 @@ mod tests {
         // An older gateway announces nothing; the guess stands.
         s.adopt_stream_thread(None);
         assert_eq!(s.streaming_thread_id, Some(7));
+    }
+
+    /// A thread elected for the turn comes onto the screen with it.
+    ///
+    /// Sending with nothing focused makes the gateway elect a thread and
+    /// announce it. Adopting it as the turn's thread but leaving the view
+    /// pointed at nothing puts the two permanently out of step: every
+    /// frame after `StreamStart` reads as belonging to a backgrounded
+    /// thread and the whole reply is dropped on the floor.
+    #[test]
+    fn an_elected_thread_comes_into_view_with_its_turn() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.mark_request_started();
+
+        s.adopt_stream_thread(Some(7));
+
+        assert_eq!(s.foreground_thread_id, Some(7));
+        assert!(
+            s.stream_targets_foreground(),
+            "the turn must render into the view, not past it"
+        );
+    }
+
+    /// Electing does not yank the user out of the thread they are reading.
+    ///
+    /// The announcement settles where the *turn* runs. A client that
+    /// already knows its foreground has said where it is looking, and a
+    /// turn running elsewhere — one started before the user switched away —
+    /// must stay in the background where it belongs.
+    #[test]
+    fn an_announcement_does_not_move_a_view_that_is_already_placed() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(3);
+        s.mark_request_started();
+
+        s.adopt_stream_thread(Some(7));
+
+        assert_eq!(s.foreground_thread_id, Some(3));
+        assert_eq!(s.streaming_thread_id, Some(7));
+        assert!(!s.stream_targets_foreground());
     }
 
     /// Only the turn being tracked can end it.
