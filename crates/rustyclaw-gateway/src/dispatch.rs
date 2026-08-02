@@ -17,11 +17,11 @@ use rustyclaw_core::gateway::{
 use rustyclaw_core::observability::ObserverEvent;
 use rustyclaw_core::tools;
 
-use crate::thread_updates::{send_thread_messages_update, send_threads_update};
+use crate::thread_updates::{send_thread_messages_update_shared, send_threads_update_shared};
 use crate::{
     COMPACTION_THRESHOLD, SharedConfig, SharedCopilotSession, SharedObserver, SharedSkillManager,
-    SharedTaskManager, SharedVault, ToolCancelFlag, auth, errors, helpers, providers,
-    tool_executor,
+    SharedTaskManager, SharedThreadMgr, SharedVault, ToolCancelFlag, auth, errors, helpers,
+    providers, tool_executor,
 };
 use protocol::server::send_frame;
 
@@ -476,7 +476,7 @@ pub(crate) async fn dispatch_text_message(
     >,
     credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
     dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &SharedThreadMgr,
     threads_path: &std::path::Path,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
@@ -645,7 +645,10 @@ pub(crate) async fn dispatch_text_message(
         // re-trigger the flush, since compaction — which starts the next
         // cycle — only fires at the (higher) compaction threshold.
         let ends_with_user = resolved.messages.last().is_some_and(|m| m.role == "user");
-        let thread_already_flushed = thread_mgr.foreground().is_some_and(|t| t.memory_flushed);
+        let thread_already_flushed = {
+            let tm = thread_mgr.lock().await;
+            tm.foreground().is_some_and(|t| t.memory_flushed)
+        };
         let mut flushed_this_round = false;
         if ends_with_user
             && !thread_already_flushed
@@ -659,10 +662,13 @@ pub(crate) async fn dispatch_text_message(
 
             // Mark as flushed to prevent repeated injections
             memory_flush.mark_flushed();
-            if let Some(thread) = thread_mgr.foreground_mut() {
-                thread.memory_flushed = true;
+            {
+                let mut tm = thread_mgr.lock().await;
+                if let Some(thread) = tm.foreground_mut() {
+                    thread.memory_flushed = true;
+                }
+                crate::helpers::persist_threads(&tm, threads_path);
             }
-            crate::helpers::persist_threads(thread_mgr, threads_path);
             flush_pending_resume = true;
             flushed_this_round = true;
 
@@ -686,10 +692,11 @@ pub(crate) async fn dispatch_text_message(
                     // Compacted in-place for this request; also persist the
                     // summary to the thread so the next prompt reuses it
                     // instead of re-compacting the full history again.
-                    if let Some(thread) = thread_mgr.foreground_mut() {
+                    let mut tm = thread_mgr.lock().await;
+                    if let Some(thread) = tm.foreground_mut() {
                         thread.apply_compaction_keeping(outcome.summary, outcome.kept_recent);
                     }
-                    if let Err(e) = thread_mgr.save_to_file(threads_path) {
+                    if let Err(e) = tm.save_to_file(threads_path) {
                         tracing::warn!(
                             error = %e,
                             path = ?threads_path,
@@ -890,16 +897,19 @@ pub(crate) async fn dispatch_text_message(
                 // Record assistant response in thread history
                 let mut updated_thread_id = None;
                 if !model_resp.text.is_empty() {
-                    if let Some(thread) = thread_mgr.foreground_mut() {
-                        updated_thread_id = Some(thread.id);
-                        thread.add_message(
-                            rustyclaw_core::threads::MessageRole::Assistant,
-                            &model_resp.text,
-                        );
+                    {
+                        let mut tm = thread_mgr.lock().await;
+                        if let Some(thread) = tm.foreground_mut() {
+                            updated_thread_id = Some(thread.id);
+                            thread.add_message(
+                                rustyclaw_core::threads::MessageRole::Assistant,
+                                &model_resp.text,
+                            );
+                        }
+                        // Persist the final assistant turn so reconnecting
+                        // clients see it via ThreadHistoryRequest.
+                        crate::helpers::persist_threads(&tm, threads_path);
                     }
-                    // Persist the final assistant turn so reconnecting
-                    // clients see it via ThreadHistoryRequest.
-                    crate::helpers::persist_threads(thread_mgr, threads_path);
                     // Auto-ingest assistant response into Steel Memory
                     #[cfg(feature = "semantic-memory")]
                     {
@@ -916,7 +926,7 @@ pub(crate) async fn dispatch_text_message(
                 }
                 providers::send_response_done(writer).await?;
                 if let Some(thread_id) = updated_thread_id {
-                    send_thread_messages_update(writer, thread_id, thread_mgr).await?;
+                    send_thread_messages_update_shared(writer, thread_id, thread_mgr).await?;
                 }
                 return Ok(());
             } else if finish_reason == "length" {
@@ -1128,18 +1138,32 @@ pub(crate) async fn dispatch_text_message(
                             if let Some(description) =
                                 update.get("description").and_then(|v| v.as_str())
                             {
-                                thread_mgr.set_foreground_description(description);
+                                thread_mgr
+                                    .lock()
+                                    .await
+                                    .set_foreground_description(description);
                                 output = format!("Thread description set to: {}", description);
-                                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                                send_threads_update_shared(writer, thread_mgr, task_mgr, None)
+                                    .await?;
                             }
                         }
                         "set_caption" => {
                             if let Some(caption) = update.get("caption").and_then(|v| v.as_str()) {
-                                if let Some(fg_id) = thread_mgr.foreground_id() {
-                                    thread_mgr.rename(fg_id, caption);
+                                let renamed = {
+                                    let mut tm = thread_mgr.lock().await;
+                                    match tm.foreground_id() {
+                                        Some(fg_id) => {
+                                            tm.rename(fg_id, caption);
+                                            crate::helpers::persist_threads(&tm, threads_path);
+                                            true
+                                        }
+                                        None => false,
+                                    }
+                                };
+                                if renamed {
                                     output = format!("Thread caption set to: {}", caption);
-                                    send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-                                    crate::helpers::persist_threads(thread_mgr, threads_path);
+                                    send_threads_update_shared(writer, thread_mgr, task_mgr, None)
+                                        .await?;
                                 } else {
                                     output = "No active thread to caption.".to_string();
                                 }
@@ -1153,7 +1177,7 @@ pub(crate) async fn dispatch_text_message(
             // Tools that modify session state should trigger sidebar update
             const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagent_run"];
             if SESSION_TOOLS.contains(&tc.name.as_str()) && !is_error {
-                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
             }
 
             // Notify the client about the result.
@@ -1222,7 +1246,8 @@ pub(crate) async fn dispatch_text_message(
         // We store a normalized form (Vec<{id,name,arguments}>) so any
         // client can faithfully replay this round regardless of which
         // provider produced it.
-        if let Some(thread) = thread_mgr.foreground_mut() {
+        let mut tm = thread_mgr.lock().await;
+        if let Some(thread) = tm.foreground_mut() {
             let normalized: Vec<serde_json::Value> = model_resp
                 .tool_calls
                 .iter()
@@ -1242,7 +1267,8 @@ pub(crate) async fn dispatch_text_message(
                 thread.add_tool_result(tr.id.clone(), tr.output.clone());
             }
         }
-        crate::helpers::persist_threads(thread_mgr, threads_path);
+        crate::helpers::persist_threads(&tm, threads_path);
+        drop(tm);
 
         // ── Bail out if tools keep failing with no progress ─────────
         // A round where every tool call errored may still recover (the
