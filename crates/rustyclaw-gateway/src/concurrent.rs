@@ -34,6 +34,13 @@ pub enum ModelTaskMessage {
     /// The main loop should update thread state.
     Done {
         thread_id: ThreadId,
+        /// Which turn this is from. A turn's completion travels the same
+        /// channel as its frames, so the loop can read the client's next
+        /// message — and start the *next* turn on this thread — before
+        /// draining it. Without this id, retiring "the turn for thread N"
+        /// would retire whichever turn is registered now, not the one that
+        /// finished.
+        turn_id: u64,
         /// Final assistant response text to add to thread history
         response: Option<String>,
     },
@@ -41,6 +48,7 @@ pub enum ModelTaskMessage {
     /// The model task failed with an error
     Error {
         thread_id: ThreadId,
+        turn_id: u64,
         message: String,
     },
 }
@@ -64,14 +72,16 @@ pub fn channel() -> (ModelTaskTx, ModelTaskRx) {
 pub struct ChannelSink {
     tx: ModelTaskTx,
     thread_id: ThreadId,
+    turn_id: u64,
     stream_id: u64,
 }
 
 impl ChannelSink {
-    pub fn new(tx: ModelTaskTx, thread_id: ThreadId, stream_id: u64) -> Self {
+    pub fn new(tx: ModelTaskTx, thread_id: ThreadId, turn_id: u64, stream_id: u64) -> Self {
         Self {
             tx,
             thread_id,
+            turn_id,
             stream_id,
         }
     }
@@ -82,6 +92,7 @@ impl ChannelSink {
             .tx
             .send(ModelTaskMessage::Done {
                 thread_id: self.thread_id,
+                turn_id: self.turn_id,
                 response,
             })
             .await;
@@ -93,6 +104,7 @@ impl ChannelSink {
             .tx
             .send(ModelTaskMessage::Error {
                 thread_id: self.thread_id,
+                turn_id: self.turn_id,
                 message,
             })
             .await;
@@ -120,6 +132,9 @@ impl TransportWriter for ChannelSink {
 /// One running turn: the task itself, and the flag that stops it.
 #[derive(Debug)]
 struct RunningTurn {
+    /// Distinguishes this turn from an earlier one on the same thread whose
+    /// completion message has not been drained yet.
+    id: u64,
     handle: tokio::task::JoinHandle<()>,
     cancel: crate::ToolCancelFlag,
 }
@@ -146,17 +161,31 @@ impl ActiveTasks {
     pub fn register(
         &mut self,
         thread_id: ThreadId,
+        turn_id: u64,
         handle: tokio::task::JoinHandle<()>,
         cancel: crate::ToolCancelFlag,
     ) {
-        if let Some(old) = self.tasks.insert(thread_id, RunningTurn { handle, cancel }) {
+        if let Some(old) = self.tasks.insert(
+            thread_id,
+            RunningTurn {
+                id: turn_id,
+                handle,
+                cancel,
+            },
+        ) {
             old.handle.abort();
         }
     }
 
-    /// Remove a task when it completes.
-    pub fn remove(&mut self, thread_id: &ThreadId) {
-        self.tasks.remove(thread_id);
+    /// Retire a turn once its completion message is handled — but only if it
+    /// is still the turn registered for that thread. A turn that finished
+    /// and was already reaped may have been replaced by the next one, and
+    /// removing that replacement would leave a running turn nothing can
+    /// stop and nothing counts as busy.
+    pub fn remove_if(&mut self, thread_id: &ThreadId, turn_id: u64) {
+        if self.tasks.get(thread_id).is_some_and(|t| t.id == turn_id) {
+            self.tasks.remove(thread_id);
+        }
     }
 
     /// Cancel a task for a specific thread.
@@ -270,8 +299,8 @@ mod tests {
         let mut tasks = ActiveTasks::new();
         let (a, b) = (ThreadId(1), ThreadId(2));
         let (flag_a, flag_b) = (flag(), flag());
-        tasks.register(a, tokio::spawn(std::future::pending()), flag_a.clone());
-        tasks.register(b, tokio::spawn(std::future::pending()), flag_b.clone());
+        tasks.register(a, 1, tokio::spawn(std::future::pending()), flag_a.clone());
+        tasks.register(b, 2, tokio::spawn(std::future::pending()), flag_b.clone());
 
         assert!(tasks.request_cancel(&a));
         assert!(
@@ -284,7 +313,7 @@ mod tests {
         );
 
         // Starting a third turn cannot disturb the Stop already recorded.
-        tasks.register(ThreadId(3), tokio::spawn(async {}), flag());
+        tasks.register(ThreadId(3), 3, tokio::spawn(async {}), flag());
         assert!(flag_a.load(Ordering::Relaxed));
 
         assert!(
@@ -299,6 +328,47 @@ mod tests {
         );
     }
 
+    /// The completion of a finished turn must not retire the turn that
+    /// replaced it. `Done` travels the same channel as the turn's frames,
+    /// so the connection loop can read the client's follow-up — and start
+    /// the next turn — before draining it. Removing by thread alone would
+    /// leave that new turn untracked: Stop could not reach it, and the
+    /// busy guard would let a third turn start alongside it.
+    #[tokio::test]
+    async fn a_finished_turns_completion_does_not_retire_its_successor() {
+        let mut tasks = ActiveTasks::new();
+        let thread = ThreadId(7);
+
+        // Turn A finishes and is reaped when the follow-up message arrives.
+        tasks.register(thread, 1, tokio::spawn(async {}), flag());
+        while !tasks.is_finished_for_test(&thread) {
+            tokio::task::yield_now().await;
+        }
+        tasks.reap_finished();
+
+        // Turn B starts on the same thread.
+        let b_cancel = flag();
+        tasks.register(
+            thread,
+            2,
+            tokio::spawn(std::future::pending()),
+            b_cancel.clone(),
+        );
+
+        // Only now does A's queued completion get drained.
+        tasks.remove_if(&thread, 1);
+
+        assert!(
+            tasks.is_running(&thread),
+            "the new turn must survive the old turn's completion"
+        );
+        assert!(tasks.request_cancel(&thread), "Stop must still reach it");
+        assert!(b_cancel.load(Ordering::Relaxed));
+
+        tasks.remove_if(&thread, 2);
+        assert!(!tasks.is_running(&thread), "its own completion retires it");
+    }
+
     /// Shutdown must end running turns, not detach them. A dropped
     /// `JoinHandle` leaves the task alive with nothing draining its
     /// frames, so it would block forever holding connection state.
@@ -308,7 +378,7 @@ mod tests {
         let handle = tokio::spawn(std::future::pending::<()>());
         let watch = tokio::spawn(async {});
         drop(watch);
-        tasks.register(ThreadId(1), handle, flag());
+        tasks.register(ThreadId(1), 1, handle, flag());
 
         tasks.abort_all();
 
@@ -325,6 +395,7 @@ mod tests {
         let only = flag();
         tasks.register(
             ThreadId(1),
+            1,
             tokio::spawn(std::future::pending()),
             only.clone(),
         );
@@ -340,6 +411,7 @@ mod tests {
         let second = flag();
         tasks.register(
             ThreadId(2),
+            2,
             tokio::spawn(std::future::pending()),
             second.clone(),
         );
@@ -356,7 +428,7 @@ mod tests {
         let mut tasks = ActiveTasks::new();
         let thread = ThreadId(7);
         let handle = tokio::spawn(async {});
-        tasks.register(thread, handle, flag());
+        tasks.register(thread, 1, handle, flag());
 
         // Let the task run to completion without touching the channel the
         // connection loop would normally drain.
