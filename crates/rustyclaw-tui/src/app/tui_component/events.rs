@@ -420,6 +420,8 @@ pub(super) fn apply_gw_event(
             queued_tool_approvals.set(Vec::new());
             queued_user_prompts.set(Vec::new());
             queued_credentials.set(Vec::new());
+            queued_device_flows.set(Vec::new());
+            device_flow_thread.set(None);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::info("Gateway connected."));
             messages.set(m);

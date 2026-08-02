@@ -98,6 +98,17 @@ impl GatewayClient {
         let connected_clone = connected.clone();
         let next_stream_id = Arc::new(AtomicU64::new(1));
         let active_stream_id = Arc::new(AtomicU64::new(0));
+        // Which thread each in-flight turn is running in, keyed by the
+        // stream its request went out on. Written from both sides: the
+        // sender seeds it from the thread the client named on `Chat`, and
+        // the reader corrects it from `StreamStart`. Seeding matters
+        // because a turn can ask for things *before* its stream opens — an
+        // auth failure on the first model call raises a credential request
+        // ahead of any `StreamStart` — and an unattributed request cannot
+        // be retired when its turn ends. Plain mutex: every use is one map
+        // operation with no await inside.
+        let stream_threads: Arc<std::sync::Mutex<std::collections::HashMap<u64, u64>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
         // Create protocol event log.
         let event_log = default_log_path()
@@ -113,12 +124,19 @@ impl GatewayClient {
         let event_tx_clone = event_tx.clone();
         let next_stream_id_tx = next_stream_id.clone();
         let active_stream_id_tx = active_stream_id.clone();
+        let stream_threads_tx = stream_threads.clone();
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 let stream_id = match &cmd {
-                    GatewayCommand::Chat { .. } => {
+                    GatewayCommand::Chat { thread_id, .. } => {
                         let id = next_stream_id_tx.fetch_add(2, Ordering::Relaxed);
                         active_stream_id_tx.store(id, Ordering::Relaxed);
+                        if let Some(thread) = thread_id {
+                            stream_threads_tx
+                                .lock()
+                                .expect("stream thread map poisoned")
+                                .insert(id, *thread);
+                        }
                         id
                     }
                     GatewayCommand::Cancel { .. } => active_stream_id_tx.load(Ordering::Relaxed),
@@ -148,15 +166,11 @@ impl GatewayClient {
 
         // ── Spawn task to handle incoming messages ─────────────────────
         let active_stream_id_rx = active_stream_id.clone();
+        let stream_threads_rx = stream_threads;
         tokio::spawn(async move {
             // Streaming stats for the event log.
             let mut stream_chunk_count: u32 = 0;
             let mut stream_total_bytes: usize = 0;
-            // Which thread each in-flight turn is running in, keyed by the
-            // stream its request went out on. Several entries at once is the
-            // normal case now: the gateway runs a turn per thread.
-            let mut stream_threads: std::collections::HashMap<u64, u64> =
-                std::collections::HashMap::new();
 
             loop {
                 match reader.recv_wire().await {
@@ -209,9 +223,19 @@ impl GatewayClient {
                             thread_id: Some(thread),
                         } = &envelope.frame.payload
                         {
-                            stream_threads.insert(stream_id, *thread);
+                            // The gateway's announcement corrects the seed:
+                            // the client's guess is wrong when it named
+                            // nothing and a thread was elected.
+                            stream_threads_rx
+                                .lock()
+                                .expect("stream thread map poisoned")
+                                .insert(stream_id, *thread);
                         }
-                        let thread_id = stream_threads.get(&stream_id).copied();
+                        let thread_id = stream_threads_rx
+                            .lock()
+                            .expect("stream thread map poisoned")
+                            .get(&stream_id)
+                            .copied();
                         let closing =
                             matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. });
                         if let Some(event) = GatewayEvent::from_server_frame(envelope.frame) {
@@ -226,7 +250,10 @@ impl GatewayClient {
                         // Released only after its close-out has been stamped,
                         // so the frame that ends the turn still names it.
                         if closing {
-                            stream_threads.remove(&stream_id);
+                            stream_threads_rx
+                                .lock()
+                                .expect("stream thread map poisoned")
+                                .remove(&stream_id);
                         }
                     }
                     Ok(None) => {
