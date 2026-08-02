@@ -471,7 +471,13 @@ pub(crate) async fn handle_connection(
                             if frame.frame_type == ClientFrameType::Cancel {
                                 match reader_tasks.upgrade() {
                                     Some(tasks) => {
-                                        if !tasks.lock().await.request_cancel_sole() {
+                                        // Bound, not held across the body:
+                                        // the connection loop wants this lock
+                                        // too, and this task must go straight
+                                        // back to decoding frames.
+                                        let stopped =
+                                            tasks.lock().await.request_cancel_sole();
+                                        if !stopped {
                                             trace!("Cancel with no turn running");
                                         }
                                     }
@@ -833,6 +839,17 @@ pub(crate) async fn handle_connection(
                                 .await?;
                             }
                             ClientPayload::ThreadSwitch { thread_id } => {
+                                // Read before the call, never inside its
+                                // argument list: a temporary guard lives to
+                                // the end of the statement, which here spans
+                                // an awaited handler that talks to the model.
+                                // The reader task takes this same lock to act
+                                // on Stop, so holding it across that call
+                                // would stall every inbound frame — Stop,
+                                // tool approvals, `ask_user` answers — for as
+                                // long as the provider took.
+                                let busy_thread =
+                                    active_tasks.lock().await.running_threads().first().copied();
                                 thread_handler::handle_thread_switch(
                                     &mut *writer,
                                     &agent_session.thread_mgr,
@@ -841,7 +858,7 @@ pub(crate) async fn handle_connection(
                                     &shared_model_ctx,
                                     &http,
                                     thread_id,
-                                    active_tasks.lock().await.running_threads().first().copied(),
+                                    busy_thread,
                                 )
                                 .await?;
                                 // Repoint the workspace at the new foreground
