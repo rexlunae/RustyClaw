@@ -855,9 +855,16 @@ pub(crate) async fn handle_connection(
                                 // retirement can never race the new
                                 // turn's own requests — and on the old
                                 // turn's stream, where clients track it.
-                                if let Some(old_stream) =
-                                    active_tasks.lock().await.displace(&turn_key)
-                                {
+                                // The registry lock is taken and released
+                                // in this statement: an `if let` scrutinee's
+                                // guard would live across the close-out
+                                // write below, and the reader task takes
+                                // the same lock to serve Stop — holding it
+                                // across a network write would stall every
+                                // inbound frame behind that write.
+                                let displaced_stream =
+                                    active_tasks.lock().await.displace(&turn_key);
+                                if let Some(old_stream) = displaced_stream {
                                     let mut scoped =
                                         rustyclaw_core::gateway::ScopedTransportWriter::new(
                                             &mut *writer,
