@@ -713,7 +713,7 @@ impl AppState {
             .retain(|(owner, ..)| *owner != Some(thread));
         self.pending_user_prompts
             .retain(|(owner, _)| *owner != Some(thread));
-        if self.in_flight.is_empty() {
+        if self.in_flight.is_empty() && !self.unowned_turn_in_flight {
             self.pending_tool_approvals
                 .retain(|(owner, ..)| owner.is_some());
             self.pending_user_prompts
@@ -730,9 +730,10 @@ impl AppState {
         self.pending_credential_requests
             .retain(|(owner, ..)| *owner != Some(thread));
         // An untagged entry — raised before its turn's stream opened, on a
-        // send that named no thread — can never match a close-out. Once no
-        // turn is in flight, nothing can be listening for it.
-        if self.in_flight.is_empty() {
+        // send that named no thread — can never match a close-out. Once
+        // nothing at all is running — no named turn, no turn still waiting
+        // for its thread — nothing can be listening for it.
+        if self.in_flight.is_empty() && !self.unowned_turn_in_flight {
             self.pending_credential_requests
                 .retain(|(owner, ..)| owner.is_some());
         }
@@ -767,12 +768,31 @@ impl AppState {
         self.pending_device_flows
             .retain(|(owner, ..)| *owner != Some(thread));
         // See `retire_credentials_for_thread`: an untagged flow can
-        // never match a close-out, and once nothing is in flight,
+        // never match a close-out, and once nothing at all is running,
         // nobody is polling for its code.
-        if self.in_flight.is_empty() {
+        if self.in_flight.is_empty() && !self.unowned_turn_in_flight {
             self.pending_device_flows
                 .retain(|(owner, ..)| owner.is_some());
         }
+    }
+
+    /// Retire the sign-in prompt the dialog showed, returning the turn it
+    /// belonged to so the cancel can name it.
+    ///
+    /// By its code, not `pop_front`: the gateway can retire the displayed
+    /// entry between render and click — a completion, a turn's close-out —
+    /// and popping the head would then discard a prompt that was never
+    /// shown and aim the cancel at *that* flow's turn, killing a reply the
+    /// user was not looking at. `None` means the flow is already gone and
+    /// there is nothing left to cancel.
+    pub fn retire_device_flow(&mut self, code: &str) -> Option<Option<u64>> {
+        let pos = self
+            .pending_device_flows
+            .iter()
+            .position(|(_, _, c, _)| c == code)?;
+        self.pending_device_flows
+            .remove(pos)
+            .map(|(owner, ..)| owner)
     }
 
     /// Retire the flow a `DeviceFlowComplete` announces.
@@ -990,9 +1010,12 @@ impl AppState {
         // belonging to the turn being stopped. A question asked by a turn
         // in another thread is still live, and wiping it would leave that
         // turn waiting out its full window on an answer the user can no
-        // longer give.
+        // longer give. An untagged question is another turn's too — one
+        // whose thread was never announced — and survives as long as
+        // anything that could own it is still running.
+        let others_running = !self.in_flight.is_empty() || self.unowned_turn_in_flight;
         self.pending_user_prompts
-            .retain(|(owner, _)| owner.is_some() && *owner != thread_id);
+            .retain(|(owner, _)| *owner != thread_id && (owner.is_some() || others_running));
         thread_id
     }
 
@@ -2566,6 +2589,70 @@ mod tests {
             Some("call-2"),
             "the other thread's question must still be waiting"
         );
+    }
+
+    /// Stop leaves an unowned turn's question alone.
+    ///
+    /// A question raised before its turn's thread was announced carries no
+    /// owner tag. Stopping a named conversation used to sweep those
+    /// untagged cards too, leaving the still-running unowned turn waiting
+    /// out its window on an answer the user could no longer give.
+    #[test]
+    fn stop_leaves_an_unowned_turns_question_alone() {
+        let mut s = idle_state();
+        // A turn submitted before any thread existed asks a question…
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"), None);
+        // …and the user stops a different, named conversation.
+        s.foreground_thread_id = Some(2);
+        s.in_flight.insert(2);
+        s.stop_current_turn();
+
+        assert!(
+            !s.pending_user_prompts.is_empty(),
+            "the unowned turn's question must still be waiting"
+        );
+    }
+
+    /// Closing a sign-in box that the gateway already retired cancels
+    /// nothing.
+    ///
+    /// The dialog renders the queue head, but the head can change between
+    /// render and click — a completion, a turn's close-out. Popping the
+    /// head at click time then discarded a prompt that was never shown and
+    /// aimed the cancel at that other flow's turn, killing a reply the
+    /// user was not looking at.
+    #[test]
+    fn closing_a_retired_sign_in_cancels_nothing() {
+        let mut s = idle_state();
+        s.pending_device_flows.push_back((
+            Some(1),
+            "https://a.example/device".into(),
+            "AAAA-1111".into(),
+            None,
+        ));
+        s.pending_device_flows.push_back((
+            Some(2),
+            "https://b.example/device".into(),
+            "BBBB-2222".into(),
+            None,
+        ));
+
+        // The displayed flow's turn closes out between render and click…
+        s.retire_device_flows_for_thread(Some(1));
+        // …then the user's click on the stale dialog lands.
+        assert_eq!(
+            s.retire_device_flow("AAAA-1111"),
+            None,
+            "the displayed flow is gone; there is nothing to cancel"
+        );
+        assert_eq!(
+            s.pending_device_flows.len(),
+            1,
+            "the other conversation's sign-in must survive the click"
+        );
+        // Closing the surviving flow names its own turn.
+        assert_eq!(s.retire_device_flow("BBBB-2222"), Some(Some(2)));
     }
 
     /// Stop leaves another conversation's question alone.

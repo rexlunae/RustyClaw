@@ -91,6 +91,16 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
         }
     };
 
+    // The sign-in prompt this render displays, snapshotted so closing it
+    // retires exactly this one. Reading the queue head again at click time
+    // races the gateway's own retirements — a completion or close-out can
+    // replace the head between render and click, and acting on the new
+    // head would cancel a turn the user was not looking at.
+    let displayed_device_flow = state.read().pending_device_flows.front().cloned();
+    let displayed_device_flow_code = displayed_device_flow
+        .as_ref()
+        .map(|(_, _, code, _)| code.clone());
+
     rsx! {
             ConnectionDialog {
                 visible: *show_connection.read(),
@@ -436,24 +446,18 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
             }
 
             DeviceFlowDialog {
-                visible: !state.read().pending_device_flows.is_empty(),
+                visible: displayed_device_flow.is_some(),
                 data: DeviceFlowData {
-                    url: state
-                        .read()
-                        .pending_device_flows
-                        .front()
+                    url: displayed_device_flow
+                        .as_ref()
                         .map(|(_, u, _, _)| u.clone())
                         .unwrap_or_default(),
-                    code: state
-                        .read()
-                        .pending_device_flows
-                        .front()
+                    code: displayed_device_flow
+                        .as_ref()
                         .map(|(_, _, c, _)| c.clone())
                         .unwrap_or_default(),
-                    message: state
-                        .read()
-                        .pending_device_flows
-                        .front()
+                    message: displayed_device_flow
+                        .as_ref()
                         .and_then(|(_, _, _, m)| m.clone()),
                     browser_opened: false,
                     tick: 0,
@@ -463,11 +467,18 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     // be the conversation on screen, now that any turn can
                     // start a sign-in. Aiming at the foreground here could
                     // kill an unrelated reply while the poll ran on.
-                    let thread_id = state
-                        .write()
-                        .pending_device_flows
-                        .pop_front()
-                        .and_then(|(owner, ..)| owner);
+                    // By the displayed prompt's code, not pop_front: the
+                    // gateway can retire the head between render and click,
+                    // and popping would discard a prompt that was never
+                    // shown and cancel that other flow's turn instead. If
+                    // the displayed flow is already gone, so is its turn —
+                    // there is nothing left to cancel.
+                    let Some(code) = displayed_device_flow_code.clone() else {
+                        return;
+                    };
+                    let Some(thread_id) = state.write().retire_device_flow(&code) else {
+                        return;
+                    };
                     state
                         .write()
                         .push_notice(MessageRole::Info, "Device flow cancelled.");
