@@ -91,15 +91,21 @@ pub(crate) async fn handle_chat_frame(
         }
     }
 
-    // Add user message to current thread's history
+    // The thread this turn belongs to, resolved once — after any
+    // auto-switch above — and used for every read and write from here on.
+    // Resolving it lazily through `foreground()` would file the answer
+    // wherever the user happened to navigate: the connection loop now
+    // serves ThreadSwitch frames while this turn runs, so the foreground
+    // is no longer pinned for the turn's duration.
+    let active_thread_id = thread_mgr.lock().await.foreground_id();
+
+    // Add user message to the turn's thread history
     let mut did_auto_label = false;
     let mut needs_caption = false;
     let mut did_append_user_message = false;
-    let mut active_thread_id = None;
-    {
+    if let Some(turn_thread) = active_thread_id {
         let mut tm = thread_mgr.lock().await;
-        if let Some(thread) = tm.foreground_mut() {
-            active_thread_id = Some(thread.id);
+        if let Some(thread) = tm.get_mut(turn_thread) {
             // Find the last user message (typically the new one)
             if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
                 // Check if this is the first message in a new thread
@@ -169,16 +175,16 @@ pub(crate) async fn handle_chat_frame(
         // the current user message; we need to
         // include prior turns so the model has
         // context of the conversation.
-        let foreground_history = {
+        let turn_history = {
             let tm = thread_mgr.lock().await;
-            tm.foreground().map(|t| {
+            active_thread_id.and_then(|id| tm.get(id)).map(|t| {
                 (
                     t.messages.iter().cloned().collect::<Vec<_>>(),
                     t.compact_summary.clone(),
                 )
             })
         };
-        if let Some((history, compact_summary)) = foreground_history {
+        if let Some((history, compact_summary)) = turn_history {
             let history = &history;
             // history includes the message we just
             // added — skip it (last element) to
@@ -351,6 +357,7 @@ pub(crate) async fn handle_chat_frame(
         credential_rx,
         dom_query_rx,
         thread_mgr,
+        active_thread_id,
         threads_path,
     )
     .await

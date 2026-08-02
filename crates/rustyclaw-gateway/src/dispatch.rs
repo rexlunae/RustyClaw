@@ -477,6 +477,11 @@ pub(crate) async fn dispatch_text_message(
     credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
     dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
     thread_mgr: &SharedThreadMgr,
+    // The thread this turn belongs to, pinned by the caller. Every write
+    // below targets it by id: the connection loop serves ThreadSwitch frames
+    // while this runs, so `foreground()` would follow the user around and
+    // file the answer in whichever thread they moved to.
+    turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
@@ -647,7 +652,9 @@ pub(crate) async fn dispatch_text_message(
         let ends_with_user = resolved.messages.last().is_some_and(|m| m.role == "user");
         let thread_already_flushed = {
             let tm = thread_mgr.lock().await;
-            tm.foreground().is_some_and(|t| t.memory_flushed)
+            turn_thread
+                .and_then(|id| tm.get(id))
+                .is_some_and(|t| t.memory_flushed)
         };
         let mut flushed_this_round = false;
         if ends_with_user
@@ -664,7 +671,7 @@ pub(crate) async fn dispatch_text_message(
             memory_flush.mark_flushed();
             {
                 let mut tm = thread_mgr.lock().await;
-                if let Some(thread) = tm.foreground_mut() {
+                if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                     thread.memory_flushed = true;
                 }
                 crate::helpers::persist_threads(&tm, threads_path);
@@ -693,7 +700,7 @@ pub(crate) async fn dispatch_text_message(
                     // summary to the thread so the next prompt reuses it
                     // instead of re-compacting the full history again.
                     let mut tm = thread_mgr.lock().await;
-                    if let Some(thread) = tm.foreground_mut() {
+                    if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                         thread.apply_compaction_keeping(outcome.summary, outcome.kept_recent);
                     }
                     if let Err(e) = tm.save_to_file(threads_path) {
@@ -899,7 +906,7 @@ pub(crate) async fn dispatch_text_message(
                 if !model_resp.text.is_empty() {
                     {
                         let mut tm = thread_mgr.lock().await;
-                        if let Some(thread) = tm.foreground_mut() {
+                        if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                             updated_thread_id = Some(thread.id);
                             thread.add_message(
                                 rustyclaw_core::threads::MessageRole::Assistant,
@@ -1138,10 +1145,9 @@ pub(crate) async fn dispatch_text_message(
                             if let Some(description) =
                                 update.get("description").and_then(|v| v.as_str())
                             {
-                                thread_mgr
-                                    .lock()
-                                    .await
-                                    .set_foreground_description(description);
+                                if let Some(id) = turn_thread {
+                                    thread_mgr.lock().await.set_description(id, description);
+                                }
                                 output = format!("Thread description set to: {}", description);
                                 send_threads_update_shared(writer, thread_mgr, task_mgr, None)
                                     .await?;
@@ -1151,13 +1157,12 @@ pub(crate) async fn dispatch_text_message(
                             if let Some(caption) = update.get("caption").and_then(|v| v.as_str()) {
                                 let renamed = {
                                     let mut tm = thread_mgr.lock().await;
-                                    match tm.foreground_id() {
-                                        Some(fg_id) => {
-                                            tm.rename(fg_id, caption);
+                                    match turn_thread {
+                                        Some(id) if tm.rename(id, caption) => {
                                             crate::helpers::persist_threads(&tm, threads_path);
                                             true
                                         }
-                                        None => false,
+                                        _ => false,
                                     }
                                 };
                                 if renamed {
@@ -1242,12 +1247,12 @@ pub(crate) async fn dispatch_text_message(
             &tool_results,
         );
 
-        // ── Persist this turn to the foreground thread's history ──
+        // ── Persist this turn to its own thread's history ─────────
         // We store a normalized form (Vec<{id,name,arguments}>) so any
         // client can faithfully replay this round regardless of which
         // provider produced it.
         let mut tm = thread_mgr.lock().await;
-        if let Some(thread) = tm.foreground_mut() {
+        if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
             let normalized: Vec<serde_json::Value> = model_resp
                 .tool_calls
                 .iter()
