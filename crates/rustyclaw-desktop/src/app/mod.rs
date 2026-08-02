@@ -957,11 +957,13 @@ pub fn App() -> Element {
 
     // Structured answers for the inline agent-question card (`ask_user` tool).
     let on_prompt_respond = move |(id, value): (String, PromptResponseValue)| {
-        // Retire only the question being answered. Questions queue per
-        // thread now, and clearing the lot would discard another turn's
-        // question unanswered — it would wait out its five-minute window
-        // on a card the user was never shown again.
-        state.write().clear_user_prompt_if(None, &id);
+        // Retire only the question being answered — the one the visible
+        // card showed. Questions queue per thread now, and clearing the
+        // lot (or the oldest holder of a colliding id, which can be a
+        // hidden thread's question) would discard another turn's question
+        // unanswered — it would wait out its five-minute window on a card
+        // the user was never shown again.
+        state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -978,7 +980,7 @@ pub fn App() -> Element {
 
     let on_prompt_dismiss = move |id: String| {
         // Dismissal is an answer too: it retires its own card only.
-        state.write().clear_user_prompt_if(None, &id);
+        state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {

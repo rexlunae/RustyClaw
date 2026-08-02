@@ -109,6 +109,7 @@ pub(crate) fn handle_gateway_event(
             s.is_streaming = false;
             s.is_thinking = false;
             s.in_flight.clear();
+            s.unowned_turn_in_flight = false;
             // Requests queued under the old connection can never be
             // answered on this one.
             s.clear_user_prompt();
@@ -141,6 +142,7 @@ pub(crate) fn handle_gateway_event(
             s.is_streaming = false;
             s.is_thinking = false;
             s.in_flight.clear();
+            s.unowned_turn_in_flight = false;
             // Including anything it was waiting on: the turns that asked
             // are gone, so no tool result will ever retire these and an
             // answer would go into a closed connection. Leaving them up
