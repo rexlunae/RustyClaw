@@ -345,9 +345,14 @@ pub struct AppState {
     /// any thread existed), in which case the card shows wherever the user is.
 
     /// Pending credential request (id, provider, secret_name, message).
-    /// Credential requests waiting for the user, oldest first. See
-    /// `pending_tool_approvals` for why this is a queue.
-    pub pending_credential_requests: std::collections::VecDeque<(String, String, String, String)>,
+    /// Credential requests waiting for the user, oldest first, each tagged
+    /// with the thread whose turn asked. See `pending_tool_approvals` for
+    /// why this is a queue; the thread tag is what lets a turn's close-out
+    /// take its dead requests down with it — a credential wait ending is
+    /// what ends the turn, so the close-out is its retirement signal.
+    #[allow(clippy::type_complexity)]
+    pub pending_credential_requests:
+        std::collections::VecDeque<(Option<u64>, String, String, String, String)>,
 
     /// Pending device flow (url, code, message).
     pub pending_device_flow: Option<(String, String, Option<String>)>,
@@ -631,6 +636,28 @@ impl AppState {
             // existed, and its frames apply to whatever comes into view.
             None => true,
         }
+    }
+
+    /// Retire a tool approval the gateway has stopped waiting for.
+    ///
+    /// The approval's `ToolResult` arrives whether the user answered or the
+    /// gateway timed out — a timeout reads as a denial and the turn moves
+    /// on. Left in place, an abandoned request sits at the head of the
+    /// queue and hides every later one, which then times out unseen: a
+    /// tool refused in the user's name that they were never shown.
+    pub fn retire_tool_approval(&mut self, id: &str) {
+        self.pending_tool_approvals
+            .retain(|(queued_id, _, _)| queued_id != id);
+    }
+
+    /// Retire the credential requests belonging to a turn that ended.
+    ///
+    /// A credential wait ending is what ends its turn, so the turn's
+    /// close-out is the one signal that these can no longer be answered.
+    pub fn retire_credentials_for_thread(&mut self, thread_id: Option<u64>) {
+        let Some(thread) = thread_id else { return };
+        self.pending_credential_requests
+            .retain(|(owner, ..)| *owner != Some(thread));
     }
 
     /// Whether a turn-scoped frame from `thread_id` should render into the
@@ -1830,6 +1857,73 @@ mod tests {
             s.visible_user_prompt().map(|p| p.id).as_deref(),
             Some("call-1")
         );
+    }
+
+    /// An abandoned approval does not block the queue behind it.
+    ///
+    /// The gateway gives up on an approval after two minutes and emits the
+    /// tool's result; the entry must go with it, or every later request
+    /// queues invisibly behind a corpse and times out unseen as a denial.
+    #[test]
+    fn an_abandoned_approval_unblocks_the_queue() {
+        let mut s = idle_state();
+        s.pending_tool_approvals.push_back((
+            "call-1".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals
+            .push_back(("call-2".into(), "write_file".into(), "{}".into()));
+
+        // What the ToolResult handler does when the gateway stops waiting.
+        s.retire_tool_approval("call-1");
+
+        assert_eq!(
+            s.pending_tool_approvals
+                .front()
+                .map(|(id, _, _)| id.as_str()),
+            Some("call-2"),
+            "the next request must surface"
+        );
+    }
+
+    /// A turn's close-out takes its credential requests with it.
+    ///
+    /// A credential wait ending is what ends its turn, so the close-out is
+    /// the one signal these can no longer be answered. Another turn's
+    /// request is untouched.
+    #[test]
+    fn a_turns_close_out_retires_its_credential_requests() {
+        let mut s = idle_state();
+        s.pending_credential_requests.push_back((
+            Some(1),
+            "cred-1".into(),
+            "openai".into(),
+            "OPENAI_API_KEY".into(),
+            "auth failed".into(),
+        ));
+        s.pending_credential_requests.push_back((
+            Some(2),
+            "cred-2".into(),
+            "anthropic".into(),
+            "ANTHROPIC_API_KEY".into(),
+            "auth failed".into(),
+        ));
+
+        s.retire_credentials_for_thread(Some(1));
+
+        assert_eq!(s.pending_credential_requests.len(), 1);
+        assert_eq!(
+            s.pending_credential_requests
+                .front()
+                .map(|(owner, ..)| *owner),
+            Some(Some(2)),
+            "the other turn's request is still live"
+        );
+
+        // An unnamed close-out (older gateway) retires nothing.
+        s.retire_credentials_for_thread(None);
+        assert_eq!(s.pending_credential_requests.len(), 1);
     }
 
     /// Labelling an unowned view keeps the words already in it.

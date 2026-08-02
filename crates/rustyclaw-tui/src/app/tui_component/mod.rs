@@ -181,7 +181,8 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let queued_tool_approvals: State<Vec<(String, String, String)>> = hooks.use_state(Vec::new);
     let queued_user_prompts: State<Vec<rustyclaw_core::user_prompt_types::UserPrompt>> =
         hooks.use_state(Vec::new);
-    let queued_credentials: State<Vec<(String, String, String, String)>> =
+    #[allow(clippy::type_complexity)]
+    let queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>> =
         hooks.use_state(Vec::new);
 
     // ── Command menu (slash-command completions) ────────────────────
@@ -421,6 +422,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         }
                     }
                 }
+
+                // Surface any queued approval/question/credential whose
+                // dialog has freed up. Answering a dialog frees it from the
+                // keyboard path, which cannot drain — and the connection may
+                // be quiet for as long as a model call takes, so waiting for
+                // inbound traffic could sit a blocked request past its own
+                // deadline while the user stares at an idle screen.
+                events::drain_queued_dialogs(&ui);
 
                 // Update spinner and elapsed timer
                 spinner_tick.set(spinner_tick.get().wrapping_add(1));

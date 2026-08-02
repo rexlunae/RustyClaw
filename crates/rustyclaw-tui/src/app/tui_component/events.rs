@@ -85,6 +85,110 @@ fn renders_here(thread_id: Option<u64>, foreground: Option<u64>) -> bool {
     }
 }
 
+/// Surface the next queued request whenever its dialog is free.
+///
+/// Requests only ever enqueue; this is the one place a dialog is populated,
+/// so a second request arriving while one is on screen waits instead of
+/// overwriting it. Called before every event — including ones whose arms
+/// return early — and from the poll loop's timer tick, because the trigger
+/// that frees a dialog is a keypress, and the connection can stay quiet for
+/// as long as a model call takes: waiting for inbound traffic could sit a
+/// blocked request past its own deadline while the user stares at an idle
+/// screen.
+pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
+    let mut show_tool_approval = ui.show_tool_approval;
+    let mut queued_tool_approvals = ui.queued_tool_approvals;
+    let mut tool_approval_id = ui.tool_approval_id;
+    let mut tool_approval_name = ui.tool_approval_name;
+    let mut tool_approval_args = ui.tool_approval_args;
+    let mut tool_approval_selected = ui.tool_approval_selected;
+    let mut show_user_prompt = ui.show_user_prompt;
+    let mut queued_user_prompts = ui.queued_user_prompts;
+    let mut user_prompt_id = ui.user_prompt_id;
+    let mut user_prompt_title = ui.user_prompt_title;
+    let mut user_prompt_desc = ui.user_prompt_desc;
+    let mut user_prompt_input = ui.user_prompt_input;
+    let mut user_prompt_type = ui.user_prompt_type;
+    let mut user_prompt_selected = ui.user_prompt_selected;
+    let mut user_prompt_checked = ui.user_prompt_checked;
+    let mut show_credential_request = ui.show_credential_request;
+    let mut queued_credentials = ui.queued_credentials;
+    let mut credential_request_id = ui.credential_request_id;
+    let mut credential_request_provider = ui.credential_request_provider;
+    let mut credential_request_secret_name = ui.credential_request_secret_name;
+    let mut credential_request_message = ui.credential_request_message;
+    let mut credential_request_input = ui.credential_request_input;
+
+    if !show_tool_approval.get() {
+        let mut queue = queued_tool_approvals.read().clone();
+        if !queue.is_empty() {
+            let (id, name, arguments) = queue.remove(0);
+            queued_tool_approvals.set(queue);
+            tool_approval_id.set(id);
+            tool_approval_name.set(name);
+            tool_approval_args.set(arguments);
+            tool_approval_selected.set(true);
+            show_tool_approval.set(true);
+        }
+    }
+    if !show_user_prompt.get() {
+        let mut queue = queued_user_prompts.read().clone();
+        if !queue.is_empty() {
+            let prompt = queue.remove(0);
+            queued_user_prompts.set(queue);
+            user_prompt_id.set(prompt.id.clone());
+            user_prompt_title.set(prompt.title.clone());
+            user_prompt_desc.set(prompt.description.clone().unwrap_or_default());
+            user_prompt_input.set(String::new());
+            user_prompt_type.set(Some(prompt.prompt_type.clone()));
+            let default_sel = match &prompt.prompt_type {
+                rustyclaw_core::user_prompt_types::PromptType::Select { default, .. } => {
+                    default.unwrap_or(0)
+                }
+                rustyclaw_core::user_prompt_types::PromptType::Confirm { default } => {
+                    if *default {
+                        0
+                    } else {
+                        1
+                    }
+                }
+                _ => 0,
+            };
+            user_prompt_selected.set(default_sel);
+            let checked = match &prompt.prompt_type {
+                rustyclaw_core::user_prompt_types::PromptType::MultiSelect {
+                    options,
+                    defaults,
+                } => {
+                    let mut checked = vec![false; options.len()];
+                    for &i in defaults {
+                        if let Some(slot) = checked.get_mut(i) {
+                            *slot = true;
+                        }
+                    }
+                    checked
+                }
+                _ => Vec::new(),
+            };
+            user_prompt_checked.set(checked);
+            show_user_prompt.set(true);
+        }
+    }
+    if !show_credential_request.get() {
+        let mut queue = queued_credentials.read().clone();
+        if !queue.is_empty() {
+            let (_thread, id, provider, secret_name, message) = queue.remove(0);
+            queued_credentials.set(queue);
+            credential_request_id.set(id);
+            credential_request_provider.set(provider);
+            credential_request_secret_name.set(secret_name);
+            credential_request_message.set(message);
+            credential_request_input.set(String::new());
+            show_credential_request.set(true);
+        }
+    }
+}
+
 /// Apply a single gateway event to the UI state bundle.
 pub(super) fn apply_gw_event(
     ev: GwEvent,
@@ -92,6 +196,7 @@ pub(super) fn apply_gw_event(
     needs_hatching: bool,
     tx_for_history: &UserTx,
 ) {
+    let ui_for_drain = ui;
     #[allow(unused_variables, unused_mut)]
     let state::Ui {
         mut messages,
@@ -237,83 +342,7 @@ pub(super) fn apply_gw_event(
         mut show_logs_dialog,
         mut logs_data,
     } = ui;
-    // Surface the next queued request whenever its dialog is free. Requests
-    // only ever enqueue; this is the one place a dialog is populated, so a
-    // second request arriving while one is on screen waits instead of
-    // overwriting it. Runs before every event — including ones whose arms
-    // return early — so an answered dialog is refilled by whatever event
-    // follows the answer.
-    let mut drain_queued_dialogs = move || {
-        if !show_tool_approval.get() {
-            let mut queue = queued_tool_approvals.read().clone();
-            if !queue.is_empty() {
-                let (id, name, arguments) = queue.remove(0);
-                queued_tool_approvals.set(queue);
-                tool_approval_id.set(id);
-                tool_approval_name.set(name);
-                tool_approval_args.set(arguments);
-                tool_approval_selected.set(true);
-                show_tool_approval.set(true);
-            }
-        }
-        if !show_user_prompt.get() {
-            let mut queue = queued_user_prompts.read().clone();
-            if !queue.is_empty() {
-                let prompt = queue.remove(0);
-                queued_user_prompts.set(queue);
-                user_prompt_id.set(prompt.id.clone());
-                user_prompt_title.set(prompt.title.clone());
-                user_prompt_desc.set(prompt.description.clone().unwrap_or_default());
-                user_prompt_input.set(String::new());
-                user_prompt_type.set(Some(prompt.prompt_type.clone()));
-                let default_sel = match &prompt.prompt_type {
-                    rustyclaw_core::user_prompt_types::PromptType::Select { default, .. } => {
-                        default.unwrap_or(0)
-                    }
-                    rustyclaw_core::user_prompt_types::PromptType::Confirm { default } => {
-                        if *default {
-                            0
-                        } else {
-                            1
-                        }
-                    }
-                    _ => 0,
-                };
-                user_prompt_selected.set(default_sel);
-                let checked = match &prompt.prompt_type {
-                    rustyclaw_core::user_prompt_types::PromptType::MultiSelect {
-                        options,
-                        defaults,
-                    } => {
-                        let mut checked = vec![false; options.len()];
-                        for &i in defaults {
-                            if let Some(slot) = checked.get_mut(i) {
-                                *slot = true;
-                            }
-                        }
-                        checked
-                    }
-                    _ => Vec::new(),
-                };
-                user_prompt_checked.set(checked);
-                show_user_prompt.set(true);
-            }
-        }
-        if !show_credential_request.get() {
-            let mut queue = queued_credentials.read().clone();
-            if !queue.is_empty() {
-                let (id, provider, secret_name, message) = queue.remove(0);
-                queued_credentials.set(queue);
-                credential_request_id.set(id);
-                credential_request_provider.set(provider);
-                credential_request_secret_name.set(secret_name);
-                credential_request_message.set(message);
-                credential_request_input.set(String::new());
-                show_credential_request.set(true);
-            }
-        }
-    };
-    drain_queued_dialogs();
+    drain_queued_dialogs(&ui_for_drain);
     match ev {
         GwEvent::AuthChallenge => {
             // Gateway wants TOTP — show the dialog
@@ -518,6 +547,15 @@ pub(super) fn apply_gw_event(
                 let mut running = in_flight.read().clone();
                 running.remove(&thread);
                 in_flight.set(running);
+                // Credential requests the ended turn was waiting on can no
+                // longer be answered — a credential wait ending is what
+                // ends its turn, so this close-out is their retirement.
+                let mut queue = queued_credentials.read().clone();
+                let before = queue.len();
+                queue.retain(|(owner, ..)| *owner != Some(thread));
+                if queue.len() != before {
+                    queued_credentials.set(queue);
+                }
             }
             // Only the turn on screen can end what is on screen. A close-out
             // from a turn running elsewhere would stop the spinner and file
@@ -717,6 +755,23 @@ pub(super) fn apply_gw_event(
             result,
             is_error,
         } => {
+            // This result arrives whether the user answered or the gateway
+            // gave up waiting; either way nobody is listening for an
+            // approval of this call any more. An abandoned entry left at
+            // the head of the queue would hide every later request, each of
+            // which then times out unseen as a denial. Retired before the
+            // render gate: a background turn's approvals die too.
+            {
+                let mut queue = queued_tool_approvals.read().clone();
+                let before = queue.len();
+                queue.retain(|(queued_id, _, _)| queued_id != &id);
+                if queue.len() != before {
+                    queued_tool_approvals.set(queue);
+                }
+            }
+            if show_tool_approval.get() && *tool_approval_id.read() == id {
+                show_tool_approval.set(false);
+            }
             if !renders_here(thread_id, foreground_thread_id.get()) {
                 return;
             }
@@ -772,7 +827,7 @@ pub(super) fn apply_gw_event(
                 name,
             )));
             messages.set(m);
-            drain_queued_dialogs();
+            drain_queued_dialogs(&ui_for_drain);
         }
         GwEvent::UserPromptRequest(prompt) => {
             let mut queue = queued_user_prompts.read().clone();
@@ -805,16 +860,23 @@ pub(super) fn apply_gw_event(
                 }
             }
             messages.set(m);
-            drain_queued_dialogs();
+            drain_queued_dialogs(&ui_for_drain);
         }
         GwEvent::CredentialRequest {
+            thread_id,
             id,
             provider,
             secret_name,
             message,
         } => {
             let mut queue = queued_credentials.read().clone();
-            queue.push((id, provider.clone(), secret_name.clone(), message));
+            queue.push((
+                thread_id,
+                id,
+                provider.clone(),
+                secret_name.clone(),
+                message,
+            ));
             queued_credentials.set(queue);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::warning(format!(
@@ -822,7 +884,7 @@ pub(super) fn apply_gw_event(
                 provider, secret_name,
             )));
             messages.set(m);
-            drain_queued_dialogs();
+            drain_queued_dialogs(&ui_for_drain);
         }
         GwEvent::VaultLocked => {
             gw_status.set(rustyclaw_core::types::GatewayStatus::VaultLocked);

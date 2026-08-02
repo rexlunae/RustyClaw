@@ -223,6 +223,9 @@ pub(crate) fn handle_gateway_event(
             if s.frame_is_for_current_turn(announced) {
                 s.response_done(announced);
             }
+            // The turn is over either way; credential requests it was
+            // waiting on can no longer be answered.
+            s.retire_credentials_for_thread(announced);
         }
         GatewayEvent::ToolCall {
             id,
@@ -259,6 +262,10 @@ pub(crate) fn handle_gateway_event(
             // even if the user never touched it, and regardless of which
             // thread is on screen.
             s.clear_user_prompt_if(&id);
+            // Same contract for approvals: this result arrives whether the
+            // user answered or the gateway gave up, and an abandoned entry
+            // at the head of the queue would hide every later request.
+            s.retire_tool_approval(&id);
             // A failed tool call already surfaces inline: the tool panel
             // shows Failed status with the full error result. No banner.
             if s.frame_targets_view(thread_id) {
@@ -508,7 +515,11 @@ pub(crate) fn handle_gateway_event(
             secret_name,
             message,
         } => {
+            // Tagged with the asking turn's thread: a credential wait
+            // ending is what ends its turn, so the turn's close-out is the
+            // signal that this request can no longer be answered.
             state.write().pending_credential_requests.push_back((
+                thread_id,
                 id,
                 provider,
                 secret_name,
