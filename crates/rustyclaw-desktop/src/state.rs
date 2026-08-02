@@ -665,6 +665,23 @@ impl AppState {
         let Some(thread) = thread_id else { return };
         self.pending_credential_requests
             .retain(|(owner, ..)| *owner != Some(thread));
+        // An untagged entry — raised before its turn's stream opened, on a
+        // send that named no thread — can never match a close-out. Once no
+        // turn is in flight, nothing can be listening for it.
+        if self.in_flight.is_empty() {
+            self.pending_credential_requests
+                .retain(|(owner, ..)| owner.is_some());
+        }
+    }
+
+    /// Retire one credential request by its id — the one that was answered.
+    ///
+    /// Answering must not `pop_front`: the gateway can retire the displayed
+    /// entry between render and click, and popping the head would then
+    /// discard a request that was never shown.
+    pub fn retire_credential_request(&mut self, id: &str) {
+        self.pending_credential_requests
+            .retain(|(_, queued_id, ..)| queued_id != id);
     }
 
     /// Retire the device-flow prompts belonging to a turn.
@@ -676,9 +693,17 @@ impl AppState {
     /// prompt on screen, which is all such a gateway can have.
     pub fn retire_device_flows_for_thread(&mut self, thread_id: Option<u64>) {
         match thread_id {
-            Some(thread) => self
-                .pending_device_flows
-                .retain(|(owner, ..)| *owner != Some(thread)),
+            Some(thread) => {
+                self.pending_device_flows
+                    .retain(|(owner, ..)| *owner != Some(thread));
+                // See `retire_credentials_for_thread`: an untagged flow can
+                // never match a close-out, and once nothing is in flight,
+                // nobody is polling for its code.
+                if self.in_flight.is_empty() {
+                    self.pending_device_flows
+                        .retain(|(owner, ..)| owner.is_some());
+                }
+            }
             None => {
                 self.pending_device_flows.pop_front();
             }
@@ -1983,6 +2008,89 @@ mod tests {
         // An unnamed close-out (older gateway) retires nothing.
         s.retire_credentials_for_thread(None);
         assert_eq!(s.pending_credential_requests.len(), 1);
+    }
+
+    /// An untagged request outlives other turns but not an idle client.
+    ///
+    /// A request raised before its turn's stream opened carries no thread,
+    /// so no close-out can ever name it. While other turns run it must
+    /// survive their close-outs — it may still belong to one of them — but
+    /// once nothing is in flight, nobody is listening for the answer and
+    /// keeping it would show a dialog no one can act on.
+    #[test]
+    fn an_untagged_request_is_swept_only_when_idle() {
+        let mut s = idle_state();
+        s.in_flight.insert(1);
+        s.in_flight.insert(2);
+        s.pending_credential_requests.push_back((
+            None,
+            "cred-untagged".into(),
+            "openai".into(),
+            "OPENAI_API_KEY".into(),
+            "auth failed".into(),
+        ));
+        s.pending_device_flows.push_back((
+            None,
+            "https://example.com/device".into(),
+            "ABCD-1234".into(),
+            None,
+        ));
+
+        // Thread 1 closes out while thread 2 is still running.
+        s.in_flight.remove(&1);
+        s.retire_credentials_for_thread(Some(1));
+        s.retire_device_flows_for_thread(Some(1));
+        assert_eq!(
+            s.pending_credential_requests.len(),
+            1,
+            "the untagged request may belong to the turn still running"
+        );
+        assert_eq!(s.pending_device_flows.len(), 1);
+
+        // The last turn ends: nothing can be listening any more.
+        s.in_flight.remove(&2);
+        s.retire_credentials_for_thread(Some(2));
+        s.retire_device_flows_for_thread(Some(2));
+        assert!(s.pending_credential_requests.is_empty());
+        assert!(s.pending_device_flows.is_empty());
+    }
+
+    /// Answering a credential dialog retires the answered request, not the
+    /// queue head.
+    ///
+    /// The head can change between render and click — a close-out can
+    /// retire the displayed entry first — and popping the front would then
+    /// discard a request that was never shown.
+    #[test]
+    fn answering_a_credential_retires_it_by_id() {
+        let mut s = idle_state();
+        s.pending_credential_requests.push_back((
+            Some(1),
+            "cred-1".into(),
+            "openai".into(),
+            "OPENAI_API_KEY".into(),
+            "auth failed".into(),
+        ));
+        s.pending_credential_requests.push_back((
+            Some(2),
+            "cred-2".into(),
+            "anthropic".into(),
+            "ANTHROPIC_API_KEY".into(),
+            "auth failed".into(),
+        ));
+
+        // The user answers the second entry after the first was retired
+        // out from under the dialog and re-rendered.
+        s.retire_credential_request("cred-2");
+
+        assert_eq!(s.pending_credential_requests.len(), 1);
+        assert_eq!(
+            s.pending_credential_requests
+                .front()
+                .map(|(_, id, ..)| id.as_str()),
+            Some("cred-1"),
+            "only the answered request goes"
+        );
     }
 
     /// Labelling an unowned view keeps the words already in it.

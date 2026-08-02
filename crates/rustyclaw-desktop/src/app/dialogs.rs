@@ -344,7 +344,10 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     selected_allow: true,
                 },
                 on_approve: move |id: String| {
-                    state.write().pending_tool_approvals.pop_front();
+                    // By id, not pop_front: the gateway can retire the displayed
+                    // entry between render and click, and popping the head
+                    // would discard a request that was never shown.
+                    state.write().retire_tool_approval(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -353,7 +356,10 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_deny: move |id: String| {
-                    state.write().pending_tool_approvals.pop_front();
+                    // By id, not pop_front: the gateway can retire the displayed
+                    // entry between render and click, and popping the head
+                    // would discard a request that was never shown.
+                    state.write().retire_tool_approval(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -395,7 +401,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     input_len: 0,
                 },
                 on_submit: move |(id, value): (String, String)| {
-                    state.write().pending_credential_requests.pop_front();
+                    state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -408,7 +414,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_dismiss: move |id: String| {
-                    state.write().pending_credential_requests.pop_front();
+                    state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
