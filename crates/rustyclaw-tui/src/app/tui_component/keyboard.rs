@@ -77,6 +77,7 @@ pub(super) fn apply_key_event(
         mut credential_request_secret_name,
         mut credential_request_message,
         mut credential_request_input,
+        credential_request_thread: _,
         mut show_provider_selector,
         mut provider_selector_items,
         mut provider_selector_ids,

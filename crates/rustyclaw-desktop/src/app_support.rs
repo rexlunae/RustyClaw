@@ -540,7 +540,7 @@ pub(crate) fn handle_gateway_event(
                 .push_back((thread_id, url, code, message));
         }
         GatewayEvent::DeviceFlowComplete => {
-            state.write().retire_device_flows_for_thread(thread_id);
+            state.write().retire_completed_device_flow(thread_id);
         }
         GatewayEvent::SecretsListResult { ok, entries } => {
             if ok {

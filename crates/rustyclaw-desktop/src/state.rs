@@ -684,26 +684,35 @@ impl AppState {
             .retain(|(_, queued_id, ..)| queued_id != id);
     }
 
-    /// Retire the device-flow prompts belonging to a turn.
+    /// Retire the device-flow prompts belonging to a turn's close-out.
     ///
-    /// Called both when a flow completes (`DeviceFlowComplete`, attributed
-    /// to its turn) and when the turn ends any other way — expiry and
-    /// cancellation both end the turn, so its close-out is the fallback
-    /// retirement. An unattributed completion (older gateway) retires the
-    /// prompt on screen, which is all such a gateway can have.
+    /// Expiry and cancellation both end the flow's turn, so its close-out
+    /// is the fallback retirement. A close-out that names no thread retires
+    /// nothing here — an unnamed one can come from any turn, and popping
+    /// the front would discard another conversation's sign-in prompt and
+    /// the code the user was about to enter.
     pub fn retire_device_flows_for_thread(&mut self, thread_id: Option<u64>) {
+        let Some(thread) = thread_id else { return };
+        self.pending_device_flows
+            .retain(|(owner, ..)| *owner != Some(thread));
+        // See `retire_credentials_for_thread`: an untagged flow can
+        // never match a close-out, and once nothing is in flight,
+        // nobody is polling for its code.
+        if self.in_flight.is_empty() {
+            self.pending_device_flows
+                .retain(|(owner, ..)| owner.is_some());
+        }
+    }
+
+    /// Retire the flow a `DeviceFlowComplete` announces.
+    ///
+    /// A completion is a statement about one specific flow, so `None` means
+    /// something different here than on a close-out: a gateway too old to
+    /// attribute its frames, whose one possible flow is the prompt on
+    /// screen.
+    pub fn retire_completed_device_flow(&mut self, thread_id: Option<u64>) {
         match thread_id {
-            Some(thread) => {
-                self.pending_device_flows
-                    .retain(|(owner, ..)| *owner != Some(thread));
-                // See `retire_credentials_for_thread`: an untagged flow can
-                // never match a close-out, and once nothing is in flight,
-                // nobody is polling for its code.
-                if self.in_flight.is_empty() {
-                    self.pending_device_flows
-                        .retain(|(owner, ..)| owner.is_some());
-                }
-            }
+            Some(_) => self.retire_device_flows_for_thread(thread_id),
             None => {
                 self.pending_device_flows.pop_front();
             }
@@ -1932,15 +1941,43 @@ mod tests {
         ));
 
         // Thread 1's flow completes; thread 2's is untouched and surfaces.
-        s.retire_device_flows_for_thread(Some(1));
+        s.retire_completed_device_flow(Some(1));
         assert_eq!(
             s.pending_device_flows.front().map(|(owner, ..)| *owner),
             Some(Some(2))
         );
 
         // An unattributed completion (older gateway) retires the visible one.
-        s.retire_device_flows_for_thread(None);
+        s.retire_completed_device_flow(None);
         assert!(s.pending_device_flows.is_empty());
+    }
+
+    /// An unnamed close-out does not take another conversation's sign-in.
+    ///
+    /// A close-out with no thread can come from any turn — only a
+    /// completion may read `None` as "the prompt on screen". Popping the
+    /// front here discarded a queued sign-in, and the code the user was
+    /// about to enter with it, because some unrelated reply finished.
+    #[test]
+    fn an_unnamed_close_out_leaves_sign_ins_alone() {
+        let mut s = idle_state();
+        s.in_flight.insert(2);
+        s.pending_device_flows.push_back((
+            Some(2),
+            "https://example.com/device".into(),
+            "ABCD-1234".into(),
+            None,
+        ));
+
+        // What the ResponseDone handler does for a turn that had no
+        // thread to announce.
+        s.retire_device_flows_for_thread(None);
+
+        assert_eq!(
+            s.pending_device_flows.len(),
+            1,
+            "the other conversation's sign-in must survive"
+        );
     }
 
     /// An abandoned approval does not block the queue behind it.
