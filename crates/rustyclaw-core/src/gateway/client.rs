@@ -140,7 +140,7 @@ impl GatewayClient {
 
                         // Track streaming progress.
                         match &envelope.frame.payload {
-                            ServerPayload::StreamStart => {
+                            ServerPayload::StreamStart { .. } => {
                                 stream_chunk_count = 0;
                                 stream_total_bytes = 0;
                                 event_log_rx.log_streaming("started");
@@ -234,9 +234,20 @@ impl GatewayClient {
         self.connected.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Send a chat message.
+    /// Send a chat message on the gateway's current thread.
     pub async fn chat(&self, message: String) -> Result<()> {
-        self.send(GatewayCommand::Chat { message }).await
+        self.send(GatewayCommand::Chat {
+            message,
+            thread_id: None,
+        })
+        .await
+    }
+
+    /// Send a chat message, naming the thread it belongs to. `None` leaves
+    /// the choice to the gateway, for callers that have no thread of their
+    /// own yet — the first message of a fresh session, a headless one-shot.
+    pub async fn chat_in_thread(&self, message: String, thread_id: Option<u64>) -> Result<()> {
+        self.send(GatewayCommand::Chat { message, thread_id }).await
     }
 
     /// Authenticate with TOTP code.

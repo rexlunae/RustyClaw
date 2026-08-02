@@ -396,7 +396,14 @@ pub enum StatusType {
 // ============================================================================
 
 /// Protocol version for multiplexed SSH/stdin wire envelopes.
-pub const WIRE_PROTOCOL_VERSION: u16 = 1;
+///
+/// Bumped to 2 when `Chat`, `StreamStart` and `ResponseDone` gained explicit
+/// thread ids. Frames are bincode-encoded positionally — `#[serde(default)]`
+/// does nothing here, since there is no field to be missing, only bytes to
+/// be misread — so a peer at version 1 cannot decode these. Mismatched peers
+/// fail at the first affected frame rather than mis-parsing one into another;
+/// the version is what lets an envelope-carrying transport say so plainly.
+pub const WIRE_PROTOCOL_VERSION: u16 = 2;
 
 /// Stream ID used for connection-level control frames.
 pub const CONTROL_STREAM_ID: u64 = 0;
@@ -511,6 +518,21 @@ pub enum ClientPayload {
     Reload,
     Chat {
         messages: Vec<super::types::ChatMessage>,
+        /// The thread this message belongs to.
+        ///
+        /// Naming it is what keeps the two sides from disagreeing. The
+        /// gateway used to infer the thread from its own foreground at the
+        /// moment it processed the frame, which is not necessarily the
+        /// thread the user typed into: the foreground is written by both
+        /// sides — the client's `ThreadSwitch`, the gateway's own
+        /// auto-switch — and since turns became concurrent with the
+        /// connection loop, a switch can land between the send and the
+        /// processing.
+        ///
+        /// `None` means "whatever the gateway considers current", which is
+        /// the old behaviour, kept for clients that do not track threads.
+        #[serde(default)]
+        thread_id: Option<u64>,
     },
     SecretsList,
     SecretsGet {
@@ -998,7 +1020,16 @@ pub enum ServerPayload {
     Info {
         message: String,
     },
-    StreamStart,
+    /// A turn has begun. Opens a turn on this stream and says which thread
+    /// its frames — chunks, tool calls, questions, the final response —
+    /// belong to, so the client never has to infer it from what it last
+    /// sent. Inference was the client-side half of the same disagreement:
+    /// a thread switch during a turn, or a completion consumed early, left
+    /// the answer landing in whatever thread happened to be on screen.
+    StreamStart {
+        #[serde(default)]
+        thread_id: Option<u64>,
+    },
     Chunk {
         delta: String,
     },
@@ -1018,8 +1049,13 @@ pub enum ServerPayload {
         result: String,
         is_error: bool,
     },
+    /// The turn is over. Carries its thread for the same reason
+    /// [`ServerPayload::StreamStart`] does: a client tracking one in-flight
+    /// response otherwise cannot tell whose completion this is.
     ResponseDone {
         ok: bool,
+        #[serde(default)]
+        thread_id: Option<u64>,
     },
     ToolApprovalRequest {
         id: String,

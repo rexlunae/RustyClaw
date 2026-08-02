@@ -905,7 +905,10 @@ pub(super) fn handle_normal_key(
                             // sees feedback while waiting for the model.
                             streaming.set(true);
                             stream_start.set(Some(Instant::now()));
-                            let _ = tx.send(UserInput::Chat(val));
+                            let _ = tx.send(UserInput::Chat {
+                                text: val,
+                                thread_id: foreground_thread_id.get(),
+                            });
                         }
                     }
                 }

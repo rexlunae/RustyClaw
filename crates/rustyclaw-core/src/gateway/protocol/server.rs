@@ -349,20 +349,28 @@ pub async fn send_chunk(writer: &mut dyn TransportWriter, delta: &str) -> Result
     send_frame(writer, &frame).await
 }
 
-/// Build and send a response done frame.
-pub async fn send_response_done(writer: &mut dyn TransportWriter, ok: bool) -> Result<()> {
+/// Build and send a response done frame, naming the thread whose turn ended.
+pub async fn send_response_done(
+    writer: &mut dyn TransportWriter,
+    ok: bool,
+    thread_id: Option<u64>,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::ResponseDone,
-        payload: ServerPayload::ResponseDone { ok },
+        payload: ServerPayload::ResponseDone { ok, thread_id },
     };
     send_frame(writer, &frame).await
 }
 
-/// Build and send a stream start frame.
-pub async fn send_stream_start(writer: &mut dyn TransportWriter) -> Result<()> {
+/// Build and send a stream start frame, naming the thread the turn belongs
+/// to so the client can route the frames that follow without guessing.
+pub async fn send_stream_start(
+    writer: &mut dyn TransportWriter,
+    thread_id: Option<u64>,
+) -> Result<()> {
     let frame = ServerFrame {
         frame_type: ServerFrameType::StreamStart,
-        payload: ServerPayload::StreamStart,
+        payload: ServerPayload::StreamStart { thread_id },
     };
     send_frame(writer, &frame).await
 }

@@ -639,10 +639,14 @@ pub fn App() -> Element {
             s.mark_request_started();
         }
 
+        // Name the thread on the wire. The message was typed into *this*
+        // thread and belongs to it however long the frame takes to arrive,
+        // and whatever the gateway's foreground is doing meanwhile.
+        let turn_thread = state.read().streaming_thread_id;
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                if let Err(e) = client.chat(prompt).await {
+                if let Err(e) = client.chat_in_thread(prompt, turn_thread).await {
                     tracing::error!("Failed to send message: {}", e);
                 }
             });

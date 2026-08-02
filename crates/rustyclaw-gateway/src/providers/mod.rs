@@ -70,8 +70,11 @@ pub async fn send_chunk(writer: &mut dyn TransportWriter, delta: &str) -> Result
 }
 
 /// Send the response_done sentinel frame as binary.
+/// The turn's thread is stamped on by [`crate::concurrent::ChannelSink`],
+/// which is the writer every turn runs through and the only place that
+/// knows which thread this turn belongs to.
 pub async fn send_response_done(writer: &mut dyn TransportWriter) -> Result<()> {
-    server::send_response_done(writer, true)
+    server::send_response_done(writer, true, None)
         .await
         .context("Failed to send response_done frame")
 }
