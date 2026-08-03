@@ -282,6 +282,23 @@ pub async fn exec_secrets_store(args: &serde_json::Value, vault: &SharedVault) -
     ))
 }
 
+/// Refuse model/client-driven mutation of a gateway-provisioned service
+/// credential.
+///
+/// The write and read paths already fence the reserved namespaces; deleting,
+/// disabling, or re-policying an entry is the remaining way to tamper with
+/// one — it breaks the configured bot's login rather than disclosing
+/// anything. These credentials are managed through the messenger setup
+/// panel, whose handler talks to the vault directly and is not affected.
+fn reserved_mutation_error(name: &str) -> Option<String> {
+    rustyclaw_core::secrets::is_reserved_service_name(name).then(|| {
+        format!(
+            "'{name}' is a gateway-provisioned service credential; manage it \
+             through the messenger setup panel instead."
+        )
+    })
+}
+
 /// Change the access policy of an existing credential.
 #[instrument(skip(args, vault))]
 pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVault) -> ToolResult {
@@ -289,6 +306,9 @@ pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVau
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
+    if let Some(refusal) = reserved_mutation_error(cred_name) {
+        return Err(refusal.into());
+    }
 
     let policy_str = args
         .get("policy")
@@ -346,6 +366,10 @@ pub async fn exec_secrets_link_trigger(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: triggerId".to_string())?;
     let allow = args.get("allow").and_then(|v| v.as_bool()).unwrap_or(true);
+
+    if let Some(refusal) = reserved_mutation_error(cred_name) {
+        return Err(refusal.into());
+    }
 
     let mut mgr = vault.lock().await;
     mgr.set_credential_trigger_link(cred_name, trigger_id, allow)
@@ -475,6 +499,10 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsDelete { key } => {
+            if let Some(refusal) = reserved_mutation_error(&key) {
+                send_secrets_delete_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.delete_secret(&key);
             match result {
@@ -516,6 +544,10 @@ pub(crate) async fn handle_secrets_frame(
             policy,
             skills,
         } => {
+            if let Some(refusal) = reserved_mutation_error(&name) {
+                send_secrets_set_policy_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let policy_str = policy.clone();
             let policy = match policy.as_str() {
@@ -548,6 +580,10 @@ pub(crate) async fn handle_secrets_frame(
             }
         }
         ClientPayload::SecretsSetDisabled { name, disabled } => {
+            if let Some(refusal) = reserved_mutation_error(&name) {
+                send_secrets_set_disabled_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.set_credential_disabled(&name, disabled);
             match result {
@@ -559,6 +595,10 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsDeleteCredential { name } => {
+            if let Some(refusal) = reserved_mutation_error(&name) {
+                send_secrets_delete_credential_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let meta_key = format!("cred:{}", name);
             let is_legacy = v.get_secret(&meta_key, true).ok().flatten().is_none();
@@ -624,4 +664,48 @@ pub(crate) async fn handle_secrets_frame(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reserved_namespace_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn vault(dir: &std::path::Path) -> SharedVault {
+        Arc::new(Mutex::new(rustyclaw_core::secrets::SecretsManager::new(
+            dir,
+        )))
+    }
+
+    #[tokio::test]
+    async fn the_model_cannot_store_or_repolicy_a_service_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = vault(dir.path());
+
+        // Storing into the reserved namespace would plant an entry the
+        // policy-skipping service read path is willing to serve…
+        let store = exec_secrets_store(
+            &serde_json::json!({
+                "name": "messenger/tg/token",
+                "kind": "token",
+                "value": "planted"
+            }),
+            &vault,
+        )
+        .await;
+        assert!(store.is_err(), "reserved store must be refused");
+
+        // …and re-policying an existing one would let the agent-facing read
+        // path at it, or break the bot's login via TriggerOnly.
+        let policy = exec_secrets_set_policy(
+            &serde_json::json!({
+                "name": "messenger/tg/token",
+                "policy": "always"
+            }),
+            &vault,
+        )
+        .await;
+        assert!(policy.is_err(), "reserved re-policy must be refused");
+    }
 }

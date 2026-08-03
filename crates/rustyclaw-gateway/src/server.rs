@@ -1533,6 +1533,7 @@ pub(crate) async fn handle_connection(
                                     &mut *writer,
                                     payload,
                                     &mut config,
+                                    &shared_config,
                                     &vault,
                                 ).await?;
                             }

@@ -38,12 +38,26 @@ use crate::SharedVault;
 ///
 /// Every mutation replies with its own result frame *and* a refreshed view, so
 /// a client never has to guess what the config now looks like.
+///
+/// Mutations run against the gateway's **shared** config, not the caller's
+/// connection snapshot. Persisting the snapshot looked identical in tests
+/// with one connection, but the shared copy never learned about the change —
+/// so the next handler that persisted *it* (an agent rename, a model switch)
+/// rewrote `config.toml` with every messenger account and route missing,
+/// while their credentials lived on in the vault. The connection snapshot is
+/// re-synced from the shared copy on the way out.
 pub async fn handle_messenger_config(
     writer: &mut dyn TransportWriter,
     payload: ClientPayload,
-    config: &mut Config,
+    conn_config: &mut Config,
+    shared_config: &crate::SharedConfig,
     vault: &SharedVault,
 ) -> Result<()> {
+    // Held across the whole mutation so two clients editing at once serialise
+    // instead of interleaving read-modify-write on the settings file.
+    let mut shared = shared_config.write().await;
+    let config = &mut *shared;
+
     match payload {
         ClientPayload::MessengerConfigRequest => {}
 
@@ -112,7 +126,15 @@ pub async fn handle_messenger_config(
         }
     }
 
-    send_frame(writer, &build_view(config, vault).await).await
+    // The connection's own snapshot drives everything else this connection
+    // does (prompts, messenger loops started from it); leaving it behind the
+    // shared copy would undo the fix above from this connection's viewpoint.
+    conn_config.messengers = config.messengers.clone();
+    conn_config.messenger_routes = config.messenger_routes.clone();
+
+    let view = build_view(config, vault).await;
+    drop(shared);
+    send_frame(writer, &view).await
 }
 
 // ── View ────────────────────────────────────────────────────────────────────
@@ -692,11 +714,44 @@ async fn delete_account(config: &mut Config, vault: &SharedVault, name: &str) ->
     let Some(index) = config.messengers.iter().position(|m| m.name == name) else {
         return Err(vec![format!("No account named '{name}'")]);
     };
+
+    // Config first, vault second. Destroying the vault entries before the
+    // deletion was durable meant a failed settings write left the on-disk
+    // config naming credentials that no longer existed — an account that
+    // could never log in again. The reverse failure order merely leaves an
+    // untidy vault entry, which is why the vault cleanup below is
+    // best-effort.
+    let prior_messengers = config.messengers.clone();
+    let prior_routes = config.messenger_routes.clone();
+
     let removed = config.messengers.remove(index);
+
+    // A route pointing at a deleted account matches nothing and would sit in
+    // the table as a permanent puzzle.
+    let before = config.messenger_routes.len();
+    config.messenger_routes.retain(|r| r.messenger != name);
+    let dropped = before - config.messenger_routes.len();
+
+    if let Err(e) = persist(config) {
+        config.messengers = prior_messengers;
+        config.messenger_routes = prior_routes;
+        return Err(e);
+    }
 
     {
         let mut mgr = vault.lock().await;
-        for cred in removed.secret_refs.values() {
+        // Never delete a key some other account still references (possible in
+        // a legacy config whose names collide once slugged).
+        let referenced: std::collections::BTreeSet<&String> = config
+            .messengers
+            .iter()
+            .flat_map(|m| m.secret_refs.values())
+            .collect();
+        for cred in removed
+            .secret_refs
+            .values()
+            .filter(|c| !referenced.contains(c))
+        {
             if let Err(e) = mgr.delete_credential(cred) {
                 // The account is already gone from config; a stuck vault entry
                 // is untidy, not dangerous, and worth a log rather than a
@@ -706,13 +761,6 @@ async fn delete_account(config: &mut Config, vault: &SharedVault, name: &str) ->
         }
     }
 
-    // A route pointing at a deleted account matches nothing and would sit in
-    // the table as a permanent puzzle.
-    let before = config.messenger_routes.len();
-    config.messenger_routes.retain(|r| r.messenger != name);
-    let dropped = before - config.messenger_routes.len();
-
-    persist(config)?;
     info!(account = %name, routes_removed = dropped, "Messenger account deleted");
     Ok(Some(match dropped {
         0 => format!("Deleted '{name}'"),
@@ -722,6 +770,11 @@ async fn delete_account(config: &mut Config, vault: &SharedVault, name: &str) ->
 
 /// Move an account's plaintext credentials into the vault.
 async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -> Outcome {
+    // For restoring the live config if anything below fails: the client is
+    // told the migration failed, so the config it is then shown must still
+    // carry the plaintext credentials, and the on-disk copy must match.
+    let prior_messengers = config.messengers.clone();
+
     let Some(entry) = config.messengers.iter_mut().find(|m| m.name == name) else {
         return Err(vec![format!("No account named '{name}'")]);
     };
@@ -732,8 +785,11 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
 
     let label = kind_spec(&entry.messenger_type).map_or("Messenger", |s| s.label);
     let mut moved = Vec::new();
+    let mut created: Vec<String> = Vec::new();
+    let mut failure: Option<Vec<String>> = None;
     {
         let mut mgr = vault.lock().await;
+        let existing = mgr.list_secrets();
         for field in &pending {
             let Some(value) = entry.field_value(field.field) else {
                 continue;
@@ -746,8 +802,16 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
                 description: Some(format!("{label} credential for messenger '{name}'")),
                 disabled: false,
             };
-            mgr.store_credential(&cred, &secret_entry, &value, None)
-                .map_err(|e| vec![format!("Could not store {}: {e}", field.label)])?;
+            if !existing.contains(&format!("val:{cred}")) {
+                created.push(cred.clone());
+            }
+            if let Err(e) = mgr.store_credential(&cred, &secret_entry, &value, None) {
+                for cred in &created {
+                    let _ = mgr.delete_credential(cred);
+                }
+                failure = Some(vec![format!("Could not store {}: {e}", field.label)]);
+                break;
+            }
             entry.secret_refs.insert(field.field.to_string(), cred);
             // Clear only after the vault write succeeded — the ordering is the
             // difference between migrating a credential and losing one.
@@ -755,8 +819,16 @@ async fn migrate_secrets(config: &mut Config, vault: &SharedVault, name: &str) -
             moved.push(field.label);
         }
     }
+    if let Some(errors) = failure {
+        config.messengers = prior_messengers;
+        return Err(errors);
+    }
 
-    persist(config)?;
+    if let Err(e) = persist(config) {
+        config.messengers = prior_messengers;
+        discard_created_credentials(vault, &created).await;
+        return Err(e);
+    }
     info!(account = %name, count = moved.len(), "Messenger credentials moved to the vault");
     Ok(Some(format!(
         "Moved {} into the vault for '{name}'",
@@ -802,6 +874,7 @@ fn save_route(
         enabled,
     };
 
+    let prior_routes = config.messenger_routes.clone();
     match config
         .messenger_routes
         .iter_mut()
@@ -811,7 +884,12 @@ fn save_route(
         None => config.messenger_routes.push(route),
     }
 
-    persist(config).map_err(|e| e.join("; "))?;
+    if let Err(e) = persist(config) {
+        // The client is told the save failed; the live config (and the view
+        // rebuilt from it) must not show the route as applied.
+        config.messenger_routes = prior_routes;
+        return Err(e.join("; "));
+    }
     debug!(%messenger, ?channel, thread_id, "Messenger route saved");
     Ok(Some(match channel {
         Some(c) => format!("{messenger} {c} → {label}"),
@@ -825,14 +903,17 @@ fn delete_route(
     channel: Option<&str>,
 ) -> Result<Option<String>, String> {
     let channel = channel.filter(|c| !c.trim().is_empty());
-    let before = config.messenger_routes.len();
+    let prior_routes = config.messenger_routes.clone();
     config
         .messenger_routes
         .retain(|r| !(r.messenger == messenger && r.channel.as_deref() == channel));
-    if config.messenger_routes.len() == before {
+    if config.messenger_routes.len() == prior_routes.len() {
         return Err("No such route".to_string());
     }
-    persist(config).map_err(|e| e.join("; "))?;
+    if let Err(e) = persist(config) {
+        config.messenger_routes = prior_routes;
+        return Err(e.join("; "));
+    }
     Ok(Some("Route removed".to_string()))
 }
 
@@ -1500,6 +1581,110 @@ mod tests {
             ServerPayload::MessengerConfigResult { accounts, .. } => accounts.clone(),
             other => panic!("expected a config result, got {other:?}"),
         }
+    }
+
+    /// A writer that keeps every frame, for handler-level tests.
+    struct SinkWriter(Vec<ServerFrame>);
+
+    #[async_trait::async_trait]
+    impl rustyclaw_core::gateway::TransportWriter for SinkWriter {
+        async fn send_on_stream(
+            &mut self,
+            _stream_id: u64,
+            frame: &ServerFrame,
+        ) -> anyhow::Result<()> {
+            self.0.push(frame.clone());
+            Ok(())
+        }
+
+        async fn close(&mut self) -> anyhow::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn a_mutation_lands_in_the_shared_config_not_just_the_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+        let (config, vault) = fixture(dir.path());
+        let shared: crate::SharedConfig = Arc::new(tokio::sync::RwLock::new(config.clone()));
+        let mut conn_config = config;
+        let mut writer = SinkWriter(Vec::new());
+
+        handle_messenger_config(
+            &mut writer,
+            ClientPayload::MessengerAccountSave {
+                original_name: None,
+                name: "tg".to_string(),
+                messenger_type: "telegram".to_string(),
+                enabled: true,
+                fields: Vec::new(),
+                secrets: vec![("token".to_string(), "123:secret".to_string())],
+                display_name: None,
+                bio: None,
+                avatar_path: None,
+                agent_id: None,
+            },
+            &mut conn_config,
+            &shared,
+            &vault,
+        )
+        .await
+        .unwrap();
+
+        // The shared copy is what every other settings handler persists from.
+        // An account living only in the connection snapshot survives exactly
+        // until the next agent rename or model switch rewrites config.toml
+        // without it.
+        assert_eq!(shared.read().await.messengers.len(), 1);
+        assert_eq!(
+            conn_config.messengers.len(),
+            1,
+            "the connection snapshot must follow the shared copy"
+        );
+
+        // The unrelated-settings-change scenario end to end: persisting the
+        // shared copy must keep the account on disk.
+        shared.read().await.save(None).unwrap();
+        let on_disk = std::fs::read_to_string(dir.path().join("config.toml")).unwrap();
+        assert!(
+            on_disk.contains("[[messengers]]"),
+            "a shared-config persist must not erase messenger accounts"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_delete_that_cannot_persist_keeps_the_credential_and_the_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("123:secret"))
+            .await
+            .unwrap();
+
+        // Make persist fail; the vault deletion must not have happened yet,
+        // or the on-disk config keeps naming a credential that is gone and
+        // the account can never log in again.
+        let config_path = dir.path().join("config.toml");
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::create_dir_all(&config_path).unwrap();
+
+        let errors = delete_account(&mut config, &vault, "tg").await.unwrap_err();
+        assert!(!errors.is_empty());
+
+        assert_eq!(
+            config.messengers.len(),
+            1,
+            "a failed delete must leave the live config untouched"
+        );
+        assert_eq!(
+            vault
+                .lock()
+                .await
+                .read_service_credential("messenger/tg/token")
+                .unwrap()
+                .as_deref(),
+            Some("123:secret"),
+            "a failed delete must not have destroyed the credential"
+        );
     }
 
     #[tokio::test]
