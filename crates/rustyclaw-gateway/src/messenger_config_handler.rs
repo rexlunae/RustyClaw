@@ -30,7 +30,6 @@ use rustyclaw_core::messengers::setup::{
     self, ThreadRoute, kind_spec, secret_name, validate_account_name, validate_fields,
 };
 use rustyclaw_core::secrets::{AccessPolicy, SecretEntry, SecretKind};
-use rustyclaw_core::threads::ThreadManager;
 
 use crate::SharedVault;
 
@@ -1083,6 +1082,7 @@ async fn send_route_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustyclaw_core::threads::ThreadManager;
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
