@@ -55,6 +55,10 @@ pub(crate) async fn handle_chat_frame(
     thread_mgr: &SharedThreadMgr,
     turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
+    // A resumed turn replays the conversation already in the thread's log;
+    // its last user message is recorded, and recording it again would
+    // duplicate it in the transcript.
+    is_resume: bool,
 ) -> Result<()> {
     // The thread this turn belongs to. The connection loop settles it —
     // including the auto-switch to a better-matching thread — before
@@ -70,7 +74,7 @@ pub(crate) async fn handle_chat_frame(
     let mut did_auto_label = false;
     let mut needs_caption = false;
     let mut did_append_user_message = false;
-    if let Some(turn_thread) = active_thread_id {
+    if let Some(turn_thread) = active_thread_id.filter(|_| !is_resume) {
         let mut tm = thread_mgr.lock().await;
         if let Some(thread) = tm.get_mut(turn_thread) {
             // Find the last user message (typically the new one)
@@ -105,7 +109,12 @@ pub(crate) async fn handle_chat_frame(
 
     // Auto-ingest user message into Steel Memory
     #[cfg(feature = "semantic-memory")]
-    if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+    if let Some(last_user) = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .filter(|_| !is_resume)
+    {
         let ws = config.workspace_dir().to_path_buf();
         let text = last_user.content.clone();
         tokio::spawn(async move {

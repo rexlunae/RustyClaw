@@ -432,9 +432,10 @@ mod tests {
         }
 
         // A fresh connection: reload both managers, then derive the workspace
-        // exactly as `handle_connection` does.
+        // exactly as `handle_connection` does — including migrating the
+        // legacy single-file layout into the per-thread store.
         let projects = ProjectManager::load_or_new(&projects_path);
-        let threads = ThreadManager::load_or_default(&threads_path);
+        let threads = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
         let mut config = Config::default();
         repoint_workspace(&mut config, &projects, &threads);
 

@@ -674,7 +674,7 @@ pub(crate) async fn dispatch_text_message(
                 if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                     thread.memory_flushed = true;
                 }
-                crate::helpers::persist_threads(&tm, threads_path);
+                crate::helpers::persist_threads(&mut tm, threads_path);
             }
             flush_pending_resume = true;
             flushed_this_round = true;
@@ -703,13 +703,7 @@ pub(crate) async fn dispatch_text_message(
                     if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                         thread.apply_compaction_keeping(outcome.summary, outcome.kept_recent);
                     }
-                    if let Err(e) = tm.save_to_file(threads_path) {
-                        tracing::warn!(
-                            error = %e,
-                            path = ?threads_path,
-                            "Failed to persist compaction summary to thread history"
-                        );
-                    }
+                    crate::helpers::persist_threads(&mut tm, threads_path);
                 }
                 Ok(None) => {} // nothing to compact
                 Err(err) => {
@@ -915,7 +909,7 @@ pub(crate) async fn dispatch_text_message(
                         }
                         // Persist the final assistant turn so reconnecting
                         // clients see it via ThreadHistoryRequest.
-                        crate::helpers::persist_threads(&tm, threads_path);
+                        crate::helpers::persist_threads(&mut tm, threads_path);
                     }
                     // Auto-ingest assistant response into Steel Memory
                     #[cfg(feature = "semantic-memory")]
@@ -1167,7 +1161,7 @@ pub(crate) async fn dispatch_text_message(
                                     let mut tm = thread_mgr.lock().await;
                                     match turn_thread {
                                         Some(id) if tm.rename(id, caption) => {
-                                            crate::helpers::persist_threads(&tm, threads_path);
+                                            crate::helpers::persist_threads(&mut tm, threads_path);
                                             true
                                         }
                                         _ => false,
@@ -1280,7 +1274,7 @@ pub(crate) async fn dispatch_text_message(
                 thread.add_tool_result(tr.id.clone(), tr.output.clone());
             }
         }
-        crate::helpers::persist_threads(&tm, threads_path);
+        crate::helpers::persist_threads(&mut tm, threads_path);
         drop(tm);
 
         // ── Bail out if tools keep failing with no progress ─────────

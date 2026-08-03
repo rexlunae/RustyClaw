@@ -1108,6 +1108,25 @@ pub(super) fn apply_gw_event(
                     thread.is_foreground = thread.id == active_id;
                 }
             }
+            // "Streaming" in the status column is derived from the
+            // gateway's turn markers, so it is authoritative: a turn is
+            // running in that thread whether or not this client saw it
+            // start — a reconnect, another client, or a turn the gateway
+            // resumed after a restart. Seed the in-flight set from it
+            // (add-only; removal belongs to each turn's close-out).
+            {
+                let mut running = in_flight.read().clone();
+                let before = running.len();
+                for t in thread_list
+                    .iter()
+                    .filter(|t| t.status.as_deref() == Some("Streaming"))
+                {
+                    running.insert(t.id);
+                }
+                if running.len() != before {
+                    in_flight.set(running);
+                }
+            }
             // Adapt transport threads to view items, group them through the
             // shared SidebarTree, then flatten back to a project-ordered list.
             // The flat order matches the rendered tree, so the keyboard's flat

@@ -69,6 +69,55 @@ impl ThreadManager {
         self.events_tx.subscribe()
     }
 
+    /// Build a manager from already-loaded threads — the store's loader.
+    /// Callers still need [`Self::ensure_foreground`] afterwards.
+    pub fn from_parts(threads: Vec<AgentThread>, foreground_id: Option<ThreadId>) -> Self {
+        let (events_tx, _) = broadcast::channel(256);
+        let mut mgr = Self {
+            threads: HashMap::new(),
+            foreground_id,
+            events_tx,
+            config: ThreadManagerConfig::default(),
+        };
+        for thread in threads {
+            ThreadId::reserve_above(thread.id.0);
+            mgr.threads.insert(thread.id, thread);
+        }
+        mgr
+    }
+
+    /// Every thread, mutably — the store drains pending log records
+    /// through this.
+    pub fn threads_mut(&mut self) -> impl Iterator<Item = &mut AgentThread> {
+        self.threads.values_mut()
+    }
+
+    /// Record that a turn began in a thread. Until the matching
+    /// [`Self::end_turn`] writes the stop indicator, the thread is open —
+    /// what clients render as streaming, and what a restarted gateway
+    /// resumes.
+    pub fn begin_turn(&mut self, id: ThreadId) {
+        if let Some(thread) = self.threads.get_mut(&id) {
+            thread.begin_turn();
+        }
+    }
+
+    /// Write a thread's stop indicator. `ok` is false for errors and
+    /// cancellations. Threads with no open turn are left alone.
+    pub fn end_turn(&mut self, id: ThreadId, ok: bool) {
+        if let Some(thread) = self.threads.get_mut(&id) {
+            thread.end_turn(ok);
+        }
+    }
+
+    /// The threads whose last turn has no stop indicator — interrupted
+    /// mid-answer by whatever ended the process that ran them.
+    pub fn open_threads(&self) -> Vec<ThreadId> {
+        let mut open: Vec<&AgentThread> = self.threads.values().filter(|t| t.is_open()).collect();
+        open.sort_by_key(|t| t.created_at);
+        open.iter().map(|t| t.id).collect()
+    }
+
     // ── Thread Creation ─────────────────────────────────────────────────────
 
     /// Create a new chat thread and make it foreground.
@@ -841,6 +890,44 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Compaction summarises the model's context; it must never destroy
+    /// the conversation. The old implementation popped the summarised
+    /// messages off the thread — and the thread's messages are the
+    /// transcript every client loads, so switching threads or crossing
+    /// the context threshold truncated the visible conversation to its
+    /// last few messages, permanently.
+    #[test]
+    fn compaction_keeps_the_transcript_whole() {
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Long chat");
+        for i in 0..10 {
+            mgr.add_message(id, MessageRole::User, format!("message {i}"));
+        }
+
+        let thread = mgr.get_mut(id).unwrap();
+        thread.apply_compaction_keeping("what came before".into(), 3);
+
+        assert_eq!(
+            thread.messages.len(),
+            10,
+            "every message is still in the record"
+        );
+        assert_eq!(thread.compacted_up_to, 7);
+        let ctx = thread.build_context();
+        assert!(
+            ctx.contains("what came before") && ctx.contains("message 9"),
+            "context is summary plus the uncompacted tail"
+        );
+        assert!(
+            !ctx.contains("message 0"),
+            "summarised messages stay out of the model context"
+        );
+        // Re-compacting covers only the tail, seeded with the prior summary.
+        let prompt = thread.compaction_prompt();
+        assert!(prompt.contains("what came before"));
+        assert!(!prompt.contains("message 0"));
     }
 
     /// The elected foreground is an interactive thread, not a sub-agent or
