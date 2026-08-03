@@ -484,6 +484,17 @@ pub fn secret_name(account: &str, field: &str) -> String {
     format!("messenger/{}/{}", account_slug(account), field)
 }
 
+/// Hex SHA-256 of a file's contents.
+///
+/// Used to pin a profile avatar to the bytes present when the user saved it
+/// — see [`MessengerProfile::avatar_sha256`].
+pub fn file_fingerprint(path: &std::path::Path) -> std::io::Result<String> {
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path)?;
+    let digest = Sha256::digest(&bytes);
+    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+}
+
 /// Whether two account names would share one set of vault keys.
 ///
 /// `"Telegram Main"`, `"telegram-main"` and `"telegram_main"` all slug to
@@ -513,6 +524,14 @@ pub struct MessengerProfile {
     /// Avatar image to upload, where the backend supports it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub avatar_path: Option<std::path::PathBuf>,
+    /// SHA-256 of the avatar's contents at the moment it was saved.
+    ///
+    /// The upload happens at connect time, arbitrarily later, and anything
+    /// able to write the workspace (the agent's own file tools included)
+    /// could swap the file in between. Pinning the bytes the user actually
+    /// saved means a swap makes the upload refuse, not exfiltrate.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar_sha256: Option<String>,
     /// Which agent's identity this account speaks as. Defaults to `main`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
@@ -521,9 +540,15 @@ pub struct MessengerProfile {
 /// A profile with every fallback applied, ready to present.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedProfile {
+    /// Name presented on the platform.
     pub display_name: String,
+    /// Status/about text, when set anywhere.
     pub bio: Option<String>,
+    /// Avatar image to upload, where the backend supports it.
     pub avatar_path: Option<std::path::PathBuf>,
+    /// See [`MessengerProfile::avatar_sha256`].
+    pub avatar_sha256: Option<String>,
+    /// Agent whose identity this account speaks as.
     pub agent_id: String,
 }
 
@@ -548,6 +573,7 @@ impl MessengerProfile {
                     .map(str::to_string)
             }),
             avatar_path: self.avatar_path.clone(),
+            avatar_sha256: self.avatar_sha256.clone(),
             agent_id: self
                 .agent_id
                 .clone()

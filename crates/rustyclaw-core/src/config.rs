@@ -207,7 +207,11 @@ pub struct Config {
 ///
 /// `Debug` is implemented by hand rather than derived so credentials are
 /// redacted; see the impl below.
-#[derive(Clone, Default, Serialize, Deserialize)]
+///
+/// `PartialEq` lets the messenger loop notice a setup-panel edit — it
+/// compares the shared config's account list against the one its
+/// connections were built from on each poll tick.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessengerConfig {
     /// Display name for this messenger instance.
     #[serde(default)]
@@ -376,7 +380,7 @@ impl std::fmt::Debug for MessengerConfig {
 }
 
 /// DM (Direct Message) configuration for messengers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DmConfig {
     /// Whether DMs are enabled.
     #[serde(default)]

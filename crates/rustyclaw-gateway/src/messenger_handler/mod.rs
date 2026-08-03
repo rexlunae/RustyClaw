@@ -164,9 +164,31 @@ async fn announce_profile(
         // between, and it is this read that leaves the host.
         match crate::messenger_config_handler::validate_avatar(avatar, config) {
             Ok(path) => {
-                let url = format!("file://{}", path.display());
-                if let Err(e) = messenger.set_profile_picture(&url).await {
-                    debug!(messenger = %messenger.name(), error = %e, "Could not set avatar");
+                // Location checks can't vouch for *contents*: anything with
+                // workspace write access (the agent's file tools included)
+                // could have replaced the image. Only the bytes present when
+                // the user saved the profile get published; a mismatch means
+                // "re-save in the setup panel to bless the new image". A
+                // profile with no recorded fingerprint was hand-written into
+                // config.toml on the host, which is at least as deliberate
+                // as a panel save, so it uploads as-is.
+                let fingerprint = rustyclaw_core::messengers::setup::file_fingerprint(&path);
+                let publishable = match (profile.avatar_sha256.as_deref(), &fingerprint) {
+                    (Some(saved), Ok(current)) => saved == current,
+                    (Some(_), Err(_)) => false,
+                    (None, _) => true,
+                };
+                if publishable {
+                    let url = format!("file://{}", path.display());
+                    if let Err(e) = messenger.set_profile_picture(&url).await {
+                        debug!(messenger = %messenger.name(), error = %e, "Could not set avatar");
+                    }
+                } else {
+                    warn!(
+                        path = %path.display(),
+                        "Avatar contents changed since the profile was saved; \
+                         not publishing them — re-save the profile to use the new image"
+                    );
                 }
             }
             Err(reasons) => warn!(
@@ -352,8 +374,14 @@ fn get_messenger_for_account<'a>(
 ///
 /// When `messenger_max_concurrent` > 1, messages are processed concurrently.
 /// The loop continues polling for new messages while processing tasks run.
+///
+/// Reads the **shared** config, not a startup snapshot: the setup panel
+/// saves accounts and routes into it, and a loop pinned to a boot-time copy
+/// reported those saves as done while never connecting or routing anything
+/// until the gateway restarted. Each tick picks up the current config;
+/// a change to the account list rebuilds the connections.
 pub async fn run_messenger_loop(
-    config: Config,
+    shared_config: crate::SharedConfig,
     messenger_mgr: SharedMessengerManager,
     model_ctx: Option<Arc<ModelContext>>,
     vault: SharedVault,
@@ -373,6 +401,8 @@ pub async fn run_messenger_loop(
             return Ok(());
         }
     };
+
+    let mut config = shared_config.read().await.clone();
 
     let poll_interval =
         Duration::from_millis(config.messenger_poll_interval_ms.unwrap_or(2000).max(500) as u64);
@@ -416,6 +446,27 @@ pub async fn run_messenger_loop(
                 break;
             }
             _ = tokio::time::sleep(poll_interval) => {
+                // Pick up setup-panel edits without a restart. The account
+                // list decides which connections exist, so a change there
+                // rebuilds them; routes and profiles are read from the fresh
+                // snapshot on every message either way.
+                let fresh = shared_config.read().await.clone();
+                if fresh.messengers != config.messengers {
+                    match create_messenger_manager(&fresh, &vault).await {
+                        Ok(new_mgr) => {
+                            *messenger_mgr.lock().await = new_mgr;
+                            info!(
+                                accounts = fresh.messengers.len(),
+                                "Messenger connections rebuilt after a config change"
+                            );
+                        }
+                        Err(e) => {
+                            error!(error = %e, "Could not rebuild messengers after a config change");
+                        }
+                    }
+                }
+                config = fresh;
+
                 eprintln!("DEBUG: Polling messengers...");
                 // Poll all messengers for incoming messages
                 let messages = {

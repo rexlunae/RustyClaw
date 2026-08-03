@@ -257,10 +257,14 @@ pub async fn run_gateway(
 
     // ── Initialize and start messenger loop ─────────────────────────
     //
-    // If messengers are configured, we poll them for incoming messages
-    // and route them through the model.
+    // Spawned unconditionally, not just when messengers exist at boot: the
+    // setup panel adds accounts at runtime, and the loop is what notices
+    // them (it re-reads the shared config each tick). Gating on the boot
+    // config meant a first account saved through the panel could never
+    // connect until a restart. With nothing configured, polling an empty
+    // manager is a no-op.
     eprintln!("DEBUG: messengers configured: {}", config.messengers.len());
-    let messenger_mgr = if !config.messengers.is_empty() {
+    let messenger_mgr = {
         eprintln!("DEBUG: Creating messenger manager...");
         match messenger_handler::create_messenger_manager(&config, &vault).await {
             Ok(mgr) => {
@@ -268,7 +272,7 @@ pub async fn run_gateway(
                 let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));
 
                 // Spawn messenger loop
-                let messenger_config = config.clone();
+                let messenger_config = shared_config.clone();
                 let messenger_ctx = model_ctx.clone();
                 let messenger_vault = vault.clone();
                 let messenger_skills = skill_mgr.clone();
@@ -312,8 +316,6 @@ pub async fn run_gateway(
                 None
             }
         }
-    } else {
-        None
     };
 
     // ── External triggers ───────────────────────────────────────────

@@ -52,13 +52,28 @@ pub async fn handle_messenger_config(
     shared_config: &crate::SharedConfig,
     vault: &SharedVault,
 ) -> Result<()> {
+    /// A mutation's outcome, carried past the settings lock to the transport.
+    enum Reply {
+        /// From an account save, delete, or migration.
+        Account { name: String, outcome: Outcome },
+        /// From a route save or delete.
+        Route(Result<Option<String>, String>),
+        /// A plain view request has no result frame of its own.
+        None,
+    }
+
     // Held across the whole mutation so two clients editing at once serialise
-    // instead of interleaving read-modify-write on the settings file.
+    // instead of interleaving read-modify-write on the settings file — but
+    // NOT across any transport write. A frame send can block on a client
+    // that is slow to drain, and stalling every other connection's settings
+    // access on one laggard is the documented deadlock shape this codebase
+    // has hit before. Results are computed here and sent after the guard is
+    // dropped.
     let mut shared = shared_config.write().await;
     let config = &mut *shared;
 
-    match payload {
-        ClientPayload::MessengerConfigRequest => {}
+    let reply = match payload {
+        ClientPayload::MessengerConfigRequest => Reply::None,
 
         ClientPayload::MessengerAccountSave {
             original_name,
@@ -72,7 +87,7 @@ pub async fn handle_messenger_config(
             avatar_path,
             agent_id,
         } => {
-            let result = save_account(
+            let outcome = save_account(
                 config,
                 vault,
                 original_name,
@@ -87,17 +102,17 @@ pub async fn handle_messenger_config(
                 agent_id,
             )
             .await;
-            send_account_result(writer, &name, result).await?;
+            Reply::Account { name, outcome }
         }
 
         ClientPayload::MessengerAccountDelete { name } => {
-            let result = delete_account(config, vault, &name).await;
-            send_account_result(writer, &name, result).await?;
+            let outcome = delete_account(config, vault, &name).await;
+            Reply::Account { name, outcome }
         }
 
         ClientPayload::MessengerSecretsMigrate { name } => {
-            let result = migrate_secrets(config, vault, &name).await;
-            send_account_result(writer, &name, result).await?;
+            let outcome = migrate_secrets(config, vault, &name).await;
+            Reply::Account { name, outcome }
         }
 
         ClientPayload::MessengerRouteSave {
@@ -106,14 +121,12 @@ pub async fn handle_messenger_config(
             thread_id,
             agent_id,
             enabled,
-        } => {
-            let result = save_route(config, messenger, channel, thread_id, agent_id, enabled);
-            send_route_result(writer, result).await?;
-        }
+        } => Reply::Route(save_route(
+            config, messenger, channel, thread_id, agent_id, enabled,
+        )),
 
         ClientPayload::MessengerRouteDelete { messenger, channel } => {
-            let result = delete_route(config, &messenger, channel.as_deref());
-            send_route_result(writer, result).await?;
+            Reply::Route(delete_route(config, &messenger, channel.as_deref()))
         }
 
         other => {
@@ -123,7 +136,7 @@ pub async fn handle_messenger_config(
             );
             return Ok(());
         }
-    }
+    };
 
     // The connection's own snapshot drives everything else this connection
     // does (prompts, messenger loops started from it); leaving it behind the
@@ -133,6 +146,12 @@ pub async fn handle_messenger_config(
 
     let view = build_view(config, vault).await;
     drop(shared);
+
+    match reply {
+        Reply::Account { name, outcome } => send_account_result(writer, &name, outcome).await?,
+        Reply::Route(result) => send_route_result(writer, result).await?,
+        Reply::None => {}
+    }
     send_frame(writer, &view).await
 }
 
@@ -371,7 +390,12 @@ async fn save_account(
     let Some(spec) = kind_spec(&messenger_type) else {
         return Err(vec![format!("Unknown messenger type: '{messenger_type}'")]);
     };
-    if !feature_available(spec.feature) {
+    // Only an *enabled* account needs a runnable backend. Both clients
+    // implement the Disable toggle as a save with `enabled` flipped, so
+    // refusing here made the one account the panel flags as unsupported —
+    // the one failing at every startup — the one account that could not be
+    // switched off without deleting it.
+    if enabled && !feature_available(spec.feature) {
         return Err(vec![format!(
             "This gateway was built without support for {}",
             spec.label
@@ -475,15 +499,20 @@ async fn save_account(
     }
 
     // Everything present counts: values arriving now, and credentials already
-    // in the vault from a previous save.
-    let arriving: Vec<&str> = staged.iter().map(|(f, _, _)| f.as_str()).collect();
-    validate_fields(&messenger_type, |field| {
-        arriving.contains(&field)
-            || entry.field_is_set(field)
-            || fields
-                .iter()
-                .any(|(name, value)| name == field && !value.trim().is_empty())
-    })?;
+    // in the vault from a previous save. A *disabled* account skips the
+    // required-field check: it is not going to connect, and demanding a bot
+    // token before an unsupported or half-configured account may be switched
+    // off inverts the point of disabling it. Enabling validates in full.
+    if enabled {
+        let arriving: Vec<&str> = staged.iter().map(|(f, _, _)| f.as_str()).collect();
+        validate_fields(&messenger_type, |field| {
+            arriving.contains(&field)
+                || entry.field_is_set(field)
+                || fields
+                    .iter()
+                    .any(|(name, value)| name == field && !value.trim().is_empty())
+        })?;
+    }
 
     // Validate everything that still can be before the vault is touched. The
     // avatar check in particular used to run after the writes, and any
@@ -493,7 +522,19 @@ async fn save_account(
     let validated_avatar = match avatar_path {
         None => None,
         Some(path) if path.as_os_str().is_empty() => Some(None),
-        Some(path) => Some(Some(validate_avatar(&path, config)?)),
+        Some(path) => {
+            let canonical = validate_avatar(&path, config)?;
+            // Fingerprinted now, while the user is looking at the file they
+            // picked. The upload happens at connect time, and the hash is
+            // what stops a file swapped in between from being published.
+            let fingerprint = setup::file_fingerprint(&canonical).map_err(|e| {
+                vec![format!(
+                    "Could not read avatar '{}': {e}",
+                    canonical.display()
+                )]
+            })?;
+            Some(Some((canonical, fingerprint)))
+        }
     };
 
     // Steps after the writes can still fail (a vault rename, persisting the
@@ -557,7 +598,16 @@ async fn save_account(
         profile.bio = override_of(Some(value));
     }
     if let Some(avatar) = validated_avatar {
-        profile.avatar_path = avatar;
+        match avatar {
+            Some((path, fingerprint)) => {
+                profile.avatar_path = Some(path);
+                profile.avatar_sha256 = Some(fingerprint);
+            }
+            None => {
+                profile.avatar_path = None;
+                profile.avatar_sha256 = None;
+            }
+        }
     }
     if let Some(id) = agent_id {
         profile.agent_id = override_of(Some(id));
@@ -1479,6 +1529,119 @@ mod tests {
             None,
             "a type change must not orphan the old credential in the vault"
         );
+    }
+
+    #[tokio::test]
+    async fn an_unsupported_account_can_still_be_disabled() {
+        if feature_available(Some("matrix")) {
+            return; // This build can run it, so the scenario doesn't exist.
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        // An account this build can't run — from a config written by a build
+        // that could. The panel flags it unsupported and offers Disable.
+        config.messengers.push(MessengerConfig {
+            name: "mx".to_string(),
+            messenger_type: "matrix".to_string(),
+            enabled: true,
+            ..Default::default()
+        });
+
+        // Disabling must work: it is the one action that stops the account
+        // failing at every startup, and it cannot make anything worse.
+        save_account(
+            &mut config,
+            &vault,
+            Some("mx".to_string()),
+            "mx".to_string(),
+            "matrix".to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("disabling an unsupported account must be allowed");
+        assert!(!config.messengers[0].enabled);
+
+        // Re-enabling still validates: the backend genuinely cannot run.
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("mx".to_string()),
+            "mx".to_string(),
+            "matrix".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(errors[0].contains("without support"), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn an_avatar_is_fingerprinted_at_save_and_cleared_with_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+
+        std::fs::create_dir_all(config.workspace_dir()).unwrap();
+        let face = config.workspace_dir().join("face.png");
+        std::fs::write(&face, b"\x89PNG-bytes").unwrap();
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(face.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let profile = config.messengers[0].profile.clone().unwrap();
+        assert_eq!(
+            profile.avatar_sha256.as_deref(),
+            Some(setup::file_fingerprint(&face).unwrap().as_str()),
+            "the saved bytes are what connect-time uploads are pinned to"
+        );
+
+        // Clearing the avatar clears the pin with it.
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(std::path::PathBuf::new()),
+            None,
+        )
+        .await
+        .unwrap();
+        let profile = config.messengers[0].profile.clone();
+        assert!(profile.is_none_or(|p| p.avatar_sha256.is_none()));
     }
 
     #[tokio::test]
