@@ -876,6 +876,12 @@ pub(crate) async fn handle_connection(
                                 // reply, in whichever thread the user had
                                 // just opened.
                                 active_tasks.lock().await.reap_finished();
+                                // The ephemeral sweep was never wired to
+                                // anything: completed sub-agent and task
+                                // threads accumulated forever, and every
+                                // prompt-context builder that walks the
+                                // thread list dragged them along.
+                                agent_session.thread_mgr.lock().await.cleanup_ephemeral();
                                 // The client names the thread it typed into,
                                 // and that name wins. The gateway's own
                                 // foreground is only a cache of what a client

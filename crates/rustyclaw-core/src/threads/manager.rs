@@ -541,6 +541,21 @@ impl ThreadManager {
                 continue;
             }
 
+            // Only work that is actually happening belongs here: this
+            // string is injected into every prompt as "Background Tasks",
+            // and it used to include every backgrounded conversation the
+            // agent had ever had — so a question as small as "status
+            // report?" arrived wrapped in the tail ends of finished work,
+            // and the model dutifully deliberated about tasks that were
+            // done and merged. An open turn is running; a non-interactive
+            // thread's lifecycle says whether it is. An idle conversation
+            // is not a background task.
+            let active =
+                thread.is_open() || (!thread.kind.is_interactive() && thread.status.is_running());
+            if !active {
+                continue;
+            }
+
             // Include summary or recent info for backgrounded threads
             if let Some(summary) = &thread.compact_summary {
                 context.push_str(&format!(
@@ -558,13 +573,21 @@ impl ThreadManager {
                     thread.messages.len()
                 ));
                 for msg in recent.into_iter().rev() {
-                    context.push_str(&format!(
-                        "{:?}: {}\n",
-                        msg.role,
-                        &msg.content[..msg.content.len().min(100)]
-                    ));
+                    // By characters, not bytes: a byte slice can land
+                    // inside a multi-byte character and panic.
+                    let snippet: String = msg.content.chars().take(100).collect();
+                    context.push_str(&format!("{:?}: {}\n", msg.role, snippet));
                 }
                 context.push('\n');
+            } else {
+                // Running work with nothing recorded yet is still work —
+                // name it, so the model knows it exists.
+                context.push_str(&format!(
+                    "## {} ({})\n{}\n\n",
+                    thread.label,
+                    thread.kind.display_name(),
+                    thread.description.as_deref().unwrap_or("In progress")
+                ));
             }
         }
 
@@ -890,6 +913,51 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Finished and idle threads stay out of every prompt's context.
+    ///
+    /// The "Background Tasks" injection used to carry the tail of every
+    /// backgrounded conversation, forever — so a question as small as
+    /// "status report?" arrived wrapped in last night's finished work and
+    /// the model deliberated about tasks that were already done. Only work
+    /// that is actually running belongs there: an open turn, or a
+    /// non-interactive thread whose lifecycle says it is running.
+    #[test]
+    fn idle_and_finished_work_stays_out_of_global_context() {
+        let mut mgr = ThreadManager::new();
+        let old = mgr.create_chat("Last night's dev task");
+        mgr.add_message(old, MessageRole::User, "please fix the thing");
+        mgr.add_message(old, MessageRole::Assistant, "done — merged in #353");
+        let current = mgr.create_chat("Today");
+        mgr.switch_foreground(current);
+
+        assert!(
+            mgr.build_global_context().is_empty(),
+            "an idle backgrounded conversation is not a background task"
+        );
+
+        // The same thread with a turn actually running is background work.
+        mgr.begin_turn(old);
+        assert!(mgr.build_global_context().contains("Last night's dev task"));
+        mgr.end_turn(old, true);
+        assert!(mgr.build_global_context().is_empty());
+
+        // A running task thread appears; a completed one disappears.
+        let task = mgr.create_task("Deploy", "ship it", None);
+        assert!(mgr.build_global_context().contains("Deploy"));
+        mgr.complete(task, Some("shipped".into()), None);
+        assert!(
+            mgr.build_global_context().is_empty(),
+            "completed work must not haunt later prompts"
+        );
+
+        // Multi-byte content must not panic the snippet truncation.
+        let busy = mgr.create_chat("Unicode");
+        mgr.add_message(busy, MessageRole::User, "é".repeat(200));
+        mgr.begin_turn(busy);
+        mgr.switch_foreground(current);
+        assert!(mgr.build_global_context().contains("Unicode"));
     }
 
     /// Compaction summarises the model's context; it must never destroy
