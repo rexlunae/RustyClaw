@@ -66,8 +66,16 @@ async fn resolve_credentials(
     for (field, credential) in &messenger_config.secret_refs {
         match mgr.read_service_credential(credential) {
             Ok(Some(value)) => {
-                if let Err(e) = resolved.set_field(field, &value) {
-                    warn!(field, error = %e, "Could not apply vaulted credential");
+                // The error is deliberately not logged: `set_field`'s parse
+                // messages quote the offending value, and the value here is
+                // a decrypted credential. "Never log secrets" outranks a
+                // better diagnostic.
+                if resolved.set_field(field, &value).is_err() {
+                    warn!(
+                        account = %messenger_config.name,
+                        field,
+                        "Vaulted credential does not fit this field; leaving it unset"
+                    );
                 }
             }
             Ok(None) => warn!(
@@ -271,9 +279,12 @@ fn resolve_routing(
 
     // The thread is read from disk each time rather than cached: a client may
     // have renamed it, moved it, or deleted it since the loop started, and a
-    // stale working directory is a tool call in the wrong repository.
+    // stale working directory is a tool call in the wrong repository. Read
+    // through the per-thread store like every other gateway call site — the
+    // legacy loader reads a `threads.json` migration has renamed away, so it
+    // found nothing and every route fell back to the default workspace.
     let threads_path = config.sessions_dir_for(route.agent()).join("threads.json");
-    let thread_mgr = rustyclaw_core::threads::ThreadManager::load_or_default(&threads_path);
+    let thread_mgr = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
     let Some(thread) = thread_mgr.get(rustyclaw_core::threads::ThreadId(route.thread_id)) else {
         warn!(
             account = %account.name,
@@ -955,7 +966,12 @@ mod tests {
         if let Some(dir) = working_dir {
             mgr.set_working_dir(id, Some(dir.to_path_buf()));
         }
-        mgr.save_to_file(&sessions.join("threads.json")).unwrap();
+        // Through the store, as the gateway persists: seeding the legacy
+        // `threads.json` masked the production loader reading a file that
+        // no longer exists.
+        rustyclaw_core::threads::ThreadStore::at_legacy_path(&sessions.join("threads.json"))
+            .persist(&mut mgr)
+            .unwrap();
         id.0
     }
 

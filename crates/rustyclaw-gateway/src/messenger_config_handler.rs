@@ -174,8 +174,13 @@ fn available_kinds() -> Vec<String> {
 fn routable_threads(config: &Config) -> Vec<RoutableThreadDto> {
     let mut out = Vec::new();
     for agent in config.agent_registry().list() {
+        // Through the per-thread store, like every other gateway call site.
+        // The legacy loader reads a `threads.json` the gateway no longer
+        // writes (migration renames it away), so it saw no threads at all —
+        // and then invented a fresh "Main", leaving the picker with one
+        // phantom entry and rejecting every real thread id.
         let path = config.sessions_dir_for(&agent.id).join("threads.json");
-        let mgr = ThreadManager::load_or_default(&path);
+        let mgr = rustyclaw_core::threads::ThreadStore::load_or_migrate(&path);
         for thread in mgr.list() {
             out.push(RoutableThreadDto {
                 thread_id: thread.id.0,
@@ -1694,7 +1699,12 @@ mod tests {
         let mut mgr = ThreadManager::new();
         let first = mgr.create_chat("First");
         let second = mgr.create_chat("Second");
-        mgr.save_to_file(&sessions.join("threads.json")).unwrap();
+        // Through the store, as the gateway persists: seeding the legacy
+        // `threads.json` masked the production loader reading a file that
+        // no longer exists.
+        rustyclaw_core::threads::ThreadStore::at_legacy_path(&sessions.join("threads.json"))
+            .persist(&mut mgr)
+            .unwrap();
 
         save_route(
             &mut config,
