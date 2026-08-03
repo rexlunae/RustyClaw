@@ -272,7 +272,7 @@ pub(super) fn handle_normal_key(
         modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c'));
     if show_messengers_dialog.get() && !quit_chord {
         use rustyclaw_core::gateway::client_types::GatewayCommand;
-        use rustyclaw_view::messengers::{MessengerEditorData, MessengerTab};
+        use rustyclaw_view::messengers::{MessengerEditorData, MessengerTab, RouteEditorData};
 
         let send_input = |input: UserInput| {
             if let Ok(guard) = tx_for_keys.lock() {
@@ -332,6 +332,54 @@ pub(super) fn handle_normal_key(
             return;
         }
 
+        // ── Route editor ──
+        if let Some(editor) = data.route_editor.clone() {
+            let mut editor = editor;
+            match code {
+                KeyCode::Esc => data.route_editor = None,
+                KeyCode::Tab | KeyCode::Down => editor.focus_next(),
+                KeyCode::BackTab | KeyCode::Up => editor.focus_prev(),
+                KeyCode::Left => editor.cycle(-1, data.threads.len()),
+                KeyCode::Right => editor.cycle(1, data.threads.len()),
+                KeyCode::Backspace => editor.backspace(),
+                // Unmodified characters only, for the same reason as the
+                // account editor above.
+                KeyCode::Char(c)
+                    if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    editor.insert(c)
+                }
+                KeyCode::Enter => {
+                    match (editor.account(), data.threads.get(editor.thread_idx)) {
+                        (Some(account), Some(thread)) => {
+                            send_input(UserInput::MessengerCommand(
+                                GatewayCommand::MessengerRouteSave {
+                                    messenger: account.to_string(),
+                                    channel: editor.channel_value(),
+                                    thread_id: thread.thread_id,
+                                    agent_id: Some(thread.agent_id.clone()),
+                                    enabled: true,
+                                },
+                            ));
+                            data.set_status("Saving…", false);
+                            // Open until the gateway confirms, like the
+                            // account editor.
+                        }
+                        (None, _) => {
+                            editor.errors = vec!["Add a messenger account first".to_string()]
+                        }
+                        (_, None) => editor.errors = vec!["No thread to route to".to_string()],
+                    }
+                }
+                _ => {}
+            }
+            if data.route_editor.is_some() {
+                data.route_editor = Some(editor);
+            }
+            messengers_data.set(Some(data));
+            return;
+        }
+
         // ── Backend picker (step one of "new account") ──
         if let Some(cursor) = data.kind_picker {
             let kinds = data.selectable_kinds();
@@ -374,13 +422,17 @@ pub(super) fn handle_normal_key(
             KeyCode::Char('t') if plain => data.toggle_tab(),
             KeyCode::Char('n') if plain => match data.tab {
                 MessengerTab::Accounts => data.kind_picker = Some(0),
-                // Routes are bound from the thread side, where the thread ids
-                // are already on screen; offering a blank id field here would
-                // ask the user to memorise a number.
-                MessengerTab::Routes => data.set_status(
-                    "Add a route with: /messengers → accounts → select → 't'",
-                    false,
-                ),
+                MessengerTab::Routes => {
+                    let accounts: Vec<String> =
+                        data.accounts.iter().map(|a| a.name.clone()).collect();
+                    if accounts.is_empty() {
+                        data.set_status("Add a messenger account first ('t' switches tabs)", true);
+                    } else if data.threads.is_empty() {
+                        data.set_status("No threads to route to — create a thread first", true);
+                    } else {
+                        data.route_editor = Some(RouteEditorData::new(accounts, None));
+                    }
+                }
             },
             KeyCode::Char('e') if plain => {
                 if let Some(account) = data.selected_account() {

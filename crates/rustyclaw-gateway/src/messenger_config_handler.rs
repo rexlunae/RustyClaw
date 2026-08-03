@@ -341,8 +341,6 @@ async fn save_account(
 ) -> Outcome {
     let name = name.trim().to_string();
     validate_account_name(&name).map_err(|e| vec![e])?;
-    // Captured before `config` is borrowed mutably below.
-    let credentials_dir = config.credentials_dir();
 
     let Some(spec) = kind_spec(&messenger_type) else {
         return Err(vec![format!("Unknown messenger type: '{messenger_type}'")]);
@@ -445,10 +443,30 @@ async fn save_account(
                 .any(|(name, value)| name == field && !value.trim().is_empty())
     })?;
 
+    // Validate everything that still can be before the vault is touched. The
+    // avatar check in particular used to run after the writes, and any
+    // rejection there stranded a freshly stored credential under an account
+    // that never came into being — unreferenced by `secret_refs`, invisible
+    // to `delete_account`, cleaned up by nothing.
+    let validated_avatar = match avatar_path {
+        None => None,
+        Some(path) if path.as_os_str().is_empty() => Some(None),
+        Some(path) => Some(Some(validate_avatar(&path, config)?)),
+    };
+
+    // Steps after the writes can still fail (a vault rename, persisting the
+    // config), so remember which credentials this call brought into being.
+    // Only those are safe to delete on the way out — rolling back an
+    // *overwrite* by deletion would destroy the previous value too.
+    let mut created: Vec<String> = Vec::new();
     {
         let mut mgr = vault.lock().await;
+        let existing = mgr.list_secrets();
         for (field, label, value) in &staged {
             let cred = secret_name(&name, field);
+            if !existing.contains(&format!("val:{cred}")) {
+                created.push(cred.clone());
+            }
             let secret_entry = SecretEntry {
                 label: format!("{name} — {label}"),
                 kind: SecretKind::Token,
@@ -459,8 +477,12 @@ async fn save_account(
                 description: Some(format!("{} credential for messenger '{name}'", spec.label)),
                 disabled: false,
             };
-            mgr.store_credential(&cred, &secret_entry, value, None)
-                .map_err(|e| vec![format!("Could not store {label} in the vault: {e}")])?;
+            if let Err(e) = mgr.store_credential(&cred, &secret_entry, value, None) {
+                for cred in &created {
+                    let _ = mgr.delete_credential(cred);
+                }
+                return Err(vec![format!("Could not store {label} in the vault: {e}")]);
+            }
             entry.secret_refs.insert(field.clone(), cred);
             // The vault now owns it; leaving the plaintext twin behind would
             // defeat the entire point of moving it.
@@ -483,11 +505,8 @@ async fn save_account(
     if let Some(value) = bio {
         profile.bio = override_of(Some(value));
     }
-    if let Some(path) = avatar_path {
-        profile.avatar_path = match path.as_os_str().is_empty() {
-            true => None,
-            false => Some(validate_avatar(&path, &credentials_dir)?),
-        };
+    if let Some(avatar) = validated_avatar {
+        profile.avatar_path = avatar;
     }
     if let Some(id) = agent_id {
         profile.agent_id = override_of(Some(id));
@@ -497,7 +516,10 @@ async fn save_account(
     // Renaming moves the vault entries too, so credentials follow the account
     // rather than being orphaned under the old name.
     if let Some(orig) = original_name.as_deref().filter(|o| *o != name) {
-        rename_credentials(&mut entry, vault, orig, &name).await?;
+        if let Err(e) = rename_credentials(&mut entry, vault, orig, &name).await {
+            discard_created_credentials(vault, &created).await;
+            return Err(e);
+        }
     }
 
     match original_name
@@ -518,7 +540,10 @@ async fn save_account(
         }
     }
 
-    persist(config)?;
+    if let Err(e) = persist(config) {
+        discard_created_credentials(vault, &created).await;
+        return Err(e);
+    }
     info!(account = %name, messenger_type = %messenger_type, "Messenger account saved");
     Ok(Some(match staged.is_empty() {
         true => format!("Saved '{name}'"),
@@ -538,6 +563,22 @@ async fn save_account(
 /// `from` is unused beyond documenting intent: the current reference is read
 /// from `secret_refs`, which is authoritative even if an earlier rename left
 /// it pointing somewhere unexpected.
+/// Best-effort removal of credentials a failed save brought into being.
+///
+/// Callers pass only names that did not exist before the save — deleting an
+/// overwritten credential would destroy the previous value along with the new
+/// one. Failures here are swallowed: the save is already being rejected for
+/// the real reason, and that is the error the user needs to see.
+async fn discard_created_credentials(vault: &SharedVault, created: &[String]) {
+    if created.is_empty() {
+        return;
+    }
+    let mut mgr = vault.lock().await;
+    for cred in created {
+        let _ = mgr.delete_credential(cred);
+    }
+}
+
 async fn rename_credentials(
     entry: &mut MessengerConfig,
     vault: &SharedVault,
@@ -737,11 +778,13 @@ const AVATAR_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 /// `announce_profile` uploads this file's *contents* to a third-party service,
 /// so an unchecked path is an exfiltration primitive: a connected client could
 /// name the credentials vault and have the gateway publish it. The workspace
-/// file frames already refuse anything outside their root; this is the same
-/// idea applied to the one other path a client gets to name.
+/// file frames already refuse anything outside their root; the same
+/// confinement applies here — an avatar must live inside an agent workspace,
+/// not merely outside the credentials store, or any readable image anywhere
+/// on the gateway host could be published to a platform the requester picks.
 fn validate_avatar(
     path: &std::path::Path,
-    credentials_dir: &std::path::Path,
+    config: &Config,
 ) -> Result<std::path::PathBuf, Vec<String>> {
     let canonical = path
         .canonicalize()
@@ -750,9 +793,13 @@ fn validate_avatar(
     // Two checks, deliberately. `is_protected_path` consults a process-global
     // credentials directory that is only set once the gateway has initialised
     // its sandbox, so on its own it silently permits everything before that
-    // point. The explicit comparison does not depend on global state.
+    // point. The explicit comparison does not depend on global state. Both
+    // are kept even though the workspace confinement below would also refuse
+    // these paths: naming the vault deserves its own message and its own log
+    // line, not a generic "outside the workspace".
     let protected = rustyclaw_core::tools::is_protected_path(&canonical)
-        || credentials_dir
+        || config
+            .credentials_dir()
             .canonicalize()
             .is_ok_and(|dir| canonical.starts_with(dir));
     if protected {
@@ -778,6 +825,26 @@ fn validate_avatar(
         return Err(vec![format!(
             "An avatar must be one of: {}",
             AVATAR_EXTENSIONS.join(", ")
+        )]);
+    }
+
+    // Confinement proper: the file must be inside an agent workspace. That is
+    // where the user's own files live, and it is the boundary every other
+    // client-named path in the protocol already honours.
+    let mut roots = vec![config.workspace_dir()];
+    for agent in config.agent_registry().list() {
+        roots.push(config.workspace_dir_for(&agent.id));
+    }
+    let allowed = roots.iter().any(|root| {
+        root.canonicalize()
+            .is_ok_and(|root| canonical.starts_with(root))
+    });
+    if !allowed {
+        warn!(path = %canonical.display(), "Refused an avatar outside the agent workspaces");
+        return Err(vec![format!(
+            "An avatar must live inside an agent workspace (for instance {}); \
+             the gateway does not publish files from elsewhere on its host",
+            config.workspace_dir().display()
         )]);
     }
 
@@ -1455,7 +1522,8 @@ mod tests {
         save_telegram(&mut config, &vault, "tg", Some("t"))
             .await
             .unwrap();
-        let avatar = dir.path().join("face.png");
+        std::fs::create_dir_all(config.workspace_dir()).unwrap();
+        let avatar = config.workspace_dir().join("face.png");
         std::fs::write(&avatar, b"png").unwrap();
         save_account(
             &mut config,
@@ -1625,7 +1693,8 @@ mod tests {
             .await
             .unwrap();
 
-        let face = dir.path().join("face.png");
+        std::fs::create_dir_all(config.workspace_dir()).unwrap();
+        let face = config.workspace_dir().join("face.png");
         std::fs::write(&face, b"\x89PNG").unwrap();
         save_account(
             &mut config,
@@ -1642,13 +1711,101 @@ mod tests {
             None,
         )
         .await
-        .expect("a png outside the vault is fine");
+        .expect("a png in the workspace is fine");
         assert_eq!(
             config.messengers[0]
                 .profile
                 .as_ref()
                 .and_then(|p| p.avatar_path.clone()),
             Some(face.canonicalize().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn an_image_outside_every_workspace_is_refused_as_an_avatar() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+
+        // A perfectly ordinary image — but not in any agent workspace, so
+        // publishing it would let a client exfiltrate arbitrary readable
+        // images from the gateway host.
+        let face = dir.path().join("face.png");
+        std::fs::write(&face, b"\x89PNG").unwrap();
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(face),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(errors[0].contains("workspace"), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn a_save_rejected_after_storing_a_credential_removes_it_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        // A bad avatar path fails the save *after* credentials used to be
+        // written, which stranded the token in the vault under an account
+        // that never came into being.
+        let errors = save_account(
+            &mut config,
+            &vault,
+            None,
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            vec![("token".to_string(), "123:secret".to_string())],
+            None,
+            None,
+            Some(dir.path().join("nonexistent.png")),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(!errors.is_empty());
+        assert!(config.messengers.is_empty(), "the account must not exist");
+
+        let stored = vault.lock().await.list_secrets();
+        assert!(
+            stored.iter().all(|k| !k.contains("messenger/tg/")),
+            "a rejected save must not leave its credential behind: {stored:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_save_that_cannot_persist_removes_the_credential_it_created() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        // Occupying config.toml's path with a directory makes `persist` fail
+        // — the one rejection that can only happen after the vault write, so
+        // it exercises the rollback rather than the reordered validation.
+        std::fs::create_dir_all(dir.path().join("config.toml")).unwrap();
+
+        let errors = save_telegram(&mut config, &vault, "tg", Some("123:secret"))
+            .await
+            .unwrap_err();
+        assert!(errors[0].contains("save"), "{errors:?}");
+
+        let stored = vault.lock().await.list_secrets();
+        assert!(
+            stored.iter().all(|k| !k.contains("messenger/tg/")),
+            "an unpersisted account must not keep a vault credential: {stored:?}"
         );
     }
 

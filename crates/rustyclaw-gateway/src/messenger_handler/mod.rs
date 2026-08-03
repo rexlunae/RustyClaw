@@ -304,13 +304,27 @@ fn resolve_routing(
     }
 }
 
-fn get_messenger_by_type<'a>(
+/// The connection a reply (or typing indicator) should leave through.
+///
+/// Messages are tagged with the account they arrived on, and the answer must
+/// go back out the same way: with two accounts on one platform, resolving by
+/// type alone sends the second account's replies through the first account's
+/// bot. The type-based fallback covers a messenger built from something other
+/// than this config (tests, hand-rolled setups), where no name matches.
+fn get_messenger_for_account<'a>(
     mgr: &'a MessengerManager,
+    account_name: &str,
     messenger_type: &str,
 ) -> Option<&'a dyn Messenger> {
-    mgr.messengers()
+    let messengers = mgr.messengers();
+    messengers
         .iter()
-        .find(|messenger| messenger.messenger_type() == messenger_type)
+        .find(|messenger| messenger.name() == account_name)
+        .or_else(|| {
+            messengers
+                .iter()
+                .find(|messenger| messenger.messenger_type() == messenger_type)
+        })
         .map(|messenger| messenger.as_ref())
 }
 
@@ -420,7 +434,7 @@ pub async fn run_messenger_loop(
                             // Set typing indicator
                             if let Some(channel) = &msg.channel {
                                 let mgr = messenger_mgr.lock().await;
-                                if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
+                                if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
                                     let _ = messenger.set_typing(channel, true).await;
                                 }
                             }
@@ -446,7 +460,7 @@ pub async fn run_messenger_loop(
                             // Clear typing indicator
                             if let Some(channel) = channel_for_typing {
                                 let mgr = messenger_mgr.lock().await;
-                                if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
+                                if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
                                     let _ = messenger.set_typing(&channel, false).await;
                                 }
                             }
@@ -462,7 +476,7 @@ pub async fn run_messenger_loop(
                         // Set typing indicator before processing
                         if let Some(channel) = &msg.channel {
                             let mgr = messenger_mgr.lock().await;
-                            if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
+                            if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
                                 let _ = messenger.set_typing(channel, true).await;
                             }
                         }
@@ -488,7 +502,7 @@ pub async fn run_messenger_loop(
                         // Clear typing indicator after processing
                         if let Some(channel) = channel_for_typing {
                             let mgr = messenger_mgr.lock().await;
-                            if let Some(messenger) = get_messenger_by_type(&mgr, &messenger_type) {
+                            if let Some(messenger) = get_messenger_for_account(&mgr, &account_name, &messenger_type) {
                                 let _ = messenger.set_typing(&channel, false).await;
                             }
                         }
@@ -872,7 +886,7 @@ async fn process_incoming_message(
         && final_response.trim() != "HEARTBEAT_OK"
     {
         let mgr = messenger_mgr.lock().await;
-        if let Some(messenger) = get_messenger_by_type(&mgr, messenger_type) {
+        if let Some(messenger) = get_messenger_for_account(&mgr, account_name, messenger_type) {
             let recipient = msg.channel.as_deref().unwrap_or(&msg.sender);
 
             let opts = SendOptions {

@@ -646,6 +646,94 @@ impl RoutableThreadData {
     }
 }
 
+/// The keyboard-driven "new route" form.
+///
+/// The desktop builds its route form from dropdowns; a terminal needs the
+/// same choices as cyclable rows. Accounts and threads are chosen from what
+/// the panel already knows — the only thing typed is the channel id.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct RouteEditorData {
+    /// Account names to choose from.
+    pub accounts: Vec<String>,
+    /// Chosen index into `accounts`.
+    pub account_idx: usize,
+    /// Channel id as typed; blank routes the whole account.
+    pub channel: String,
+    /// Chosen index into the panel's `threads`.
+    pub thread_idx: usize,
+    /// Focused row.
+    pub focused: usize,
+    pub errors: Vec<String>,
+}
+
+impl RouteEditorData {
+    pub const ROW_ACCOUNT: usize = 0;
+    pub const ROW_CHANNEL: usize = 1;
+    pub const ROW_THREAD: usize = 2;
+    const ROWS: usize = 3;
+
+    /// Start a route for `preferred` when it names a known account, or the
+    /// first account otherwise.
+    pub fn new(accounts: Vec<String>, preferred: Option<&str>) -> Self {
+        let account_idx = preferred
+            .and_then(|name| accounts.iter().position(|a| a == name))
+            .unwrap_or(0);
+        Self {
+            accounts,
+            account_idx,
+            ..Default::default()
+        }
+    }
+
+    pub fn focus_next(&mut self) {
+        self.focused = (self.focused + 1) % Self::ROWS;
+    }
+
+    pub fn focus_prev(&mut self) {
+        self.focused = (self.focused + Self::ROWS - 1) % Self::ROWS;
+    }
+
+    /// Step the focused chooser row by `delta`, wrapping. `thread_count`
+    /// bounds the thread row; the channel row has nothing to cycle.
+    pub fn cycle(&mut self, delta: isize, thread_count: usize) {
+        let step = |idx: usize, len: usize| -> usize {
+            match len {
+                0 => 0,
+                len => (idx as isize + delta).rem_euclid(len as isize) as usize,
+            }
+        };
+        match self.focused {
+            Self::ROW_ACCOUNT => self.account_idx = step(self.account_idx, self.accounts.len()),
+            Self::ROW_THREAD => self.thread_idx = step(self.thread_idx, thread_count),
+            _ => {}
+        }
+    }
+
+    /// Type into the channel row; the chooser rows take no text.
+    pub fn insert(&mut self, c: char) {
+        if self.focused == Self::ROW_CHANNEL {
+            self.channel.push(c);
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if self.focused == Self::ROW_CHANNEL {
+            self.channel.pop();
+        }
+    }
+
+    /// The chosen account, when there is one to choose.
+    pub fn account(&self) -> Option<&str> {
+        self.accounts.get(self.account_idx).map(String::as_str)
+    }
+
+    /// The channel to send: blank means "the whole account".
+    pub fn channel_value(&self) -> Option<String> {
+        let trimmed = self.channel.trim();
+        (!trimmed.is_empty()).then(|| trimmed.to_string())
+    }
+}
+
 // ── Panel ───────────────────────────────────────────────────────────────────
 
 /// Everything the messenger setup panel renders.
@@ -663,6 +751,8 @@ pub struct MessengersPanelData {
     pub selected: Option<usize>,
     /// Open account editor, if any.
     pub editor: Option<MessengerEditorData>,
+    /// Open "new route" form, if any (keyboard-driven clients).
+    pub route_editor: Option<RouteEditorData>,
     /// Open backend picker, if any: the index into
     /// [`selectable_kinds`](Self::selectable_kinds).
     pub kind_picker: Option<usize>,
@@ -772,6 +862,12 @@ impl MessengersPanelData {
             0 => None,
             n => Some(self.selected.unwrap_or(0).min(n - 1)),
         };
+        // A refresh landing mid-edit keeps the route form open (matching the
+        // account editor), but its thread choice must stay in range of the
+        // list it indexes into.
+        if let Some(editor) = &mut self.route_editor {
+            editor.thread_idx = editor.thread_idx.min(self.threads.len().saturating_sub(1));
+        }
     }
 
     /// Record an outcome for display.
@@ -943,6 +1039,49 @@ mod tests {
         assert_eq!(errors, vec!["Bot token is required"]);
         editor.set_value("token", "123:abc");
         assert!(editor.validate().is_ok());
+    }
+
+    #[test]
+    fn a_route_form_cycles_choosers_and_types_only_the_channel() {
+        let mut form = RouteEditorData::new(
+            vec!["tg-main".into(), "tg-support".into()],
+            Some("tg-support"),
+        );
+        assert_eq!(form.account(), Some("tg-support"), "preferred wins");
+
+        // The account row cycles and wraps; typing into it does nothing.
+        form.cycle(1, 3);
+        assert_eq!(form.account(), Some("tg-main"));
+        form.insert('x');
+        assert_eq!(form.channel, "", "chooser rows take no text");
+
+        // The channel row types; cycling it does nothing.
+        form.focus_next();
+        form.insert('#');
+        form.insert('a');
+        form.cycle(1, 3);
+        assert_eq!(form.channel, "#a");
+        form.backspace();
+        assert_eq!(form.channel, "#");
+
+        // The thread row cycles within the count it is given.
+        form.focus_next();
+        form.cycle(-1, 3);
+        assert_eq!(form.thread_idx, 2, "cycling backwards wraps");
+        form.cycle(1, 0);
+        assert_eq!(form.thread_idx, 0, "an empty thread list cannot underflow");
+    }
+
+    #[test]
+    fn a_blank_channel_routes_the_whole_account() {
+        let mut form = RouteEditorData::new(vec!["irc".into()], None);
+        assert_eq!(form.channel_value(), None);
+        form.focus_next();
+        form.insert(' ');
+        assert_eq!(form.channel_value(), None, "whitespace is not a channel");
+        form.insert('#');
+        form.insert('r');
+        assert_eq!(form.channel_value().as_deref(), Some("#r"));
     }
 
     #[test]

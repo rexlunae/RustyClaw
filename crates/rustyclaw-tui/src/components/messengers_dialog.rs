@@ -9,7 +9,7 @@
 // client renders the same forms from the same rules.
 
 use iocraft::prelude::*;
-use rustyclaw_view::messengers::{MessengerTab, MessengersPanelData};
+use rustyclaw_view::messengers::{MessengerTab, MessengersPanelData, RouteEditorData};
 use rustyclaw_view::tone::Tone;
 
 use crate::theme;
@@ -191,6 +191,70 @@ fn editor_lines(data: &MessengersPanelData) -> Vec<Line> {
     lines
 }
 
+/// The "new route" form: two chooser rows around one typed row.
+fn route_editor_lines(data: &MessengersPanelData) -> Vec<Line> {
+    let Some(editor) = &data.route_editor else {
+        return Vec::new();
+    };
+    let mut lines = vec![
+        (
+            "Bind a channel to a thread".to_string(),
+            theme::ACCENT_BRIGHT,
+        ),
+        (String::new(), theme::TEXT),
+    ];
+
+    let row = |i: usize, label: &str, shown: String, muted: bool| -> Line {
+        let focused = i == editor.focused;
+        let pointer = if focused { "▸ " } else { "  " };
+        (
+            format!("{pointer}{label:<18} {shown}"),
+            match (focused, muted) {
+                (true, _) => theme::ACCENT_BRIGHT,
+                (false, true) => theme::MUTED,
+                (false, false) => theme::TEXT,
+            },
+        )
+    };
+
+    lines.push(row(
+        RouteEditorData::ROW_ACCOUNT,
+        "‹› Account",
+        editor.account().unwrap_or("(no accounts)").to_string(),
+        false,
+    ));
+    lines.push(row(
+        RouteEditorData::ROW_CHANNEL,
+        "Channel id",
+        match editor.channel.is_empty() {
+            true => "(blank = every channel on the account)".to_string(),
+            false => editor.channel.clone(),
+        },
+        editor.channel.is_empty(),
+    ));
+    lines.push(row(
+        RouteEditorData::ROW_THREAD,
+        "‹› Thread",
+        data.threads
+            .get(editor.thread_idx)
+            .map(|t| t.label_for_picker())
+            .unwrap_or_else(|| "(no threads)".to_string()),
+        false,
+    ));
+
+    lines.push((String::new(), theme::TEXT));
+    lines.push((
+        "  ‹› rows cycle with ←/→; the channel id is the platform's own \
+         (a Telegram chat id, an IRC #channel, a Matrix room)"
+            .to_string(),
+        theme::TEXT_DIM,
+    ));
+    for error in &editor.errors {
+        lines.push((format!("  ✗ {error}"), theme::ERROR));
+    }
+    lines
+}
+
 /// The "which backend?" picker shown before a new account's form.
 fn picker_lines(data: &MessengersPanelData) -> Vec<Line> {
     let Some(selected) = data.kind_picker else {
@@ -225,6 +289,14 @@ fn picker_lines(data: &MessengersPanelData) -> Vec<Line> {
 fn hints(data: &MessengersPanelData) -> Vec<(&'static str, &'static str)> {
     if data.editor.is_some() {
         return vec![("Tab", "next field"), ("Enter", "save"), ("Esc", "cancel")];
+    }
+    if data.route_editor.is_some() {
+        return vec![
+            ("Tab", "next field"),
+            ("←→", "choose"),
+            ("Enter", "save"),
+            ("Esc", "cancel"),
+        ];
     }
     if data.kind_picker.is_some() {
         return vec![("↑↓", "choose"), ("Enter", "continue"), ("Esc", "cancel")];
@@ -269,6 +341,8 @@ pub fn MessengersDialog(props: &MessengersDialogProps) -> impl Into<AnyElement<'
     // Exactly one of these is non-empty; the panel state decides which.
     let (title, lines) = if data.editor.is_some() {
         ("Messenger setup".to_string(), editor_lines(&data))
+    } else if data.route_editor.is_some() {
+        ("Messenger setup".to_string(), route_editor_lines(&data))
     } else if data.kind_picker.is_some() {
         ("Messenger setup".to_string(), picker_lines(&data))
     } else {
@@ -281,7 +355,7 @@ pub fn MessengersDialog(props: &MessengersDialogProps) -> impl Into<AnyElement<'
     };
 
     let summary = match (
-        data.editor.is_some() || data.kind_picker.is_some(),
+        data.editor.is_some() || data.route_editor.is_some() || data.kind_picker.is_some(),
         data.tab,
     ) {
         (true, _) => String::new(),

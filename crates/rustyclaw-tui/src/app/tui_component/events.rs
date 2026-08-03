@@ -1802,6 +1802,15 @@ pub(super) fn apply_gw_event(
             // A refresh arrives after every mutation, so `apply` keeps the
             // cursor where the user left it rather than resetting to the top.
             data.apply(accounts, routes, threads, available_kinds, vault_locked);
+            // The load is over, so the "Loading…" placeholder must go — but
+            // only that. The gateway answers every mutation with an action
+            // result *followed by* this refresh, so clearing the status
+            // unconditionally would wipe each "Saved" or failure message the
+            // moment it was set.
+            if data.status.as_deref() == Some("Loading…") {
+                data.status = None;
+                data.status_is_error = false;
+            }
             // The editor is closed by whatever opened it; a refresh landing
             // mid-edit must not discard what the user has typed.
             messengers_data.set(Some(data));
@@ -1818,6 +1827,7 @@ pub(super) fn apply_gw_event(
             if ok {
                 data.commits += 1;
                 data.editor = None;
+                data.route_editor = None;
                 data.kind_picker = None;
             }
             messengers_data.set(Some(data));

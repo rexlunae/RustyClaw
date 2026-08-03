@@ -36,16 +36,44 @@ impl SecretsManager {
     /// a tool call — belongs on [`SecretsManager::get_credential`], which
     /// enforces the policy.
     pub fn read_service_credential(&mut self, name: &str) -> Result<Option<String>> {
-        if !SERVICE_CREDENTIAL_NAMESPACES
-            .iter()
-            .any(|ns| name.starts_with(ns))
-        {
+        if !Self::is_service_credential_name(name) {
             // Not an error: the caller asked for something this path does not
             // serve, and reporting "no such credential" is both true from here
             // and free of information about what the vault actually holds.
             return Ok(None);
         }
         self.get_secret(&format!("val:{name}"), true)
+    }
+
+    /// Whether `name` has the exact shape of a provisioned service credential.
+    ///
+    /// A prefix check alone would let any string that merely *starts with* a
+    /// namespace through the policy bypass. Requiring the full
+    /// `<namespace><account>/<field>` shape — two further non-empty segments
+    /// in the slug/field character set that
+    /// [`crate::messengers::setup::secret_name`] produces — means the only
+    /// names this path can address are ones the gateway's own provisioning
+    /// could have written. Anything else (extra segments, empty account,
+    /// uppercase, `:` that could collide with the vault's key patterns) reads
+    /// as absent.
+    fn is_service_credential_name(name: &str) -> bool {
+        SERVICE_CREDENTIAL_NAMESPACES.iter().any(|ns| {
+            let Some(rest) = name.strip_prefix(ns) else {
+                return false;
+            };
+            let mut segments = rest.split('/');
+            let (Some(account), Some(field), None) =
+                (segments.next(), segments.next(), segments.next())
+            else {
+                return false;
+            };
+            let ok = |s: &str| {
+                !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_".contains(c))
+            };
+            ok(account) && ok(field)
+        })
     }
 
     /// Delete a typed credential and all its associated vault keys.
@@ -737,5 +765,27 @@ mod service_credential_tests {
         // refuse the agent. This path must not become a way around that.
         assert_eq!(mgr.read_service_credential("anthropic").unwrap(), None);
         assert_eq!(mgr.read_service_credential("../anthropic").unwrap(), None);
+    }
+
+    #[test]
+    fn only_the_exact_provisioned_shape_is_addressable() {
+        // The namespace prefix alone is not the contract — the whole
+        // `messenger/<account>/<field>` shape is, in the character set the
+        // provisioning path produces. Anything looser turns the policy
+        // bypass into a read primitive for whatever else shares the prefix.
+        let ok = SecretsManager::is_service_credential_name;
+        assert!(ok("messenger/tg/token"));
+        assert!(ok("messenger/tg-main/app_token"));
+
+        assert!(!ok("messenger/"), "namespace alone");
+        assert!(!ok("messenger/tg"), "missing field segment");
+        assert!(!ok("messenger//token"), "empty account segment");
+        assert!(!ok("messenger/tg/"), "empty field segment");
+        assert!(!ok("messenger/tg/token/extra"), "extra segment");
+        assert!(!ok("messenger/Tg/token"), "outside the slug charset");
+        assert!(
+            !ok("messenger/tg/token:pub"),
+            "':' collides with the vault's own key patterns"
+        );
     }
 }
