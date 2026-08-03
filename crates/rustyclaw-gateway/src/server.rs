@@ -1812,11 +1812,46 @@ mod tests {
         peer: PeerInfo,
         incoming: Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
         outgoing: Arc<Mutex<Vec<ServerFrame>>>,
+        /// A patient client: once its frames run out, hang up only after
+        /// this many close-outs have been sent — the way a real client
+        /// stays connected while its turn streams. `None` hangs up the
+        /// moment the frames run out (which asks running turns to stop).
+        hang_up_after_done: Option<usize>,
     }
 
     struct MockReader {
         peer: PeerInfo,
         incoming: Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
+        outgoing: Arc<Mutex<Vec<ServerFrame>>>,
+        hang_up_after_done: Option<usize>,
+    }
+
+    /// Shared recv for both mock halves: deliver queued frames, then
+    /// either hang up at once or wait for the agreed number of
+    /// `ResponseDone` frames first.
+    async fn mock_recv(
+        incoming: &Arc<Mutex<VecDeque<Option<ClientFrame>>>>,
+        outgoing: &Arc<Mutex<Vec<ServerFrame>>>,
+        hang_up_after_done: Option<usize>,
+    ) -> Result<Option<WireFrame<ClientFrame>>> {
+        loop {
+            if let Some(frame) = incoming.lock().await.pop_front() {
+                return Ok(frame.map(WireFrame::control));
+            }
+            let Some(needed) = hang_up_after_done else {
+                return Ok(None);
+            };
+            let done = outgoing
+                .lock()
+                .await
+                .iter()
+                .filter(|f| matches!(f.payload, ServerPayload::ResponseDone { .. }))
+                .count();
+            if done >= needed {
+                return Ok(None);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
     }
 
     struct MockWriter {
@@ -1834,6 +1869,28 @@ mod tests {
                     peer,
                     incoming: Arc::new(Mutex::new(VecDeque::from(frames))),
                     outgoing: outgoing.clone(),
+                    hang_up_after_done: None,
+                },
+                outgoing,
+            )
+        }
+
+        /// A client that sends its frames and then stays connected until
+        /// `turns` close-outs have come back — hanging up mid-turn asks
+        /// the gateway to cancel the turn, which is the disconnect
+        /// behaviour, not the conversation behaviour.
+        fn with_frames_until_done(
+            peer: PeerInfo,
+            frames: Vec<Option<ClientFrame>>,
+            turns: usize,
+        ) -> (Self, Arc<Mutex<Vec<ServerFrame>>>) {
+            let outgoing = Arc::new(Mutex::new(Vec::new()));
+            (
+                Self {
+                    peer,
+                    incoming: Arc::new(Mutex::new(VecDeque::from(frames))),
+                    outgoing: outgoing.clone(),
+                    hang_up_after_done: Some(turns),
                 },
                 outgoing,
             )
@@ -1847,13 +1904,7 @@ mod tests {
         }
 
         async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
-            Ok(self
-                .incoming
-                .lock()
-                .await
-                .pop_front()
-                .unwrap_or(None)
-                .map(WireFrame::control))
+            mock_recv(&self.incoming, &self.outgoing, self.hang_up_after_done).await
         }
 
         async fn send_on_stream(&mut self, _stream_id: u64, frame: &ServerFrame) -> Result<()> {
@@ -1870,6 +1921,8 @@ mod tests {
                 Box::new(MockReader {
                     peer: self.peer.clone(),
                     incoming: self.incoming.clone(),
+                    outgoing: self.outgoing.clone(),
+                    hang_up_after_done: self.hang_up_after_done,
                 }),
                 Box::new(MockWriter {
                     outgoing: self.outgoing.clone(),
@@ -1881,13 +1934,7 @@ mod tests {
     #[async_trait]
     impl TransportReader for MockReader {
         async fn recv(&mut self) -> Result<Option<WireFrame<ClientFrame>>> {
-            Ok(self
-                .incoming
-                .lock()
-                .await
-                .pop_front()
-                .unwrap_or(None)
-                .map(WireFrame::control))
+            mock_recv(&self.incoming, &self.outgoing, self.hang_up_after_done).await
         }
 
         fn peer_info(&self) -> &PeerInfo {
@@ -2896,6 +2943,432 @@ mod tests {
             )),
             "Expected a close-out naming the thread the client was waiting on"
         );
+
+        Ok(())
+    }
+
+    // ── Content-routing tests: a scripted model, real turns ─────────────
+
+    /// A scripted OpenAI-compatible model endpoint.
+    ///
+    /// Every reply is derived from the request that produced it: the last
+    /// user message it was shown, and how many user messages the request
+    /// carried. A reply filed in the wrong thread, or built from another
+    /// conversation's history, is therefore visible in the transcript
+    /// itself — no inspection of internals required. Speaks both the
+    /// streaming (SSE) protocol the chat path uses and the plain-JSON
+    /// protocol internal calls (compaction summaries) use.
+    async fn spawn_mock_model() -> std::net::SocketAddr {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        fn content_text(value: &serde_json::Value) -> String {
+            match value {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Array(parts) => parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(|t| t.as_str()))
+                    .collect::<Vec<_>>()
+                    .join(""),
+                _ => String::new(),
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind mock model");
+        let addr = listener.local_addr().expect("mock model addr");
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = Vec::new();
+                    let mut tmp = [0u8; 8192];
+                    let header_end = loop {
+                        let n = match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => return,
+                            Ok(n) => n,
+                        };
+                        buf.extend_from_slice(&tmp[..n]);
+                        if let Some(pos) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                            break pos + 4;
+                        }
+                        if buf.len() > 1_000_000 {
+                            return;
+                        }
+                    };
+                    let headers = String::from_utf8_lossy(&buf[..header_end]).to_string();
+                    let content_length: usize = headers
+                        .lines()
+                        .find_map(|l| {
+                            l.to_ascii_lowercase()
+                                .strip_prefix("content-length:")
+                                .and_then(|v| v.trim().parse().ok())
+                        })
+                        .unwrap_or(0);
+                    while buf.len() < header_end + content_length {
+                        let n = match sock.read(&mut tmp).await {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => n,
+                        };
+                        buf.extend_from_slice(&tmp[..n]);
+                    }
+                    let body = &buf[header_end..(header_end + content_length).min(buf.len())];
+                    let request: serde_json::Value =
+                        serde_json::from_slice(body).unwrap_or_default();
+                    let users: Vec<String> = request
+                        .get("messages")
+                        .and_then(|m| m.as_array())
+                        .map(|msgs| {
+                            msgs.iter()
+                                .filter(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+                                .filter_map(|m| m.get("content").map(content_text))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    let text = format!(
+                        "reply({}|u{})",
+                        users.last().cloned().unwrap_or_default(),
+                        users.len()
+                    );
+                    let streaming = request
+                        .get("stream")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let payload = if streaming {
+                        let chunk =
+                            |delta: serde_json::Value, finish: serde_json::Value| -> String {
+                                format!(
+                                    "data: {}\n\n",
+                                    serde_json::json!({
+                                        "id": "mock", "object": "chat.completion.chunk",
+                                        "created": 0, "model": "mock",
+                                        "choices": [{"index": 0, "delta": delta,
+                                                     "finish_reason": finish}]
+                                    })
+                                )
+                            };
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\nconnection: close\r\n\r\n{}{}{}data: [DONE]\n\n",
+                            chunk(
+                                serde_json::json!({"role": "assistant", "content": ""}),
+                                serde_json::Value::Null
+                            ),
+                            chunk(
+                                serde_json::json!({"content": text}),
+                                serde_json::Value::Null
+                            ),
+                            chunk(
+                                serde_json::json!({}),
+                                serde_json::Value::String("stop".into())
+                            ),
+                        )
+                    } else {
+                        let body = serde_json::json!({
+                            "id": "mock", "object": "chat.completion", "created": 0,
+                            "model": "mock",
+                            "choices": [{"index": 0,
+                                         "message": {"role": "assistant", "content": text},
+                                         "finish_reason": "stop"}],
+                            "usage": {"prompt_tokens": 1, "completion_tokens": 1,
+                                      "total_tokens": 2}
+                        })
+                        .to_string();
+                        format!(
+                            "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                            body.len(),
+                            body
+                        )
+                    };
+                    let _ = sock.write_all(payload.as_bytes()).await;
+                    let _ = sock.shutdown().await;
+                });
+            }
+        });
+        addr
+    }
+
+    /// Run one connection against shared on-disk state, returning every
+    /// frame the client was sent. `turns` is how many close-outs the
+    /// client waits for before hanging up — pass the number of Chat
+    /// frames, or 0 for connections that run no turns.
+    async fn run_connection(
+        cfg: &Config,
+        model_ctx: &SharedModelCtx,
+        frames: Vec<Option<ClientFrame>>,
+        turns: usize,
+    ) -> Result<Vec<ServerFrame>> {
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = if turns == 0 {
+            MockTransport::with_frames(peer, frames)
+        } else {
+            MockTransport::with_frames_until_done(peer, frames, turns)
+        };
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg.clone())),
+            model_ctx.clone(),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+        let frames = outgoing.lock().await.clone();
+        Ok(frames)
+    }
+
+    fn chat_frame(thread: u64, text: &str) -> ClientFrame {
+        ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", text)],
+                thread_id: Some(thread),
+            },
+        }
+    }
+
+    fn history_request(thread: u64) -> ClientFrame {
+        ClientFrame {
+            frame_type: ClientFrameType::ThreadHistoryRequest,
+            payload: ClientPayload::ThreadHistoryRequest { thread_id: thread },
+        }
+    }
+
+    /// Every `ThreadHistoryReply` in a frame stream, in arrival order, as
+    /// `(thread, [(role, content)…])`.
+    fn history_replies(frames: &[ServerFrame]) -> Vec<(u64, Vec<(String, String)>)> {
+        frames
+            .iter()
+            .filter_map(|f| match &f.payload {
+                ServerPayload::ThreadHistoryReply {
+                    thread_id,
+                    ok,
+                    messages,
+                    ..
+                } => {
+                    assert!(ok, "history reply for thread {thread_id} failed");
+                    Some((
+                        *thread_id,
+                        messages
+                            .iter()
+                            .map(|m| (m.role.clone(), m.content.clone()))
+                            .collect(),
+                    ))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The gateway returns the right messages, in the right threads, in
+    /// the right order — whatever order the client asks in.
+    ///
+    /// Three real turns run against the scripted model: two in one thread,
+    /// one in another. Each scripted reply names the user message it
+    /// answers and how many user messages the model was shown, so a turn
+    /// filed under the wrong thread, or a prompt assembled from another
+    /// thread's conversation, changes the recorded text and fails the
+    /// comparison. The histories are then fetched thread-B-first and
+    /// thread-A-first, and must be identical either way.
+    #[tokio::test]
+    async fn histories_are_right_in_every_request_order() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let addr = spawn_mock_model().await;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(Some(Arc::new(
+            rustyclaw_core::gateway::ModelContext {
+                provider: "openai".to_string(),
+                model: "mock-model".to_string(),
+                base_url: format!("http://{addr}/v1"),
+                api_key: Some("test-key".to_string()),
+            },
+        ))));
+
+        // One connection per turn, so each turn completes (and persists)
+        // before the next begins.
+        let first = run_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(chat_frame(alpha.0, "alpha one"))],
+            1,
+        )
+        .await?;
+        run_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(chat_frame(beta.0, "beta one"))],
+            1,
+        )
+        .await?;
+        run_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(chat_frame(alpha.0, "alpha two"))],
+            1,
+        )
+        .await?;
+
+        // The completion snapshot of the first turn already names its
+        // thread and carries exactly that turn's exchange.
+        let snapshot = first
+            .iter()
+            .rev()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadMessages {
+                    thread_id,
+                    messages,
+                } if *thread_id == alpha.0 => Some(messages.clone()),
+                _ => None,
+            })
+            .expect("the finished turn sends its thread's snapshot");
+        assert_eq!(
+            snapshot
+                .iter()
+                .map(|m| (m.role.as_str(), m.content.as_str()))
+                .collect::<Vec<_>>(),
+            vec![("user", "alpha one"), ("assistant", "reply(alpha one|u1)")],
+        );
+
+        let expected_alpha: Vec<(String, String)> = vec![
+            ("user".into(), "alpha one".into()),
+            ("assistant".into(), "reply(alpha one|u1)".into()),
+            ("user".into(), "alpha two".into()),
+            ("assistant".into(), "reply(alpha two|u2)".into()),
+        ];
+        let expected_beta: Vec<(String, String)> = vec![
+            ("user".into(), "beta one".into()),
+            ("assistant".into(), "reply(beta one|u1)".into()),
+        ];
+
+        for order in [[beta.0, alpha.0], [alpha.0, beta.0]] {
+            let frames = run_connection(
+                &cfg,
+                &model_ctx,
+                vec![
+                    Some(history_request(order[0])),
+                    Some(history_request(order[1])),
+                    None,
+                ],
+                0,
+            )
+            .await?;
+            let replies = history_replies(&frames);
+            assert_eq!(replies.len(), 2, "one reply per request");
+            assert_eq!(
+                [replies[0].0, replies[1].0],
+                order,
+                "replies arrive in the order they were asked for"
+            );
+            for (thread, messages) in &replies {
+                let want = if *thread == alpha.0 {
+                    &expected_alpha
+                } else {
+                    &expected_beta
+                };
+                assert_eq!(
+                    messages, want,
+                    "thread {thread} must return its own messages, whole and in order \
+                     (request order {order:?})"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Switching between threads shows each thread its own transcript,
+    /// in either order.
+    ///
+    /// `ThreadSwitch` answers with the switched thread's `ThreadMessages`;
+    /// switching B→A must show the same transcripts as A→B, and neither
+    /// may leak the other conversation's scripted replies.
+    #[tokio::test]
+    async fn switch_order_does_not_change_what_each_thread_shows() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+
+        let addr = spawn_mock_model().await;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(Some(Arc::new(
+            rustyclaw_core::gateway::ModelContext {
+                provider: "openai".to_string(),
+                model: "mock-model".to_string(),
+                base_url: format!("http://{addr}/v1"),
+                api_key: Some("test-key".to_string()),
+            },
+        ))));
+
+        run_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(chat_frame(alpha.0, "alpha one"))],
+            1,
+        )
+        .await?;
+        run_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(chat_frame(beta.0, "beta one"))],
+            1,
+        )
+        .await?;
+
+        let switch = |thread: u64| ClientFrame {
+            frame_type: ClientFrameType::ThreadSwitch,
+            payload: ClientPayload::ThreadSwitch { thread_id: thread },
+        };
+        for order in [[beta.0, alpha.0], [alpha.0, beta.0]] {
+            let frames = run_connection(
+                &cfg,
+                &model_ctx,
+                vec![Some(switch(order[0])), Some(switch(order[1])), None],
+                0,
+            )
+            .await?;
+            // The snapshot that follows each switch belongs to the thread
+            // that was switched to, and carries exactly its conversation.
+            for thread in order {
+                let messages = frames
+                    .iter()
+                    .filter_map(|f| match &f.payload {
+                        ServerPayload::ThreadMessages {
+                            thread_id,
+                            messages,
+                        } if *thread_id == thread => Some(messages.clone()),
+                        _ => None,
+                    })
+                    .next_back()
+                    .expect("each switch answers with that thread's snapshot");
+                let label = if thread == alpha.0 { "alpha" } else { "beta" };
+                assert_eq!(
+                    messages
+                        .iter()
+                        .map(|m| (m.role.as_str(), m.content.to_string()))
+                        .collect::<Vec<_>>(),
+                    vec![
+                        ("user", format!("{label} one")),
+                        ("assistant", format!("reply({label} one|u1)")),
+                    ],
+                    "switch order {order:?}"
+                );
+            }
+        }
 
         Ok(())
     }
