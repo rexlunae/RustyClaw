@@ -576,11 +576,19 @@ pub(crate) async fn handle_connection(
         // Streaming forever, with nothing left that could ever close it.
         // It gets its overdue stop indicator instead.
         if !abandoned.is_empty() {
-            let mut tm = agent_session.thread_mgr.lock().await;
-            for thread in abandoned {
-                tm.end_turn(thread, false);
+            {
+                let mut tm = agent_session.thread_mgr.lock().await;
+                for thread in abandoned {
+                    tm.end_turn(thread, false);
+                }
+                crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
             }
-            crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
+            // The initial thread list already went out with the marker
+            // still open; without a refreshed one, this client keeps
+            // showing the thread as Streaming — composer gated on a reply
+            // that will never come — until some unrelated broadcast.
+            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None)
+                .await?;
         }
         for thread in resumable {
             let (label, messages) = {
@@ -2576,6 +2584,26 @@ mod tests {
                 ServerPayload::Info { message, .. } if message.contains("Resuming")
             )),
             "there is nothing to resume"
+        );
+        // The client is told, not just the disk: the initial list went out
+        // before the sweep, so a refreshed one must follow with the thread
+        // back at Ready — otherwise this client gates its composer on a
+        // reply that will never come.
+        let last_status = frames
+            .iter()
+            .rev()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadsUpdate { threads, .. } => threads
+                    .iter()
+                    .find(|t| t.id == stuck.0)
+                    .map(|t| t.status.clone()),
+                _ => None,
+            })
+            .expect("a ThreadsUpdate mentioning the thread");
+        assert_eq!(
+            last_status.as_deref(),
+            Some("Ready"),
+            "the client's final thread list must show the swept thread as Ready"
         );
         let restored = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path)
             .load()
