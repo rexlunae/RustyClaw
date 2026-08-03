@@ -285,16 +285,28 @@ impl ActiveTasks {
     /// removing that replacement would leave a running turn nothing can
     /// stop and nothing counts as busy.
     ///
-    /// Returns whether it was still this turn — the caller's licence to
-    /// close the turn's marker. A completion drained after the thread
-    /// already started its next turn must not write that *new* turn's
-    /// stop indicator.
+    /// Returns whether this completion still speaks for the thread — the
+    /// caller's licence to close the turn's marker. Three cases:
+    ///
+    /// - The matching turn is registered: retire it, licence granted.
+    /// - A *different* turn is registered: the thread already moved on,
+    ///   and this stale completion must not write the new turn's stop
+    ///   indicator. No licence.
+    /// - *Nothing* is registered: the turn finished and `reap_finished`
+    ///   (which runs for every incoming Chat frame, on all threads) swept
+    ///   its entry before this completion drained. The completion is
+    ///   still the thread's last word, and refusing it would leave the
+    ///   start marker open forever — reported as Streaming to every
+    ///   client, and re-run as a crashed turn on the next start.
+    ///   Licence granted.
     pub fn remove_if(&mut self, thread_id: &ThreadId, turn_id: u64) -> bool {
-        if self.tasks.get(thread_id).is_some_and(|t| t.id == turn_id) {
-            self.tasks.remove(thread_id);
-            true
-        } else {
-            false
+        match self.tasks.get(thread_id) {
+            Some(turn) if turn.id == turn_id => {
+                self.tasks.remove(thread_id);
+                true
+            }
+            Some(_) => false,
+            None => true,
         }
     }
 
@@ -491,10 +503,13 @@ mod tests {
     }
 
     /// A stale completion has no licence to close the current turn's
-    /// marker. `remove_if` answers "was this still the registered turn?" —
-    /// a Done drained after the thread already started its next turn must
-    /// report false, or the drain writes the *new* turn's stop indicator
-    /// while it is still streaming.
+    /// marker — but a merely *reaped* one keeps its licence. `remove_if`
+    /// answers "does this completion still speak for the thread?": false
+    /// only when a different turn took the thread over, whose marker the
+    /// stale drain must not close. When nothing is registered — the turn
+    /// finished and `reap_finished` swept it before its completion
+    /// drained — the completion is still the last word, and refusing it
+    /// would leave the thread's start marker open forever.
     #[tokio::test]
     async fn a_stale_completion_gets_no_licence() {
         let mut tasks = ActiveTasks::new();
@@ -511,6 +526,28 @@ mod tests {
         assert!(
             tasks.remove_if(&thread, 2),
             "the registered turn's own completion may close it"
+        );
+    }
+
+    /// The reap-then-drain ordering: a Chat frame for *any* thread reaps
+    /// every finished turn before their completions drain. The drained
+    /// completion then finds nothing registered — and must still close
+    /// its turn's marker, because nothing else ever will.
+    #[tokio::test]
+    async fn a_reaped_completion_keeps_its_licence() {
+        let mut tasks = ActiveTasks::new();
+        let thread = ThreadId(1);
+        tasks.register(thread, 1, 1, tokio::spawn(async {}), flag());
+        while !tasks.is_finished_for_test(&thread) {
+            tokio::task::yield_now().await;
+        }
+        // A Chat frame for some other thread sweeps the finished entry…
+        tasks.reap_finished();
+        // …and only then does the finished turn's completion drain.
+        assert!(
+            tasks.remove_if(&thread, 1),
+            "a reaped completion is still the thread's last word and must \
+             close its marker"
         );
     }
 
