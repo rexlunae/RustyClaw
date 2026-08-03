@@ -383,9 +383,14 @@ async fn save_account(
         .unwrap_or_default();
 
     // A type change invalidates the old credentials: they belong to a backend
-    // that is no longer in play. Drop the references rather than carrying
-    // stale ones forward.
+    // that is no longer in play. Drop the references — and remember the vault
+    // entries they pointed at, because a reference-less credential is
+    // invisible to `delete_account` and would otherwise live in the vault
+    // forever. The entries themselves are deleted only after this save
+    // persists, so a failure further down does not cost a working login.
+    let mut obsolete: Vec<String> = Vec::new();
     if !entry.messenger_type.is_empty() && entry.messenger_type != messenger_type {
+        obsolete.extend(entry.secret_refs.values().cloned());
         entry.secret_refs.clear();
     }
 
@@ -513,14 +518,31 @@ async fn save_account(
     }
     entry.profile = (!profile.is_empty()).then_some(profile);
 
-    // Renaming moves the vault entries too, so credentials follow the account
-    // rather than being orphaned under the old name.
+    // Renaming copies the vault entries too, so credentials follow the
+    // account rather than being orphaned under the old name. The old keys go
+    // on the deferred-delete list: they must outlive `persist`, which is the
+    // moment the config stops referring to them.
     if let Some(orig) = original_name.as_deref().filter(|o| *o != name) {
-        if let Err(e) = rename_credentials(&mut entry, vault, orig, &name).await {
-            discard_created_credentials(vault, &created).await;
-            return Err(e);
+        match rename_credentials(&mut entry, vault, orig, &name).await {
+            Ok((old_keys, rename_created)) => {
+                obsolete.extend(old_keys);
+                created.extend(rename_created);
+            }
+            Err(e) => {
+                discard_created_credentials(vault, &created).await;
+                return Err(e);
+            }
         }
     }
+
+    // Everything from here to `persist` mutates the connection's live config,
+    // and `build_view` renders that config to every client right after this
+    // function returns. A failed persist must therefore put it back exactly
+    // as it was — otherwise the user is told the save failed while the panel
+    // shows it applied, and the phantom state gets written out by whichever
+    // unrelated save next succeeds.
+    let prior_messengers = config.messengers.clone();
+    let prior_routes = config.messenger_routes.clone();
 
     match original_name
         .as_deref()
@@ -541,8 +563,27 @@ async fn save_account(
     }
 
     if let Err(e) = persist(config) {
+        config.messengers = prior_messengers;
+        config.messenger_routes = prior_routes;
         discard_created_credentials(vault, &created).await;
         return Err(e);
+    }
+
+    // The save is durable; now the keys nothing references any more can go.
+    // Best-effort, and never anything still referenced by any account — a
+    // stuck entry is untidy, a deleted live credential is a broken login.
+    if !obsolete.is_empty() {
+        let referenced: std::collections::BTreeSet<&String> = config
+            .messengers
+            .iter()
+            .flat_map(|m| m.secret_refs.values())
+            .collect();
+        let mut mgr = vault.lock().await;
+        for cred in obsolete.iter().filter(|c| !referenced.contains(c)) {
+            if let Err(e) = mgr.delete_credential(cred) {
+                warn!(credential = %cred, error = %e, "Could not remove a superseded messenger credential");
+            }
+        }
     }
     info!(account = %name, messenger_type = %messenger_type, "Messenger account saved");
     Ok(Some(match staged.is_empty() {
@@ -579,13 +620,24 @@ async fn discard_created_credentials(vault: &SharedVault, created: &[String]) {
     }
 }
 
+/// Copy an account's credentials to the names a rename gives them.
+///
+/// The old keys are deliberately *not* deleted here. Until the config that
+/// references the new names has been persisted, the old key is the only copy
+/// the on-disk config can find — deleting it first meant a failed settings
+/// write silently destroyed the credential. The caller deletes the returned
+/// old keys only after `persist` has succeeded.
+///
+/// Returns `(old_keys, created_keys)`: the keys to retire once the rename is
+/// durable, and the copies this call brought into being (for rollback). On
+/// error the copies already made are removed again before returning.
 async fn rename_credentials(
     entry: &mut MessengerConfig,
     vault: &SharedVault,
     from: &str,
     to: &str,
-) -> Result<(), Vec<String>> {
-    debug!(%from, %to, "Moving messenger credentials to follow a rename");
+) -> Result<(Vec<String>, Vec<String>), Vec<String>> {
+    debug!(%from, %to, "Copying messenger credentials to follow a rename");
     let mut mgr = vault.lock().await;
 
     let moves: Vec<(String, String, String)> = entry
@@ -595,10 +647,19 @@ async fn rename_credentials(
         .filter(|(_, current, new)| current != new)
         .collect();
 
+    let existing = mgr.list_secrets();
+    let mut old_keys: Vec<String> = Vec::new();
+    let mut created: Vec<String> = Vec::new();
     for (field, old, new) in moves {
-        let value = mgr
-            .read_service_credential(&old)
-            .map_err(|e| vec![format!("Could not read '{old}' while renaming: {e}")])?;
+        let value = match mgr.read_service_credential(&old) {
+            Ok(value) => value,
+            Err(e) => {
+                for cred in &created {
+                    let _ = mgr.delete_credential(cred);
+                }
+                return Err(vec![format!("Could not read '{old}' while renaming: {e}")]);
+            }
+        };
         // Nothing under the old key: the reference was already stale, so
         // repointing it at the new name is the most honest thing available.
         let Some(value) = value else {
@@ -612,14 +673,19 @@ async fn rename_credentials(
             description: Some(format!("Credential for messenger '{to}'")),
             disabled: false,
         };
-        mgr.store_credential(&new, &secret_entry, &value, None)
-            .map_err(|e| vec![format!("Could not write '{new}' while renaming: {e}")])?;
-        // Only after the copy landed — the reverse order loses the credential
-        // if the write fails.
-        let _ = mgr.delete_credential(&old);
+        if !existing.contains(&format!("val:{new}")) {
+            created.push(new.clone());
+        }
+        if let Err(e) = mgr.store_credential(&new, &secret_entry, &value, None) {
+            for cred in &created {
+                let _ = mgr.delete_credential(cred);
+            }
+            return Err(vec![format!("Could not write '{new}' while renaming: {e}")]);
+        }
+        old_keys.push(old);
         entry.secret_refs.insert(field, new);
     }
-    Ok(())
+    Ok((old_keys, created))
 }
 
 async fn delete_account(config: &mut Config, vault: &SharedVault, name: &str) -> Outcome {
@@ -782,7 +848,7 @@ const AVATAR_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
 /// confinement applies here — an avatar must live inside an agent workspace,
 /// not merely outside the credentials store, or any readable image anywhere
 /// on the gateway host could be published to a platform the requester picks.
-fn validate_avatar(
+pub(crate) fn validate_avatar(
     path: &std::path::Path,
     config: &Config,
 ) -> Result<std::path::PathBuf, Vec<String>> {
@@ -1295,6 +1361,73 @@ mod tests {
             config.messengers[0].server.as_deref(),
             Some("irc.libera.chat")
         );
+        // The vault entry goes too. With the reference cleared nothing can
+        // reach it again — not even delete_account — so leaving it stored
+        // means a live token nothing will ever clean up.
+        assert_eq!(
+            vault
+                .lock()
+                .await
+                .read_service_credential("messenger/acct/token")
+                .unwrap(),
+            None,
+            "a type change must not orphan the old credential in the vault"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rename_that_cannot_persist_keeps_the_credential_reachable() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("123:secret"))
+            .await
+            .unwrap();
+
+        // Make the *next* persist fail: the rename's vault copy has already
+        // happened by then, which is exactly the window that used to lose
+        // the credential (old key deleted, new key rolled back, on-disk
+        // config still pointing at the old key).
+        let config_path = dir.path().join("config.toml");
+        std::fs::remove_file(&config_path).unwrap();
+        std::fs::create_dir_all(&config_path).unwrap();
+
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "telegram-main".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(!errors.is_empty());
+
+        // The in-memory config must still describe the un-renamed account —
+        // the client was told the save failed, and the view built right after
+        // this reply must not show it applied.
+        assert_eq!(config.messengers[0].name, "tg");
+        assert_eq!(
+            config.messengers[0].secret_ref("token"),
+            Some("messenger/tg/token")
+        );
+        // And the key that config points at must still hold the value.
+        assert_eq!(
+            vault
+                .lock()
+                .await
+                .read_service_credential("messenger/tg/token")
+                .unwrap()
+                .as_deref(),
+            Some("123:secret"),
+            "a failed rename must never cost the stored credential"
+        );
     }
 
     #[tokio::test]
@@ -1806,6 +1939,10 @@ mod tests {
         assert!(
             stored.iter().all(|k| !k.contains("messenger/tg/")),
             "an unpersisted account must not keep a vault credential: {stored:?}"
+        );
+        assert!(
+            config.messengers.is_empty(),
+            "an unpersisted account must not appear in the live config either"
         );
     }
 

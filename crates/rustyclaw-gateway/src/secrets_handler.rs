@@ -248,6 +248,18 @@ pub async fn exec_secrets_store(args: &serde_json::Value, vault: &SharedVault) -
         return Err("username_password credentials require the 'username' parameter.".into());
     }
 
+    // Service namespaces are readable through `read_service_credential`,
+    // which skips the access policy — their safety rests on nothing but the
+    // gateway's own provisioning ever writing there. This path is driven by
+    // the model, so it does not get to.
+    if rustyclaw_core::secrets::is_reserved_service_name(cred_name) {
+        return Err(format!(
+            "'{cred_name}' is in a namespace reserved for gateway-provisioned service \
+             credentials. Choose a name outside it."
+        )
+        .into());
+    }
+
     let entry = SecretEntry {
         label: cred_name.to_string(),
         kind,
@@ -401,6 +413,21 @@ pub(crate) async fn handle_secrets_frame(
             send_secrets_list_result(writer, true, dto_entries).await?;
         }
         ClientPayload::SecretsStore { key, value } => {
+            // Same reservation as the agent-facing store: a raw key like
+            // `val:messenger/x/token` would otherwise plant an entry the
+            // policy-skipping service read path is willing to serve.
+            if rustyclaw_core::secrets::is_reserved_service_name(&key) {
+                send_secrets_store_result(
+                    writer,
+                    false,
+                    &format!(
+                        "'{key}' is in a namespace reserved for gateway-provisioned \
+                         service credentials. Choose a key outside it."
+                    ),
+                )
+                .await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.store_secret(&key, &value);
             match result {

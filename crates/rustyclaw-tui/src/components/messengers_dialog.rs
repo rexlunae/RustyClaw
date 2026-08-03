@@ -14,8 +14,10 @@ use rustyclaw_view::tone::Tone;
 
 use crate::theme;
 
+/// Props for [`MessengersDialog`].
 #[derive(Default, Props)]
 pub struct MessengersDialogProps {
+    /// Panel state from the gateway; `None` until the first view arrives.
     pub data: Option<MessengersPanelData>,
 }
 
@@ -323,6 +325,7 @@ fn hints(data: &MessengersPanelData) -> Vec<(&'static str, &'static str)> {
     }
 }
 
+/// The messenger setup overlay: account list, editors, and routing table.
 #[component]
 pub fn MessengersDialog(props: &MessengersDialogProps) -> impl Into<AnyElement<'static>> {
     let Some(data) = props.data.clone() else {

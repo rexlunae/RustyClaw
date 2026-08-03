@@ -53,8 +53,11 @@ impl MessengerTab {
 /// One configured account, as the list shows it.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MessengerAccountData {
+    /// Account name, unique within the config; what routes match on.
     pub name: String,
+    /// Backend id, matching a `KindSpec` in the setup schema.
     pub messenger_type: String,
+    /// Whether the gateway should connect this account.
     pub enabled: bool,
     /// Non-secret field values, in schema order.
     pub fields: Vec<(String, String)>,
@@ -562,11 +565,15 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
 /// One row of the routing table.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MessengerRouteData {
+    /// Account name the route applies to.
     pub messenger: String,
     /// `None` renders as "all channels".
     pub channel: Option<String>,
+    /// Gateway thread the conversation is bound to.
     pub thread_id: u64,
+    /// Agent whose thread list `thread_id` refers to.
     pub agent_id: String,
+    /// Whether the route is in effect.
     pub enabled: bool,
     /// Thread label, or `None` when the thread is gone.
     pub thread_label: Option<String>,
@@ -624,8 +631,11 @@ impl MessengerRouteData {
 /// A thread a route may point at.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct RoutableThreadData {
+    /// Thread id within its agent's thread list.
     pub thread_id: u64,
+    /// Thread label as the sidebar shows it.
     pub label: String,
+    /// Agent that owns the thread.
     pub agent_id: String,
 }
 
@@ -663,12 +673,16 @@ pub struct RouteEditorData {
     pub thread_idx: usize,
     /// Focused row.
     pub focused: usize,
+    /// Validation problems from the last submit attempt.
     pub errors: Vec<String>,
 }
 
 impl RouteEditorData {
+    /// The account chooser row.
     pub const ROW_ACCOUNT: usize = 0;
+    /// The typed channel-id row.
     pub const ROW_CHANNEL: usize = 1;
+    /// The thread chooser row.
     pub const ROW_THREAD: usize = 2;
     const ROWS: usize = 3;
 
@@ -739,9 +753,13 @@ impl RouteEditorData {
 /// Everything the messenger setup panel renders.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct MessengersPanelData {
+    /// Which tab is showing.
     pub tab: MessengerTab,
+    /// Configured accounts, in config order.
     pub accounts: Vec<MessengerAccountData>,
+    /// Configured routes, in config order.
     pub routes: Vec<MessengerRouteData>,
+    /// Threads a route may point at, across all agents.
     pub threads: Vec<RoutableThreadData>,
     /// Messenger types this gateway build can run.
     pub available_kinds: Vec<String>,

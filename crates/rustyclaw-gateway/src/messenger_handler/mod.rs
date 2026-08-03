@@ -142,6 +142,7 @@ fn apply_profile(
 async fn announce_profile(
     messenger: &dyn Messenger,
     profile: &rustyclaw_core::messengers::setup::ResolvedProfile,
+    config: &Config,
 ) {
     if let Some(bio) = profile.bio.as_deref() {
         if let Err(e) = messenger.set_text_status(bio).await {
@@ -149,17 +150,21 @@ async fn announce_profile(
         }
     }
     if let Some(avatar) = profile.avatar_path.as_deref() {
-        match avatar.canonicalize() {
+        // Validated at save time AND here. The path was checked when the user
+        // configured it, but this upload happens on every connect, arbitrarily
+        // later — the file (or a symlink in its place) can have changed in
+        // between, and it is this read that leaves the host.
+        match crate::messenger_config_handler::validate_avatar(avatar, config) {
             Ok(path) => {
                 let url = format!("file://{}", path.display());
                 if let Err(e) = messenger.set_profile_picture(&url).await {
                     debug!(messenger = %messenger.name(), error = %e, "Could not set avatar");
                 }
             }
-            Err(e) => warn!(
+            Err(reasons) => warn!(
                 path = %avatar.display(),
-                error = %e,
-                "Avatar path does not exist; leaving the current picture alone"
+                reason = %reasons.join("; "),
+                "Configured avatar no longer passes validation; leaving the current picture alone"
             ),
         }
     }
@@ -191,6 +196,7 @@ pub async fn create_messenger_manager(
                 announce_profile(
                     messenger.as_ref(),
                     &resolved_profile(messenger_config, config),
+                    config,
                 )
                 .await;
                 manager = manager.add_boxed(messenger);

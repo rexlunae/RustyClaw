@@ -18,6 +18,24 @@ use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, Se
 /// [`crate::messengers::setup::secret_name`] does.
 pub const SERVICE_CREDENTIAL_NAMESPACES: &[&str] = &["messenger/"];
 
+/// Whether a caller-supplied credential name (or raw vault key) lands inside
+/// a service namespace.
+///
+/// [`SecretsManager::read_service_credential`]'s safety rests on service
+/// namespaces holding only gateway-provisioned entries — a lexical guarantee
+/// until the *write* paths enforce it. Agent- and client-facing store
+/// handlers call this to refuse names that would smuggle an entry into the
+/// namespace, whether as a bare name or as a pre-prefixed raw key.
+pub fn is_reserved_service_name(name: &str) -> bool {
+    let bare = name
+        .strip_prefix("val:")
+        .or_else(|| name.strip_prefix("cred:"))
+        .unwrap_or(name);
+    SERVICE_CREDENTIAL_NAMESPACES
+        .iter()
+        .any(|ns| bare.starts_with(ns))
+}
+
 impl SecretsManager {
     /// Read a single-value credential that the *gateway process* needs in
     /// order to do what the user configured — a messenger's bot token, for
@@ -765,6 +783,19 @@ mod service_credential_tests {
         // refuse the agent. This path must not become a way around that.
         assert_eq!(mgr.read_service_credential("anthropic").unwrap(), None);
         assert_eq!(mgr.read_service_credential("../anthropic").unwrap(), None);
+    }
+
+    #[test]
+    fn reserved_namespaces_are_recognised_in_every_spelling() {
+        // The write-path guard has to catch the bare name and both raw key
+        // spellings, or a caller could plant an entry the policy-skipping
+        // service read path is willing to serve.
+        assert!(is_reserved_service_name("messenger/tg/token"));
+        assert!(is_reserved_service_name("val:messenger/tg/token"));
+        assert!(is_reserved_service_name("cred:messenger/tg/token"));
+        assert!(!is_reserved_service_name("anthropic"));
+        assert!(!is_reserved_service_name("val:anthropic"));
+        assert!(!is_reserved_service_name("my-messenger/token"));
     }
 
     #[test]
