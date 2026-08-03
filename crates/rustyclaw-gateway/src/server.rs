@@ -30,6 +30,99 @@ use crate::{
     auth, concurrent, plugin_handler, project_handler, providers, thread_handler,
 };
 
+/// When this gateway process started. A turn marker in the log older than
+/// this was written by a previous process — the turn it opened died with
+/// that process, and the resume path picks it up. A younger marker belongs
+/// to a turn running right now on some connection of this process, and
+/// must be left alone.
+static PROCESS_START: std::sync::LazyLock<std::time::SystemTime> =
+    std::sync::LazyLock::new(std::time::SystemTime::now);
+
+/// Turns already resumed by this process, keyed by (agent, thread). Two
+/// clients connecting together would otherwise each load the same open
+/// marker from disk and both restart the same interrupted turn.
+static RESUMED_TURNS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashSet<(String, u64)>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// Everything a spawned turn takes from its connection — owned clones, so
+/// the turn outlives the borrow of the loop that started it. Built per
+/// spawn by the Chat arm and by the resume path, which is the point:
+/// resuming an interrupted turn is starting a turn, not a special case.
+struct TurnDeps {
+    http: reqwest::Client,
+    config: rustyclaw_core::config::Config,
+    vault: SharedVault,
+    skill_mgr: SharedSkillManager,
+    task_mgr: SharedTaskManager,
+    observer: Option<SharedObserver>,
+    shared_config: SharedConfig,
+    shared_model_ctx: SharedModelCtx,
+    shared_copilot_session: SharedCopilotSession,
+    approvals: Arc<crate::pending::PendingResponses<bool>>,
+    user_prompts: Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
+    >,
+    credentials: Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
+    dom_queries: Arc<crate::pending::PendingResponses<(String, bool)>>,
+    thread_mgr: crate::SharedThreadMgr,
+    threads_path: std::path::PathBuf,
+}
+
+/// Spawn one turn: run the conversation through `handle_chat_frame` in its
+/// own task, reporting completion through the model-task channel. Returns
+/// the join handle and the turn's cancel flag for `ActiveTasks::register`.
+fn spawn_turn(
+    deps: TurnDeps,
+    messages: Vec<rustyclaw_core::gateway::ChatMessage>,
+    stream_id: u64,
+    turn_id: u64,
+    turn_thread: Option<rustyclaw_core::threads::ThreadId>,
+    model_task_tx: concurrent::ModelTaskTx,
+    is_resume: bool,
+) -> (tokio::task::JoinHandle<()>, ToolCancelFlag) {
+    let turn_key = turn_thread.unwrap_or(rustyclaw_core::threads::ThreadId(0));
+    let tool_cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+    let turn_cancel = tool_cancel.clone();
+    let mut sink = concurrent::ChannelSink::new(model_task_tx, turn_key, turn_id, stream_id);
+    let handle = tokio::spawn(async move {
+        let result = crate::chat::handle_chat_frame(
+            &deps.http,
+            messages,
+            stream_id,
+            &mut sink,
+            &deps.config,
+            &deps.vault,
+            &deps.skill_mgr,
+            &deps.task_mgr,
+            deps.observer.as_ref(),
+            &turn_cancel,
+            &deps.shared_config,
+            &deps.shared_model_ctx,
+            &deps.shared_copilot_session,
+            &deps.approvals,
+            &deps.user_prompts,
+            &deps.credentials,
+            &deps.dom_queries,
+            &deps.thread_mgr,
+            turn_thread,
+            &deps.threads_path,
+            is_resume,
+        )
+        .await;
+        match result {
+            // The turn already recorded its own assistant message; `None`
+            // keeps the loop from adding a second copy.
+            Ok(()) => sink.done(None).await,
+            Err(e) => sink.error(format!("{e:#}")).await,
+        }
+    });
+    (handle, tool_cancel)
+}
+
 pub(crate) async fn handle_connection(
     conn: Box<dyn transport::Transport>,
     shared_config: SharedConfig,
@@ -421,6 +514,9 @@ pub(crate) async fn handle_connection(
     // Counter for turn ids, so a turn's completion cannot retire the turn
     // that replaced it.
     let mut next_turn_id: u64 = 0;
+    // Server-initiated turns (resumed ones) run on even stream ids;
+    // clients allocate odd ones, so the two can never collide.
+    let mut next_server_stream_id: u64 = 0;
 
     // ── Send initial thread list ───────────────────────────────────
     // Freshly-connected clients need to know the current thread state.
@@ -440,6 +536,94 @@ pub(crate) async fn handle_connection(
     }
     if let Err(e) = plugin_handler::send_plugins_update(&mut *writer).await {
         warn!(error = %e, "Failed to send initial plugin list");
+    }
+
+    // ── Resume turns a previous gateway process left open ──────────
+    // A thread whose log ends inside a turn — a start marker with no stop
+    // indicator — was still answering when its gateway died. It loads back
+    // in as open, and open means running: restart the turn from the
+    // thread's recorded conversation, so the answer the user was waiting
+    // for arrives instead of silently never coming. Only markers older
+    // than this process qualify; a younger one is a turn running right now
+    // on another connection. The process-wide claim keeps two clients
+    // connecting together from both resuming the same turn.
+    {
+        let resumable: Vec<rustyclaw_core::threads::ThreadId> = {
+            let tm = agent_session.thread_mgr.lock().await;
+            tm.open_threads()
+                .into_iter()
+                .filter(|id| {
+                    tm.get(*id).is_some_and(|t| {
+                        !t.messages.is_empty() && t.open_turn.is_some_and(|at| at < *PROCESS_START)
+                    })
+                })
+                .filter(|id| {
+                    RESUMED_TURNS
+                        .lock()
+                        .expect("resume registry poisoned")
+                        .insert((agent_session.agent_id.clone(), id.0))
+                })
+                .collect()
+        };
+        for thread in resumable {
+            let (label, messages) = {
+                let tm = agent_session.thread_mgr.lock().await;
+                let Some(t) = tm.get(thread) else { continue };
+                (
+                    t.label.clone(),
+                    crate::thread_updates::thread_history_messages(t),
+                )
+            };
+            protocol::server::send_info(
+                &mut *writer,
+                &format!("Resuming interrupted turn in '{label}'…"),
+            )
+            .await?;
+            {
+                let mut tm = agent_session.thread_mgr.lock().await;
+                // The orphaned marker gets its overdue stop indicator, and
+                // the resumed turn opens its own — the log keeps the crash
+                // visible instead of papering over it.
+                tm.end_turn(thread, false);
+                tm.begin_turn(thread);
+                crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
+            }
+            send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None)
+                .await?;
+            next_turn_id += 1;
+            let turn_id = next_turn_id;
+            next_server_stream_id += 2;
+            let stream_id = next_server_stream_id;
+            let (handle, tool_cancel) = spawn_turn(
+                TurnDeps {
+                    http: http.clone(),
+                    config: config.clone(),
+                    vault: vault.clone(),
+                    skill_mgr: skill_mgr.clone(),
+                    task_mgr: task_mgr.clone(),
+                    observer: observer.clone(),
+                    shared_config: shared_config.clone(),
+                    shared_model_ctx: shared_model_ctx.clone(),
+                    shared_copilot_session: shared_copilot_session.clone(),
+                    approvals: approvals.clone(),
+                    user_prompts: user_prompts.clone(),
+                    credentials: credentials.clone(),
+                    dom_queries: dom_queries.clone(),
+                    thread_mgr: agent_session.thread_mgr.clone(),
+                    threads_path: agent_session.threads_path.clone(),
+                },
+                messages,
+                stream_id,
+                turn_id,
+                Some(thread),
+                model_task_tx.clone(),
+                true,
+            );
+            active_tasks
+                .lock()
+                .await
+                .register(thread, turn_id, stream_id, handle, tool_cancel);
+        }
     }
 
     let reader_cancel = cancel.clone();
@@ -877,67 +1061,59 @@ pub(crate) async fn handle_connection(
                                     )
                                     .await?;
                                 }
+                                // Mark the turn open in the thread's log —
+                                // the start half of the stop-indicator pair.
+                                // A displaced predecessor gets its stop
+                                // marker first: aborted, it will never
+                                // write its own. The broadcast right after
+                                // is what flips the thread to "Streaming"
+                                // in every client's sidebar.
+                                if let Some(thread) = turn_thread {
+                                    let mut tm = agent_session.thread_mgr.lock().await;
+                                    if displaced_stream.is_some() {
+                                        tm.end_turn(thread, false);
+                                    }
+                                    tm.begin_turn(thread);
+                                    crate::helpers::persist_threads(
+                                        &mut tm,
+                                        &agent_session.threads_path,
+                                    );
+                                }
+                                send_threads_update_shared(
+                                    &mut *writer,
+                                    &agent_session.thread_mgr,
+                                    &task_mgr,
+                                    None,
+                                )
+                                .await?;
                                 {
-                                    // A fresh flag per turn: see ActiveTasks.
-                                    let tool_cancel: ToolCancelFlag =
-                                        Arc::new(AtomicBool::new(false));
                                     next_turn_id += 1;
                                     let turn_id = next_turn_id;
-                                    let mut sink = concurrent::ChannelSink::new(
-                                        model_task_tx.clone(),
-                                        turn_key,
-                                        turn_id,
+                                    let (handle, tool_cancel) = spawn_turn(
+                                        TurnDeps {
+                                            http: http.clone(),
+                                            config: config.clone(),
+                                            vault: vault.clone(),
+                                            skill_mgr: skill_mgr.clone(),
+                                            task_mgr: task_mgr.clone(),
+                                            observer: observer.clone(),
+                                            shared_config: shared_config.clone(),
+                                            shared_model_ctx: shared_model_ctx.clone(),
+                                            shared_copilot_session: shared_copilot_session.clone(),
+                                            approvals: approvals.clone(),
+                                            user_prompts: user_prompts.clone(),
+                                            credentials: credentials.clone(),
+                                            dom_queries: dom_queries.clone(),
+                                            thread_mgr: agent_session.thread_mgr.clone(),
+                                            threads_path: agent_session.threads_path.clone(),
+                                        },
+                                        messages,
                                         stream_id,
+                                        turn_id,
+                                        turn_thread,
+                                        model_task_tx.clone(),
+                                        false,
                                     );
-                                    let http = http.clone();
-                                    let config = config.clone();
-                                    let vault = vault.clone();
-                                    let skill_mgr = skill_mgr.clone();
-                                    let task_mgr = task_mgr.clone();
-                                    let observer = observer.clone();
-                                    let turn_cancel = tool_cancel.clone();
-                                    let shared_config = shared_config.clone();
-                                    let shared_model_ctx = shared_model_ctx.clone();
-                                    let shared_copilot_session = shared_copilot_session.clone();
-                                    let approvals = approvals.clone();
-                                    let user_prompts = user_prompts.clone();
-                                    let credentials = credentials.clone();
-                                    let dom_queries = dom_queries.clone();
-                                    let thread_mgr = agent_session.thread_mgr.clone();
-                                    let threads_path = agent_session.threads_path.clone();
-                                    let handle = tokio::spawn(async move {
-                                        let result = crate::chat::handle_chat_frame(
-                                            &http,
-                                            messages,
-                                            stream_id,
-                                            &mut sink,
-                                            &config,
-                                            &vault,
-                                            &skill_mgr,
-                                            &task_mgr,
-                                            observer.as_ref(),
-                                            &turn_cancel,
-                                            &shared_config,
-                                            &shared_model_ctx,
-                                            &shared_copilot_session,
-                                            &approvals,
-                                            &user_prompts,
-                                            &credentials,
-                                            &dom_queries,
-                                            &thread_mgr,
-                                            turn_thread,
-                                            &threads_path,
-                                        )
-                                        .await;
-                                        match result {
-                                            // The turn already recorded its
-                                            // own assistant message; `None`
-                                            // keeps the loop from adding a
-                                            // second copy.
-                                            Ok(()) => sink.done(None).await,
-                                            Err(e) => sink.error(format!("{e:#}")).await,
-                                        }
-                                    });
                                     // One turn per thread, any number of
                                     // threads. The predecessor for this
                                     // thread was displaced and closed out
@@ -1200,7 +1376,7 @@ pub(crate) async fn handle_connection(
                                     project_id,
                                 )
                                 .await?;
-                                crate::helpers::persist_threads(&*agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+                                crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
                                 send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
                             }
                             ClientPayload::ProjectSwitch { project_id } => {
@@ -1398,17 +1574,28 @@ pub(crate) async fn handle_connection(
                                 send_thread_messages_update_shared(&mut *writer, thread_id, &agent_session.thread_mgr).await?;
                             }
 
+                            // The turn's stop indicator: recorded before
+                            // the broadcast below, so the thread list the
+                            // clients get says "Ready" — and before the
+                            // persist, so a crash after this point still
+                            // leaves a closed turn on disk.
+                            agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
+
                             // Send updated thread list (status may have changed)
                             send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
 
                             // Persist thread state
-                            crate::helpers::persist_threads(&*agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+                            crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
 
                             if last_turn_drained {
                                 break;
                             }
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, stream_id, turn_id, message, closed_out } => {
+                            // A failed turn still ends — with a stop
+                            // indicator that says so.
+                            agent_session.thread_mgr.lock().await.end_turn(thread_id, false);
+                            crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
                             // Same identity check as Done above.
                             active_tasks.lock().await.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
@@ -1482,8 +1669,24 @@ pub(crate) async fn handle_connection(
     // Persist thread state on disconnect. This is the last write of the
     // session and carries everything said during it, so a failure here is
     // the most expensive one to lose silently.
+    // The connection is over and its turns are aborted with it — no
+    // completion message will ever drain for them. Their stop indicators
+    // say cancelled; left open, the threads would load as "open" on the
+    // next process start and resume turns whose client asked this process,
+    // which answered (or died trying) already. A process that crashes
+    // never gets here — that is the one case that leaves markers open,
+    // and exactly the one the resume path exists for.
+    {
+        let running = active_tasks.lock().await.running_threads();
+        if !running.is_empty() {
+            let mut tm = agent_session.thread_mgr.lock().await;
+            for thread in running {
+                tm.end_turn(thread, false);
+            }
+        }
+    }
     crate::helpers::persist_threads(
-        &*agent_session.thread_mgr.lock().await,
+        &mut *agent_session.thread_mgr.lock().await,
         &agent_session.threads_path,
     );
 
@@ -2077,6 +2280,186 @@ mod tests {
             last_foreground,
             Some(alpha.0),
             "The named thread should be the one in use"
+        );
+
+        Ok(())
+    }
+
+    /// A turn writes its start and stop markers into the thread's log, and
+    /// the client sees the transition.
+    ///
+    /// The turn markers are the thread's status: an open marker is what
+    /// clients render as "Streaming", the stop indicator is what returns
+    /// the thread to "Ready" — and a turn that ends without one would load
+    /// as still-open on the next start and be resumed. No model is
+    /// configured, so the turn fails fast; the marker contract holds on
+    /// every path, this one included.
+    #[tokio::test]
+    async fn a_turn_opens_and_closes_its_markers() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (alpha, _beta) = seed_two_threads(&cfg, "alpha", "beta")?;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+
+        let chat = ClientFrame {
+            frame_type: ClientFrameType::Chat,
+            payload: ClientPayload::Chat {
+                messages: vec![ChatMessage::text("user", "hello")],
+                thread_id: Some(alpha.0),
+            },
+        };
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![Some(chat), None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::ThreadsUpdate { threads, .. }
+                    if threads.iter().any(|t| t.id == alpha.0
+                        && t.status.as_deref() == Some("Streaming"))
+            )),
+            "the turn's start must broadcast the thread as Streaming"
+        );
+
+        // The stop indicator reached the log: the thread loads closed, so
+        // the next gateway start has nothing to resume.
+        let restored = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path)
+            .load()
+            .expect("the store should load");
+        assert!(
+            !restored.get(alpha).expect("thread exists").is_open(),
+            "an ended turn must leave no open marker behind"
+        );
+
+        Ok(())
+    }
+
+    /// A turn interrupted by a dead gateway is resumed on the next start.
+    ///
+    /// A start marker with no stop indicator is exactly what a process
+    /// leaves when it dies mid-answer. The thread loads back in as open,
+    /// and the first connection restarts its turn from the recorded
+    /// conversation — the user gets their answer (here: the no-model
+    /// error) instead of a conversation that silently went quiet.
+    #[tokio::test]
+    async fn an_interrupted_turn_is_resumed_on_start() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+
+        // A thread whose log ends inside a turn, stamped long before this
+        // process started — the shape a crash leaves behind.
+        let store = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path);
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+        let interrupted = manager.create_chat("interrupted");
+        manager.add_message(
+            interrupted,
+            rustyclaw_core::threads::MessageRole::User,
+            "finish this thought",
+        );
+        store.persist(&mut manager).map_err(anyhow::Error::from)?;
+        {
+            use std::io::Write;
+            let log = threads_path
+                .parent()
+                .unwrap()
+                .join("threads")
+                .join(format!("{}.log.jsonl", interrupted.0));
+            let record =
+                serde_json::to_string(&rustyclaw_core::threads::ThreadLogRecord::TurnStarted {
+                    at: std::time::SystemTime::UNIX_EPOCH,
+                })?;
+            let mut f = std::fs::OpenOptions::new().append(true).open(&log)?;
+            writeln!(f, "{record}")?;
+        }
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        // No client frames at all: the resume is the gateway's own doing.
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::Info { message, .. } if message.contains("Resuming")
+            )),
+            "the client is told the turn is being picked back up"
+        );
+        assert!(
+            frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::ResponseDone { thread_id, .. }
+                    if *thread_id == Some(interrupted.0)
+            )),
+            "the resumed turn runs to a close-out naming its thread"
+        );
+        let restored = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path)
+            .load()
+            .expect("the store should load");
+        assert!(
+            !restored.get(interrupted).expect("thread exists").is_open(),
+            "the resumed turn's stop indicator closes the thread"
         );
 
         Ok(())

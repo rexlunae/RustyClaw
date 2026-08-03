@@ -56,11 +56,17 @@ pub fn estimate_tokens(messages: &[ChatMessage]) -> usize {
 /// its messages for the rest of the session, so nothing looks wrong until the
 /// gateway restarts and the thread comes back short — or empty. Losing a
 /// conversation deserves a log line at minimum.
+///
+/// `path` is the legacy `threads.json` location; the per-thread store lives
+/// in a `threads/` directory beside it and appends new activity rather than
+/// rewriting every conversation. `&mut` because appending drains each
+/// thread's pending log records.
 pub fn persist_threads(
-    thread_mgr: &rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
     path: &std::path::Path,
 ) {
-    if let Err(e) = thread_mgr.save_to_file(path) {
+    let store = rustyclaw_core::threads::ThreadStore::at_legacy_path(path);
+    if let Err(e) = store.persist(thread_mgr) {
         tracing::error!(
             path = %path.display(),
             error = %e,

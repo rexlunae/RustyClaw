@@ -213,6 +213,28 @@ pub enum MessageRole {
     Tool,
 }
 
+/// One record in a thread's persistent event log.
+///
+/// The log is the thread's history *as it happened*: messages in
+/// chronological order, interleaved with explicit turn boundaries. The
+/// boundaries are what make the thread's state derivable rather than
+/// stored — a `TurnStarted` with no matching `TurnEnded` means the turn
+/// is still open. A gateway that dies mid-turn leaves exactly that shape
+/// behind, so the next start knows both that the thread was streaming
+/// and that the turn needs resuming; no status enum can go stale the
+/// same way, because nothing has to remember to reset it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ThreadLogRecord {
+    /// A conversation message.
+    Message(ThreadMessage),
+    /// A turn began — the stop indicator's opening half.
+    TurnStarted { at: SystemTime },
+    /// The turn's explicit stop indicator. `ok` is false for errors and
+    /// cancellations.
+    TurnEnded { at: SystemTime, ok: bool },
+}
+
 /// An agent thread — the unified representation of all concurrent work.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentThread {
@@ -249,11 +271,23 @@ pub struct AgentThread {
     /// Is this the foreground (user-focused) thread?
     pub is_foreground: bool,
 
-    /// Conversation history (for interactive threads)
+    /// Conversation history (for interactive threads).
+    ///
+    /// Chronological and complete: this is the transcript every client
+    /// loads, and nothing may truncate it short of deleting the thread.
+    /// Compaction summarises the model's *context*, not the record — see
+    /// [`Self::apply_compaction_keeping`], which moves `compacted_up_to`
+    /// instead of removing anything.
     pub messages: VecDeque<ThreadMessage>,
 
-    /// Compacted summary of older messages
+    /// Compacted summary of the messages before `compacted_up_to`.
     pub compact_summary: Option<String>,
+
+    /// How many leading messages `compact_summary` covers. Those messages
+    /// are excluded from model-context building but kept in `messages` —
+    /// they are the user's conversation, not the model's scratch space.
+    #[serde(default)]
+    pub compacted_up_to: usize,
 
     /// Working directory override for this thread.
     ///
@@ -277,6 +311,19 @@ pub struct AgentThread {
     /// rather than on every prompt near the threshold.
     #[serde(default)]
     pub memory_flushed: bool,
+
+    /// When the currently open turn started, if one is running. Derived
+    /// from the log's turn markers — reconstructed on load, never
+    /// persisted as state of its own — so it cannot disagree with the
+    /// record. `Some` is what clients see as "streaming"/"open".
+    #[serde(skip)]
+    pub open_turn: Option<SystemTime>,
+
+    /// Log records appended since the store last persisted this thread.
+    /// Every mutation that belongs in the record pushes here; the store
+    /// drains it with appends instead of rewriting history.
+    #[serde(skip)]
+    pub pending_log: Vec<ThreadLogRecord>,
 }
 
 impl AgentThread {
@@ -301,10 +348,13 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            compacted_up_to: 0,
             working_dir: None,
             result: None,
             share_context: true,
             memory_flushed: false,
+            open_turn: None,
+            pending_log: Vec::new(),
         }
     }
 
@@ -335,10 +385,13 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            compacted_up_to: 0,
             working_dir: None,
             result: None,
             share_context: true,
             memory_flushed: false,
+            open_turn: None,
+            pending_log: Vec::new(),
         }
     }
 
@@ -367,10 +420,13 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            compacted_up_to: 0,
             working_dir: None,
             result: None,
             share_context: false,
             memory_flushed: false,
+            open_turn: None,
+            pending_log: Vec::new(),
         }
     }
 
@@ -399,10 +455,13 @@ impl AgentThread {
             is_foreground: false,
             messages: VecDeque::new(),
             compact_summary: None,
+            compacted_up_to: 0,
             working_dir: None,
             result: None,
             share_context: true,
             memory_flushed: false,
+            open_turn: None,
+            pending_log: Vec::new(),
         }
     }
 
@@ -433,16 +492,48 @@ impl AgentThread {
         self.last_activity = SystemTime::now();
     }
 
+    /// Append a message to the conversation history and the pending log.
+    fn push_message(&mut self, message: ThreadMessage) {
+        self.messages.push_back(message.clone());
+        self.pending_log.push(ThreadLogRecord::Message(message));
+        self.last_activity = SystemTime::now();
+    }
+
     /// Add a message to the conversation history.
     pub fn add_message(&mut self, role: MessageRole, content: impl Into<String>) {
-        self.messages.push_back(ThreadMessage {
+        self.push_message(ThreadMessage {
             role,
             content: content.into(),
             timestamp: SystemTime::now(),
             tool_calls: None,
             tool_call_id: None,
         });
-        self.last_activity = SystemTime::now();
+    }
+
+    /// Record that a turn began in this thread. The log carries the marker;
+    /// until [`Self::end_turn`] writes the matching stop indicator, the
+    /// thread is open — on screen and on disk.
+    pub fn begin_turn(&mut self) {
+        let at = SystemTime::now();
+        self.open_turn = Some(at);
+        self.pending_log.push(ThreadLogRecord::TurnStarted { at });
+        self.last_activity = at;
+    }
+
+    /// Write the open turn's stop indicator, if one is open. `ok` is false
+    /// for errors and cancellations. A thread with no open turn is left
+    /// alone — a stray stop marker would just be noise in the record.
+    pub fn end_turn(&mut self, ok: bool) {
+        if self.open_turn.take().is_some() {
+            let at = SystemTime::now();
+            self.pending_log.push(ThreadLogRecord::TurnEnded { at, ok });
+            self.last_activity = at;
+        }
+    }
+
+    /// Whether a turn is open — started, with no stop indicator yet.
+    pub fn is_open(&self) -> bool {
+        self.open_turn.is_some()
     }
 
     /// Add an assistant turn that issued tool calls. `text` may be empty
@@ -453,26 +544,24 @@ impl AgentThread {
         text: impl Into<String>,
         tool_calls: serde_json::Value,
     ) {
-        self.messages.push_back(ThreadMessage {
+        self.push_message(ThreadMessage {
             role: MessageRole::Assistant,
             content: text.into(),
             timestamp: SystemTime::now(),
             tool_calls: Some(tool_calls),
             tool_call_id: None,
         });
-        self.last_activity = SystemTime::now();
     }
 
     /// Add a tool-result message linked to the originating call's id.
     pub fn add_tool_result(&mut self, tool_call_id: impl Into<String>, output: impl Into<String>) {
-        self.messages.push_back(ThreadMessage {
+        self.push_message(ThreadMessage {
             role: MessageRole::Tool,
             content: output.into(),
             timestamp: SystemTime::now(),
             tool_calls: None,
             tool_call_id: Some(tool_call_id.into()),
         });
-        self.last_activity = SystemTime::now();
     }
 
     /// Get message count.
@@ -481,13 +570,21 @@ impl AgentThread {
     }
 
     /// Generate a prompt for compacting this thread's conversation.
+    ///
+    /// Covers only what the current summary does not: the prior summary
+    /// (if any) plus the messages after `compacted_up_to`, so re-compacting
+    /// folds forward instead of re-reading the whole transcript.
     pub fn compaction_prompt(&self) -> String {
         let mut prompt = String::from(
             "Summarize the following conversation in 2-3 sentences, \
              capturing the key topics, decisions, and any pending items:\n\n",
         );
 
-        for msg in &self.messages {
+        if let Some(summary) = &self.compact_summary {
+            prompt.push_str(&format!("Summary of earlier conversation: {}\n\n", summary));
+        }
+
+        for msg in self.messages.iter().skip(self.compacted_up_to) {
             let role = match msg.role {
                 MessageRole::User => "User",
                 MessageRole::Assistant => "Assistant",
@@ -507,13 +604,17 @@ impl AgentThread {
     }
 
     /// Apply a compaction summary, keeping the given number of recent
-    /// messages. Used when the caller knows exactly which tail of the
-    /// conversation the summary does *not* cover.
+    /// messages in the model's context. Used when the caller knows exactly
+    /// which tail of the conversation the summary does *not* cover.
+    ///
+    /// This moves the context boundary — it deletes nothing. The old
+    /// implementation popped the summarised messages off `messages`, and
+    /// since `messages` is the transcript every client loads, switching
+    /// threads or crossing the context threshold permanently destroyed
+    /// the conversation down to its last few messages. The record stays
+    /// whole; only context building skips the summarised prefix.
     pub fn apply_compaction_keeping(&mut self, summary: String, keep_recent: usize) {
-        while self.messages.len() > keep_recent {
-            self.messages.pop_front();
-        }
-
+        self.compacted_up_to = self.messages.len().saturating_sub(keep_recent);
         self.compact_summary = Some(summary);
         // A new compaction cycle begins: allow the next pre-compaction
         // memory flush to fire again.
@@ -532,10 +633,10 @@ impl AgentThread {
             ctx.push_str("\n\n");
         }
 
-        // Include recent messages
-        if !self.messages.is_empty() {
+        // Include the messages the summary does not cover
+        if self.messages.len() > self.compacted_up_to {
             ctx.push_str("## Recent Messages\n");
-            for msg in &self.messages {
+            for msg in self.messages.iter().skip(self.compacted_up_to) {
                 let role = match msg.role {
                     MessageRole::User => "User",
                     MessageRole::Assistant => "Assistant",
@@ -551,8 +652,20 @@ impl AgentThread {
 }
 
 /// Info for sidebar display.
+///
+/// The busy state comes from the log's turn markers, not the status enum:
+/// an open turn is "Streaming" whatever the enum says, and an interactive
+/// thread at rest is "Ready". The enum still speaks for the task/sub-agent
+/// lifecycle (Completed, Failed, …).
 impl From<&AgentThread> for ThreadInfo {
     fn from(t: &AgentThread) -> Self {
+        let (status, status_icon) = if t.open_turn.is_some() {
+            ("Streaming".to_string(), "▶".to_string())
+        } else if t.status == ThreadStatus::Active {
+            ("Ready".to_string(), "○".to_string())
+        } else {
+            (t.status.display(), t.status.icon().to_string())
+        };
         Self {
             id: t.id,
             project_id: t.project_id,
@@ -560,8 +673,8 @@ impl From<&AgentThread> for ThreadInfo {
             icon: t.kind.icon().to_string(),
             label: t.label.clone(),
             description: t.description.clone(),
-            status: t.status.display(),
-            status_icon: t.status.icon().to_string(),
+            status,
+            status_icon,
             is_foreground: t.is_foreground,
             is_interactive: t.kind.is_interactive(),
             message_count: t.messages.len(),

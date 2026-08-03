@@ -332,7 +332,7 @@ pub(crate) fn handle_gateway_event(
                 foreground_id = ?foreground_id,
                 "ThreadsUpdate received"
             );
-            state.write().threads = threads
+            let mapped: Vec<ThreadInfo> = threads
                 .into_iter()
                 .map(|t| ThreadInfo {
                     id: t.id,
@@ -345,7 +345,21 @@ pub(crate) fn handle_gateway_event(
                     working_dir: t.working_dir,
                 })
                 .collect();
-            state.write().set_foreground_thread(foreground_id);
+            let mut s = state.write();
+            // The status column is derived from each thread's turn markers
+            // on the gateway, so "Streaming" is authoritative: a turn is
+            // running there whether or not this client saw it start — a
+            // reconnect, another client's message, or a turn the gateway
+            // resumed after a restart. Seed the in-flight set from it
+            // before the foreground derives the indicators, so Stop and
+            // the composer gate come up right. Add-only: removal belongs
+            // to each turn's own close-out, and clearing here would race
+            // a message this client just sent.
+            for t in mapped.iter().filter(|t| t.status == "Streaming") {
+                s.in_flight.insert(t.id);
+            }
+            s.threads = mapped;
+            s.set_foreground_thread(foreground_id);
         }
         GatewayEvent::PluginsUpdate { plugins } => {
             tracing::info!(count = plugins.len(), "PluginsUpdate received");

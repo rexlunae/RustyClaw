@@ -18,7 +18,6 @@ use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, transport};
 use rustyclaw_core::projects::ProjectManager;
-use rustyclaw_core::threads::ThreadManager;
 
 use crate::project_handler;
 use crate::thread_updates::{send_projects_update, send_threads_update_shared};
@@ -43,7 +42,7 @@ impl AgentSession {
         let _ = std::fs::create_dir_all(&sessions_dir);
         let threads_path = sessions_dir.join("threads.json");
         let projects_path = sessions_dir.join("projects.json");
-        let thread_mgr = ThreadManager::load_or_default(&threads_path);
+        let thread_mgr = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
         let mut project_mgr = ProjectManager::load_or_new(&projects_path);
         project_mgr.ensure_default(config.workspace_dir_for(agent_id));
         crate::helpers::persist_projects(&project_mgr, &projects_path);
@@ -58,7 +57,7 @@ impl AgentSession {
 
     /// Persist thread and project state.
     pub async fn save(&self) {
-        crate::helpers::persist_threads(&*self.thread_mgr.lock().await, &self.threads_path);
+        crate::helpers::persist_threads(&mut *self.thread_mgr.lock().await, &self.threads_path);
         crate::helpers::persist_projects(&self.project_mgr, &self.projects_path);
     }
 }

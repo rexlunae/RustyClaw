@@ -69,7 +69,7 @@ pub(crate) async fn handle_thread_create(
         };
         debug!("Thread create request: {} (project {})", label, project_id);
         let thread_id = tm.create_chat_in(project_id, &label);
-        crate::helpers::persist_threads(&tm, threads_path);
+        crate::helpers::persist_threads(&mut tm, threads_path);
         (thread_id, label)
     };
     let frame = ServerFrame {
@@ -134,7 +134,7 @@ pub(crate) async fn handle_thread_switch(
             },
         };
         send_frame(writer, &frame).await?;
-        crate::helpers::persist_threads(&*thread_mgr.lock().await, threads_path);
+        crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
         return Ok(());
     }
 
@@ -212,7 +212,7 @@ pub(crate) async fn handle_thread_switch(
         send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
         send_thread_messages_update_shared(writer, target_id, thread_mgr).await?;
         // Persist thread state (includes compaction summary)
-        crate::helpers::persist_threads(&*thread_mgr.lock().await, threads_path);
+        crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
     } else {
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
@@ -313,7 +313,7 @@ pub(crate) async fn handle_thread_close(
         let mut tm = thread_mgr.lock().await;
         tm.remove(task_id);
         // Persist thread state
-        crate::helpers::persist_threads(&tm, threads_path);
+        crate::helpers::persist_threads(&mut tm, threads_path);
         tm.foreground().map(|t| t.id)
     };
     // Send updated thread list
@@ -383,7 +383,7 @@ pub(crate) async fn handle_thread_update(
         let mut tm = thread_mgr.lock().await;
         tm.rename(id, &label);
         tm.set_working_dir(id, working_dir);
-        crate::helpers::persist_threads(&tm, threads_path);
+        crate::helpers::persist_threads(&mut tm, threads_path);
 
         // Editing the foreground thread's directory has to take effect right
         // away, otherwise the next tool call still runs in the old one.
@@ -421,7 +421,7 @@ pub(crate) async fn handle_thread_rename(
         let renamed = tm.rename(task_id, &new_label);
         if renamed {
             // Persist thread state
-            crate::helpers::persist_threads(&tm, threads_path);
+            crate::helpers::persist_threads(&mut tm, threads_path);
         }
         renamed
     };
@@ -536,7 +536,15 @@ mod tests {
         assert!(override_dir.is_dir(), "the override directory is created");
         // The edited thread is the foreground one, so tools run there now.
         assert_eq!(config.workspace_dir(), override_dir);
-        assert!(threads_path.is_file(), "the edit is persisted");
+        assert!(
+            threads_path
+                .parent()
+                .unwrap()
+                .join("threads")
+                .join("state.json")
+                .is_file(),
+            "the edit is persisted to the per-thread store"
+        );
 
         // Clearing the override hands the thread back to its project.
         handle_thread_update(
