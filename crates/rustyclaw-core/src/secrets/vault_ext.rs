@@ -6,6 +6,18 @@ use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 use super::SecretsManager;
 use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
 
+/// Credential namespaces [`SecretsManager::read_service_credential`] may
+/// address.
+///
+/// A service credential is one the *gateway* uses on the user's behalf, and
+/// reading it skips the agent-facing permission check. Restricting which names
+/// that path can even name keeps the bypass from becoming a general-purpose
+/// way to read `WithAuth` secrets: a future call site that passed an arbitrary
+/// name would get `None`, not someone's API key. Add a namespace here only
+/// alongside a subsystem that provisions its own credentials the way
+/// [`crate::messengers::setup::secret_name`] does.
+pub const SERVICE_CREDENTIAL_NAMESPACES: &[&str] = &["messenger/"];
+
 impl SecretsManager {
     /// Read a single-value credential that the *gateway process* needs in
     /// order to do what the user configured — a messenger's bot token, for
@@ -18,9 +30,21 @@ impl SecretsManager {
     /// permission check would mean a bot could not connect unless the model
     /// were also allowed to read its token, which is exactly backwards.
     ///
-    /// Callers must be gateway-internal. Anything reachable from a tool call
-    /// belongs on [`SecretsManager::get_credential`] instead.
+    /// Because that is a real bypass, it is confined to
+    /// [`SERVICE_CREDENTIAL_NAMESPACES`]: a name outside them reads as absent
+    /// rather than being fetched. Anything else — and anything reachable from
+    /// a tool call — belongs on [`SecretsManager::get_credential`], which
+    /// enforces the policy.
     pub fn read_service_credential(&mut self, name: &str) -> Result<Option<String>> {
+        if !SERVICE_CREDENTIAL_NAMESPACES
+            .iter()
+            .any(|ns| name.starts_with(ns))
+        {
+            // Not an error: the caller asked for something this path does not
+            // serve, and reporting "no such credential" is both true from here
+            // and free of information about what the vault actually holds.
+            return Ok(None);
+        }
         self.get_secret(&format!("val:{name}"), true)
     }
 
@@ -668,5 +692,50 @@ impl SecretsManager {
             .storage(origin)
             .map(|s| s.keys().cloned().collect())
             .unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod service_credential_tests {
+    use super::*;
+
+    /// A vault holding one messenger credential and one ordinary API key.
+    fn vault(dir: &std::path::Path) -> SecretsManager {
+        let mut mgr = SecretsManager::new(dir);
+        let entry = |label: &str| SecretEntry {
+            label: label.to_string(),
+            kind: SecretKind::Token,
+            policy: AccessPolicy::WithAuth,
+            description: None,
+            disabled: false,
+        };
+        mgr.store_credential("messenger/tg/token", &entry("bot"), "123:secret", None)
+            .unwrap();
+        mgr.store_credential("anthropic", &entry("api"), "sk-ant-live", None)
+            .unwrap();
+        mgr
+    }
+
+    #[test]
+    fn a_messenger_credential_is_readable_by_the_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = vault(dir.path());
+        assert_eq!(
+            mgr.read_service_credential("messenger/tg/token")
+                .unwrap()
+                .as_deref(),
+            Some("123:secret"),
+            "the connect path must be able to read what it was configured with"
+        );
+    }
+
+    #[test]
+    fn the_bypass_cannot_reach_a_credential_outside_a_service_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = vault(dir.path());
+        // `anthropic` is a WithAuth credential that `get_credential` would
+        // refuse the agent. This path must not become a way around that.
+        assert_eq!(mgr.read_service_credential("anthropic").unwrap(), None);
+        assert_eq!(mgr.read_service_credential("../anthropic").unwrap(), None);
     }
 }

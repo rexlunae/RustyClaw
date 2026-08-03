@@ -415,15 +415,24 @@ impl MessengerEditorData {
 
     /// Profile override as `(display_name, bio, avatar)`, blank meaning
     /// "inherit from the agent".
+    /// Profile override as `(display_name, bio, avatar)`.
+    ///
+    /// Name and description are always `Some`, blank included: the editor
+    /// renders both rows, so a blank one is the user saying "inherit from the
+    /// agent" and has to reach the gateway as an explicit clear. `None` is
+    /// reserved for callers that are not editing the profile at all — an
+    /// enable/disable toggle — where it means "leave it alone".
+    ///
+    /// The avatar is the exception. Its stored path is not sent to clients, so
+    /// the row cannot be pre-filled and a blank one means "unchanged" rather
+    /// than "remove". Removing an avatar is therefore not yet expressible in
+    /// the editor, which is the lesser of the two wrongs.
     pub fn profile_values(&self) -> (Option<String>, Option<String>, Option<std::path::PathBuf>) {
-        let text = |name: &str| {
-            let value = self.value_of(name).trim();
-            (!value.is_empty()).then(|| value.to_string())
-        };
+        let avatar = self.value_of(FIELD_AVATAR).trim().to_string();
         (
-            text(FIELD_DISPLAY_NAME),
-            text(FIELD_BIO),
-            text(FIELD_AVATAR).map(std::path::PathBuf::from),
+            Some(self.value_of(FIELD_DISPLAY_NAME).trim().to_string()),
+            Some(self.value_of(FIELD_BIO).trim().to_string()),
+            (!avatar.is_empty()).then(|| std::path::PathBuf::from(avatar)),
         )
     }
 }
@@ -443,7 +452,15 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
 
     if let Some(spec) = setup::kind_spec(messenger_type) {
         for field in spec.fields {
-            let stored = account.is_some_and(|a| a.vaulted.iter().any(|v| v == field.name));
+            // A credential still sitting in plaintext config counts as stored
+            // for the purpose of this form. It is not where it should be —
+            // that is what the migrate action is for — but demanding the user
+            // retype a working token before they can edit a channel list
+            // would make the un-migrated account the harder one to look after.
+            let stored = account.is_some_and(|a| {
+                a.vaulted.iter().any(|v| v == field.name)
+                    || a.plaintext.iter().any(|(f, _)| f == field.name)
+            });
             let value = match field.is_secret() {
                 // Never pre-fill a secret: the client was not sent the value,
                 // and inventing something to show would be a lie about what
@@ -783,6 +800,50 @@ mod tests {
         assert!(token.placeholder().contains("leave blank"));
         // A stored credential satisfies the requirement without retyping.
         assert!(editor.validate().is_ok(), "{:?}", editor.validate());
+    }
+
+    #[test]
+    fn a_plaintext_credential_counts_as_present_when_editing() {
+        let mut telegram = account("telegram");
+        telegram.plaintext = vec![("token".into(), "Bot token".into())];
+        let editor = MessengerEditorData::edit(&telegram);
+        let token = editor.fields.iter().find(|f| f.name == "token").unwrap();
+        assert!(
+            token.stored,
+            "an un-migrated account must still be editable without retyping its token"
+        );
+        // The gateway accepts this save; the form must not be the thing that
+        // blocks it.
+        assert!(editor.validate().is_ok(), "{:?}", editor.validate());
+        assert!(editor.secret_values().is_empty());
+    }
+
+    #[test]
+    fn a_blank_profile_row_is_sent_as_an_explicit_clear() {
+        let mut telegram = account("telegram");
+        telegram.display_name = "SupportBot".into();
+        telegram.display_name_overridden = true;
+        let mut editor = MessengerEditorData::edit(&telegram);
+        editor.set_value(FIELD_DISPLAY_NAME, "");
+
+        let (display_name, bio, avatar) = editor.profile_values();
+        // Some("") rather than None: None means "not editing the profile",
+        // which is what a toggle sends, and would keep the old name.
+        assert_eq!(display_name.as_deref(), Some(""));
+        assert_eq!(bio.as_deref(), Some(""));
+        // The avatar row cannot be pre-filled, so blank means "unchanged".
+        assert_eq!(avatar, None);
+    }
+
+    #[test]
+    fn a_filled_profile_row_is_sent_as_typed() {
+        let mut editor = MessengerEditorData::new("console");
+        editor.set_value(FIELD_ACCOUNT_NAME, "c");
+        editor.set_value(FIELD_DISPLAY_NAME, "Ada");
+        editor.set_value(FIELD_AVATAR, "/tmp/face.png");
+        let (display_name, _, avatar) = editor.profile_values();
+        assert_eq!(display_name.as_deref(), Some("Ada"));
+        assert_eq!(avatar, Some(std::path::PathBuf::from("/tmp/face.png")));
     }
 
     #[test]

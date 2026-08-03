@@ -27,8 +27,7 @@ use rustyclaw_core::gateway::TransportWriter;
 use rustyclaw_core::gateway::protocol::frames::*;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use rustyclaw_core::messengers::setup::{
-    self, MessengerProfile, ThreadRoute, kind_spec, secret_name, validate_account_name,
-    validate_fields,
+    self, ThreadRoute, kind_spec, secret_name, validate_account_name, validate_fields,
 };
 use rustyclaw_core::secrets::{AccessPolicy, SecretEntry, SecretKind};
 use rustyclaw_core::threads::ThreadManager;
@@ -195,10 +194,18 @@ async fn account_dto(
     // Only report a reference the vault actually still has. A dangling
     // `secret_refs` entry — vault wiped, config kept — would otherwise render
     // as a configured credential right up until the connection fails.
+    //
+    // `list_secrets` returns raw vault keys, and a typed credential is stored
+    // as the pair `cred:<name>` / `val:<name>`. Comparing against the bare
+    // name matches neither, which is how this managed to report *every*
+    // account as uncredentialed.
     let vaulted: BTreeMap<String, String> = messenger
         .secret_refs
         .iter()
-        .filter(|(_, cred)| stored.iter().any(|s| s == *cred))
+        .filter(|(_, cred)| {
+            let value_key = format!("val:{cred}");
+            stored.contains(&value_key)
+        })
         .map(|(field, cred)| (field.clone(), cred.clone()))
         .collect();
 
@@ -436,12 +443,27 @@ async fn save_account(
         }
     }
 
-    let profile = MessengerProfile {
-        display_name: override_of(display_name),
-        bio: override_of(bio),
-        avatar_path,
-        agent_id: agent_id.filter(|a| !a.trim().is_empty()),
-    };
+    // Merge the profile rather than replacing it.
+    //
+    // `None` means "the caller did not send this field", not "clear it".
+    // Enabling an account sends no profile at all, and replacing the stored
+    // profile with that would silently delete the name and description the
+    // user configured — for an operation that has nothing to do with either.
+    // An explicit empty string is how a field is cleared, matching the wire
+    // documentation on `ClientPayload::MessengerAccountSave`.
+    let mut profile = entry.profile.clone().unwrap_or_default();
+    if let Some(value) = display_name {
+        profile.display_name = override_of(Some(value));
+    }
+    if let Some(value) = bio {
+        profile.bio = override_of(Some(value));
+    }
+    if let Some(path) = avatar_path {
+        profile.avatar_path = (!path.as_os_str().is_empty()).then_some(path);
+    }
+    if let Some(id) = agent_id {
+        profile.agent_id = override_of(Some(id));
+    }
     entry.profile = (!profile.is_empty()).then_some(profile);
 
     // Renaming moves the vault entries too, so credentials follow the account
@@ -1187,6 +1209,213 @@ mod tests {
             "identity is (account, channel)"
         );
         assert_eq!(config.messenger_routes[0].thread_id, second.0);
+    }
+
+    /// Pull the accounts out of a `build_view` frame.
+    fn accounts_in(frame: &ServerFrame) -> Vec<MessengerAccountDto> {
+        match &frame.payload {
+            ServerPayload::MessengerConfigResult { accounts, .. } => accounts.clone(),
+            other => panic!("expected a config result, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_view_reports_a_saved_credential_as_vaulted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("123:secret"))
+            .await
+            .unwrap();
+
+        // The vault lists raw keys (`val:messenger/tg/token`) while config
+        // holds the bare name, so this is where a prefix mismatch shows up as
+        // "every account has no credentials".
+        let accounts = accounts_in(&build_view(&config, &vault).await);
+        assert_eq!(
+            accounts[0].vaulted.get("token").map(String::as_str),
+            Some("messenger/tg/token"),
+            "a credential that was just saved must read as stored: {:?}",
+            accounts[0].vaulted
+        );
+    }
+
+    #[tokio::test]
+    async fn the_view_does_not_claim_a_credential_the_vault_no_longer_has() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("123:secret"))
+            .await
+            .unwrap();
+        // Config keeps pointing at it; the vault does not have it any more.
+        vault
+            .lock()
+            .await
+            .delete_credential("messenger/tg/token")
+            .unwrap();
+
+        let accounts = accounts_in(&build_view(&config, &vault).await);
+        assert!(
+            accounts[0].vaulted.is_empty(),
+            "a dangling reference must not render as a configured credential"
+        );
+    }
+
+    #[tokio::test]
+    async fn toggling_an_account_leaves_its_profile_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+        // Give it a presented identity.
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            Some("SupportBot".to_string()),
+            Some("Ask me about billing".to_string()),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A toggle sends no profile fields at all.
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            false,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let profile = config.messengers[0].profile.clone().unwrap_or_default();
+        assert_eq!(
+            profile.display_name.as_deref(),
+            Some("SupportBot"),
+            "disabling an account must not erase the name it presents"
+        );
+        assert_eq!(profile.bio.as_deref(), Some("Ask me about billing"));
+        assert!(
+            !config.messengers[0].enabled,
+            "the toggle should still apply"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_explicit_blank_clears_a_profile_override() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            Some("SupportBot".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        // Blank, not absent: the user emptied the row.
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            Some(String::new()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let profile = config.messengers[0].profile.clone().unwrap_or_default();
+        assert_eq!(
+            profile.display_name, None,
+            "an emptied row must fall back to the agent's name"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_that_sends_no_avatar_keeps_the_configured_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+        let avatar = dir.path().join("face.png");
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(avatar.clone()),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // The editor cannot pre-fill the avatar row, so an ordinary save
+        // sends None — which must not be read as "remove the picture".
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            Some("Ada".to_string()),
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            config.messengers[0]
+                .profile
+                .as_ref()
+                .and_then(|p| p.avatar_path.clone()),
+            Some(avatar)
+        );
     }
 
     #[test]
