@@ -508,14 +508,28 @@ impl ThreadManager {
 
     /// Clean up old ephemeral threads.
     pub fn cleanup_ephemeral(&mut self) {
+        self.cleanup_ephemeral_except(None);
+    }
+
+    /// Clean up old ephemeral threads, sparing `keep`.
+    ///
+    /// The exemption exists for the message-arrival sweep: the sweep must
+    /// not remove the very conversation the incoming message was typed
+    /// into — a completed task thread the user was still looking at —
+    /// because resolution would then refuse the message as addressed to a
+    /// thread that "no longer exists" and drop the user's words. The
+    /// message's own activity refreshes the thread's retention window, so
+    /// sparing it here does not keep it forever.
+    pub fn cleanup_ephemeral_except(&mut self, keep: Option<ThreadId>) {
         let now = SystemTime::now();
         let retention = self.config.ephemeral_retention;
 
         let to_remove: Vec<ThreadId> = self
             .threads
             .iter()
-            .filter(|(_, t)| {
-                t.kind.is_ephemeral()
+            .filter(|(id, t)| {
+                Some(**id) != keep
+                    && t.kind.is_ephemeral()
                     && t.status.is_terminal()
                     && now
                         .duration_since(t.last_activity)
@@ -913,6 +927,38 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The retention sweep spares the thread a message just named.
+    ///
+    /// The sweep runs when a message arrives; without the exemption it
+    /// could remove the very conversation the message was typed into — a
+    /// completed task thread the user was still looking at — and the
+    /// gateway would then refuse the message as addressed to a thread
+    /// that "no longer exists", dropping the user's words.
+    #[test]
+    fn the_ephemeral_sweep_spares_the_thread_being_messaged() {
+        let mut mgr = ThreadManager::with_config(ThreadManagerConfig {
+            ephemeral_retention: Duration::from_secs(0),
+            ..ThreadManagerConfig::default()
+        });
+        let addressed = mgr.create_task("Addressed", "the one being replied to", None);
+        let stale = mgr.create_task("Stale", "long done", None);
+        mgr.complete(addressed, None, None);
+        mgr.complete(stale, None, None);
+        // Zero retention: both are eligible the moment they complete.
+        std::thread::sleep(Duration::from_millis(5));
+
+        mgr.cleanup_ephemeral_except(Some(addressed));
+
+        assert!(
+            mgr.get(addressed).is_some(),
+            "the thread the message names must survive the sweep"
+        );
+        assert!(
+            mgr.get(stale).is_none(),
+            "other expired ephemeral threads still go"
+        );
     }
 
     /// Finished and idle threads stay out of every prompt's context.

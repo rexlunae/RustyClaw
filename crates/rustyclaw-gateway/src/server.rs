@@ -876,12 +876,6 @@ pub(crate) async fn handle_connection(
                                 // reply, in whichever thread the user had
                                 // just opened.
                                 active_tasks.lock().await.reap_finished();
-                                // The ephemeral sweep was never wired to
-                                // anything: completed sub-agent and task
-                                // threads accumulated forever, and every
-                                // prompt-context builder that walks the
-                                // thread list dragged them along.
-                                agent_session.thread_mgr.lock().await.cleanup_ephemeral();
                                 // The client names the thread it typed into,
                                 // and that name wins. The gateway's own
                                 // foreground is only a cache of what a client
@@ -1056,6 +1050,22 @@ pub(crate) async fn handle_connection(
                                 // never reaches the client.
                                 let turn_key = turn_thread
                                     .unwrap_or(rustyclaw_core::threads::ThreadId(0));
+                                // Retire old ephemeral threads — after the
+                                // turn's thread is settled, never before:
+                                // the sweep could remove the very
+                                // conversation this message was typed into
+                                // (a completed task thread the user was
+                                // still looking at), and resolution would
+                                // then refuse the message as addressed to
+                                // a thread that "no longer exists",
+                                // dropping the user's words. The settled
+                                // thread is exempt; its own activity
+                                // refreshes its retention window.
+                                agent_session
+                                    .thread_mgr
+                                    .lock()
+                                    .await
+                                    .cleanup_ephemeral_except(turn_thread);
                                 // A second message in this conversation
                                 // displaces the turn still running there —
                                 // and a displaced turn is aborted at its
