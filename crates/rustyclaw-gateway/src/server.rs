@@ -1596,13 +1596,16 @@ pub(crate) async fn handle_connection(
                             // the broadcast below, so the thread list the
                             // clients get says "Ready" — and before the
                             // persist, so a crash after this point still
-                            // leaves a closed turn on disk. Only if this
-                            // completion is still the registered turn: a
-                            // Done drained after the thread's next turn
-                            // began belongs to a displaced predecessor,
-                            // whose marker the displacement already
-                            // closed — writing one here would close the
-                            // *new* turn's marker while it streams.
+                            // leaves a closed turn on disk. Only with the
+                            // licence: a Done drained after the thread's
+                            // next turn began belongs to a displaced
+                            // predecessor, whose marker the displacement
+                            // already closed — writing one here would
+                            // close the *new* turn's marker while it
+                            // streams. A completion whose entry was merely
+                            // reaped keeps the licence: it is still the
+                            // thread's last word, and nothing else will
+                            // ever close the marker.
                             if still_this_turn {
                                 agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
                             }
