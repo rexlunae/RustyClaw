@@ -505,8 +505,11 @@ if should_install rustyclaw; then
                 success "Fedora/RHEL build deps ready"
             elif has pacman; then
                 info "Installing Arch build deps..."
+                # webkit2gtk-4.1 (not webkit2gtk) is the current Arch package
+                # name for WebKitGTK 4.1; it provides both webkit2gtk-4.1.pc
+                # and javascriptcoregtk-4.1.pc
                 sudo pacman -Sy --noconfirm --needed \
-                    base-devel openssl pkgconf glib2 gtk3 webkit2gtk xdotool \
+                    base-devel openssl pkgconf glib2 gtk3 webkit2gtk-4.1 xdotool \
                     2>/dev/null || true
                 success "Arch build deps ready"
             elif has apk; then
@@ -537,6 +540,22 @@ if should_install rustyclaw; then
                     success "webkit2gtk-4.1 development package detected"
                 else
                     warn "webkit2gtk-4.1.pc not found; install your distro's WebKitGTK 4.1 development package"
+                fi
+
+                # The desktop client (rustyclaw-desktop) hard-requires
+                # JavaScriptCore + WebKitGTK 4.1 + libxdo; if they're missing
+                # the cargo build fails only after several minutes of compile
+                # time, so fail fast here with install instructions instead.
+                if pkg-config --exists "javascriptcoregtk-4.1" && pkg-config --exists "libxdo"; then
+                    success "JavaScriptCore + libxdo development packages detected"
+                else
+                    err "WebKitGTK/JavaScriptCore 4.1 and libxdo dev packages not found — rustyclaw-desktop cannot build without them"
+                    err "Install them, e.g.:"
+                    err "  Debian/Ubuntu: sudo apt-get install libwebkit2gtk-4.1-dev libxdo-dev"
+                    err "  Fedora:        sudo dnf install webkit2gtk4.1-devel xdotool-devel"
+                    err "  Arch:          sudo pacman -S webkit2gtk-4.1 xdotool"
+                    err "  Alpine:        sudo apk add webkit2gtk-dev xdotool-dev"
+                    exit 1
                 fi
             fi
             ;;

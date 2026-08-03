@@ -152,6 +152,16 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
         }
     };
 
+    // The sign-in prompt this render displays, snapshotted so closing it
+    // retires exactly this one. Reading the queue head again at click time
+    // races the gateway's own retirements — a completion or close-out can
+    // replace the head between render and click, and acting on the new
+    // head would cancel a turn the user was not looking at.
+    let displayed_device_flow = state.read().pending_device_flows.front().cloned();
+    let displayed_device_flow_code = displayed_device_flow
+        .as_ref()
+        .map(|(_, _, code, _)| code.clone());
+
     rsx! {
             ConnectionDialog {
                 visible: *show_connection.read(),
@@ -405,7 +415,10 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     selected_allow: true,
                 },
                 on_approve: move |id: String| {
-                    state.write().pending_tool_approval = None;
+                    // By id, not pop_front: the gateway can retire the displayed
+                    // entry between render and click, and popping the head
+                    // would discard a request that was never shown.
+                    state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -414,7 +427,10 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_deny: move |id: String| {
-                    state.write().pending_tool_approval = None;
+                    // By id, not pop_front: the gateway can retire the displayed
+                    // entry between render and click, and popping the head
+                    // would discard a request that was never shown.
+                    state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -456,7 +472,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     input_len: 0,
                 },
                 on_submit: move |(id, value): (String, String)| {
-                    state.write().pending_credential_request = None;
+                    state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -469,7 +485,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     }
                 },
                 on_dismiss: move |id: String| {
-                    state.write().pending_credential_request = None;
+                    state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
@@ -498,37 +514,46 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
             }
 
             DeviceFlowDialog {
-                visible: state.read().pending_device_flow.is_some(),
+                visible: displayed_device_flow.is_some(),
                 data: DeviceFlowData {
-                    url: state
-                        .read()
-                        .pending_device_flow
+                    url: displayed_device_flow
                         .as_ref()
-                        .map(|(u, _, _)| u.clone())
+                        .map(|(_, u, _, _)| u.clone())
                         .unwrap_or_default(),
-                    code: state
-                        .read()
-                        .pending_device_flow
+                    code: displayed_device_flow
                         .as_ref()
-                        .map(|(_, c, _)| c.clone())
+                        .map(|(_, _, c, _)| c.clone())
                         .unwrap_or_default(),
-                    message: state
-                        .read()
-                        .pending_device_flow
+                    message: displayed_device_flow
                         .as_ref()
-                        .and_then(|(_, _, m)| m.clone()),
+                        .and_then(|(_, _, _, m)| m.clone()),
                     browser_opened: false,
                     tick: 0,
                 },
                 on_close: move |_| {
-                    state.write().pending_device_flow = None;
+                    // Cancel the turn the flow belongs to — which need not
+                    // be the conversation on screen, now that any turn can
+                    // start a sign-in. Aiming at the foreground here could
+                    // kill an unrelated reply while the poll ran on.
+                    // By the displayed prompt's code, not pop_front: the
+                    // gateway can retire the head between render and click,
+                    // and popping would discard a prompt that was never
+                    // shown and cancel that other flow's turn instead. If
+                    // the displayed flow is already gone, so is its turn —
+                    // there is nothing left to cancel.
+                    let Some(code) = displayed_device_flow_code.clone() else {
+                        return;
+                    };
+                    let Some(thread_id) = state.write().retire_device_flow(&code) else {
+                        return;
+                    };
                     state
                         .write()
                         .push_notice(MessageRole::Info, "Device flow cancelled.");
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
                         spawn(async move {
-                            let _ = client.send(GatewayCommand::Cancel).await;
+                            let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
                         });
                     }
                 },

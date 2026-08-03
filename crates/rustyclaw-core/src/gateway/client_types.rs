@@ -62,7 +62,10 @@ pub enum GatewayEvent {
     ModelReloaded { provider: String, model: String },
 
     /// Stream starting
-    StreamStart,
+    /// A turn began. `thread_id` is the thread its frames belong to; the
+    /// client should route everything up to the matching `ResponseDone`
+    /// there rather than to whatever is on screen.
+    StreamStart { thread_id: Option<u64> },
 
     /// Thinking started (extended thinking)
     ThinkingStart,
@@ -79,7 +82,8 @@ pub enum GatewayEvent {
     Chunk { delta: String },
 
     /// Response complete
-    ResponseDone,
+    /// A turn ended. Carries the thread it belonged to.
+    ResponseDone { thread_id: Option<u64> },
 
     /// Tool call initiated
     ToolCall {
@@ -447,9 +451,18 @@ pub enum GatewayEvent {
 #[allow(dead_code)]
 #[serde(tag = "type")]
 pub enum GatewayCommand {
-    /// Send a chat message
+    /// Send a chat message.
+    ///
+    /// `thread_id` names the thread the message belongs to. A client that
+    /// tracks threads should always set it: without it the gateway falls
+    /// back to its own idea of the current thread, which the client cannot
+    /// see and which either side may have changed in the meantime.
     #[serde(rename = "chat")]
-    Chat { message: String },
+    Chat {
+        message: String,
+        #[serde(default)]
+        thread_id: Option<u64>,
+    },
 
     /// Authenticate with TOTP code
     #[serde(rename = "auth")]
@@ -572,9 +585,11 @@ pub enum GatewayCommand {
     #[serde(rename = "secrets_list")]
     SecretsList,
 
-    /// Cancel current operation
+    /// Cancel current operation. `thread_id` names the turn to stop; `None`
+    /// is honoured only when exactly one is running, since the gateway would
+    /// otherwise have to guess which conversation the user meant.
     #[serde(rename = "cancel")]
-    Cancel,
+    Cancel { thread_id: Option<u64> },
 
     /// Control a running exec process (pause/resume/stop/kill)
     #[serde(rename = "process_control")]
@@ -878,10 +893,11 @@ impl GatewayCommand {
     /// Convert this command into the wire frame the gateway expects.
     pub fn into_frame(self) -> ClientFrame {
         match self {
-            GatewayCommand::Chat { message } => ClientFrame {
+            GatewayCommand::Chat { message, thread_id } => ClientFrame {
                 frame_type: ClientFrameType::Chat,
                 payload: ClientPayload::Chat {
                     messages: vec![ChatMessage::text("user", &message)],
+                    thread_id,
                 },
             },
             GatewayCommand::Auth { code } => ClientFrame {
@@ -1093,9 +1109,9 @@ impl GatewayCommand {
                 frame_type: ClientFrameType::SecretsList,
                 payload: ClientPayload::SecretsList,
             },
-            GatewayCommand::Cancel => ClientFrame {
+            GatewayCommand::Cancel { thread_id } => ClientFrame {
                 frame_type: ClientFrameType::Cancel,
-                payload: ClientPayload::Empty,
+                payload: ClientPayload::Cancel { thread_id },
             },
             GatewayCommand::ProcessControl { pid, action } => ClientFrame {
                 frame_type: ClientFrameType::ProcessControl,
@@ -1425,12 +1441,16 @@ impl GatewayEvent {
                     ),
                 }
             }),
-            ServerPayload::StreamStart => Some(GatewayEvent::StreamStart),
+            ServerPayload::StreamStart { thread_id } => {
+                Some(GatewayEvent::StreamStart { thread_id })
+            }
             ServerPayload::ThinkingStart => Some(GatewayEvent::ThinkingStart),
             ServerPayload::ThinkingDelta { delta } => Some(GatewayEvent::ThinkingDelta { delta }),
             ServerPayload::ThinkingEnd => Some(GatewayEvent::ThinkingEnd),
             ServerPayload::Chunk { delta } => Some(GatewayEvent::Chunk { delta }),
-            ServerPayload::ResponseDone { .. } => Some(GatewayEvent::ResponseDone),
+            ServerPayload::ResponseDone { thread_id, .. } => {
+                Some(GatewayEvent::ResponseDone { thread_id })
+            }
             ServerPayload::ToolCall {
                 id,
                 name,

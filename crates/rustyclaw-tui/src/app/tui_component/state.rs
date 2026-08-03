@@ -84,6 +84,10 @@ pub(super) struct Ui {
     pub credential_request_secret_name: State<String>,
     pub credential_request_message: State<String>,
     pub credential_request_input: State<String>,
+    /// The turn whose request the visible credential dialog belongs to, so
+    /// a close-out for another turn cannot tear it down — and the one for
+    /// its own turn can.
+    pub credential_request_thread: State<Option<u64>>,
     pub show_provider_selector: State<bool>,
     pub provider_selector_items: State<Vec<String>>,
     pub provider_selector_ids: State<Vec<String>>,
@@ -121,6 +125,35 @@ pub(super) struct Ui {
     pub tab_selected: State<usize>,
     pub thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>>,
     pub foreground_thread_id: State<Option<u64>>,
+    /// Threads with a turn still running.
+    ///
+    /// The spinner and Esc are gated on `streaming`, which describes the
+    /// view and is cleared whenever the view moves. Without a record of what
+    /// is actually running, coming back to a conversation that is still
+    /// answering showed no indicator and Esc did nothing.
+    pub in_flight: State<std::collections::HashSet<u64>>,
+    /// Requests waiting for a dialog that is already occupied, oldest first.
+    ///
+    /// Turns run per thread, so two of them can ask at once. A second
+    /// request used to overwrite the dialog's signals — the first was never
+    /// shown again, and its timeout was read as a denial of a tool the user
+    /// never saw. Each queue drains into its dialog as the dialog frees up.
+    pub queued_tool_approvals: State<Vec<(Option<u64>, String, String, String)>>,
+    /// The turn whose request the visible approval dialog shows, so a
+    /// tool result attributed to another turn cannot tear it down.
+    pub tool_approval_thread: State<Option<u64>>,
+    pub queued_user_prompts:
+        State<Vec<(Option<u64>, rustyclaw_core::user_prompt_types::UserPrompt)>>,
+    /// As `tool_approval_thread`, for the visible `ask_user` card.
+    pub user_prompt_thread: State<Option<u64>>,
+    #[allow(clippy::type_complexity)]
+    pub queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>>,
+    /// Device-flow prompts waiting for the dialog, oldest first, tagged with
+    /// each flow's owner (a turn, an old gateway, or this client itself).
+    pub queued_device_flows: State<Vec<(crate::app::DeviceFlowOwner, String, String, String)>>,
+    /// The owner of the flow the visible device dialog shows, so a
+    /// completion or close-out for any other owner cannot tear it down.
+    pub device_flow_owner: State<Option<crate::app::DeviceFlowOwner>>,
     pub command_completions: State<Vec<String>>,
     pub command_selected: State<Option<usize>>,
     pub model_completion_provider: State<Option<String>>,

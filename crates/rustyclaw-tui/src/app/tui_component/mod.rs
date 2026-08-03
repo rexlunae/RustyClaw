@@ -128,6 +128,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let credential_request_secret_name = hooks.use_state(String::new);
     let credential_request_message = hooks.use_state(String::new);
     let credential_request_input = hooks.use_state(String::new);
+    let credential_request_thread: State<Option<u64>> = hooks.use_state(|| None);
 
     // ── Provider / model selection dialog state ─────────────────────
     let show_provider_selector = hooks.use_state(|| false);
@@ -176,6 +177,22 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
     let thread_messages_cache: State<HashMap<u64, Vec<DisplayMessage>>> =
         hooks.use_state(HashMap::new);
     let foreground_thread_id: State<Option<u64>> = hooks.use_state(|| None);
+    let in_flight: State<std::collections::HashSet<u64>> =
+        hooks.use_state(std::collections::HashSet::new);
+    let queued_tool_approvals: State<Vec<(Option<u64>, String, String, String)>> =
+        hooks.use_state(Vec::new);
+    let tool_approval_thread: State<Option<u64>> = hooks.use_state(|| None);
+    #[allow(clippy::type_complexity)]
+    let queued_user_prompts: State<
+        Vec<(Option<u64>, rustyclaw_core::user_prompt_types::UserPrompt)>,
+    > = hooks.use_state(Vec::new);
+    let user_prompt_thread: State<Option<u64>> = hooks.use_state(|| None);
+    #[allow(clippy::type_complexity)]
+    let queued_credentials: State<Vec<(Option<u64>, String, String, String, String)>> =
+        hooks.use_state(Vec::new);
+    let queued_device_flows: State<Vec<(crate::app::DeviceFlowOwner, String, String, String)>> =
+        hooks.use_state(Vec::new);
+    let device_flow_owner: State<Option<crate::app::DeviceFlowOwner>> = hooks.use_state(|| None);
 
     // ── Command menu (slash-command completions) ────────────────────
     let command_completions: State<Vec<String>> = hooks.use_state(Vec::new);
@@ -311,6 +328,7 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         credential_request_secret_name,
         credential_request_message,
         credential_request_input,
+        credential_request_thread,
         show_provider_selector,
         provider_selector_items,
         provider_selector_ids,
@@ -346,6 +364,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
         tab_selected,
         thread_messages_cache,
         foreground_thread_id,
+        in_flight,
+        queued_tool_approvals,
+        tool_approval_thread,
+        queued_user_prompts,
+        user_prompt_thread,
+        queued_credentials,
+        queued_device_flows,
+        device_flow_owner,
         command_completions,
         command_selected,
         model_completion_provider,
@@ -415,6 +441,14 @@ pub fn TuiRoot(props: &TuiRootProps, mut hooks: Hooks) -> impl Into<AnyElement<'
                         }
                     }
                 }
+
+                // Surface any queued approval/question/credential whose
+                // dialog has freed up. Answering a dialog frees it from the
+                // keyboard path, which cannot drain — and the connection may
+                // be quiet for as long as a model call takes, so waiting for
+                // inbound traffic could sit a blocked request past its own
+                // deadline while the user stares at an idle screen.
+                events::drain_queued_dialogs(&ui);
 
                 // Update spinner and elapsed timer
                 spinner_tick.set(spinner_tick.get().wrapping_add(1));

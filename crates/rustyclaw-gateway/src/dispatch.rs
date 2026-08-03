@@ -7,7 +7,6 @@ use anyhow::{Context, Result};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use tokio::sync::Mutex;
 use tracing::{debug, trace};
 
 use rustyclaw_core::gateway::{
@@ -17,11 +16,11 @@ use rustyclaw_core::gateway::{
 use rustyclaw_core::observability::ObserverEvent;
 use rustyclaw_core::tools;
 
-use crate::thread_updates::{send_thread_messages_update, send_threads_update};
+use crate::thread_updates::{send_thread_messages_update_shared, send_threads_update_shared};
 use crate::{
     COMPACTION_THRESHOLD, SharedConfig, SharedCopilotSession, SharedObserver, SharedSkillManager,
-    SharedTaskManager, SharedVault, ToolCancelFlag, auth, errors, helpers, providers,
-    tool_executor,
+    SharedTaskManager, SharedThreadMgr, SharedVault, ToolCancelFlag, auth, errors, helpers,
+    providers, tool_executor,
 };
 use protocol::server::send_frame;
 
@@ -85,32 +84,38 @@ where
     );
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let mut rx_open = true;
+    // The process this call is actually waiting on, announced over the sink
+    // when the exec path spawns it. This is the only attribution used: the
+    // registry is process-global and turns run concurrently, so guessing
+    // "the newest child" — as this used to — could pick another
+    // conversation's process, and the pid in a ToolStatus frame is what the
+    // client's pause/stop/kill controls act on. No announcement, no pid.
+    let mut announced_pid: Option<u32> = None;
     let result = loop {
         tokio::select! {
             chunk = rx.recv(), if rx_open => {
                 match chunk {
                     Some(c) => {
-                        protocol::server::send_tool_output_delta(
-                            writer, tool_id, &c.chunk, c.is_stderr,
-                        )
-                        .await?;
+                        if let Some(pid) = c.pid {
+                            announced_pid = Some(pid);
+                        }
+                        if !c.chunk.is_empty() {
+                            protocol::server::send_tool_output_delta(
+                                writer, tool_id, &c.chunk, c.is_stderr,
+                            )
+                            .await?;
+                        }
                     }
                     None => rx_open = false,
                 }
             }
             _ = ticker.tick() => {
                 let elapsed_ms = started.elapsed().as_millis() as u64;
-                // Attribute the newest child spawned since this call began;
-                // tool calls on this connection run sequentially, so that is
-                // the process this call is waiting on. With multiple
-                // concurrent connections the pick is best-effort (stats
-                // could come from another connection's child) — control
-                // stays safe regardless, since the registry allowlists
-                // every PID it hands out.
-                let proc = rustyclaw_core::exec_status::sample_active()
-                    .into_iter()
-                    .filter(|p| p.elapsed_ms <= elapsed_ms.saturating_add(250))
-                    .min_by_key(|p| p.elapsed_ms);
+                let proc = announced_pid.and_then(|pid| {
+                    rustyclaw_core::exec_status::sample_active()
+                        .into_iter()
+                        .find(|p| p.pid == pid)
+                });
                 let (pid, cpu, mem, state) = match proc {
                     Some(p) => (Some(p.pid), p.cpu_percent, p.memory_bytes, p.state),
                     None => (None, None, None, None),
@@ -127,26 +132,38 @@ where
             res = &mut exec => break res,
         }
     };
-    // Drain chunks pushed just before the tool completed.
+    // Drain chunks pushed just before the tool completed. Announcements are
+    // moot by now — the process has exited — so only real output goes out.
     while let Ok(c) = rx.try_recv() {
-        protocol::server::send_tool_output_delta(writer, tool_id, &c.chunk, c.is_stderr).await?;
+        if !c.chunk.is_empty() {
+            protocol::server::send_tool_output_delta(writer, tool_id, &c.chunk, c.is_stderr)
+                .await?;
+        }
     }
     Ok(result)
+}
+
+/// Why a wait for an `ask_user` answer ended without one.
+enum PromptWaitEnd {
+    /// The user pressed Stop while the question was on screen.
+    Cancelled,
+    /// Nobody answered within the wait window.
+    TimedOut,
+    /// The client went away.
+    Closed,
 }
 
 async fn execute_user_prompt(
     writer: &mut dyn transport::TransportWriter,
     call_id: &str,
     arguments: &serde_json::Value,
-    user_prompt_rx: &Arc<
-        Mutex<
-            tokio::sync::mpsc::Receiver<(
-                String,
-                bool,
-                rustyclaw_core::user_prompt_types::PromptResponseValue,
-            )>,
-        >,
+    user_prompts: &Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
     >,
+    tool_cancel: &ToolCancelFlag,
 ) -> (String, bool) {
     use rustyclaw_core::user_prompt_types::{FormField, PromptOption, PromptType, UserPrompt};
 
@@ -286,19 +303,45 @@ async fn execute_user_prompt(
         prompt_type,
     };
 
+    // Claim the id before the question goes out. A client that answers
+    // instantly would otherwise be answering a call that is not yet waiting,
+    // and its answer would be dropped as unclaimed.
+    let mut pending = user_prompts.register(call_id);
+
     // Send the prompt directly to the TUI (embedded in the binary frame).
     if let Err(e) = protocol::server::send_user_prompt_request(writer, call_id, &prompt).await {
         return (format!("Failed to send user prompt: {}", e), true);
     }
 
-    // Wait for the user's response (with 5 minute timeout).
+    // Wait for the user's response (with 5 minute timeout), watching the
+    // cancel flag throughout: a question is not a modal, so Stop has to end
+    // the wait instead of the user being forced to answer it first. Only this
+    // call's answer can arrive here — another question's goes to the call
+    // that asked it, rather than being consumed and discarded on the way.
     let rx_result = {
-        let mut rx = user_prompt_rx.lock().await;
-        tokio::time::timeout(std::time::Duration::from_secs(300), rx.recv()).await
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(300);
+        loop {
+            if tool_cancel.load(Ordering::Relaxed) {
+                break Err(PromptWaitEnd::Cancelled);
+            }
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break Err(PromptWaitEnd::TimedOut);
+            }
+            // A short poll interval keeps Stop responsive while the wait
+            // itself may last minutes.
+            let tick = std::time::Duration::from_millis(200).min(deadline - now);
+            match tokio::time::timeout(tick, pending.rx()).await {
+                Ok(Ok(answer)) => break Ok(answer),
+                // The claim was displaced, or the connection went away.
+                Ok(Err(_)) => break Err(PromptWaitEnd::Closed),
+                Err(_) => {} // tick elapsed; re-check cancel and keep waiting
+            }
+        }
     };
 
     match rx_result {
-        Ok(Some((id, dismissed, value))) if id == call_id => {
+        Ok((dismissed, value)) => {
             if dismissed {
                 (
                     "User dismissed the prompt without answering.".to_string(),
@@ -322,9 +365,14 @@ async fn execute_user_prompt(
                 }
             }
         }
-        Ok(Some(_)) => ("Mismatched prompt response ID.".to_string(), true),
-        Ok(None) => ("User prompt channel closed.".to_string(), true),
-        Err(_) => ("User prompt timed out after 5 minutes.".to_string(), true),
+        Err(PromptWaitEnd::Cancelled) => (
+            "The user stopped the turn before answering the question.".to_string(),
+            true,
+        ),
+        Err(PromptWaitEnd::Closed) => ("User prompt channel closed.".to_string(), true),
+        Err(PromptWaitEnd::TimedOut) => {
+            ("User prompt timed out after 5 minutes.".to_string(), true)
+        }
     }
 }
 
@@ -334,27 +382,25 @@ async fn execute_dom_query(
     writer: &mut dyn transport::TransportWriter,
     call_id: &str,
     arguments: &serde_json::Value,
-    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
+    dom_queries: &Arc<crate::pending::PendingResponses<(String, bool)>>,
 ) -> (String, bool) {
     let js = arguments
         .get("js")
         .and_then(|v| v.as_str())
         .unwrap_or("document.title");
 
+    let mut pending = dom_queries.register(call_id);
     if let Err(e) = protocol::server::send_dom_query(writer, call_id, js).await {
         return (format!("Failed to send DOM query: {}", e), true);
     }
 
-    // Wait for the client's response (30 second timeout).
-    let rx_result = {
-        let mut rx = dom_query_rx.lock().await;
-        tokio::time::timeout(std::time::Duration::from_secs(30), rx.recv()).await
-    };
+    // Wait for the client's response (30 second timeout). Claimed before the
+    // query goes out, so an instant answer is not dropped as unclaimed.
+    let rx_result = tokio::time::timeout(std::time::Duration::from_secs(30), pending.rx()).await;
 
     match rx_result {
-        Ok(Some((id, result, is_error))) if id == call_id => (result, is_error),
-        Ok(Some(_)) => ("Mismatched DOM query response ID.".to_string(), true),
-        Ok(None) => ("DOM query channel closed.".to_string(), true),
+        Ok(Ok((result, is_error))) => (result, is_error),
+        Ok(Err(_)) => ("DOM query was abandoned.".to_string(), true),
         Err(_) => (
             "DOM query timed out after 30 seconds. The client may not support DOM queries."
                 .to_string(),
@@ -417,19 +463,21 @@ pub(crate) async fn dispatch_text_message(
     tool_cancel: &ToolCancelFlag,
     shared_config: &SharedConfig,
     shared_copilot_session: &SharedCopilotSession,
-    approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
-    user_prompt_rx: &Arc<
-        Mutex<
-            tokio::sync::mpsc::Receiver<(
-                String,
-                bool,
-                rustyclaw_core::user_prompt_types::PromptResponseValue,
-            )>,
-        >,
+    approvals: &Arc<crate::pending::PendingResponses<bool>>,
+    user_prompts: &Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
     >,
-    credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
-    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    credentials: &Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
+    dom_queries: &Arc<crate::pending::PendingResponses<(String, bool)>>,
+    thread_mgr: &SharedThreadMgr,
+    // The thread this turn belongs to, pinned by the caller. Every write
+    // below targets it by id: the connection loop serves ThreadSwitch frames
+    // while this runs, so `foreground()` would follow the user around and
+    // file the answer in whichever thread they moved to.
+    turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
 ) -> Result<()> {
     let mut resolved = match providers::resolve_request(req.clone(), model_ctx) {
@@ -445,6 +493,10 @@ pub(crate) async fn dispatch_text_message(
             send_frame(writer, &error_frame)
                 .await
                 .context("Failed to send error frame")?;
+            // The turn ends here, and its ending must say so: the sink
+            // stamps the thread onto this close-out, and without one the
+            // clients keep the thread marked in-flight forever.
+            protocol::server::send_response_done(writer, false, None).await?;
             return Ok(());
         }
     };
@@ -559,7 +611,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -598,7 +650,12 @@ pub(crate) async fn dispatch_text_message(
         // re-trigger the flush, since compaction — which starts the next
         // cycle — only fires at the (higher) compaction threshold.
         let ends_with_user = resolved.messages.last().is_some_and(|m| m.role == "user");
-        let thread_already_flushed = thread_mgr.foreground().is_some_and(|t| t.memory_flushed);
+        let thread_already_flushed = {
+            let tm = thread_mgr.lock().await;
+            turn_thread
+                .and_then(|id| tm.get(id))
+                .is_some_and(|t| t.memory_flushed)
+        };
         let mut flushed_this_round = false;
         if ends_with_user
             && !thread_already_flushed
@@ -612,10 +669,13 @@ pub(crate) async fn dispatch_text_message(
 
             // Mark as flushed to prevent repeated injections
             memory_flush.mark_flushed();
-            if let Some(thread) = thread_mgr.foreground_mut() {
-                thread.memory_flushed = true;
+            {
+                let mut tm = thread_mgr.lock().await;
+                if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
+                    thread.memory_flushed = true;
+                }
+                crate::helpers::persist_threads(&mut tm, threads_path);
             }
-            crate::helpers::persist_threads(thread_mgr, threads_path);
             flush_pending_resume = true;
             flushed_this_round = true;
 
@@ -639,16 +699,11 @@ pub(crate) async fn dispatch_text_message(
                     // Compacted in-place for this request; also persist the
                     // summary to the thread so the next prompt reuses it
                     // instead of re-compacting the full history again.
-                    if let Some(thread) = thread_mgr.foreground_mut() {
+                    let mut tm = thread_mgr.lock().await;
+                    if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
                         thread.apply_compaction_keeping(outcome.summary, outcome.kept_recent);
                     }
-                    if let Err(e) = thread_mgr.save_to_file(threads_path) {
-                        tracing::warn!(
-                            error = %e,
-                            path = ?threads_path,
-                            "Failed to persist compaction summary to thread history"
-                        );
-                    }
+                    crate::helpers::persist_threads(&mut tm, threads_path);
                 }
                 Ok(None) => {} // nothing to compact
                 Err(err) => {
@@ -660,7 +715,7 @@ pub(crate) async fn dispatch_text_message(
                         &mut resolved,
                         &mut original_api_key,
                         vault,
-                        credential_rx,
+                        credentials,
                         tool_cancel,
                     )
                     .await;
@@ -718,7 +773,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -736,7 +791,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -843,16 +898,19 @@ pub(crate) async fn dispatch_text_message(
                 // Record assistant response in thread history
                 let mut updated_thread_id = None;
                 if !model_resp.text.is_empty() {
-                    if let Some(thread) = thread_mgr.foreground_mut() {
-                        updated_thread_id = Some(thread.id);
-                        thread.add_message(
-                            rustyclaw_core::threads::MessageRole::Assistant,
-                            &model_resp.text,
-                        );
+                    {
+                        let mut tm = thread_mgr.lock().await;
+                        if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
+                            updated_thread_id = Some(thread.id);
+                            thread.add_message(
+                                rustyclaw_core::threads::MessageRole::Assistant,
+                                &model_resp.text,
+                            );
+                        }
+                        // Persist the final assistant turn so reconnecting
+                        // clients see it via ThreadHistoryRequest.
+                        crate::helpers::persist_threads(&mut tm, threads_path);
                     }
-                    // Persist the final assistant turn so reconnecting
-                    // clients see it via ThreadHistoryRequest.
-                    crate::helpers::persist_threads(thread_mgr, threads_path);
                     // Auto-ingest assistant response into Steel Memory
                     #[cfg(feature = "semantic-memory")]
                     {
@@ -869,7 +927,7 @@ pub(crate) async fn dispatch_text_message(
                 }
                 providers::send_response_done(writer).await?;
                 if let Some(thread_id) = updated_thread_id {
-                    send_thread_messages_update(writer, thread_id, thread_mgr).await?;
+                    send_thread_messages_update_shared(writer, thread_id, thread_mgr).await?;
                 }
                 return Ok(());
             } else if finish_reason == "length" {
@@ -880,7 +938,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -898,7 +956,7 @@ pub(crate) async fn dispatch_text_message(
                     &mut resolved,
                     &mut original_api_key,
                     vault,
-                    credential_rx,
+                    credentials,
                     tool_cancel,
                 )
                 .await?
@@ -959,23 +1017,31 @@ pub(crate) async fn dispatch_text_message(
                     (msg, true)
                 }
                 tools::ToolPermission::Ask => {
+                    // Claimed before the request goes out, so an instant
+                    // approval is not dropped as belonging to nobody.
+                    let mut pending_approval = approvals.register(&tc.id);
                     // Send approval request to the TUI and wait for response.
                     protocol::server::send_tool_approval_request(
                         writer, &tc.id, &tc.name, &args_str,
                     )
                     .await?;
 
-                    // Wait for the user's response (with timeout).
-                    let approved = {
-                        let mut rx = approval_rx.lock().await;
-                        match tokio::time::timeout(std::time::Duration::from_secs(120), rx.recv())
-                            .await
-                        {
-                            Ok(Some((id, approved))) if id == tc.id => approved,
-                            Ok(Some(_)) => false, // Mismatched ID — treat as denied
-                            Ok(None) => false,    // Channel closed
-                            Err(_) => false,      // Timeout
-                        }
+                    // Wait for the user's response (with timeout). Only this
+                    // call's answer can arrive: an id belonging to another
+                    // call used to land here, be consumed, and be read as a
+                    // denial — refusing a tool in the user's name while
+                    // destroying the answer meant for its own call.
+                    let approved = match tokio::time::timeout(
+                        std::time::Duration::from_secs(120),
+                        pending_approval.rx(),
+                    )
+                    .await
+                    {
+                        Ok(Ok(approved)) => approved,
+                        // Abandoned, or the connection went away. Denying is
+                        // the safe reading of "no answer".
+                        Ok(Err(_)) => false,
+                        Err(_) => false, // Timeout
                     };
 
                     if !approved {
@@ -991,9 +1057,16 @@ pub(crate) async fn dispatch_text_message(
                             .await?;
 
                         if tools::is_user_prompt_tool(&tc.name) {
-                            execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
+                            execute_user_prompt(
+                                writer,
+                                &tc.id,
+                                &tc.arguments,
+                                user_prompts,
+                                tool_cancel,
+                            )
+                            .await
                         } else if tools::is_dom_query_tool(&tc.name) {
-                            execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
+                            execute_dom_query(writer, &tc.id, &tc.arguments, dom_queries).await
                         } else if tools::is_subagent_run_tool(&tc.name) {
                             let config_snapshot = shared_config.read().await.clone();
                             crate::subagent_runner::execute_subagent_run(
@@ -1025,9 +1098,16 @@ pub(crate) async fn dispatch_text_message(
 
                     // Execute the tool.
                     if tools::is_user_prompt_tool(&tc.name) {
-                        execute_user_prompt(writer, &tc.id, &tc.arguments, user_prompt_rx).await
+                        execute_user_prompt(
+                            writer,
+                            &tc.id,
+                            &tc.arguments,
+                            user_prompts,
+                            tool_cancel,
+                        )
+                        .await
                     } else if tools::is_dom_query_tool(&tc.name) {
-                        execute_dom_query(writer, &tc.id, &tc.arguments, dom_query_rx).await
+                        execute_dom_query(writer, &tc.id, &tc.arguments, dom_queries).await
                     } else if tools::is_subagent_run_tool(&tc.name) {
                         let config_snapshot = shared_config.read().await.clone();
                         crate::subagent_runner::execute_subagent_run(
@@ -1067,18 +1147,30 @@ pub(crate) async fn dispatch_text_message(
                             if let Some(description) =
                                 update.get("description").and_then(|v| v.as_str())
                             {
-                                thread_mgr.set_foreground_description(description);
+                                if let Some(id) = turn_thread {
+                                    thread_mgr.lock().await.set_description(id, description);
+                                }
                                 output = format!("Thread description set to: {}", description);
-                                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                                send_threads_update_shared(writer, thread_mgr, task_mgr, None)
+                                    .await?;
                             }
                         }
                         "set_caption" => {
                             if let Some(caption) = update.get("caption").and_then(|v| v.as_str()) {
-                                if let Some(fg_id) = thread_mgr.foreground_id() {
-                                    thread_mgr.rename(fg_id, caption);
+                                let renamed = {
+                                    let mut tm = thread_mgr.lock().await;
+                                    match turn_thread {
+                                        Some(id) if tm.rename(id, caption) => {
+                                            crate::helpers::persist_threads(&mut tm, threads_path);
+                                            true
+                                        }
+                                        _ => false,
+                                    }
+                                };
+                                if renamed {
                                     output = format!("Thread caption set to: {}", caption);
-                                    send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-                                    crate::helpers::persist_threads(thread_mgr, threads_path);
+                                    send_threads_update_shared(writer, thread_mgr, task_mgr, None)
+                                        .await?;
                                 } else {
                                     output = "No active thread to caption.".to_string();
                                 }
@@ -1092,7 +1184,7 @@ pub(crate) async fn dispatch_text_message(
             // Tools that modify session state should trigger sidebar update
             const SESSION_TOOLS: &[&str] = &["sessions_spawn", "sessions_send", "subagent_run"];
             if SESSION_TOOLS.contains(&tc.name.as_str()) && !is_error {
-                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+                send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
             }
 
             // Notify the client about the result.
@@ -1157,11 +1249,12 @@ pub(crate) async fn dispatch_text_message(
             &tool_results,
         );
 
-        // ── Persist this turn to the foreground thread's history ──
+        // ── Persist this turn to its own thread's history ─────────
         // We store a normalized form (Vec<{id,name,arguments}>) so any
         // client can faithfully replay this round regardless of which
         // provider produced it.
-        if let Some(thread) = thread_mgr.foreground_mut() {
+        let mut tm = thread_mgr.lock().await;
+        if let Some(thread) = turn_thread.and_then(|id| tm.get_mut(id)) {
             let normalized: Vec<serde_json::Value> = model_resp
                 .tool_calls
                 .iter()
@@ -1181,7 +1274,8 @@ pub(crate) async fn dispatch_text_message(
                 thread.add_tool_result(tr.id.clone(), tr.output.clone());
             }
         }
-        crate::helpers::persist_threads(thread_mgr, threads_path);
+        crate::helpers::persist_threads(&mut tm, threads_path);
+        drop(tm);
 
         // ── Bail out if tools keep failing with no progress ─────────
         // A round where every tool call errored may still recover (the
@@ -1221,7 +1315,7 @@ pub(crate) async fn dispatch_text_message(
         &mut resolved,
         &mut original_api_key,
         vault,
-        credential_rx,
+        credentials,
         tool_cancel,
     )
     .await?;
@@ -1366,5 +1460,212 @@ mod live_status_tests {
             }
             other => panic!("expected ToolStatus payload, got {other:?}"),
         }
+    }
+
+    /// Status frames carry only the pid this call announced.
+    ///
+    /// The ticker used to guess "the newest child in the registry", which
+    /// held only while one tool ran at a time. With turns concurrent, the
+    /// newest child can belong to another conversation — and the pid in a
+    /// ToolStatus frame is what the client's pause/stop/kill acts on, so
+    /// the guess let Stop on one conversation kill the other's process.
+    /// No announcement, no pid; an announcement is not echoed as output.
+    #[tokio::test]
+    async fn status_carries_only_the_announced_pid() {
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        // A process this test registers, standing in for a *different*
+        // conversation's child: present in the registry, not announced here.
+        let _other = rustyclaw_core::exec_status::register(std::process::id(), "other turn");
+        let _ = tx.send(rustyclaw_core::tools::ToolOutputChunk {
+            chunk: String::new(),
+            is_stderr: false,
+            pid: None,
+        });
+        let (_out, _is_error) = drive_tool_with_live_frames(
+            &mut writer,
+            "tc3",
+            "execute_command",
+            std::time::Instant::now(),
+            rx,
+            async {
+                tokio::time::sleep(TOOL_STATUS_INITIAL_DELAY + TOOL_STATUS_INTERVAL / 2).await;
+                ("done".to_string(), false)
+            },
+        )
+        .await
+        .expect("drive should succeed");
+
+        assert!(
+            !writer
+                .frames
+                .iter()
+                .any(|f| f.frame_type == ServerFrameType::ToolOutputDelta),
+            "an announcement chunk is not output"
+        );
+        for f in &writer.frames {
+            if let ServerPayload::ToolStatus { pid, .. } = &f.payload {
+                assert_eq!(
+                    *pid, None,
+                    "with no announced pid, the registry must not be guessed from"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod user_prompt_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use rustyclaw_core::user_prompt_types::PromptResponseValue;
+    use std::sync::atomic::AtomicBool;
+
+    /// Writer that drops every frame; these tests are about the wait, not
+    /// about what goes out on the wire.
+    struct NullWriter;
+
+    #[async_trait]
+    impl transport::TransportWriter for NullWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, _frame: &ServerFrame) -> Result<()> {
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    type Prompts = Arc<crate::pending::PendingResponses<(bool, PromptResponseValue)>>;
+
+    fn prompts() -> Prompts {
+        Arc::default()
+    }
+
+    /// Answer `id` once the call has claimed it.
+    ///
+    /// The claim is made inside `execute_user_prompt`, so a test cannot
+    /// deliver up front the way it could when a channel just queued whatever
+    /// was sent: an answer to a call nobody is waiting on now goes nowhere,
+    /// which is the entire point.
+    fn answer_when_claimed(
+        registry: Prompts,
+        id: &'static str,
+        value: (bool, PromptResponseValue),
+    ) {
+        tokio::spawn(async move {
+            while registry.outstanding() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            registry.deliver(id, value);
+        });
+    }
+
+    fn text_question() -> serde_json::Value {
+        serde_json::json!({ "prompt_type": "text", "title": "Which colour?" })
+    }
+
+    /// Answering ends the wait with the user's text.
+    #[tokio::test]
+    async fn an_answer_ends_the_wait() {
+        let registry = prompts();
+        answer_when_claimed(
+            registry.clone(),
+            "tc1",
+            (false, PromptResponseValue::Text("blue".into())),
+        );
+
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+        let (out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &registry, &cancel),
+        )
+        .await
+        .expect("the wait must end once the answer arrives");
+
+        assert_eq!(out, "blue");
+        assert!(!is_error);
+    }
+
+    /// Stop ends a turn parked on a question instead of the user being
+    /// forced to answer it first.
+    #[tokio::test]
+    async fn stop_ends_the_wait_without_an_answer() {
+        let registry = prompts();
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(true));
+
+        let (out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &registry, &cancel),
+        )
+        .await
+        .expect("a cancelled wait must not run to the five-minute timeout");
+
+        assert!(is_error, "the tool call did not get an answer");
+        assert!(out.contains("stopped"), "unhelpful tool result: {out}");
+        assert_eq!(
+            registry.outstanding(),
+            0,
+            "an abandoned question must not leave its id claimed"
+        );
+    }
+
+    /// A cancel that lands while the question is on screen is observed too,
+    /// not just one that beat the question to it.
+    #[tokio::test]
+    async fn stop_lands_while_the_question_is_on_screen() {
+        let registry = prompts();
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+        let flag = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            flag.store(true, Ordering::Relaxed);
+        });
+
+        let (_out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc1", &text_question(), &registry, &cancel),
+        )
+        .await
+        .expect("the wait must notice a cancel that arrives mid-wait");
+
+        assert!(is_error);
+    }
+
+    /// An answer to a question a previous Stop abandoned goes nowhere.
+    ///
+    /// It used to be delivered to whichever question happened to be waiting,
+    /// which consumed it and — at the approval site — read the unrecognised
+    /// id as a denial. Now it is simply not delivered, and the question that
+    /// is waiting still gets its own answer.
+    #[tokio::test]
+    async fn a_stale_answer_does_not_answer_the_current_question() {
+        let registry = prompts();
+        let stale = registry.clone();
+        let fresh = registry.clone();
+        tokio::spawn(async move {
+            while stale.outstanding() == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+            assert!(
+                !stale.deliver(
+                    "old-call",
+                    (false, PromptResponseValue::Text("stale".into()))
+                ),
+                "the abandoned question is not waiting for anything"
+            );
+            fresh.deliver("tc2", (false, PromptResponseValue::Text("fresh".into())));
+        });
+
+        let cancel: ToolCancelFlag = Arc::new(AtomicBool::new(false));
+        let (out, is_error) = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            execute_user_prompt(&mut NullWriter, "tc2", &text_question(), &registry, &cancel),
+        )
+        .await
+        .expect("a stale answer must be dropped, not mistaken for this one");
+
+        assert_eq!(out, "fresh");
+        assert!(!is_error);
     }
 }

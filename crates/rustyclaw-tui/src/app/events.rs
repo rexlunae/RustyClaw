@@ -6,6 +6,25 @@
 
 use rustyclaw_view::PromptAttachment;
 
+/// Who a device-flow sign-in belongs to.
+///
+/// `None` used to stand for two different owners at once — a gateway too
+/// old to attribute its frames *and* a flow this client started itself
+/// (provider sign-in from `/model`). A local flow finishing then read as
+/// "the flow on screen" and tore down another conversation's dialog, while
+/// its own queued entry was never retired and later resurfaced with an
+/// expired code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum DeviceFlowOwner {
+    /// Raised by a turn, attributed to its thread by the core client.
+    Turn(u64),
+    /// From a gateway too old to attribute its frames — such a gateway can
+    /// only run one turn, so it can only have one flow.
+    Unattributed,
+    /// Started by this client itself, with no turn involved.
+    Local,
+}
+
 /// Events pushed from the gateway reader into the iocraft render component.
 #[derive(Debug, Clone)]
 pub(crate) enum GwEvent {
@@ -31,19 +50,29 @@ pub(crate) enum GwEvent {
         summary: String,
         details: Option<String>,
     },
-    StreamStart,
-    Chunk(String),
-    ResponseDone,
-    ThinkingStart,
+    /// A turn opened. Carries the thread the gateway is running it in, so a
+    /// turn started elsewhere — or a refusal for a thread this client is not
+    /// waiting on — can be told apart from the one on screen.
+    StreamStart(Option<u64>),
+    Chunk(Option<u64>, String),
+    /// A turn closed, naming its thread. See [`GwEvent::StreamStart`].
+    ResponseDone(Option<u64>),
+    // Every frame of a turn is tagged with the thread it is running in.
+    // With a turn per thread, reasoning text and tool panels from a
+    // conversation the user is not reading would otherwise be drawn into —
+    // and appended to — the one they are.
+    ThinkingStart(Option<u64>),
     /// A chunk of the model's reasoning text.
-    ThinkingDelta(String),
-    ThinkingEnd,
+    ThinkingDelta(Option<u64>, String),
+    ThinkingEnd(Option<u64>),
     ToolCall {
+        thread_id: Option<u64>,
         id: String,
         name: String,
         arguments: String,
     },
     ToolResult {
+        thread_id: Option<u64>,
         id: String,
         name: String,
         result: String,
@@ -51,24 +80,36 @@ pub(crate) enum GwEvent {
     },
     /// Live status for a still-running tool call (elapsed + process stats).
     ToolStatus {
+        thread_id: Option<u64>,
         id: String,
         status: rustyclaw_core::ui::ToolLiveStatus,
     },
     /// A chunk of live stdout/stderr from a still-running tool.
     ToolOutput {
+        thread_id: Option<u64>,
         id: String,
         chunk: String,
     },
-    /// Gateway requests user approval for a tool call (Ask mode).
+    /// Gateway requests user approval for a tool call (Ask mode). Tagged
+    /// with the asking turn's thread: call ids collide across turns, so
+    /// the tool's result retires its own turn's entry by (thread, id).
     ToolApprovalRequest {
+        thread_id: Option<u64>,
         id: String,
         name: String,
         arguments: String,
     },
-    /// Gateway requests structured user input (ask_user tool).
-    UserPromptRequest(rustyclaw_core::user_prompt_types::UserPrompt),
-    /// Gateway requests an API key or credential from the user.
+    /// Gateway requests structured user input (ask_user tool). Thread-
+    /// tagged like `ToolApprovalRequest`, and for the same reason.
+    UserPromptRequest {
+        thread_id: Option<u64>,
+        prompt: rustyclaw_core::user_prompt_types::UserPrompt,
+    },
+    /// Gateway requests an API key or credential from the user. Tagged with
+    /// the asking turn's thread: a credential wait ending is what ends its
+    /// turn, so the turn's close-out retires requests it left behind.
     CredentialRequest {
+        thread_id: Option<u64>,
         id: String,
         provider: String,
         secret_name: String,
@@ -123,7 +164,6 @@ pub(crate) enum GwEvent {
 
     /// Live message/history update for a thread.
     ThreadMessages {
-        #[allow(dead_code)]
         thread_id: u64,
         messages: Vec<rustyclaw_core::gateway::protocol::types::ChatMessage>,
     },
@@ -153,14 +193,18 @@ pub(crate) enum GwEvent {
         help_url: String,
         help_text: String,
     },
-    /// Show the device flow verification dialog.
+    /// Show the device flow verification dialog. Tagged with the flow's
+    /// owner, so completing or ending one sign-in cannot tear down
+    /// another's.
     DeviceFlowCode {
+        owner: DeviceFlowOwner,
         provider: String,
         url: String,
         code: String,
     },
-    /// Device flow completed — dismiss dialog and store token.
-    DeviceFlowDone,
+    /// Device flow completed — dismiss its dialog and retire its queue
+    /// entry.
+    DeviceFlowDone(DeviceFlowOwner),
     /// Device flow succeeded — store token and proceed to model selection.
     DeviceFlowToken {
         provider: String,

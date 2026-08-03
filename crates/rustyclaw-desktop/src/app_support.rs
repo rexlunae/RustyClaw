@@ -19,8 +19,16 @@ use rustyclaw_view::{SecretsDialogData, SwarmAgentData, SwarmData};
 /// are coalesced into a single `Chunks` entry to reduce signal writes,
 /// while preserving the ordering of non-chunk events relative to chunks.
 pub(crate) enum BufferEntry {
-    Event(GatewayEvent),
+    Event {
+        /// The thread whose turn produced this, when it is turn-scoped.
+        thread_id: Option<u64>,
+        event: GatewayEvent,
+    },
     Chunks {
+        /// Coalescing is per thread: with a turn running in each of two
+        /// threads, merging their chunks by adjacency alone would splice two
+        /// different answers into one string.
+        thread_id: Option<u64>,
         text: String,
         count: u32,
         bytes: usize,
@@ -76,7 +84,11 @@ pub(crate) async fn connect_to_gateway(
 }
 
 /// Handle a gateway event.
-pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppState>) {
+pub(crate) fn handle_gateway_event(
+    thread_id: Option<u64>,
+    event: GatewayEvent,
+    mut state: Signal<AppState>,
+) {
     match event {
         GatewayEvent::Connected {
             agent,
@@ -96,7 +108,14 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.is_processing = false;
             s.is_streaming = false;
             s.is_thinking = false;
-            s.streaming_thread_id = None;
+            s.in_flight.clear();
+            s.unowned_turn_in_flight = false;
+            // Requests queued under the old connection can never be
+            // answered on this one.
+            s.clear_user_prompt();
+            s.pending_tool_approvals.clear();
+            s.pending_credential_requests.clear();
+            s.pending_device_flows.clear();
             // The gateway repoints the workspace at the restored foreground
             // thread's directory on connect, which need not be where the
             // previous session's editor cache came from.
@@ -122,7 +141,16 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             s.is_processing = false;
             s.is_streaming = false;
             s.is_thinking = false;
-            s.streaming_thread_id = None;
+            s.in_flight.clear();
+            s.unowned_turn_in_flight = false;
+            // Including anything it was waiting on: the turns that asked
+            // are gone, so no tool result will ever retire these and an
+            // answer would go into a closed connection. Leaving them up
+            // would be an invitation to answer nothing.
+            s.clear_user_prompt();
+            s.pending_tool_approvals.clear();
+            s.pending_credential_requests.clear();
+            s.pending_device_flows.clear();
         }
         GatewayEvent::AuthRequired => {
             state.write().connection = ConnectionStatus::Authenticating;
@@ -152,37 +180,61 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 .write()
                 .push_notice(MessageRole::Error, format!("Model error: {}", message));
         }
-        // Live stream events carry no thread id; they belong to the thread
-        // that submitted the request (`streaming_thread_id`). When the user
-        // has switched away from it, they must not touch the on-screen view
-        // or its indicators — the backgrounded thread's transcript arrives
-        // via the gateway's history snapshot on completion.
-        GatewayEvent::StreamStart => {
+        // A turn opens by naming its thread, and closes the same way. The
+        // frames in between carry no id — they belong to the turn, and the
+        // turn's thread is `streaming_thread_id`. When the user has switched
+        // away from it, they must not touch the on-screen view or its
+        // indicators; the backgrounded thread's transcript arrives via the
+        // gateway's history snapshot on completion.
+        GatewayEvent::StreamStart {
+            thread_id: announced,
+        } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            // The gateway's answer to "which thread is this turn in" beats
+            // the guess made when the message was sent.
+            s.adopt_stream_thread(announced);
+            if s.frame_targets_view(announced) {
                 s.start_assistant_message();
             }
         }
         GatewayEvent::ThinkingStart => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.start_thinking_message();
             }
         }
         GatewayEvent::ThinkingEnd => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.end_thinking_message();
             }
         }
         GatewayEvent::Chunk { delta } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.append_to_current_message(&delta);
             }
         }
-        GatewayEvent::ResponseDone => {
-            state.write().response_done();
+        GatewayEvent::ResponseDone {
+            thread_id: announced,
+        } => {
+            let mut s = state.write();
+            // Only the turn being tracked can end it. A close-out naming a
+            // different thread — a refused message, a turn started from
+            // another client on the same agent — would otherwise retire the
+            // live response, taking the Stop button and the working
+            // indicator with it while the model is still going.
+            if s.frame_is_for_current_turn(announced) {
+                s.response_done(announced);
+            }
+            // The turn is over either way; credential requests and sign-in
+            // flows it was waiting on can no longer be answered.
+            s.retire_credentials_for_thread(announced);
+            s.retire_device_flows_for_thread(announced);
+            // Nor can approvals and questions it never resolved — a turn
+            // displaced by a newer message dies mid-wait, and this
+            // close-out is the only retirement its requests will get.
+            s.retire_requests_for_thread(announced);
         }
         GatewayEvent::ToolCall {
             id,
@@ -190,7 +242,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             arguments,
         } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.add_tool_call(id, name, arguments);
                 // A tool call marks the end of this round's text stream; the
                 // gateway is now executing the tool. Switch the indicator from
@@ -203,7 +255,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::ToolOutput { id, chunk, .. } => {
             // Live output from a running tool: update its panel in place.
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.append_tool_output(&id, &chunk);
             }
         }
@@ -214,9 +266,21 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             is_error,
         } => {
             let mut s = state.write();
+            // The `ask_user` tool's result means the gateway has stopped
+            // waiting — answered, cancelled, or timed out. Retire the card
+            // even if the user never touched it, and regardless of which
+            // thread is on screen. Scoped to the result's own thread: the
+            // id is a colliding call id, and after the user answered this
+            // entry an id-only match would discard another turn's
+            // still-unanswered request instead.
+            s.clear_user_prompt_if(thread_id, &id);
+            // Same contract for approvals: this result arrives whether the
+            // user answered or the gateway gave up, and an abandoned entry
+            // at the head of the queue would hide every later request.
+            s.retire_tool_approval(thread_id, &id);
             // A failed tool call already surfaces inline: the tool panel
             // shows Failed status with the full error result. No banner.
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.set_tool_result(&id, result, is_error);
             }
         }
@@ -231,7 +295,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             message,
         } => {
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.set_tool_live_status(
                     &id,
                     rustyclaw_core::ui::ToolLiveStatus {
@@ -250,7 +314,14 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             name,
             arguments,
         } => {
-            state.write().pending_tool_approval = Some((id, name, arguments));
+            // Queued, not overwritten: a second turn's request while one is on
+            // screen waits its turn. Overwriting meant the first was never
+            // shown again, and its two-minute timeout read as a denial of a
+            // tool the user never saw.
+            state
+                .write()
+                .pending_tool_approvals
+                .push_back((thread_id, id, name, arguments));
         }
         GatewayEvent::ThreadsUpdate {
             threads,
@@ -261,7 +332,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                 foreground_id = ?foreground_id,
                 "ThreadsUpdate received"
             );
-            state.write().threads = threads
+            let mapped: Vec<ThreadInfo> = threads
                 .into_iter()
                 .map(|t| ThreadInfo {
                     id: t.id,
@@ -274,7 +345,21 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
                     working_dir: t.working_dir,
                 })
                 .collect();
-            state.write().set_foreground_thread(foreground_id);
+            let mut s = state.write();
+            // The status column is derived from each thread's turn markers
+            // on the gateway, so "Streaming" is authoritative: a turn is
+            // running there whether or not this client saw it start — a
+            // reconnect, another client's message, or a turn the gateway
+            // resumed after a restart. Seed the in-flight set from it
+            // before the foreground derives the indicators, so Stop and
+            // the composer gate come up right. Add-only: removal belongs
+            // to each turn's own close-out, and clearing here would race
+            // a message this client just sent.
+            for t in mapped.iter().filter(|t| t.status == "Streaming") {
+                s.in_flight.insert(t.id);
+            }
+            s.threads = mapped;
+            s.set_foreground_thread(foreground_id);
         }
         GatewayEvent::PluginsUpdate { plugins } => {
             tracing::info!(count = plugins.len(), "PluginsUpdate received");
@@ -445,7 +530,10 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             state.write().hydrate_thread_messages(thread_id, messages);
         }
         GatewayEvent::UserPromptRequest { id: _, prompt } => {
-            state.write().pending_user_prompt = Some(prompt);
+            // Tagged with the turn that asked it, so a question from a
+            // conversation the user is not looking at waits there rather
+            // than appearing in the one they are.
+            state.write().set_user_prompt(prompt, thread_id);
         }
         GatewayEvent::CredentialRequest {
             id,
@@ -453,13 +541,29 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             secret_name,
             message,
         } => {
-            state.write().pending_credential_request = Some((id, provider, secret_name, message));
+            // Tagged with the asking turn's thread: a credential wait
+            // ending is what ends its turn, so the turn's close-out is the
+            // signal that this request can no longer be answered.
+            state.write().pending_credential_requests.push_back((
+                thread_id,
+                id,
+                provider,
+                secret_name,
+                message,
+            ));
         }
         GatewayEvent::DeviceFlowStart { url, code, message } => {
-            state.write().pending_device_flow = Some((url, code, message));
+            // Tagged with the turn that started the flow, and queued: two
+            // conversations can both need to sign in, and dismissing this
+            // dialog aims a Cancel at the flow's own turn — not at whatever
+            // happens to be on screen.
+            state
+                .write()
+                .pending_device_flows
+                .push_back((thread_id, url, code, message));
         }
         GatewayEvent::DeviceFlowComplete => {
-            state.write().pending_device_flow = None;
+            state.write().retire_completed_device_flow(thread_id);
         }
         GatewayEvent::SecretsListResult { ok, entries } => {
             if ok {
@@ -576,7 +680,7 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
             // Accumulate the reasoning text into the open thinking block so
             // the transcript can show *why* the agent did what it did.
             let mut s = state.write();
-            if s.stream_targets_foreground() {
+            if s.frame_targets_view(thread_id) {
                 s.append_thinking(&delta);
             }
         }
@@ -601,7 +705,16 @@ pub(crate) fn handle_gateway_event(event: GatewayEvent, mut state: Signal<AppSta
         GatewayEvent::Error { message } => {
             let mut s = state.write();
             s.push_notice(MessageRole::Error, message);
-            s.is_processing = false;
+            // Fallback for gateways that never name their turns: with no
+            // tracked turns there is no close-out coming, and this is the
+            // only thing standing between an error and a stuck composer.
+            // When turns are tracked, retirement belongs to the error's own
+            // `ResponseDone` — clearing here would take the working state
+            // off a conversation that is still answering whenever some
+            // *other* turn errors.
+            if s.in_flight.is_empty() {
+                s.is_processing = false;
+            }
         }
         GatewayEvent::Info { message } => {
             state.write().push_notice(MessageRole::Info, message);

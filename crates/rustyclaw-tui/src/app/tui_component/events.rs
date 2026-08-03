@@ -5,11 +5,12 @@ use std::sync::mpsc as sync_mpsc;
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Instant;
 
+use iocraft::prelude::State;
 use rustyclaw_view::tracing;
 
 use super::display_message_from_gateway;
 use super::state;
-use crate::app::{GwEvent, PanelKind, UserInput};
+use crate::app::{DeviceFlowOwner, GwEvent, PanelKind, UserInput};
 use crate::types::DisplayMessage;
 
 type UserTx = Arc<StdMutex<Option<sync_mpsc::Sender<UserInput>>>>;
@@ -36,6 +37,190 @@ fn close_open_thinking(m: &mut Vec<DisplayMessage>, duration_ms: Option<u64>) ->
     true
 }
 
+/// Point the view's streaming indicators at `incoming`.
+///
+/// `streaming`, the elapsed timer and `streaming_buf` are one set shared by
+/// the whole view, so they only ever describe the thread being shown. When
+/// the view moves they are stale — nothing else clears them, since a
+/// close-out for the thread that left is ignored precisely because it is no
+/// longer on screen, and the spinner would run forever.
+///
+/// Clearing alone is not enough either: `streaming` is what Esc is gated on,
+/// so a conversation still answering when the user returns to it would show
+/// no progress and could not be stopped at all. The flag is set from what is
+/// actually running.
+///
+/// The partial text is dropped in both directions — the answer so far lives
+/// in the transcript, and the gateway's history snapshot is what makes a
+/// returned-to conversation whole.
+fn rebase_view_streaming(
+    incoming: Option<u64>,
+    in_flight: &std::collections::HashSet<u64>,
+    streaming: &mut State<bool>,
+    stream_start: &mut State<Option<Instant>>,
+    elapsed: &mut State<String>,
+    streaming_buf: &mut State<String>,
+) {
+    let still_answering = incoming.is_some_and(|thread| in_flight.contains(&thread));
+    streaming.set(still_answering);
+    stream_start.set(still_answering.then(Instant::now));
+    elapsed.set(String::new());
+    streaming_buf.set(String::new());
+}
+
+/// Whether a turn-scoped frame from `thread_id` belongs to the thread on
+/// screen.
+///
+/// The TUI shows one thread at a time and keeps a single streaming buffer, so
+/// "which turn should render" has exactly one right answer: the one running
+/// in the foreground thread. Tracking it in a separate slot could only ever
+/// disagree — the slot followed whichever turn started last, so opening a
+/// second turn elsewhere silently stole the screen from the first.
+///
+/// `None` is a gateway too old to attribute its frames, and is trusted.
+fn renders_here(thread_id: Option<u64>, foreground: Option<u64>) -> bool {
+    match (thread_id, foreground) {
+        (Some(announced), Some(on_screen)) => announced == on_screen,
+        _ => true,
+    }
+}
+
+/// Surface the next queued request whenever its dialog is free.
+///
+/// Requests only ever enqueue; this is the one place a dialog is populated,
+/// so a second request arriving while one is on screen waits instead of
+/// overwriting it. Called before every event — including ones whose arms
+/// return early — and from the poll loop's timer tick, because the trigger
+/// that frees a dialog is a keypress, and the connection can stay quiet for
+/// as long as a model call takes: waiting for inbound traffic could sit a
+/// blocked request past its own deadline while the user stares at an idle
+/// screen.
+pub(super) fn drain_queued_dialogs(ui: &state::Ui) {
+    let mut show_tool_approval = ui.show_tool_approval;
+    let mut queued_tool_approvals = ui.queued_tool_approvals;
+    let mut tool_approval_thread = ui.tool_approval_thread;
+    let mut tool_approval_id = ui.tool_approval_id;
+    let mut tool_approval_name = ui.tool_approval_name;
+    let mut tool_approval_args = ui.tool_approval_args;
+    let mut tool_approval_selected = ui.tool_approval_selected;
+    let mut show_user_prompt = ui.show_user_prompt;
+    let mut queued_user_prompts = ui.queued_user_prompts;
+    let mut user_prompt_thread = ui.user_prompt_thread;
+    let mut user_prompt_id = ui.user_prompt_id;
+    let mut user_prompt_title = ui.user_prompt_title;
+    let mut user_prompt_desc = ui.user_prompt_desc;
+    let mut user_prompt_input = ui.user_prompt_input;
+    let mut user_prompt_type = ui.user_prompt_type;
+    let mut user_prompt_selected = ui.user_prompt_selected;
+    let mut user_prompt_checked = ui.user_prompt_checked;
+    let mut show_credential_request = ui.show_credential_request;
+    let mut queued_credentials = ui.queued_credentials;
+    let mut credential_request_id = ui.credential_request_id;
+    let mut credential_request_provider = ui.credential_request_provider;
+    let mut credential_request_secret_name = ui.credential_request_secret_name;
+    let mut credential_request_message = ui.credential_request_message;
+    let mut credential_request_input = ui.credential_request_input;
+    let mut credential_request_thread = ui.credential_request_thread;
+    let mut show_device_flow = ui.show_device_flow;
+    let mut queued_device_flows = ui.queued_device_flows;
+    let mut device_flow_owner = ui.device_flow_owner;
+    let mut device_flow_provider = ui.device_flow_provider;
+    let mut device_flow_url = ui.device_flow_url;
+    let mut device_flow_code = ui.device_flow_code;
+    let mut device_flow_tick = ui.device_flow_tick;
+    let mut device_flow_browser_opened = ui.device_flow_browser_opened;
+
+    if !show_tool_approval.get() {
+        let mut queue = queued_tool_approvals.read().clone();
+        if !queue.is_empty() {
+            let (owner, id, name, arguments) = queue.remove(0);
+            queued_tool_approvals.set(queue);
+            tool_approval_thread.set(owner);
+            tool_approval_id.set(id);
+            tool_approval_name.set(name);
+            tool_approval_args.set(arguments);
+            tool_approval_selected.set(true);
+            show_tool_approval.set(true);
+        }
+    }
+    if !show_user_prompt.get() {
+        let mut queue = queued_user_prompts.read().clone();
+        if !queue.is_empty() {
+            let (owner, prompt) = queue.remove(0);
+            queued_user_prompts.set(queue);
+            user_prompt_thread.set(owner);
+            user_prompt_id.set(prompt.id.clone());
+            user_prompt_title.set(prompt.title.clone());
+            user_prompt_desc.set(prompt.description.clone().unwrap_or_default());
+            user_prompt_input.set(String::new());
+            user_prompt_type.set(Some(prompt.prompt_type.clone()));
+            let default_sel = match &prompt.prompt_type {
+                rustyclaw_core::user_prompt_types::PromptType::Select { default, .. } => {
+                    default.unwrap_or(0)
+                }
+                rustyclaw_core::user_prompt_types::PromptType::Confirm { default } => {
+                    if *default {
+                        0
+                    } else {
+                        1
+                    }
+                }
+                _ => 0,
+            };
+            user_prompt_selected.set(default_sel);
+            let checked = match &prompt.prompt_type {
+                rustyclaw_core::user_prompt_types::PromptType::MultiSelect {
+                    options,
+                    defaults,
+                } => {
+                    let mut checked = vec![false; options.len()];
+                    for &i in defaults {
+                        if let Some(slot) = checked.get_mut(i) {
+                            *slot = true;
+                        }
+                    }
+                    checked
+                }
+                _ => Vec::new(),
+            };
+            user_prompt_checked.set(checked);
+            show_user_prompt.set(true);
+        }
+    }
+    if !show_credential_request.get() {
+        let mut queue = queued_credentials.read().clone();
+        if !queue.is_empty() {
+            let (thread, id, provider, secret_name, message) = queue.remove(0);
+            queued_credentials.set(queue);
+            credential_request_thread.set(thread);
+            credential_request_id.set(id);
+            credential_request_provider.set(provider);
+            credential_request_secret_name.set(secret_name);
+            credential_request_message.set(message);
+            credential_request_input.set(String::new());
+            show_credential_request.set(true);
+        }
+    }
+    if !show_device_flow.get() {
+        let mut queue = queued_device_flows.read().clone();
+        if !queue.is_empty() {
+            let (owner, provider, url, code) = queue.remove(0);
+            queued_device_flows.set(queue);
+            device_flow_owner.set(Some(owner));
+            device_flow_provider.set(provider);
+            device_flow_url.set(url.clone());
+            device_flow_code.set(code);
+            device_flow_tick.set(0);
+            // Opened when the dialog surfaces, not when the request was
+            // queued — the user should meet the browser tab and the code
+            // together.
+            crate::components::device_flow_dialog::open_url_in_browser(&url);
+            device_flow_browser_opened.set(true);
+            show_device_flow.set(true);
+        }
+    }
+}
+
 /// Apply a single gateway event to the UI state bundle.
 pub(super) fn apply_gw_event(
     ev: GwEvent,
@@ -43,6 +228,7 @@ pub(super) fn apply_gw_event(
     needs_hatching: bool,
     tx_for_history: &UserTx,
 ) {
+    let ui_for_drain = ui;
     #[allow(unused_variables, unused_mut)]
     let state::Ui {
         mut messages,
@@ -66,6 +252,7 @@ pub(super) fn apply_gw_event(
         mut auth_code,
         mut auth_error,
         mut show_tool_approval,
+        mut tool_approval_thread,
         mut tool_approval_id,
         mut tool_approval_name,
         mut tool_approval_args,
@@ -85,6 +272,7 @@ pub(super) fn apply_gw_event(
         mut pairing_port,
         mut pairing_error,
         mut show_user_prompt,
+        mut user_prompt_thread,
         mut user_prompt_id,
         mut user_prompt_title,
         mut user_prompt_desc,
@@ -98,6 +286,7 @@ pub(super) fn apply_gw_event(
         mut credential_request_secret_name,
         mut credential_request_message,
         mut credential_request_input,
+        mut credential_request_thread,
         mut show_provider_selector,
         mut provider_selector_items,
         mut provider_selector_ids,
@@ -133,6 +322,12 @@ pub(super) fn apply_gw_event(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
+        mut in_flight,
+        mut queued_tool_approvals,
+        mut queued_user_prompts,
+        mut queued_credentials,
+        mut queued_device_flows,
+        mut device_flow_owner,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -186,6 +381,7 @@ pub(super) fn apply_gw_event(
         mut show_logs_dialog,
         mut logs_data,
     } = ui;
+    drain_queued_dialogs(&ui_for_drain);
     match ev {
         GwEvent::AuthChallenge => {
             // Gateway wants TOTP — show the dialog
@@ -206,12 +402,52 @@ pub(super) fn apply_gw_event(
             gw_status.set(rustyclaw_core::types::GatewayStatus::Disconnected);
             show_auth_dialog.set(false);
             active_process.set(None);
+            // Every turn died with the connection. Leaving them recorded
+            // re-arms the spinner — and the Esc gate — for replies that can
+            // never arrive, on every later visit to those threads.
+            in_flight.set(std::collections::HashSet::new());
+            // The queued requests died with their turns: nothing will ever
+            // retire them, and an answer would go into a closed connection.
+            // Left in place, the first event after reconnect would drain a
+            // stale request into a dialog.
+            queued_tool_approvals.set(Vec::new());
+            queued_user_prompts.set(Vec::new());
+            queued_credentials.set(Vec::new());
+            queued_device_flows.set(Vec::new());
+            device_flow_owner.set(None);
+            // The requests already drained into dialogs died with their
+            // turns too; a box left on screen would swallow keyboard input
+            // for an answer that has nowhere to go.
+            show_tool_approval.set(false);
+            show_user_prompt.set(false);
+            show_credential_request.set(false);
+            credential_request_thread.set(None);
+            show_device_flow.set(false);
+            device_flow_browser_opened.set(false);
+            streaming.set(false);
+            stream_start.set(None);
+            elapsed.set(String::new());
+            streaming_buf.set(String::new());
             let mut m = messages.read().clone();
             m.push(DisplayMessage::warning(format!("Disconnected: {}", reason)));
             messages.set(m);
         }
         GwEvent::Connected => {
             gw_status.set(rustyclaw_core::types::GatewayStatus::Connected);
+            // A fresh session has nothing in flight, whatever the previous
+            // one left behind.
+            in_flight.set(std::collections::HashSet::new());
+            queued_tool_approvals.set(Vec::new());
+            queued_user_prompts.set(Vec::new());
+            queued_credentials.set(Vec::new());
+            queued_device_flows.set(Vec::new());
+            device_flow_owner.set(None);
+            show_tool_approval.set(false);
+            show_user_prompt.set(false);
+            show_credential_request.set(false);
+            credential_request_thread.set(None);
+            show_device_flow.set(false);
+            device_flow_browser_opened.set(false);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::info("Gateway connected."));
             messages.set(m);
@@ -280,12 +516,18 @@ pub(super) fn apply_gw_event(
                 auth_code.set(String::new());
                 auth_error.set(String::new());
             }
-            // Always stop the spinner / streaming state so
-            // the TUI doesn't get stuck in "Thinking…" after
-            // a provider error (e.g. 400 Bad Request).
-            streaming.set(false);
-            stream_start.set(None);
-            elapsed.set(String::new());
+            // Fallback for gateways that never name their turns: with no
+            // tracked turns there is no close-out coming, and this is what
+            // keeps a provider error (e.g. 400 Bad Request) from leaving
+            // the spinner stuck in "Thinking…". When turns are tracked,
+            // retirement belongs to the error's own `ResponseDone` —
+            // stopping here would blank the on-screen turn's progress
+            // whenever some *other* turn errors.
+            if in_flight.read().is_empty() {
+                streaming.set(false);
+                stream_start.set(None);
+                elapsed.set(String::new());
+            }
             streaming_buf.set(String::new());
 
             let mut m = messages.read().clone();
@@ -300,7 +542,28 @@ pub(super) fn apply_gw_event(
             m.push(msg);
             messages.set(m);
         }
-        GwEvent::StreamStart => {
+        GwEvent::StreamStart(thread_id) => {
+            // Nothing focused means the gateway elected a thread for this
+            // turn; follow it onto the screen. Otherwise the thread on
+            // screen is the answer to "which turn should render", and a
+            // turn opening anywhere else must not move it — that is what a
+            // second slot got wrong: adopting every announcement in turn,
+            // it ended up naming whichever turn started last rather than
+            // the one the user is reading.
+            if foreground_thread_id.get().is_none() && thread_id.is_some() {
+                foreground_thread_id.set(thread_id);
+            }
+            // Recorded whether or not it is on screen: coming back to a
+            // conversation that is still answering has to restore its
+            // spinner, and Esc is gated on that same flag.
+            if let Some(thread) = thread_id {
+                let mut running = in_flight.read().clone();
+                running.insert(thread);
+                in_flight.set(running);
+            }
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             streaming.set(true);
             // Keep the earlier start time if we already
             // began timing on user submit.
@@ -309,7 +572,15 @@ pub(super) fn apply_gw_event(
             }
             streaming_buf.set(String::new());
         }
-        GwEvent::Chunk(text) => {
+        GwEvent::Chunk(thread_id, text) => {
+            // A chunk from a turn running in a thread that is not on screen
+            // must not join this answer: one `streaming_buf` is shared, so
+            // appending it would splice two replies into one message. That
+            // thread's transcript arrives whole when the user switches to
+            // it.
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             let mut buf = streaming_buf.read().clone();
             buf.push_str(&text);
             streaming_buf.set(buf);
@@ -326,7 +597,77 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ResponseDone => {
+        GwEvent::ResponseDone(thread_id) => {
+            // Retired before the render gate: a turn that finished off-screen
+            // is no longer running, and returning to it must not show a
+            // spinner for an answer that is already complete.
+            if let Some(thread) = thread_id {
+                let mut running = in_flight.read().clone();
+                running.remove(&thread);
+                in_flight.set(running);
+                // Credential requests and sign-in flows the ended turn was
+                // waiting on can no longer be answered — their waits ending
+                // is what ends the turn, so this close-out retires them.
+                let mut queue = queued_credentials.read().clone();
+                let before = queue.len();
+                queue.retain(|(owner, ..)| *owner != Some(thread));
+                if queue.len() != before {
+                    queued_credentials.set(queue);
+                }
+                let mut flows = queued_device_flows.read().clone();
+                let before = flows.len();
+                flows.retain(|(owner, ..)| *owner != DeviceFlowOwner::Turn(thread));
+                if flows.len() != before {
+                    queued_device_flows.set(flows);
+                }
+                if show_device_flow.get()
+                    && device_flow_owner.get() == Some(DeviceFlowOwner::Turn(thread))
+                {
+                    show_device_flow.set(false);
+                    device_flow_browser_opened.set(false);
+                    device_flow_owner.set(None);
+                }
+                // The displayed credential request left the queue when the
+                // dialog drained it, so the retain above cannot reach it —
+                // without this the password box outlives the request and
+                // swallows an answer nobody is waiting for.
+                if show_credential_request.get() && credential_request_thread.get() == Some(thread)
+                {
+                    show_credential_request.set(false);
+                    credential_request_thread.set(None);
+                }
+                // Approvals and questions the ended turn never resolved die
+                // with it too. Normally their own ToolResult retires them; a
+                // turn displaced by a newer message in its thread is aborted
+                // mid-wait and never sends one, so the close-out the gateway
+                // emits on its behalf is the only retirement they will get —
+                // queued or already on screen.
+                let mut approvals = queued_tool_approvals.read().clone();
+                let before = approvals.len();
+                approvals.retain(|(owner, ..)| *owner != Some(thread));
+                if approvals.len() != before {
+                    queued_tool_approvals.set(approvals);
+                }
+                if show_tool_approval.get() && tool_approval_thread.get() == Some(thread) {
+                    show_tool_approval.set(false);
+                }
+                let mut prompts = queued_user_prompts.read().clone();
+                let before = prompts.len();
+                prompts.retain(|(owner, _)| *owner != Some(thread));
+                if prompts.len() != before {
+                    queued_user_prompts.set(prompts);
+                }
+                if show_user_prompt.get() && user_prompt_thread.get() == Some(thread) {
+                    show_user_prompt.set(false);
+                }
+            }
+            // Only the turn on screen can end what is on screen. A close-out
+            // from a turn running elsewhere would stop the spinner and file
+            // this half-streamed answer as finished while it is still being
+            // written.
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             // Capture the accumulated assistant text and
             // send it back to the tokio loop so it gets
             // appended to the conversation history.
@@ -357,7 +698,11 @@ pub(super) fn apply_gw_event(
                 }
             }
         }
-        GwEvent::ThinkingStart => {
+        GwEvent::ThinkingStart(thread_id) => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Thinking is a form of streaming — show spinner
             streaming.set(true);
             if stream_start.get().is_none() {
@@ -371,7 +716,11 @@ pub(super) fn apply_gw_event(
             m.push(DisplayMessage::thinking(""));
             messages.set(m);
         }
-        GwEvent::ThinkingDelta(delta) => {
+        GwEvent::ThinkingDelta(thread_id, delta) => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Accumulate the reasoning text into the open thinking block
             // so the user can expand it later and see *why* the agent did
             // what it did.
@@ -388,7 +737,11 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ThinkingEnd => {
+        GwEvent::ThinkingEnd(thread_id) => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Thinking done, but streaming may continue with chunks.
             // Don't clear streaming here — just close out the thinking
             // block: stamp its duration and fold it to a one-line gist
@@ -430,10 +783,14 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::ToolCall {
+            thread_id,
             id,
             name,
             arguments,
         } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             let mut started = tool_started.read().clone();
             started.insert(id.clone(), Instant::now());
             tool_started.set(started);
@@ -452,7 +809,15 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ToolStatus { id, status } => {
+        GwEvent::ToolStatus {
+            thread_id,
+            id,
+            status,
+        } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Track the controllable process (if any) behind the running
             // call so the inline pause/stop/kill keys know their target.
             active_process.set(status.pid.map(|pid| super::state::ActiveProcess {
@@ -468,7 +833,15 @@ pub(super) fn apply_gw_event(
             }
             messages.set(m);
         }
-        GwEvent::ToolOutput { id, chunk } => {
+        GwEvent::ToolOutput {
+            thread_id,
+            id,
+            chunk,
+        } => {
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
+
             // Live output from a running tool: fold it into that tool's
             // panel so the row updates in place while the process runs.
             let mut m = messages.read().clone();
@@ -480,11 +853,71 @@ pub(super) fn apply_gw_event(
             }
         }
         GwEvent::ToolResult {
+            thread_id,
             id,
             name,
             result,
             is_error,
         } => {
+            // This result arrives whether the user answered or the gateway
+            // gave up waiting; either way nobody is listening for an
+            // approval of this call any more. An abandoned entry left at
+            // the head of the queue would hide every later request, each of
+            // which then times out unseen as a denial. Retired before the
+            // render gate: a background turn's approvals die too.
+            // Oldest holder of the id first, and only one: call ids like
+            // `call_0` collide across concurrent turns, and the gateway
+            // resolves its waiters oldest-first. The displayed request was
+            // drained from the head of the queue, so it is older than any
+            // queued entry sharing its id — a blanket removal would take a
+            // second turn's request down with the one this result ends.
+            // …and only within the result's own turn: after the user
+            // answered this turn's request, an id-only match would reach
+            // across and remove another turn's still-unanswered entry.
+            // `None` is an old gateway, which runs one turn and can speak
+            // for anything.
+            let speaks_for = |owner: Option<u64>| thread_id.is_none() || owner == thread_id;
+            if show_tool_approval.get()
+                && *tool_approval_id.read() == id
+                && speaks_for(tool_approval_thread.get())
+            {
+                show_tool_approval.set(false);
+            } else {
+                let mut queue = queued_tool_approvals.read().clone();
+                if let Some(pos) = queue
+                    .iter()
+                    .position(|(owner, queued_id, ..)| queued_id == &id && speaks_for(*owner))
+                {
+                    queue.remove(pos);
+                    queued_tool_approvals.set(queue);
+                }
+            }
+            // Same contract for `ask_user`: the prompt id is its tool-call
+            // id, and this result arrives whether the user answered, Stop
+            // was pressed, or the five-minute wait expired. A dead card
+            // left up would block every question queued behind it — and
+            // swallow the keyboard, since normal input is suppressed while
+            // a prompt is shown.
+            // Dialog first, then oldest queued — same FIFO-per-id contract
+            // as the approvals above.
+            if show_user_prompt.get()
+                && *user_prompt_id.read() == id
+                && speaks_for(user_prompt_thread.get())
+            {
+                show_user_prompt.set(false);
+            } else {
+                let mut queue = queued_user_prompts.read().clone();
+                if let Some(pos) = queue
+                    .iter()
+                    .position(|(owner, prompt)| prompt.id == id && speaks_for(*owner))
+                {
+                    queue.remove(pos);
+                    queued_user_prompts.set(queue);
+                }
+            }
+            if !renders_here(thread_id, foreground_thread_id.get()) {
+                return;
+            }
             let mut started = tool_started.read().clone();
             let duration_ms = started.remove(&id).map(|t| t.elapsed().as_millis() as u64);
             tool_started.set(started);
@@ -524,63 +957,26 @@ pub(super) fn apply_gw_event(
             messages.set(m);
         }
         GwEvent::ToolApprovalRequest {
+            thread_id,
             id,
             name,
             arguments,
         } => {
-            // Show tool approval dialog
-            tool_approval_id.set(id);
-            tool_approval_name.set(name.clone());
-            tool_approval_args.set(arguments.clone());
-            tool_approval_selected.set(true);
-            show_tool_approval.set(true);
+            let mut queue = queued_tool_approvals.read().clone();
+            queue.push((thread_id, id, name.clone(), arguments));
+            queued_tool_approvals.set(queue);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::system(format!(
                 "🔐 Tool approval required: {} — press Enter to allow, Esc to deny",
                 name,
             )));
             messages.set(m);
+            drain_queued_dialogs(&ui_for_drain);
         }
-        GwEvent::UserPromptRequest(prompt) => {
-            // Show user prompt dialog
-            user_prompt_id.set(prompt.id.clone());
-            user_prompt_title.set(prompt.title.clone());
-            user_prompt_desc.set(prompt.description.clone().unwrap_or_default());
-            user_prompt_input.set(String::new());
-            user_prompt_type.set(Some(prompt.prompt_type.clone()));
-            // Set default selection based on prompt type
-            let default_sel = match &prompt.prompt_type {
-                rustyclaw_core::user_prompt_types::PromptType::Select { default, .. } => {
-                    default.unwrap_or(0)
-                }
-                rustyclaw_core::user_prompt_types::PromptType::Confirm { default } => {
-                    if *default {
-                        0
-                    } else {
-                        1
-                    }
-                }
-                _ => 0,
-            };
-            user_prompt_selected.set(default_sel);
-            // Seed MultiSelect checkboxes from the prompt's defaults.
-            let checked = match &prompt.prompt_type {
-                rustyclaw_core::user_prompt_types::PromptType::MultiSelect {
-                    options,
-                    defaults,
-                } => {
-                    let mut checked = vec![false; options.len()];
-                    for &i in defaults {
-                        if let Some(slot) = checked.get_mut(i) {
-                            *slot = true;
-                        }
-                    }
-                    checked
-                }
-                _ => Vec::new(),
-            };
-            user_prompt_checked.set(checked);
-            show_user_prompt.set(true);
+        GwEvent::UserPromptRequest { thread_id, prompt } => {
+            let mut queue = queued_user_prompts.read().clone();
+            queue.push((thread_id, prompt.clone()));
+            queued_user_prompts.set(queue);
 
             // Build informative message based on prompt type
             let hint = match &prompt.prompt_type {
@@ -608,25 +1004,31 @@ pub(super) fn apply_gw_event(
                 }
             }
             messages.set(m);
+            drain_queued_dialogs(&ui_for_drain);
         }
         GwEvent::CredentialRequest {
+            thread_id,
             id,
             provider,
             secret_name,
             message,
         } => {
-            credential_request_id.set(id);
-            credential_request_provider.set(provider.clone());
-            credential_request_secret_name.set(secret_name.clone());
-            credential_request_message.set(message.clone());
-            credential_request_input.set(String::new());
-            show_credential_request.set(true);
+            let mut queue = queued_credentials.read().clone();
+            queue.push((
+                thread_id,
+                id,
+                provider.clone(),
+                secret_name.clone(),
+                message,
+            ));
+            queued_credentials.set(queue);
             let mut m = messages.read().clone();
             m.push(DisplayMessage::warning(format!(
                 "🔑 Credential required for {} ({}) — enter API key",
                 provider, secret_name,
             )));
             messages.set(m);
+            drain_queued_dialogs(&ui_for_drain);
         }
         GwEvent::VaultLocked => {
             gw_status.set(rustyclaw_core::types::GatewayStatus::VaultLocked);
@@ -708,6 +1110,25 @@ pub(super) fn apply_gw_event(
                     thread.is_foreground = thread.id == active_id;
                 }
             }
+            // "Streaming" in the status column is derived from the
+            // gateway's turn markers, so it is authoritative: a turn is
+            // running in that thread whether or not this client saw it
+            // start — a reconnect, another client, or a turn the gateway
+            // resumed after a restart. Seed the in-flight set from it
+            // (add-only; removal belongs to each turn's close-out).
+            {
+                let mut running = in_flight.read().clone();
+                let before = running.len();
+                for t in thread_list
+                    .iter()
+                    .filter(|t| t.status.as_deref() == Some("Streaming"))
+                {
+                    running.insert(t.id);
+                }
+                if running.len() != before {
+                    in_flight.set(running);
+                }
+            }
             // Adapt transport threads to view items, group them through the
             // shared SidebarTree, then flatten back to a project-ordered list.
             // The flat order matches the rendered tree, so the keyboard's flat
@@ -727,6 +1148,20 @@ pub(super) fn apply_gw_event(
             // a new foreground (including initial load).
             if foreground_id != previous_foreground {
                 foreground_thread_id.set(foreground_id);
+                // The spinner, the timer and the streaming buffer describe
+                // the view, not a turn — there is one set of them and one
+                // thread on screen. When the view moves, they belong to a
+                // conversation that is no longer being shown, and nothing
+                // will ever clear them: a close-out for that thread is
+                // correctly ignored now, so the spinner would run forever.
+                rebase_view_streaming(
+                    foreground_id,
+                    &in_flight.read().clone(),
+                    &mut streaming,
+                    &mut stream_start,
+                    &mut elapsed,
+                    &mut streaming_buf,
+                );
                 if let Some(thread_id) = foreground_id {
                     tracing::debug!(
                         thread_id,
@@ -798,16 +1233,45 @@ pub(super) fn apply_gw_event(
             show_agent_selector.set(true);
         }
         GwEvent::ThreadMessages {
-            thread_id: _,
+            thread_id,
             messages: thread_messages,
         } => {
-            messages.set(
-                thread_messages
-                    .into_iter()
-                    .map(display_message_from_gateway)
-                    .collect(),
-            );
-            scroll_offset.set(0);
+            // `thread_id == 0` is the gateway's "nothing is focused"
+            // sentinel: it carries an empty list to blank the view after
+            // backgrounding, and no real thread ever has id 0. It cannot
+            // be cached — the key names nothing — and it cannot be matched
+            // against the foreground: the `ThreadsUpdate` preceding it
+            // already set the foreground to `None`, so the equality below
+            // would drop it and leave the stale transcript on screen. A
+            // reply still streaming into the view (a turn sent before any
+            // thread existed) keeps its words; the sentinel is not a
+            // close-out.
+            if thread_id == 0 {
+                if !streaming.get() {
+                    messages.set(Vec::new());
+                    scroll_offset.set(0);
+                }
+                return;
+            }
+            let converted: Vec<DisplayMessage> = thread_messages
+                .into_iter()
+                .map(display_message_from_gateway)
+                .collect();
+            // The snapshot is authoritative for its own thread whichever
+            // that is — it feeds the cache a later switch restores from.
+            // This is how a background turn's transcript arrives whole.
+            let mut cache = thread_messages_cache.read().clone();
+            cache.insert(thread_id, converted.clone());
+            thread_messages_cache.set(cache);
+            // But only the foreground thread's snapshot may take the
+            // screen. A turn completing in a background thread sends one
+            // too, and applying it would swap the conversation being read
+            // for another — mid-word, when an answer is still streaming
+            // here.
+            if foreground_thread_id.get() == Some(thread_id) {
+                messages.set(converted);
+                scroll_offset.set(0);
+            }
         }
         GwEvent::ThreadSwitched {
             thread_id,
@@ -853,6 +1317,16 @@ pub(super) fn apply_gw_event(
             };
             messages.set(std::mem::take(&mut m));
             foreground_thread_id.set(Some(thread_id));
+            // See the `ThreadsUpdate` arm: the streaming indicators belong
+            // to whatever is on screen, and the screen just changed.
+            rebase_view_streaming(
+                Some(thread_id),
+                &in_flight.read().clone(),
+                &mut streaming,
+                &mut stream_start,
+                &mut elapsed,
+                &mut streaming_buf,
+            );
             // Ask the gateway for the authoritative,
             // cross-session history for this thread so
             // the local cache stays consistent with
@@ -940,22 +1414,41 @@ pub(super) fn apply_gw_event(
             show_api_key_dialog.set(true);
         }
         GwEvent::DeviceFlowCode {
+            owner,
             provider,
             url,
             code,
         } => {
-            device_flow_provider.set(provider);
-            device_flow_url.set(url.clone());
-            device_flow_code.set(code);
-            device_flow_tick.set(0);
-            // Auto-open the verification URL in the browser
-            crate::components::device_flow_dialog::open_url_in_browser(&url);
-            device_flow_browser_opened.set(true);
-            show_device_flow.set(true);
+            // Queued like every other request two turns can raise at once:
+            // a second sign-in must not overwrite the first, whose code
+            // would never be shown while its flow waited out its window.
+            let mut queue = queued_device_flows.read().clone();
+            queue.push((owner, provider, url, code));
+            queued_device_flows.set(queue);
+            drain_queued_dialogs(&ui_for_drain);
         }
-        GwEvent::DeviceFlowDone => {
-            show_device_flow.set(false);
-            device_flow_browser_opened.set(false);
+        GwEvent::DeviceFlowDone(owner) => {
+            // Only this flow's completion takes the dialog down; another
+            // sign-in finishing — another turn's, or one this client
+            // started itself — must not tear away a code the user is
+            // still typing. Owners compare exactly: an old gateway's
+            // Unattributed flow was drained with that same owner, and a
+            // local flow with Local, so every completion finds precisely
+            // the flow it refers to.
+            if show_device_flow.get() && device_flow_owner.get() == Some(owner) {
+                show_device_flow.set(false);
+                device_flow_browser_opened.set(false);
+                device_flow_owner.set(None);
+            }
+            // Whether displayed or still queued, the flow is over — a
+            // queued entry left behind would later drain into the dialog
+            // with a code that already expired.
+            let mut queue = queued_device_flows.read().clone();
+            let before = queue.len();
+            queue.retain(|(o, ..)| *o != owner);
+            if queue.len() != before {
+                queued_device_flows.set(queue);
+            }
         }
         GwEvent::DeviceFlowToken { provider, token } => {
             // Forward the obtained token to the tokio loop

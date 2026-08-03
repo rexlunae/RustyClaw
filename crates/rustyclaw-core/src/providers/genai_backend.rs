@@ -179,12 +179,12 @@ async fn consume_stream(
     while let Some(event) = stream.next().await {
         match event? {
             ChatStreamEvent::Start => {
-                server::send_stream_start(writer).await?;
+                server::send_stream_start(writer, None).await?;
                 stream_started = true;
             }
             ChatStreamEvent::Chunk(chunk) => {
                 if !stream_started {
-                    server::send_stream_start(writer).await?;
+                    server::send_stream_start(writer, None).await?;
                     stream_started = true;
                 }
                 // The reasoning block is over the moment answer text starts:

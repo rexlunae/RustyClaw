@@ -64,7 +64,7 @@ use swarm_tools::{
 // Re-export helpers for external use
 pub use helpers::{
     SharedVault, VAULT_ACCESS_DENIED, command_references_credentials, expand_tilde, init_sandbox,
-    is_protected_path, process_manager, run_sandboxed_command, sandbox, sandbox_wrap_interpreter,
+    is_protected_path, process_manager, run_sandboxed_command, sandbox_wrap_interpreter,
     sanitize_tool_output, set_credentials_dir, set_vault, validate_command_safe, vault,
 };
 
@@ -694,6 +694,13 @@ const ASYNC_NATIVE_TOOLS: &[&str] = &[
 pub struct ToolOutputChunk {
     pub chunk: String,
     pub is_stderr: bool,
+    /// The child process this tool call spawned, announced once when it is
+    /// known (with an empty `chunk`). This is the only trustworthy tie
+    /// between a tool call and a pid: the exec-status registry is process-
+    /// global, and with turns running concurrently, "the newest child" can
+    /// belong to another conversation — whose process a pause/stop/kill
+    /// aimed at this one would then hit.
+    pub pid: Option<u32>,
 }
 
 /// Sink a tool can use to stream live output while it runs. Sending is

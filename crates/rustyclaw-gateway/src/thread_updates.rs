@@ -8,28 +8,22 @@ use tracing::info;
 
 use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, protocol, transport};
 
-use crate::SharedTaskManager;
+use crate::{SharedTaskManager, SharedThreadMgr};
 use protocol::server::send_frame;
 
-/// Send a threads update frame to the client.
+/// The client-facing view of the thread list, taken from the manager in one
+/// synchronous pass.
 ///
-/// This includes:
-/// - Chat threads (from ThreadManager)
-/// - Running tasks (from TaskManager)
-/// - Active sub-agent sessions (from SessionManager)
-pub(crate) async fn send_threads_update(
-    writer: &mut dyn transport::TransportWriter,
+/// Split out so callers holding the shared manager can take this snapshot,
+/// release the lock, and only then write to the client. Holding the thread
+/// lock across a frame write would deadlock a model task against the
+/// connection loop the moment the frame channel filled up.
+fn thread_dtos(
     thread_mgr: &rustyclaw_core::threads::ThreadManager,
-    task_mgr: &SharedTaskManager,
-    session_key: Option<&str>,
-) -> Result<()> {
-    use rustyclaw_core::sessions::{SessionKind, SessionStatus, session_manager};
-
-    let thread_list = thread_mgr.list_info();
+) -> (Vec<protocol::ThreadInfoDto>, Option<u64>) {
     let foreground_id = thread_mgr.foreground().map(|t| t.task_id().0);
-
-    // Collect chat threads
-    let mut threads: Vec<protocol::ThreadInfoDto> = thread_list
+    let threads = thread_mgr
+        .list_info()
         .iter()
         .map(|t| protocol::ThreadInfoDto {
             id: t.id.0,
@@ -45,6 +39,39 @@ pub(crate) async fn send_threads_update(
             working_dir: t.working_dir.clone(),
         })
         .collect();
+    (threads, foreground_id)
+}
+
+/// Send a threads update frame to the client: chat threads, running tasks,
+/// and active sub-agent sessions.
+///
+/// Takes the shared manager rather than a borrow so the snapshot is taken
+/// under the lock and the lock released before anything is written. A
+/// caller holding a guard across the write would block every turn running
+/// in parallel — they take the same lock at each persistence point — for
+/// as long as the transport takes.
+pub(crate) async fn send_threads_update_shared(
+    writer: &mut dyn transport::TransportWriter,
+    thread_mgr: &SharedThreadMgr,
+    task_mgr: &SharedTaskManager,
+    session_key: Option<&str>,
+) -> Result<()> {
+    let (threads, foreground_id) = {
+        let tm = thread_mgr.lock().await;
+        thread_dtos(&tm)
+    };
+    send_threads_update_from(writer, threads, foreground_id, task_mgr, session_key).await
+}
+
+/// The rest of a threads update, once the thread snapshot is in hand.
+async fn send_threads_update_from(
+    writer: &mut dyn transport::TransportWriter,
+    mut threads: Vec<protocol::ThreadInfoDto>,
+    foreground_id: Option<u64>,
+    task_mgr: &SharedTaskManager,
+    session_key: Option<&str>,
+) -> Result<()> {
+    use rustyclaw_core::sessions::{SessionKind, SessionStatus, session_manager};
 
     // Add running tasks from TaskManager
     let tasks = if let Some(sess) = session_key {
@@ -206,10 +233,26 @@ pub(crate) fn thread_history_messages(
         .collect()
 }
 
-pub(crate) async fn send_thread_messages_update(
+/// Send one thread's transcript, on the same snapshot-then-write terms as
+/// [`send_threads_update_shared`].
+pub(crate) async fn send_thread_messages_update_shared(
     writer: &mut dyn transport::TransportWriter,
     thread_id: rustyclaw_core::threads::ThreadId,
-    thread_mgr: &rustyclaw_core::threads::ThreadManager,
+    thread_mgr: &SharedThreadMgr,
+) -> Result<()> {
+    let messages = {
+        let tm = thread_mgr.lock().await;
+        tm.get(thread_id).map(thread_history_messages)
+    };
+    send_thread_messages_from(writer, thread_id, messages).await
+}
+
+/// Send a thread's transcript. `None` means the thread is not in this
+/// session's manager at all, which is worth saying out loud.
+async fn send_thread_messages_from(
+    writer: &mut dyn transport::TransportWriter,
+    thread_id: rustyclaw_core::threads::ThreadId,
+    messages: Option<Vec<protocol::types::ChatMessage>>,
 ) -> Result<()> {
     // `unwrap_or_default()` here used to make "this thread does not exist"
     // indistinguishable from "this thread has no messages": both sent an
@@ -217,8 +260,8 @@ pub(crate) async fn send_thread_messages_update(
     // rendered a blank transcript either way with nothing to report. The
     // lookup failure is at least logged now — it means the client is showing
     // a thread this session's ThreadManager has never heard of.
-    let messages = match thread_mgr.get(thread_id) {
-        Some(thread) => thread_history_messages(thread),
+    let messages = match messages {
+        Some(messages) => messages,
         None => {
             tracing::error!(
                 thread_id = thread_id.0,
@@ -243,4 +286,86 @@ pub(crate) async fn send_thread_messages_update(
     };
 
     send_frame(writer, &frame).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    /// A writer that needs the thread manager itself — standing in for the
+    /// connection loop, which locks the manager to answer client frames while
+    /// a model task is streaming.
+    struct ThreadTouchingWriter {
+        thread_mgr: SharedThreadMgr,
+        frames: usize,
+    }
+
+    #[async_trait]
+    impl transport::TransportWriter for ThreadTouchingWriter {
+        async fn send_on_stream(&mut self, _stream_id: u64, _frame: &ServerFrame) -> Result<()> {
+            let _ = self.thread_mgr.lock().await.list_info();
+            self.frames += 1;
+            Ok(())
+        }
+
+        async fn close(&mut self) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    fn shared_manager() -> SharedThreadMgr {
+        Arc::new(Mutex::new(rustyclaw_core::threads::ThreadManager::default()))
+    }
+
+    /// The shared-handle senders must release the lock before they write.
+    /// Holding it across the write deadlocks a model task against the
+    /// connection loop as soon as the frame channel backs up — the failure
+    /// mode is a wedged gateway, so it is worth a test that simply never
+    /// finishes if the lock is held too long.
+    #[tokio::test]
+    async fn a_threads_update_does_not_hold_the_thread_lock_while_writing() {
+        let thread_mgr = shared_manager();
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::default());
+        let mut writer = ThreadTouchingWriter {
+            thread_mgr: thread_mgr.clone(),
+            frames: 0,
+        };
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            send_threads_update_shared(&mut writer, &thread_mgr, &task_mgr, None),
+        )
+        .await
+        .expect("sending a threads update must not deadlock on the thread lock")
+        .expect("send should succeed");
+
+        assert_eq!(writer.frames, 1);
+    }
+
+    /// Same for the per-thread transcript sender.
+    #[tokio::test]
+    async fn a_messages_update_does_not_hold_the_thread_lock_while_writing() {
+        let thread_mgr = shared_manager();
+        let mut writer = ThreadTouchingWriter {
+            thread_mgr: thread_mgr.clone(),
+            frames: 0,
+        };
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            send_thread_messages_update_shared(
+                &mut writer,
+                rustyclaw_core::threads::ThreadId(1),
+                &thread_mgr,
+            ),
+        )
+        .await
+        .expect("sending a transcript must not deadlock on the thread lock")
+        .expect("send should succeed");
+
+        assert_eq!(writer.frames, 1);
+    }
 }

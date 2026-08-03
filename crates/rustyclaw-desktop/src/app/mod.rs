@@ -476,26 +476,38 @@ pub fn App() -> Element {
 
                     {
                         let mut b = buf_w.lock().expect("stream buffer poisoned");
-                        for event in std::iter::once(first).chain(extra) {
-                            match event {
+                        for threaded in std::iter::once(first).chain(extra) {
+                            let thread = threaded.thread_id;
+                            match threaded.event {
                                 GatewayEvent::Chunk { delta } => {
-                                    // Coalesce consecutive chunks into one entry.
-                                    if let Some(BufferEntry::Chunks {
-                                        text, count, bytes, ..
-                                    }) = b.entries.last_mut()
-                                    {
-                                        *count += 1;
-                                        *bytes += delta.len();
-                                        text.push_str(&delta);
-                                    } else {
-                                        b.entries.push(BufferEntry::Chunks {
+                                    // Coalesce consecutive chunks into one
+                                    // entry — but only within a thread. Two
+                                    // turns' chunks arrive interleaved now,
+                                    // and merging by adjacency alone would
+                                    // splice two answers into one string.
+                                    match b.entries.last_mut() {
+                                        Some(BufferEntry::Chunks {
+                                            thread_id,
+                                            text,
+                                            count,
+                                            bytes,
+                                        }) if *thread_id == thread => {
+                                            *count += 1;
+                                            *bytes += delta.len();
+                                            text.push_str(&delta);
+                                        }
+                                        _ => b.entries.push(BufferEntry::Chunks {
+                                            thread_id: thread,
                                             text: delta.clone(),
                                             count: 1,
                                             bytes: delta.len(),
-                                        });
+                                        }),
                                     }
                                 }
-                                other => b.entries.push(BufferEntry::Event(other)),
+                                other => b.entries.push(BufferEntry::Event {
+                                    thread_id: thread,
+                                    event: other,
+                                }),
                             }
                         }
                     }
@@ -531,10 +543,13 @@ pub fn App() -> Element {
                     // is preserved.
                     for entry in entries {
                         match entry {
-                            BufferEntry::Event(GatewayEvent::DomQuery { id, js }) => {
+                            BufferEntry::Event {
+                                event: GatewayEvent::DomQuery { id, js },
+                                ..
+                            } => {
                                 handle_dom_query(&client_ui, id, js).await;
                             }
-                            BufferEntry::Event(event) => {
+                            BufferEntry::Event { thread_id, event } => {
                                 let triggers_refresh = matches!(
                                     event,
                                     GatewayEvent::Connected { .. }
@@ -555,7 +570,7 @@ pub fn App() -> Element {
                                     } => Some(*thread_id),
                                     _ => None,
                                 };
-                                handle_gateway_event(event, state);
+                                handle_gateway_event(thread_id, event, state);
                                 if triggers_refresh && !refreshed_threads_this_connection {
                                     refreshed_threads_this_connection = true;
                                     let _ = client_ui.send(GatewayCommand::ThreadList).await;
@@ -577,12 +592,19 @@ pub fn App() -> Element {
                                     last_foreground_history_request = Some(thread_id);
                                 }
                             }
-                            BufferEntry::Chunks { text, count, bytes } => {
+                            BufferEntry::Chunks {
+                                thread_id,
+                                text,
+                                count,
+                                bytes,
+                            } => {
                                 let mut s = state.write();
-                                // Chunks belong to the thread that submitted
-                                // the request; don't stream into a thread the
-                                // user has switched to in the meantime.
-                                if s.stream_targets_foreground() {
+                                // Chunks belong to the turn that produced
+                                // them, and the turn to its thread. A turn
+                                // running in a thread the user is not looking
+                                // at streams nowhere; its transcript arrives
+                                // whole when it finishes.
+                                if s.frame_targets_view(thread_id) {
                                     s.append_to_current_message(&text);
                                     s.streaming_chunks += count;
                                     s.streaming_bytes += bytes;
@@ -598,7 +620,7 @@ pub fn App() -> Element {
     // Sync pending events from state into dialog signals
     use_effect(move || {
         let s = state.read();
-        if let Some((id, name, args)) = &s.pending_tool_approval {
+        if let Some((_, id, name, args)) = s.pending_tool_approvals.front() {
             tool_approval_id.set(id.clone());
             tool_approval_name.set(name.clone());
             tool_approval_args.set(args.clone());
@@ -613,7 +635,7 @@ pub fn App() -> Element {
             show_vault_unlock.set(false);
         }
 
-        if let Some((id, provider, secret, msg)) = &s.pending_credential_request {
+        if let Some((_, id, provider, secret, msg)) = s.pending_credential_requests.front() {
             cred_request_id.set(id.clone());
             cred_request_provider.set(provider.clone());
             cred_request_secret.set(secret.clone());
@@ -641,10 +663,14 @@ pub fn App() -> Element {
             s.mark_request_started();
         }
 
+        // Name the thread on the wire. The message was typed into *this*
+        // thread and belongs to it however long the frame takes to arrive,
+        // and whatever the gateway's foreground is doing meanwhile.
+        let turn_thread = state.read().foreground_thread_id;
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                if let Err(e) = client.chat(prompt).await {
+                if let Err(e) = client.chat_in_thread(prompt, turn_thread).await {
                     tracing::error!("Failed to send message: {}", e);
                 }
             });
@@ -917,19 +943,29 @@ pub fn App() -> Element {
     let on_cancel = move |_| {
         let mut s = state.write();
         s.push_notice(MessageRole::Info, "Cancellation requested…");
-        s.finish_current_message();
+        // Names the turn it means: the gateway cannot resolve "the current
+        // one" for us once turns run per thread. Read and retire together —
+        // see `stop_current_turn` for why the order is not a call-site
+        // detail.
+        let thread_id = s.stop_current_turn();
         drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
-                let _ = client.send(GatewayCommand::Cancel).await;
+                let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
             });
         }
     };
 
     // Structured answers for the inline agent-question card (`ask_user` tool).
     let on_prompt_respond = move |(id, value): (String, PromptResponseValue)| {
-        state.write().pending_user_prompt = None;
+        // Retire only the question being answered — the one the visible
+        // card showed. Questions queue per thread now, and clearing the
+        // lot (or the oldest holder of a colliding id, which can be a
+        // hidden thread's question) would discard another turn's question
+        // unanswered — it would wait out its five-minute window on a card
+        // the user was never shown again.
+        state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -945,7 +981,8 @@ pub fn App() -> Element {
     };
 
     let on_prompt_dismiss = move |id: String| {
-        state.write().pending_user_prompt = None;
+        // Dismissal is an answer too: it retires its own card only.
+        state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
             spawn(async move {
@@ -1460,7 +1497,7 @@ pub fn App() -> Element {
                         },
                     },
                     agent_name: state.read().agent_name.clone(),
-                    pending_prompt: state.read().pending_user_prompt.clone(),
+                    pending_prompt: state.read().visible_user_prompt(),
                     provider_models: state.read().provider_models.clone(),
                     on_submit: on_submit,
                     on_cancel: on_cancel,

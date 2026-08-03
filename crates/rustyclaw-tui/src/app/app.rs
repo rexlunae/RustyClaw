@@ -33,7 +33,18 @@ use super::tui_component::TuiRoot;
 /// Messages from the iocraft render component back to tokio.
 #[derive(Debug, Clone)]
 pub(crate) enum UserInput {
-    Chat(String),
+    /// The text, and the thread the user typed it into. The id travels with
+    /// the message so the gateway files it where the user was looking, not
+    /// wherever its foreground has drifted to by the time the frame lands.
+    Chat {
+        text: String,
+        thread_id: Option<u64>,
+    },
+    /// Stop the turn running in `thread_id`. Named, because the gateway can
+    /// no longer resolve "the current one" once turns run per thread.
+    CancelCurrentRequest {
+        thread_id: Option<u64>,
+    },
     Command(String),
     AuthResponse(String),
     /// User approved or denied a tool call
@@ -55,8 +66,6 @@ pub(crate) enum UserInput {
         dismissed: bool,
         value: Option<String>,
     },
-    /// Cancel the active model/tool run.
-    CancelCurrentRequest,
     /// Pause/resume/stop/kill the process behind the running tool call.
     ProcessControl {
         pid: u32,
@@ -300,8 +309,10 @@ impl App {
         let gw_tx_conn = gw_tx.clone();
         let client_reader = client.clone();
         let _reader_handle = tokio::spawn(async move {
-            while let Some(event) = client_reader.recv().await {
-                if let Some(ev) = gateway_client::gateway_event_to_gw_event(event) {
+            while let Some(threaded) = client_reader.recv().await {
+                if let Some(ev) =
+                    gateway_client::gateway_event_to_gw_event(threaded.thread_id, threaded.event)
+                {
                     if gw_tx_conn.send(ev).is_err() {
                         break;
                     }
@@ -350,13 +361,18 @@ impl App {
         loop {
             // Poll user_rx (non-blocking on tokio side)
             match user_rx.try_recv() {
-                Ok(UserInput::Chat(text)) => {
+                Ok(UserInput::Chat { text, thread_id }) => {
                     let prompt = build_prompt_with_attachments(&text, &prompt_attachments);
                     prompt_attachments.clear();
                     let _ = gw_tx.send(GwEvent::PromptAttachmentsChanged {
                         attachments: prompt_attachments.clone(),
                     });
-                    let _ = client.send(GatewayCommand::Chat { message: prompt }).await;
+                    let _ = client
+                        .send(GatewayCommand::Chat {
+                            message: prompt,
+                            thread_id,
+                        })
+                        .await;
                 }
                 Ok(UserInput::AuthResponse(code)) => {
                     let _ = client.send(GatewayCommand::Auth { code }).await;
@@ -397,8 +413,8 @@ impl App {
                         })
                         .await;
                 }
-                Ok(UserInput::CancelCurrentRequest) => {
-                    let _ = client.send(GatewayCommand::Cancel).await;
+                Ok(UserInput::CancelCurrentRequest { thread_id }) => {
+                    let _ = client.send(GatewayCommand::Cancel { thread_id }).await;
                 }
                 Ok(UserInput::ProcessControl { pid, action }) => {
                     let _ = client
@@ -850,7 +866,10 @@ impl App {
                                             .await
                                             {
                                                 Ok(auth_resp) => {
+                                                    // A client-local flow,
+                                                    // owned by no turn.
                                                     let _ = gw_tx2.send(GwEvent::DeviceFlowCode {
+                                                        owner: crate::app::DeviceFlowOwner::Local,
                                                         provider: pid.clone(),
                                                         url: auth_resp.verification_uri.clone(),
                                                         code: auth_resp.user_code.clone(),
@@ -867,7 +886,9 @@ impl App {
                                                         tokio::time::sleep(interval).await;
                                                         if tokio::time::Instant::now() >= deadline {
                                                             let _ = gw_tx2
-                                                                .send(GwEvent::DeviceFlowDone);
+                                                                .send(GwEvent::DeviceFlowDone(
+                                                                crate::app::DeviceFlowOwner::Local,
+                                                            ));
                                                             let _ = gw_tx2.send(GwEvent::error(
                                                                 "Device flow timed out — please try again.".to_string(),
                                                             ));
@@ -877,7 +898,7 @@ impl App {
                                                             df_config, &auth_resp.device_code,
                                                         ).await {
                                                             Ok(Some(token)) => {
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local));
                                                                 let _ = gw_tx2.send(GwEvent::Success(format!(
                                                                     "✓ {} authenticated!", display
                                                                 )));
@@ -891,7 +912,7 @@ impl App {
                                                                 // Still pending — continue polling
                                                             }
                                                             Err(e) => {
-                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone);
+                                                                let _ = gw_tx2.send(GwEvent::DeviceFlowDone(crate::app::DeviceFlowOwner::Local));
                                                                 let _ = gw_tx2.send(GwEvent::Error {
                                                                     summary: format!("Device flow failed: {:#}", e),
                                                                     details: Some(rustyclaw_core::error_details::render_extended(&e)),

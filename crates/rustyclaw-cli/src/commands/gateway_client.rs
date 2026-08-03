@@ -455,6 +455,9 @@ pub(crate) async fn handle_ask(config: &Config, args: AskArgs) -> Result<()> {
         frame_type: ClientFrameType::Chat,
         payload: ClientPayload::Chat {
             messages: vec![message],
+            // Headless one-shot: it has no thread of its own to name, so the
+            // gateway picks as it always has.
+            thread_id: None,
         },
     };
     let bytes = serialize_frame(&frame).map_err(|e| anyhow::anyhow!("serialize failed: {}", e))?;

@@ -290,7 +290,23 @@ pub struct AppState {
     /// cleared on completion). Stream events carry no thread id on the wire,
     /// so this is how the client knows whether live stream events target the
     /// thread currently on screen or one the user has switched away from.
-    pub streaming_thread_id: Option<u64>,
+    /// Threads with a turn this client is waiting on.
+    ///
+    /// A set, not one id: the gateway runs a turn per thread, so sending in
+    /// one conversation and then another leaves two in flight. A single slot
+    /// held whichever started last — which made Stop cancel the wrong
+    /// conversation, discarded the older turn's close-out so its bubble never
+    /// finished, and filed its questions under the newer thread.
+    pub in_flight: std::collections::HashSet<u64>,
+
+    /// A turn submitted before any thread existed, still waiting to learn
+    /// which thread the gateway elects for it. It cannot sit in `in_flight`
+    /// — there is no id yet — but it is running all the same, and the
+    /// election's `ThreadsUpdate` must adopt it rather than derive the
+    /// working state from an `in_flight` set it was never in, which took
+    /// the Stop control off a reply still streaming and unlocked the
+    /// composer over it.
+    pub unowned_turn_in_flight: bool,
 
     /// Agent name from hatching
     pub agent_name: Option<String>,
@@ -316,17 +332,49 @@ pub struct AppState {
     /// Active UI theme.
     pub theme: Theme,
 
-    /// Pending tool approval request (id, name, arguments).
-    pub pending_tool_approval: Option<(String, String, String)>,
+    /// Pending tool approval request (owner thread, id, name, arguments).
+    /// Tool approvals waiting for the user, oldest first. A queue, not a
+    /// slot: turns run per thread, and two of them can ask at once. A second
+    /// request used to overwrite the first, which was then never shown again
+    /// — the gateway's waiter timed out after two minutes and read the
+    /// silence as a denial of a tool the user never saw.
+    /// The thread tag scopes a `ToolResult` retirement to its own turn's
+    /// entry: ids collide across turns, and an id-only match let one turn's
+    /// result take down another turn's still-unanswered request.
+    pub pending_tool_approvals: std::collections::VecDeque<(Option<u64>, String, String, String)>,
 
     /// Pending user prompt from the agent.
-    pub pending_user_prompt: Option<UserPrompt>,
+    /// Questions from the agent, each tagged with the thread whose turn
+    /// asked it. One card renders at a time — the first belonging to the
+    /// thread on screen — and the rest wait their turn instead of being
+    /// overwritten and lost.
+    pub pending_user_prompts: Vec<(Option<u64>, UserPrompt)>,
+
+    /// The thread the pending question belongs to. Questions are per-thread,
+    /// not per-window: switching to another thread hides the card, switching
+    /// back restores it, so a question never holds the whole app hostage.
+    /// `None` means the owning thread is unknown (the question arrived before
+    /// any thread existed), in which case the card shows wherever the user is.
 
     /// Pending credential request (id, provider, secret_name, message).
-    pub pending_credential_request: Option<(String, String, String, String)>,
+    /// Credential requests waiting for the user, oldest first, each tagged
+    /// with the thread whose turn asked. See `pending_tool_approvals` for
+    /// why this is a queue; the thread tag is what lets a turn's close-out
+    /// take its dead requests down with it — a credential wait ending is
+    /// what ends the turn, so the close-out is its retirement signal.
+    #[allow(clippy::type_complexity)]
+    pub pending_credential_requests:
+        std::collections::VecDeque<(Option<u64>, String, String, String, String)>,
 
     /// Pending device flow (url, code, message).
-    pub pending_device_flow: Option<(String, String, Option<String>)>,
+    /// Device-flow sign-in prompts, oldest first, each tagged with the
+    /// thread whose turn started the flow. The last of the single slots: a
+    /// second sign-in overwrote the first, whose code was never shown and
+    /// whose flow waited out its whole window — and completing one flow
+    /// tore down the other's dialog.
+    #[allow(clippy::type_complexity)]
+    pub pending_device_flows:
+        std::collections::VecDeque<(Option<u64>, String, String, Option<String>)>,
 
     /// Number of streaming chunks received in the current response.
     pub streaming_chunks: u32,
@@ -502,7 +550,8 @@ impl Default for AppState {
             active_project_id: 0,
             threads: Vec::new(),
             foreground_thread_id: None,
-            streaming_thread_id: None,
+            in_flight: std::collections::HashSet::new(),
+            unowned_turn_in_flight: false,
             agent_name: None,
             vault_locked: false,
             needs_hatching,
@@ -511,10 +560,10 @@ impl Default for AppState {
             prompt_attachments: Vec::new(),
             sidebar_collapsed: false,
             theme: Theme::default(),
-            pending_tool_approval: None,
-            pending_user_prompt: None,
-            pending_credential_request: None,
-            pending_device_flow: None,
+            pending_tool_approvals: std::collections::VecDeque::new(),
+            pending_user_prompts: Vec::new(),
+            pending_credential_requests: std::collections::VecDeque::new(),
+            pending_device_flows: std::collections::VecDeque::new(),
             streaming_chunks: 0,
             streaming_bytes: 0,
             agent_access: false,
@@ -595,7 +644,15 @@ impl AppState {
     /// only while that thread stays in the foreground.
     pub fn mark_request_started(&mut self) {
         self.is_processing = true;
-        self.streaming_thread_id = self.foreground_thread_id;
+        match self.foreground_thread_id {
+            Some(thread) => {
+                self.in_flight.insert(thread);
+            }
+            // No thread exists yet; the gateway will elect one and announce
+            // it. Remembered so the announcement adopts this turn instead
+            // of reading the empty `in_flight` set as "nothing running".
+            None => self.unowned_turn_in_flight = true,
+        }
     }
 
     /// Whether live stream events (StreamStart/Chunk/Thinking/ToolCall…)
@@ -603,7 +660,288 @@ impl AppState {
     /// thread is unknown (e.g. submitted before any thread existed) and
     /// events apply to whatever is in the foreground.
     pub fn stream_targets_foreground(&self) -> bool {
-        self.streaming_thread_id.is_none() || self.streaming_thread_id == self.foreground_thread_id
+        match self.foreground_thread_id {
+            Some(thread) => self.in_flight.contains(&thread),
+            // Nothing focused: a turn was submitted before any thread
+            // existed, and its frames apply to whatever comes into view.
+            None => true,
+        }
+    }
+
+    /// Retire a tool approval the gateway has stopped waiting for.
+    ///
+    /// The approval's `ToolResult` arrives whether the user answered or the
+    /// gateway timed out — a timeout reads as a denial and the turn moves
+    /// on. Left in place, an abandoned request sits at the head of the
+    /// queue and hides every later one, which then times out unseen: a
+    /// tool refused in the user's name that they were never shown.
+    /// Only the oldest match goes: adapters emit colliding call ids
+    /// (`call_0`, `call_1`, …), so two concurrent turns can both be
+    /// waiting on `call_0`, and the gateway resolves its waiters for an
+    /// id oldest-first. Removing every match would take another turn's
+    /// request down with the one that was actually answered — a tool
+    /// denied in the user's name that they were never shown.
+    /// And only a match the caller can speak for: a result attributed to
+    /// a thread retires that thread's entry alone. Its own entry is often
+    /// already gone — answered by the user — and an id-only match would
+    /// then reach across and remove another turn's request instead.
+    /// `None` is either an old gateway, which runs one turn and can speak
+    /// for anything, or the user answering the dialog, which shows the
+    /// oldest holder of the id — the same entry the gateway resolves.
+    pub fn retire_tool_approval(&mut self, thread_id: Option<u64>, id: &str) {
+        if let Some(pos) =
+            self.pending_tool_approvals
+                .iter()
+                .position(|(owner, queued_id, _, _)| {
+                    queued_id == id && (thread_id.is_none() || *owner == thread_id)
+                })
+        {
+            self.pending_tool_approvals.remove(pos);
+        }
+    }
+
+    /// Retire the tool approvals and questions belonging to a turn that
+    /// ended without resolving them.
+    ///
+    /// Normally each request's own `ToolResult` retires it. A turn
+    /// displaced by a newer message in its thread is aborted mid-wait and
+    /// never sends one, so the close-out the gateway emits on its behalf
+    /// is the only signal left — and by close-out time a turn that ended
+    /// normally has resolved all of these, so anything still owned by the
+    /// thread is dead. Untagged entries are handled like
+    /// `retire_credentials_for_thread`'s: a close-out cannot name them,
+    /// but once nothing is in flight nobody is waiting on them either.
+    pub fn retire_requests_for_thread(&mut self, thread_id: Option<u64>) {
+        let Some(thread) = thread_id else { return };
+        self.pending_tool_approvals
+            .retain(|(owner, ..)| *owner != Some(thread));
+        self.pending_user_prompts
+            .retain(|(owner, _)| *owner != Some(thread));
+        if self.in_flight.is_empty() && !self.unowned_turn_in_flight {
+            self.pending_tool_approvals
+                .retain(|(owner, ..)| owner.is_some());
+            self.pending_user_prompts
+                .retain(|(owner, _)| owner.is_some());
+        }
+    }
+
+    /// Retire the credential requests belonging to a turn that ended.
+    ///
+    /// A credential wait ending is what ends its turn, so the turn's
+    /// close-out is the one signal that these can no longer be answered.
+    pub fn retire_credentials_for_thread(&mut self, thread_id: Option<u64>) {
+        let Some(thread) = thread_id else { return };
+        self.pending_credential_requests
+            .retain(|(owner, ..)| *owner != Some(thread));
+        // An untagged entry — raised before its turn's stream opened, on a
+        // send that named no thread — can never match a close-out. Once
+        // nothing at all is running — no named turn, no turn still waiting
+        // for its thread — nothing can be listening for it.
+        if self.in_flight.is_empty() && !self.unowned_turn_in_flight {
+            self.pending_credential_requests
+                .retain(|(owner, ..)| owner.is_some());
+        }
+    }
+
+    /// Retire one credential request by its id — the one that was answered.
+    ///
+    /// Answering must not `pop_front`: the gateway can retire the displayed
+    /// entry between render and click, and popping the head would then
+    /// discard a request that was never shown.
+    /// Oldest match only, like `retire_tool_approval`: ids can collide
+    /// across concurrent turns, and the gateway answers oldest-first.
+    pub fn retire_credential_request(&mut self, id: &str) {
+        if let Some(pos) = self
+            .pending_credential_requests
+            .iter()
+            .position(|(_, queued_id, ..)| queued_id == id)
+        {
+            self.pending_credential_requests.remove(pos);
+        }
+    }
+
+    /// Retire the device-flow prompts belonging to a turn's close-out.
+    ///
+    /// Expiry and cancellation both end the flow's turn, so its close-out
+    /// is the fallback retirement. A close-out that names no thread retires
+    /// nothing here — an unnamed one can come from any turn, and popping
+    /// the front would discard another conversation's sign-in prompt and
+    /// the code the user was about to enter.
+    pub fn retire_device_flows_for_thread(&mut self, thread_id: Option<u64>) {
+        let Some(thread) = thread_id else { return };
+        self.pending_device_flows
+            .retain(|(owner, ..)| *owner != Some(thread));
+        // See `retire_credentials_for_thread`: an untagged flow can
+        // never match a close-out, and once nothing at all is running,
+        // nobody is polling for its code.
+        if self.in_flight.is_empty() && !self.unowned_turn_in_flight {
+            self.pending_device_flows
+                .retain(|(owner, ..)| owner.is_some());
+        }
+    }
+
+    /// Retire the sign-in prompt the dialog showed, returning the turn it
+    /// belonged to so the cancel can name it.
+    ///
+    /// By its code, not `pop_front`: the gateway can retire the displayed
+    /// entry between render and click — a completion, a turn's close-out —
+    /// and popping the head would then discard a prompt that was never
+    /// shown and aim the cancel at *that* flow's turn, killing a reply the
+    /// user was not looking at. `None` means the flow is already gone and
+    /// there is nothing left to cancel.
+    pub fn retire_device_flow(&mut self, code: &str) -> Option<Option<u64>> {
+        let pos = self
+            .pending_device_flows
+            .iter()
+            .position(|(_, _, c, _)| c == code)?;
+        self.pending_device_flows
+            .remove(pos)
+            .map(|(owner, ..)| owner)
+    }
+
+    /// Retire the flow a `DeviceFlowComplete` announces.
+    ///
+    /// A completion is a statement about one specific flow, so `None` means
+    /// something different here than on a close-out: a gateway too old to
+    /// attribute its frames, whose one possible flow is the prompt on
+    /// screen.
+    pub fn retire_completed_device_flow(&mut self, thread_id: Option<u64>) {
+        match thread_id {
+            Some(_) => self.retire_device_flows_for_thread(thread_id),
+            None => {
+                self.pending_device_flows.pop_front();
+            }
+        }
+    }
+
+    /// Whether a turn-scoped frame from `thread_id` should render into the
+    /// view on screen.
+    ///
+    /// Routed by the frame's *own* thread rather than by a single "the turn
+    /// in flight" slot. With a turn running in each of two threads, that slot
+    /// holds whichever started last, so the other turn's chunks would be
+    /// appended to the wrong transcript — two answers spliced into one.
+    ///
+    /// A frame from any other thread belongs to a turn the user is not
+    /// looking at, and is dropped: that thread's transcript arrives whole via
+    /// the gateway's history snapshot when its turn completes. `None` is a
+    /// gateway too old to attribute its frames, and is trusted as before.
+    pub fn frame_targets_view(&self, thread_id: Option<u64>) -> bool {
+        match thread_id {
+            Some(id) => self.foreground_thread_id == Some(id),
+            None => true,
+        }
+    }
+
+    /// Take the gateway at its word about which thread the turn is running
+    /// in. The client's own guess at submit time can be wrong — no thread
+    /// was focused and the gateway elected one, or an older client let it
+    /// auto-switch — and the announcement on `StreamStart` is the first
+    /// point where the two can be reconciled. Everything downstream routes
+    /// off `streaming_thread_id`, so correcting it here corrects the whole
+    /// turn: chunks, tool calls, the question card, the completion.
+    pub fn adopt_stream_thread(&mut self, thread_id: Option<u64>) {
+        let Some(id) = thread_id else { return };
+        self.in_flight.insert(id);
+        self.unowned_turn_in_flight = false;
+        // A stream opening in the on-screen thread means it is working,
+        // whatever the indicator said a moment ago. A message that
+        // displaces a running turn gets that turn's close-out first —
+        // attributed to the same thread, indistinguishable from its own —
+        // which cleared `is_processing` and with it the Stop control and
+        // the composer gate, for a reply that was only just starting.
+        if self.foreground_thread_id == Some(id) {
+            self.is_processing = true;
+        }
+        // Nothing was focused, so the gateway elected this thread for the
+        // turn. Follow it onto the screen: otherwise every frame that
+        // follows is judged to belong to a thread that isn't in view, and
+        // the reply — text, tool calls, all of it — renders nowhere.
+        //
+        // A `ThreadsUpdate` says the same thing (electing emits a
+        // `Foregrounded` event, which the connection loop turns into one)
+        // and would arrive first in practice. But that is two independent
+        // channels agreeing on their order, and the whole point of naming
+        // the thread on the turn is not having to depend on that.
+        //
+        // Recorded as in flight first: with the two now agreed, the turn
+        // counts as running here, and cached history won't replace the live
+        // view underneath it.
+        if self.foreground_thread_id.is_none() {
+            self.set_foreground_thread(Some(id));
+        }
+    }
+
+    /// Whether a turn-scoped frame announcing `thread_id` belongs to the
+    /// response this client is tracking. An unannounced thread (`None`) is
+    /// an older gateway and is trusted, as is a client that never settled
+    /// on one; a mismatch is another thread's turn and must not retire this
+    /// one's in-flight state.
+    pub fn frame_is_for_current_turn(&self, thread_id: Option<u64>) -> bool {
+        match thread_id {
+            Some(announced) => self.in_flight.contains(&announced),
+            // An older gateway, which cannot say. Trusted as before.
+            None => true,
+        }
+    }
+
+    /// Record a question from the agent, tagged with the thread whose turn
+    /// asked it (the streaming thread, else whatever is in the foreground).
+    pub fn set_user_prompt(&mut self, prompt: UserPrompt, asked_by: Option<u64>) {
+        let owner = asked_by.or(self.foreground_thread_id);
+        self.pending_user_prompts.push((owner, prompt));
+    }
+
+    /// The question to render in the chat stream: `Some` only while the
+    /// thread that asked it is the one on screen.
+    pub fn visible_user_prompt(&self) -> Option<UserPrompt> {
+        self.pending_user_prompts
+            .iter()
+            .find(|(owner, _)| owner.is_none() || *owner == self.foreground_thread_id)
+            .map(|(_, prompt)| prompt.clone())
+    }
+
+    /// Drop the pending question. Used when it is answered or dismissed, and
+    /// when the gateway stops waiting for it (cancel, timeout, tool result).
+    pub fn clear_user_prompt(&mut self) {
+        self.pending_user_prompts.clear();
+    }
+
+    /// Drop the pending question if `id` identifies it. The prompt id is the
+    /// `ask_user` tool call id, so the tool's result frame — which arrives
+    /// whether the wait ended in an answer, a cancel, or a timeout — is what
+    /// retires a card the user never touched.
+    /// Retire the question the visible card shows, on the user answering
+    /// or dismissing it.
+    ///
+    /// By the same filter that picked the card for rendering — owner
+    /// unknown or on the foreground thread — not oldest-by-id like the
+    /// approvals: their dialog always shows the queue head, so the oldest
+    /// holder of an id is what is on screen, but the visible card skips
+    /// other threads' questions, and with a colliding id the oldest holder
+    /// can be a hidden question the user did not answer. Removing that one
+    /// left the answered card on screen and silently ran another turn's
+    /// wait out.
+    pub fn answer_user_prompt(&mut self, id: &str) {
+        if let Some(pos) = self.pending_user_prompts.iter().position(|(owner, p)| {
+            p.id == id && (owner.is_none() || *owner == self.foreground_thread_id)
+        }) {
+            self.pending_user_prompts.remove(pos);
+        }
+    }
+
+    /// Oldest match only, like `retire_tool_approval`: the prompt id is a
+    /// tool-call id, which can collide across concurrent turns. And owner-
+    /// scoped like it too — see there for why an id-only match lets one
+    /// turn's result discard another turn's unanswered question.
+    pub fn clear_user_prompt_if(&mut self, thread_id: Option<u64>, id: &str) {
+        if let Some(pos) = self
+            .pending_user_prompts
+            .iter()
+            .position(|(owner, p)| p.id == id && (thread_id.is_none() || *owner == thread_id))
+        {
+            self.pending_user_prompts.remove(pos);
+        }
     }
 
     /// Start a new assistant message (streaming).
@@ -651,18 +989,61 @@ impl AppState {
         self.is_processing = false;
         self.streaming_chunks = 0;
         self.streaming_bytes = 0;
-        self.streaming_thread_id = None;
+    }
+
+    /// Retire the in-flight turn on Stop, returning the thread it was running
+    /// in so the request can name it.
+    ///
+    /// Stop means the conversation on screen. With a turn running in each of
+    /// several threads, that is the only one the user can have meant — naming
+    /// the most recently started instead would interrupt a conversation they
+    /// are not even looking at.
+    pub fn stop_current_turn(&mut self) -> Option<u64> {
+        let thread_id = self.foreground_thread_id;
+        if let Some(thread) = thread_id {
+            self.in_flight.remove(&thread);
+        }
+        // Stopping before the gateway named the turn's thread stops that
+        // unowned turn: nothing else can be running.
+        if thread_id.is_none() {
+            self.unowned_turn_in_flight = false;
+        }
+        self.finish_current_message();
+        // Stop applies to a turn parked on a question too: the gateway
+        // drops the wait, so the card goes with it — but only the cards
+        // belonging to the turn being stopped. A question asked by a turn
+        // in another thread is still live, and wiping it would leave that
+        // turn waiting out its full window on an answer the user can no
+        // longer give. An untagged question is another turn's too — one
+        // whose thread was never announced — and survives as long as
+        // anything that could own it is still running.
+        let others_running = !self.in_flight.is_empty() || self.unowned_turn_in_flight;
+        self.pending_user_prompts
+            .retain(|(owner, _)| *owner != thread_id && (owner.is_some() || others_running));
+        thread_id
     }
 
     /// Handle the end of a response. Finalizes the live view only when the
     /// response targeted the foreground thread; a response that completed in
     /// a backgrounded thread just releases the in-flight marker (its
     /// transcript arrives via the gateway's history snapshot).
-    pub fn response_done(&mut self) {
-        if self.stream_targets_foreground() {
+    pub fn response_done(&mut self, thread_id: Option<u64>) {
+        // Each turn retires its own. Clearing the lot would take the working
+        // indicator off a conversation that is still answering.
+        match thread_id {
+            Some(thread) => {
+                self.in_flight.remove(&thread);
+            }
+            None => self.in_flight.clear(),
+        }
+        // However the turn was tracked, it is over. An unowned turn that
+        // finished before any announcement named its thread must not leave
+        // this armed, or the next election would adopt a turn that no
+        // longer exists.
+        self.unowned_turn_in_flight = false;
+        let on_screen = thread_id.is_none() || thread_id == self.foreground_thread_id;
+        if on_screen {
             self.finish_current_message();
-        } else {
-            self.streaming_thread_id = None;
         }
     }
 
@@ -847,7 +1228,7 @@ impl AppState {
                     is_processing = self.is_processing,
                     is_streaming = self.is_streaming,
                     is_thinking = self.is_thinking,
-                    streaming_thread = ?self.streaming_thread_id,
+                    in_flight_threads = ?self.in_flight,
                     "{level_msg}"
                 );
             } else {
@@ -871,6 +1252,13 @@ impl AppState {
         if self.foreground_thread_id == thread_id {
             return;
         }
+        // A view with no thread is not moving anywhere — it is being
+        // labelled with the thread it was always in, elected by the gateway
+        // for a message sent before any thread existed. Its messages (the
+        // user's own words, the streaming bubble) belong to the adopted
+        // thread and must survive the labelling; there is no cache to swap
+        // in yet, only one to seed.
+        let labelling_unowned_view = self.foreground_thread_id.is_none();
         if let Some(outgoing) = self.foreground_thread_id
             && !self.messages.is_empty()
         {
@@ -895,15 +1283,40 @@ impl AppState {
             );
         }
 
-        if self.foreground_request_in_flight() {
-            return;
+        // The view always follows the foreground. This used to bail out
+        // while a request was in flight — written when the in-flight test
+        // meant "the turn being tracked is the one on screen", where it
+        // protected a live streaming bubble. The test now asks whether the
+        // *incoming* thread is busy, and with turns running per thread that
+        // is true for any busy destination: bailing left the outgoing
+        // thread's transcript on screen under the incoming thread's
+        // identity, with the incoming turn's chunks appended to it. The
+        // in-flight guard's remaining job is deciding whether a *history
+        // snapshot* may replace the live view, in
+        // `history_should_take_the_view`.
+        if labelling_unowned_view {
+            if let Some(id) = thread_id {
+                // The elected thread is the unowned turn's own: adopt it
+                // before the indicators are re-derived below, or the still-
+                // running reply reads as finished — Stop gone, composer
+                // open over it. `StreamStart` says the same thing and either
+                // announcement can arrive first.
+                if self.unowned_turn_in_flight {
+                    self.unowned_turn_in_flight = false;
+                    self.in_flight.insert(id);
+                }
+                if !self.messages.is_empty() {
+                    self.thread_messages.insert(id, self.messages.clone());
+                }
+            }
+        } else {
+            self.messages = thread_id
+                .and_then(|id| self.thread_messages.get(&id).cloned())
+                .unwrap_or_default();
         }
-        if let Some(id) = thread_id
-            && let Some(cached) = self.thread_messages.get(&id)
-        {
-            self.messages = cached.clone();
-            self.reset_streaming_indicators();
-        }
+        // Derived, not cleared: the gateway can move the foreground onto a
+        // thread whose turn is still running, and the view must say so.
+        self.derive_view_indicators();
     }
 
     /// Replace a thread's messages with canonical history from the gateway.
@@ -971,12 +1384,29 @@ impl AppState {
         // matched against this id, and the sidebar highlight moves at once.
         self.foreground_thread_id = Some(target_id);
 
-        // Reset ALL indicators so the foreground_request_in_flight() guard
-        // in hydrate_thread_messages / apply_thread_history won't block the
-        // authoritative history snapshot from the gateway. The streaming
-        // bubble from the previous view was already lost when we swapped
-        // self.messages above; the full text arrives via the snapshot.
-        self.is_processing = false;
+        // The indicators describe the view, so they are derived from what is
+        // actually running in the incoming thread — not blanket-cleared.
+        // Clearing unconditionally re-opened the composer and hid the
+        // working state of a conversation still mid-answer, which also made
+        // Stop unreachable for it; leaving them set would show a phantom
+        // spinner over an idle thread and block its history snapshot. The
+        // streaming bubble from the previous view was already lost when we
+        // swapped `self.messages` above; an in-flight thread's full text
+        // arrives via the completion snapshot.
+        self.derive_view_indicators();
+    }
+
+    /// Point the working indicators at the thread now in the foreground.
+    ///
+    /// `is_processing` doubles as the composer gate, and that is wanted: a
+    /// message sent into a thread whose turn is running would displace that
+    /// turn, so while one is running the way to intervene is Stop — which
+    /// this is what keeps reachable. Chunk/thinking arrivals re-arm the
+    /// finer-grained flags on their own.
+    fn derive_view_indicators(&mut self) {
+        self.is_processing = self
+            .foreground_thread_id
+            .is_some_and(|thread| self.in_flight.contains(&thread));
         self.is_streaming = false;
         self.is_thinking = false;
         self.streaming_chunks = 0;
@@ -1101,7 +1531,7 @@ mod tests {
         s.end_thinking_message(); // ThinkingEnd (first chunk imminent)
         s.append_to_current_message("Hello"); // Chunk
         s.append_to_current_message(", world");
-        s.response_done();
+        s.response_done(s.foreground_thread_id);
 
         let roles: Vec<MessageRole> = s.messages.iter().map(|m| m.role).collect();
         assert_eq!(roles, vec![MessageRole::Thinking, MessageRole::Assistant]);
@@ -1398,5 +1828,938 @@ mod tests {
             "queued saves must not be reported as discarded"
         );
         assert!(view.rebase_to_current_thread().is_empty());
+    }
+
+    fn question(id: &str) -> UserPrompt {
+        UserPrompt {
+            id: id.to_string(),
+            title: "Which way?".to_string(),
+            description: None,
+            prompt_type: rustyclaw_core::user_prompt_types::PromptType::TextInput {
+                placeholder: None,
+                default: None,
+            },
+        }
+    }
+
+    /// A question belongs to the thread that asked it: switching away hides
+    /// the card, switching back brings it out. Without this the question
+    /// follows the user everywhere, which is what made an inline card behave
+    /// like a modal.
+    #[test]
+    fn a_question_is_scoped_to_the_thread_that_asked_it() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+
+        s.switch_thread(2);
+        assert!(
+            s.visible_user_prompt().is_none(),
+            "another thread's question must not be on screen"
+        );
+        assert!(
+            !s.pending_user_prompts.is_empty(),
+            "switching away parks the question, it does not answer it"
+        );
+
+        s.switch_thread(1);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+    }
+
+    /// A question cannot outlive the connection that asked it: the turn is
+    /// gone, no tool result will ever retire the card, and an answer would
+    /// go into a closed socket.
+    #[test]
+    fn a_dropped_connection_retires_the_question() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
+
+        // What the Disconnected handler does.
+        s.is_processing = false;
+        s.is_streaming = false;
+        s.is_thinking = false;
+        s.in_flight.clear();
+        s.clear_user_prompt();
+
+        assert!(s.visible_user_prompt().is_none());
+        assert!(s.pending_user_prompts.is_empty());
+    }
+
+    /// The `ask_user` tool result means the gateway stopped waiting —
+    /// answered, cancelled or timed out. The card goes with it, even if the
+    /// user is looking at a different thread.
+    #[test]
+    fn a_tool_result_retires_the_question_it_belongs_to() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
+
+        s.clear_user_prompt_if(None, "some-other-call");
+        assert!(!s.pending_user_prompts.is_empty());
+
+        s.clear_user_prompt_if(None, "call-1");
+        assert!(s.pending_user_prompts.is_empty());
+    }
+
+    /// The gateway has the last word on which thread a turn is running in.
+    ///
+    /// The client guesses at submit time from its own foreground, and that
+    /// guess can be wrong — nothing was focused and the gateway elected a
+    /// thread, or an older client let it auto-switch. `StreamStart` names
+    /// the real one, and everything downstream routes off it.
+    #[test]
+    fn the_announced_thread_corrects_the_clients_guess() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.mark_request_started();
+        assert!(s.in_flight.is_empty());
+
+        s.adopt_stream_thread(Some(7));
+        assert!(s.in_flight.contains(&7));
+
+        // An older gateway announces nothing; nothing is added.
+        s.adopt_stream_thread(None);
+        assert_eq!(s.in_flight.len(), 1);
+    }
+
+    /// A thread elected for the turn comes onto the screen with it.
+    ///
+    /// Sending with nothing focused makes the gateway elect a thread and
+    /// announce it. Adopting it as the turn's thread but leaving the view
+    /// pointed at nothing puts the two permanently out of step: every
+    /// frame after `StreamStart` reads as belonging to a backgrounded
+    /// thread and the whole reply is dropped on the floor.
+    #[test]
+    fn an_elected_thread_comes_into_view_with_its_turn() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.mark_request_started();
+
+        s.adopt_stream_thread(Some(7));
+
+        assert_eq!(s.foreground_thread_id, Some(7));
+        assert!(
+            s.stream_targets_foreground(),
+            "the turn must render into the view, not past it"
+        );
+    }
+
+    /// Electing does not yank the user out of the thread they are reading.
+    ///
+    /// The announcement settles where the *turn* runs. A client that
+    /// already knows its foreground has said where it is looking, and a
+    /// turn running elsewhere — one started before the user switched away —
+    /// must stay in the background where it belongs.
+    #[test]
+    fn an_announcement_does_not_move_a_view_that_is_already_placed() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(3);
+        s.mark_request_started();
+
+        s.adopt_stream_thread(Some(7));
+
+        assert_eq!(
+            s.foreground_thread_id,
+            Some(3),
+            "a turn opening elsewhere must not move the view"
+        );
+        assert!(s.in_flight.contains(&7), "the other turn is tracked too");
+    }
+
+    /// Each turn's completion retires only its own.
+    ///
+    /// Sending in one conversation and then another leaves two turns in
+    /// flight. A single "the turn" slot held whichever started last, so the
+    /// first turn's close-out was discarded as somebody else's — its bubble
+    /// never finished and the working indicator never cleared. And the slot
+    /// decided what Stop named, so Stop cancelled the newer conversation
+    /// while the user was looking at the older one.
+    #[test]
+    fn two_turns_in_flight_retire_independently() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        // The user switches to thread 2 and sends there; thread 1 is still
+        // answering.
+        s.switch_thread(2);
+        s.mark_request_started();
+        assert!(s.in_flight.contains(&1) && s.in_flight.contains(&2));
+
+        // Thread 1 finishes. It is a real turn of this client's, so its
+        // close-out is its own — but it must not finish the bubble on screen,
+        // which belongs to thread 2.
+        assert!(s.frame_is_for_current_turn(Some(1)));
+        s.response_done(Some(1));
+        assert!(!s.in_flight.contains(&1));
+        assert!(
+            s.is_processing,
+            "thread 2 is still answering; the indicator stays"
+        );
+
+        // Thread 2 finishes, and that is the one on screen.
+        s.response_done(Some(2));
+        assert!(s.in_flight.is_empty());
+        assert!(!s.is_processing);
+    }
+
+    /// Stop interrupts the conversation on screen.
+    ///
+    /// Named from the most recently started turn, it would cancel a
+    /// conversation the user is not even looking at while the one they meant
+    /// keeps running.
+    #[test]
+    fn stop_targets_the_conversation_on_screen() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.switch_thread(2);
+        s.mark_request_started();
+
+        // Back to the older conversation, which is still answering.
+        s.switch_thread(1);
+        assert_eq!(
+            s.stop_current_turn(),
+            Some(1),
+            "Stop must name what the user is reading, not the newest turn"
+        );
+        assert!(!s.in_flight.contains(&1));
+        assert!(
+            s.in_flight.contains(&2),
+            "the other conversation keeps running"
+        );
+    }
+
+    /// Two conversations' questions each render in their own thread.
+    ///
+    /// A second question used to overwrite the first, which was never shown
+    /// again — its five-minute wait expired on an answer the user was never
+    /// offered. Now each card waits with its thread, and answering one
+    /// retires only it.
+    #[test]
+    fn two_threads_questions_each_render_in_their_own() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call-1"), Some(1));
+        s.set_user_prompt(question("call-2"), Some(2));
+
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+        s.switch_thread(2);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-2")
+        );
+
+        // Answering thread 2's question leaves thread 1's waiting.
+        s.clear_user_prompt_if(None, "call-2");
+        assert!(s.visible_user_prompt().is_none());
+        s.switch_thread(1);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-1")
+        );
+    }
+
+    /// One conversation's sign-in does not tear down another's.
+    ///
+    /// The device flow was the last single slot: a second sign-in overwrote
+    /// the first, whose code was never shown, and completing one flow took
+    /// down the other's dialog. Completion and close-out both retire only
+    /// their own turn's flow.
+    #[test]
+    fn one_sign_in_does_not_tear_down_anothers() {
+        let mut s = idle_state();
+        s.pending_device_flows.push_back((
+            Some(1),
+            "https://example.com/a".into(),
+            "AAAA-1111".into(),
+            None,
+        ));
+        s.pending_device_flows.push_back((
+            Some(2),
+            "https://example.com/b".into(),
+            "BBBB-2222".into(),
+            None,
+        ));
+
+        // Thread 1's flow completes; thread 2's is untouched and surfaces.
+        s.retire_completed_device_flow(Some(1));
+        assert_eq!(
+            s.pending_device_flows.front().map(|(owner, ..)| *owner),
+            Some(Some(2))
+        );
+
+        // An unattributed completion (older gateway) retires the visible one.
+        s.retire_completed_device_flow(None);
+        assert!(s.pending_device_flows.is_empty());
+    }
+
+    /// An unnamed close-out does not take another conversation's sign-in.
+    ///
+    /// A close-out with no thread can come from any turn — only a
+    /// completion may read `None` as "the prompt on screen". Popping the
+    /// front here discarded a queued sign-in, and the code the user was
+    /// about to enter with it, because some unrelated reply finished.
+    #[test]
+    fn an_unnamed_close_out_leaves_sign_ins_alone() {
+        let mut s = idle_state();
+        s.in_flight.insert(2);
+        s.pending_device_flows.push_back((
+            Some(2),
+            "https://example.com/device".into(),
+            "ABCD-1234".into(),
+            None,
+        ));
+
+        // What the ResponseDone handler does for a turn that had no
+        // thread to announce.
+        s.retire_device_flows_for_thread(None);
+
+        assert_eq!(
+            s.pending_device_flows.len(),
+            1,
+            "the other conversation's sign-in must survive"
+        );
+    }
+
+    /// An abandoned approval does not block the queue behind it.
+    ///
+    /// The gateway gives up on an approval after two minutes and emits the
+    /// tool's result; the entry must go with it, or every later request
+    /// queues invisibly behind a corpse and times out unseen as a denial.
+    #[test]
+    fn an_abandoned_approval_unblocks_the_queue() {
+        let mut s = idle_state();
+        s.pending_tool_approvals.push_back((
+            Some(1),
+            "call-1".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call-2".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
+
+        // What the ToolResult handler does when the gateway stops waiting.
+        s.retire_tool_approval(Some(1), "call-1");
+
+        assert_eq!(
+            s.pending_tool_approvals
+                .front()
+                .map(|(_, id, _, _)| id.as_str()),
+            Some("call-2"),
+            "the next request must surface"
+        );
+    }
+
+    /// Answering one of two same-id requests keeps the other.
+    ///
+    /// Adapters emit colliding call ids (`call_0`, …), so two concurrent
+    /// turns can both be waiting on the same id; the gateway queues a
+    /// waiter per turn and answers oldest-first. Retiring every match took
+    /// the second turn's request down with the first — it vanished unseen
+    /// and its timeout read as a denial.
+    #[test]
+    fn colliding_call_ids_retire_oldest_first() {
+        let mut s = idle_state();
+        s.pending_tool_approvals.push_back((
+            Some(1),
+            "call_0".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call_0".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
+
+        // What the dialog's answer handler does.
+        s.retire_tool_approval(None, "call_0");
+
+        assert_eq!(
+            s.pending_tool_approvals
+                .front()
+                .map(|(_, _, name, _)| name.as_str()),
+            Some("write_file"),
+            "the younger request with the shared id must survive"
+        );
+    }
+
+    /// An answered approval's tool result does not reach across threads.
+    ///
+    /// After the user approves one turn's `call_0`, that tool's result
+    /// still calls retire — its own entry is already gone. An id-only
+    /// match then removed another turn's still-queued `call_0`, which was
+    /// never shown and timed out as a denial. Scoped by thread, the
+    /// result's second retirement finds nothing.
+    #[test]
+    fn a_finished_tools_result_leaves_another_threads_request() {
+        let mut s = idle_state();
+        s.pending_tool_approvals.push_back((
+            Some(1),
+            "call_0".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call_0".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
+
+        // The user answers the displayed request (thread 1's, oldest)…
+        s.retire_tool_approval(None, "call_0");
+        // …and the approved tool finishes: its ToolResult retires again,
+        // now attributed to thread 1.
+        s.retire_tool_approval(Some(1), "call_0");
+
+        assert_eq!(
+            s.pending_tool_approvals.front().map(|(owner, ..)| *owner),
+            Some(Some(2)),
+            "thread 2's unanswered request must still be waiting"
+        );
+
+        // Same shape for questions: thread 1's answered, its result must
+        // not take thread 2's card.
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call_0"), Some(1));
+        s.set_user_prompt(question("call_0"), Some(2));
+        s.answer_user_prompt("call_0");
+        s.clear_user_prompt_if(Some(1), "call_0");
+        assert_eq!(
+            s.pending_user_prompts.first().map(|(owner, _)| *owner),
+            Some(Some(2)),
+            "thread 2's unanswered question must still be waiting"
+        );
+    }
+
+    /// A displaced turn's close-out clears the boxes it left behind.
+    ///
+    /// A second message in a conversation displaces the turn still running
+    /// there; aborted mid-wait, it never sends the ToolResult that would
+    /// retire its approval or question. The gateway closes it out on its
+    /// behalf, and that close-out must take the dead requests down —
+    /// leaving another turn's untouched — or the dead approval at the head
+    /// of the queue hides every later request.
+    #[test]
+    fn a_turns_close_out_retires_its_unresolved_requests() {
+        let mut s = idle_state();
+        s.in_flight.insert(2);
+        s.pending_tool_approvals.push_back((
+            Some(1),
+            "call_0".into(),
+            "execute_command".into(),
+            "{}".into(),
+        ));
+        s.pending_tool_approvals.push_back((
+            Some(2),
+            "call_0".into(),
+            "write_file".into(),
+            "{}".into(),
+        ));
+        s.set_user_prompt(question("call_1"), Some(1));
+        s.set_user_prompt(question("call_1"), Some(2));
+
+        // What the ResponseDone handler does for the displaced turn.
+        s.retire_requests_for_thread(Some(1));
+
+        assert_eq!(
+            s.pending_tool_approvals.front().map(|(owner, ..)| *owner),
+            Some(Some(2)),
+            "the running turn's approval must survive"
+        );
+        assert_eq!(
+            s.pending_user_prompts.first().map(|(owner, _)| *owner),
+            Some(Some(2)),
+            "the running turn's question must survive"
+        );
+    }
+
+    /// A turn's close-out takes its credential requests with it.
+    ///
+    /// A credential wait ending is what ends its turn, so the close-out is
+    /// the one signal these can no longer be answered. Another turn's
+    /// request is untouched.
+    #[test]
+    fn a_turns_close_out_retires_its_credential_requests() {
+        let mut s = idle_state();
+        s.pending_credential_requests.push_back((
+            Some(1),
+            "cred-1".into(),
+            "openai".into(),
+            "OPENAI_API_KEY".into(),
+            "auth failed".into(),
+        ));
+        s.pending_credential_requests.push_back((
+            Some(2),
+            "cred-2".into(),
+            "anthropic".into(),
+            "ANTHROPIC_API_KEY".into(),
+            "auth failed".into(),
+        ));
+
+        s.retire_credentials_for_thread(Some(1));
+
+        assert_eq!(s.pending_credential_requests.len(), 1);
+        assert_eq!(
+            s.pending_credential_requests
+                .front()
+                .map(|(owner, ..)| *owner),
+            Some(Some(2)),
+            "the other turn's request is still live"
+        );
+
+        // An unnamed close-out (older gateway) retires nothing.
+        s.retire_credentials_for_thread(None);
+        assert_eq!(s.pending_credential_requests.len(), 1);
+    }
+
+    /// An untagged request outlives other turns but not an idle client.
+    ///
+    /// A request raised before its turn's stream opened carries no thread,
+    /// so no close-out can ever name it. While other turns run it must
+    /// survive their close-outs — it may still belong to one of them — but
+    /// once nothing is in flight, nobody is listening for the answer and
+    /// keeping it would show a dialog no one can act on.
+    #[test]
+    fn an_untagged_request_is_swept_only_when_idle() {
+        let mut s = idle_state();
+        s.in_flight.insert(1);
+        s.in_flight.insert(2);
+        s.pending_credential_requests.push_back((
+            None,
+            "cred-untagged".into(),
+            "openai".into(),
+            "OPENAI_API_KEY".into(),
+            "auth failed".into(),
+        ));
+        s.pending_device_flows.push_back((
+            None,
+            "https://example.com/device".into(),
+            "ABCD-1234".into(),
+            None,
+        ));
+
+        // Thread 1 closes out while thread 2 is still running.
+        s.in_flight.remove(&1);
+        s.retire_credentials_for_thread(Some(1));
+        s.retire_device_flows_for_thread(Some(1));
+        assert_eq!(
+            s.pending_credential_requests.len(),
+            1,
+            "the untagged request may belong to the turn still running"
+        );
+        assert_eq!(s.pending_device_flows.len(), 1);
+
+        // The last turn ends: nothing can be listening any more.
+        s.in_flight.remove(&2);
+        s.retire_credentials_for_thread(Some(2));
+        s.retire_device_flows_for_thread(Some(2));
+        assert!(s.pending_credential_requests.is_empty());
+        assert!(s.pending_device_flows.is_empty());
+    }
+
+    /// Answering a credential dialog retires the answered request, not the
+    /// queue head.
+    ///
+    /// The head can change between render and click — a close-out can
+    /// retire the displayed entry first — and popping the front would then
+    /// discard a request that was never shown.
+    #[test]
+    fn answering_a_credential_retires_it_by_id() {
+        let mut s = idle_state();
+        s.pending_credential_requests.push_back((
+            Some(1),
+            "cred-1".into(),
+            "openai".into(),
+            "OPENAI_API_KEY".into(),
+            "auth failed".into(),
+        ));
+        s.pending_credential_requests.push_back((
+            Some(2),
+            "cred-2".into(),
+            "anthropic".into(),
+            "ANTHROPIC_API_KEY".into(),
+            "auth failed".into(),
+        ));
+
+        // The user answers the second entry after the first was retired
+        // out from under the dialog and re-rendered.
+        s.retire_credential_request("cred-2");
+
+        assert_eq!(s.pending_credential_requests.len(), 1);
+        assert_eq!(
+            s.pending_credential_requests
+                .front()
+                .map(|(_, id, ..)| id.as_str()),
+            Some("cred-1"),
+            "only the answered request goes"
+        );
+    }
+
+    /// Labelling an unowned view keeps the words already in it.
+    ///
+    /// A message sent before any thread exists renders immediately; the
+    /// gateway then elects a thread and announces it. That announcement
+    /// labels the view — it does not move it — and the unconditional swap
+    /// treated it as a move, replacing the user's just-sent message with
+    /// the elected thread's empty cache until the completion snapshot.
+    #[test]
+    fn labelling_the_view_with_its_elected_thread_keeps_its_words() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.add_user_message("sent before any thread existed".to_string());
+        s.mark_request_started();
+
+        // What StreamStart's adoption does.
+        s.adopt_stream_thread(Some(7));
+
+        assert_eq!(s.foreground_thread_id, Some(7));
+        assert!(
+            s.messages
+                .back()
+                .is_some_and(|m| m.content.contains("before any thread")),
+            "the user's message must survive the labelling"
+        );
+        assert!(
+            s.thread_messages
+                .get(&7)
+                .is_some_and(|cache| !cache.is_empty()),
+            "the adopted thread's cache is seeded from the view"
+        );
+    }
+
+    /// Answering the visible question retires it — not a hidden namesake.
+    ///
+    /// The visible card is foreground-filtered, so with colliding call ids
+    /// the oldest holder of the answered id can be another thread's hidden
+    /// question. Retiring oldest-by-id removed that one: the answered card
+    /// stayed on screen and the hidden turn's wait quietly expired.
+    #[test]
+    fn answering_the_visible_question_spares_a_hidden_namesake() {
+        let mut s = idle_state();
+        s.set_user_prompt(question("call_0"), Some(1));
+        s.set_user_prompt(question("call_0"), Some(2));
+        s.foreground_thread_id = Some(2);
+        assert!(s.visible_user_prompt().is_some());
+
+        // What on_prompt_respond does for the card on screen (thread 2's).
+        s.answer_user_prompt("call_0");
+
+        assert!(
+            s.visible_user_prompt().is_none(),
+            "the answered card must leave the screen"
+        );
+        s.switch_thread(1);
+        assert!(
+            s.visible_user_prompt().is_some(),
+            "thread 1's unanswered question must still be waiting"
+        );
+    }
+
+    /// Labelling an unowned view keeps its turn's working state.
+    ///
+    /// A turn sent before any thread exists has no id to sit in
+    /// `in_flight`. When the election arrives as a `ThreadsUpdate` (which
+    /// beats `StreamStart` in practice), the labelling re-derived the
+    /// indicators from that empty set — Stop vanished and the composer
+    /// unlocked over a reply still streaming. The election must adopt the
+    /// pending turn, whichever announcement carries it first.
+    #[test]
+    fn labelling_the_view_with_its_elected_thread_keeps_it_working() {
+        let mut s = idle_state();
+        s.foreground_thread_id = None;
+        s.add_user_message("sent before any thread existed".to_string());
+        s.mark_request_started();
+
+        // What the ThreadsUpdate handler does when the election's
+        // Foregrounded event arrives before StreamStart.
+        s.set_foreground_thread(Some(7));
+
+        assert!(
+            s.is_processing,
+            "the reply is still streaming and must say so"
+        );
+        assert!(
+            s.in_flight.contains(&7),
+            "the elected thread carries the adopted turn"
+        );
+
+        // The turn's close-out still lands: nothing left armed behind it.
+        s.response_done(Some(7));
+        assert!(!s.is_processing && s.in_flight.is_empty());
+        assert!(
+            !s.unowned_turn_in_flight,
+            "an adopted turn must not be adopted again"
+        );
+    }
+
+    /// A displaced turn's close-out must not silence its replacement.
+    ///
+    /// A second message in a busy conversation makes the gateway close the
+    /// displaced turn out first — attributed to the same thread, so it is
+    /// indistinguishable from the new turn's own close-out and clears the
+    /// working state armed at submit. The new turn's stream opening in the
+    /// on-screen thread is the fact that re-arms it; without that, Stop and
+    /// the composer gate stayed gone for the whole reply.
+    #[test]
+    fn a_displaced_close_out_does_not_silence_the_new_turn() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        // The displaced predecessor's close-out lands first…
+        s.response_done(Some(1));
+        // …then the replacement's stream opens in the same thread.
+        s.adopt_stream_thread(Some(1));
+
+        assert!(
+            s.is_processing,
+            "Stop must be available for the reply now running"
+        );
+        assert!(s.in_flight.contains(&1));
+    }
+
+    /// A gateway-driven foreground move always swaps the transcript.
+    ///
+    /// The old early return, guarding a live streaming bubble, fired for
+    /// any busy destination once the in-flight test became per-thread —
+    /// leaving the outgoing thread's messages on screen under the incoming
+    /// thread's identity, with the incoming turn's chunks appended to them.
+    #[test]
+    fn a_foreground_move_onto_a_busy_thread_swaps_the_view() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.add_user_message("thread one's words".to_string());
+        // Thread 2 is mid-answer with cached history.
+        s.in_flight.insert(2);
+        s.thread_messages.insert(
+            2,
+            VecDeque::from(vec![ChatMessage::user("thread two's words")]),
+        );
+
+        s.set_foreground_thread(Some(2));
+
+        assert!(
+            s.messages
+                .back()
+                .is_some_and(|m| m.content.contains("thread two")),
+            "the view must show the thread it claims to"
+        );
+        assert!(
+            s.is_processing,
+            "the incoming thread is still answering and must say so"
+        );
+    }
+
+    /// Answering one question leaves the others queued.
+    ///
+    /// The respond handler used the clear-everything path, so answering the
+    /// card on screen silently discarded every other thread's question with
+    /// it. Retirement is by call id.
+    #[test]
+    fn answering_one_question_leaves_the_others_queued() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.set_user_prompt(question("call-1"), Some(1));
+        s.set_user_prompt(question("call-2"), Some(2));
+
+        // What on_prompt_respond does for the visible card.
+        s.answer_user_prompt("call-1");
+
+        s.switch_thread(2);
+        assert_eq!(
+            s.visible_user_prompt().map(|p| p.id).as_deref(),
+            Some("call-2"),
+            "the other thread's question must still be waiting"
+        );
+    }
+
+    /// Stop leaves an unowned turn's question alone.
+    ///
+    /// A question raised before its turn's thread was announced carries no
+    /// owner tag. Stopping a named conversation used to sweep those
+    /// untagged cards too, leaving the still-running unowned turn waiting
+    /// out its window on an answer the user could no longer give.
+    #[test]
+    fn stop_leaves_an_unowned_turns_question_alone() {
+        let mut s = idle_state();
+        // A turn submitted before any thread existed asks a question…
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"), None);
+        // …and the user stops a different, named conversation.
+        s.foreground_thread_id = Some(2);
+        s.in_flight.insert(2);
+        s.stop_current_turn();
+
+        assert!(
+            !s.pending_user_prompts.is_empty(),
+            "the unowned turn's question must still be waiting"
+        );
+    }
+
+    /// Closing a sign-in box that the gateway already retired cancels
+    /// nothing.
+    ///
+    /// The dialog renders the queue head, but the head can change between
+    /// render and click — a completion, a turn's close-out. Popping the
+    /// head at click time then discarded a prompt that was never shown and
+    /// aimed the cancel at that other flow's turn, killing a reply the
+    /// user was not looking at.
+    #[test]
+    fn closing_a_retired_sign_in_cancels_nothing() {
+        let mut s = idle_state();
+        s.pending_device_flows.push_back((
+            Some(1),
+            "https://a.example/device".into(),
+            "AAAA-1111".into(),
+            None,
+        ));
+        s.pending_device_flows.push_back((
+            Some(2),
+            "https://b.example/device".into(),
+            "BBBB-2222".into(),
+            None,
+        ));
+
+        // The displayed flow's turn closes out between render and click…
+        s.retire_device_flows_for_thread(Some(1));
+        // …then the user's click on the stale dialog lands.
+        assert_eq!(
+            s.retire_device_flow("AAAA-1111"),
+            None,
+            "the displayed flow is gone; there is nothing to cancel"
+        );
+        assert_eq!(
+            s.pending_device_flows.len(),
+            1,
+            "the other conversation's sign-in must survive the click"
+        );
+        // Closing the surviving flow names its own turn.
+        assert_eq!(s.retire_device_flow("BBBB-2222"), Some(Some(2)));
+    }
+
+    /// Stop leaves another conversation's question alone.
+    ///
+    /// Questions are thread-scoped; Stop is too. Wiping the card
+    /// unconditionally left the asking turn waiting out its five-minute
+    /// window on an answer the user could no longer give.
+    #[test]
+    fn stop_leaves_another_threads_question_alone() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"), Some(1));
+
+        // The user switches to thread 2, starts a turn there, and stops it.
+        s.switch_thread(2);
+        s.mark_request_started();
+        s.stop_current_turn();
+
+        assert!(
+            !s.pending_user_prompts.is_empty(),
+            "thread 1's question is still waiting for its answer"
+        );
+
+        // Stopping thread 1 itself does retire its question.
+        s.switch_thread(1);
+        s.stop_current_turn();
+        assert!(s.pending_user_prompts.is_empty());
+    }
+
+    /// Returning to a conversation that is still answering shows it working.
+    ///
+    /// The indicators are derived from `in_flight` on every switch, in both
+    /// directions. Blanket-clearing re-opened the composer over a running
+    /// turn — a send there displaces the turn, so the honest offer is Stop,
+    /// and Stop is gated on the same flag. Leaving them set showed a phantom
+    /// spinner over idle threads.
+    #[test]
+    fn returning_to_a_busy_thread_restores_its_working_state() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        s.switch_thread(2);
+        assert!(!s.is_processing, "thread 2 has no turn running");
+
+        s.switch_thread(1);
+        assert!(
+            s.is_processing,
+            "thread 1 is still answering; the working state and Stop come back"
+        );
+
+        s.response_done(Some(1));
+        assert!(!s.is_processing);
+    }
+
+    /// Stop names the turn it is stopping.
+    ///
+    /// The id was read *after* `finish_current_message` had already cleared
+    /// it, so every Stop went out unnamed — which the gateway honours only
+    /// while exactly one turn is running and ignores when several are. A Stop
+    /// button that silently does nothing. Reading and retiring are one
+    /// operation now, so the order cannot be got wrong at a call site.
+    #[test]
+    fn stopping_a_turn_reports_the_thread_it_was_in() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(4);
+        s.mark_request_started();
+        s.set_user_prompt(question("call-1"), s.foreground_thread_id);
+
+        let stopped = s.stop_current_turn();
+
+        assert_eq!(stopped, Some(4), "the Stop must name its turn");
+        assert!(!s.is_processing);
+        assert!(!s.in_flight.contains(&4));
+        assert!(
+            s.pending_user_prompts.is_empty(),
+            "a turn parked on a question loses the card with it"
+        );
+    }
+
+    /// Only the turn being tracked can end it.
+    ///
+    /// A close-out for another thread — a message refused because its thread
+    /// had gone, a turn from another client on the same agent — used to be
+    /// indistinguishable from this turn's own, and retiring on it took the
+    /// Stop button and the working indicator away while the model was still
+    /// running.
+    #[test]
+    fn a_close_out_for_another_thread_leaves_this_turn_running() {
+        let mut s = idle_state();
+        s.foreground_thread_id = Some(1);
+        s.mark_request_started();
+
+        assert!(!s.frame_is_for_current_turn(Some(2)));
+        assert!(s.frame_is_for_current_turn(Some(1)));
+        // Unannounced: an older gateway, and trusted as before.
+        assert!(s.frame_is_for_current_turn(None));
+
+        // What the ResponseDone handler does when it matches.
+        if s.frame_is_for_current_turn(Some(1)) {
+            s.response_done(s.foreground_thread_id);
+        }
+        assert!(!s.is_processing);
     }
 }

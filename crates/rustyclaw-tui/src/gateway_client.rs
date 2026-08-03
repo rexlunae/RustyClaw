@@ -15,7 +15,10 @@ use rustyclaw_core::gateway::GatewayEvent;
 ///
 /// Returns `None` for events the TUI does not surface (e.g. DOM queries, which
 /// require a webview the TUI does not have).
-pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> {
+pub(crate) fn gateway_event_to_gw_event(
+    thread_id: Option<u64>,
+    event: GatewayEvent,
+) -> Option<GwEvent> {
     use GatewayEvent as E;
 
     let ev = match event {
@@ -50,12 +53,16 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         E::ModelReloaded { provider, model } => GwEvent::ModelReloaded { provider, model },
 
         // ── Streaming ───────────────────────────────────────────────────
-        E::StreamStart => GwEvent::StreamStart,
-        E::ThinkingStart => GwEvent::ThinkingStart,
-        E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(delta),
-        E::ThinkingEnd => GwEvent::ThinkingEnd,
-        E::Chunk { delta } => GwEvent::Chunk(delta),
-        E::ResponseDone => GwEvent::ResponseDone,
+        E::StreamStart { thread_id } => GwEvent::StreamStart(thread_id),
+        E::ThinkingStart => GwEvent::ThinkingStart(thread_id),
+        E::ThinkingDelta { delta } => GwEvent::ThinkingDelta(thread_id, delta),
+        E::ThinkingEnd => GwEvent::ThinkingEnd(thread_id),
+        // Tagged with the turn that produced it. The TUI renders one thread
+        // at a time and shares a single streaming buffer, so a chunk from a
+        // turn running elsewhere has to be recognisable — appending it here
+        // would splice two answers together.
+        E::Chunk { delta } => GwEvent::Chunk(thread_id, delta),
+        E::ResponseDone { thread_id } => GwEvent::ResponseDone(thread_id),
 
         // ── Tool calls ──────────────────────────────────────────────────
         E::ToolCall {
@@ -63,6 +70,7 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             name,
             arguments,
         } => GwEvent::ToolCall {
+            thread_id,
             id,
             name,
             arguments,
@@ -73,6 +81,7 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             result,
             is_error,
         } => GwEvent::ToolResult {
+            thread_id,
             id,
             name,
             result,
@@ -88,6 +97,7 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
             state,
             message,
         } => GwEvent::ToolStatus {
+            thread_id,
             id,
             status: rustyclaw_core::ui::ToolLiveStatus {
                 elapsed_ms,
@@ -100,37 +110,50 @@ pub(crate) fn gateway_event_to_gw_event(event: GatewayEvent) -> Option<GwEvent> 
         },
         // stderr chunks merge into the same tail a terminal would show;
         // the flag isn't currently surfaced in either client.
-        E::ToolOutput { id, chunk, .. } => GwEvent::ToolOutput { id, chunk },
+        E::ToolOutput { id, chunk, .. } => GwEvent::ToolOutput {
+            thread_id,
+            id,
+            chunk,
+        },
         E::ToolApprovalRequest {
             id,
             name,
             arguments,
         } => GwEvent::ToolApprovalRequest {
+            thread_id,
             id,
             name,
             arguments,
         },
 
         // ── Interactive prompts ─────────────────────────────────────────
-        E::UserPromptRequest { prompt, .. } => GwEvent::UserPromptRequest(prompt),
+        E::UserPromptRequest { prompt, .. } => GwEvent::UserPromptRequest { thread_id, prompt },
         E::CredentialRequest {
             id,
             provider,
             secret_name,
             message,
         } => GwEvent::CredentialRequest {
+            thread_id,
             id,
             provider,
             secret_name,
             message,
         },
         E::DeviceFlowStart { url, code, .. } => GwEvent::DeviceFlowCode {
+            owner: thread_id
+                .map(crate::app::DeviceFlowOwner::Turn)
+                .unwrap_or(crate::app::DeviceFlowOwner::Unattributed),
             // Provider context is shown via the preceding Info message.
             provider: String::new(),
             url,
             code,
         },
-        E::DeviceFlowComplete => GwEvent::DeviceFlowDone,
+        E::DeviceFlowComplete => GwEvent::DeviceFlowDone(
+            thread_id
+                .map(crate::app::DeviceFlowOwner::Turn)
+                .unwrap_or(crate::app::DeviceFlowOwner::Unattributed),
+        ),
 
         // ── Threads ─────────────────────────────────────────────────────
         // The TUI tab bar renders id/label/is_foreground/message_count only,
@@ -576,7 +599,13 @@ mod tests {
     /// Run a server frame through the shared parser and the TUI adapter, the
     /// same path the gateway reader takes at runtime.
     fn adapt(frame: ServerFrame) -> Option<GwEvent> {
-        GatewayEvent::from_server_frame(frame).and_then(gateway_event_to_gw_event)
+        adapt_for(None, frame)
+    }
+
+    /// As `adapt`, for a frame the core client attributed to `thread_id`.
+    fn adapt_for(thread_id: Option<u64>, frame: ServerFrame) -> Option<GwEvent> {
+        GatewayEvent::from_server_frame(frame)
+            .and_then(|event| gateway_event_to_gw_event(thread_id, event))
     }
 
     #[test]
@@ -630,7 +659,7 @@ mod tests {
             },
         };
         match adapt(frame) {
-            Some(GwEvent::Chunk(t)) => assert_eq!(t, "Hello"),
+            Some(GwEvent::Chunk(_, t)) => assert_eq!(t, "Hello"),
             other => panic!("expected Chunk, got {other:?}"),
         }
     }
@@ -654,6 +683,32 @@ mod tests {
         }
     }
 
+    /// A gateway flow's owner is its turn — or Unattributed from an old
+    /// gateway — never Local, which is reserved for flows this client
+    /// starts itself. Overloading one value for both is what let a local
+    /// sign-in finishing tear down a turn's dialog.
+    #[test]
+    fn gateway_device_flows_are_never_owned_by_the_client() {
+        fn complete() -> ServerFrame {
+            ServerFrame {
+                frame_type: ServerFrameType::DeviceFlowComplete,
+                payload: ServerPayload::DeviceFlowComplete,
+            }
+        }
+        match adapt_for(Some(5), complete()) {
+            Some(GwEvent::DeviceFlowDone(owner)) => {
+                assert_eq!(owner, crate::app::DeviceFlowOwner::Turn(5));
+            }
+            other => panic!("expected DeviceFlowDone, got {other:?}"),
+        }
+        match adapt(complete()) {
+            Some(GwEvent::DeviceFlowDone(owner)) => {
+                assert_eq!(owner, crate::app::DeviceFlowOwner::Unattributed);
+            }
+            other => panic!("expected DeviceFlowDone, got {other:?}"),
+        }
+    }
+
     #[test]
     fn tool_status_frame_maps_to_tool_status() {
         let frame = ServerFrame {
@@ -670,7 +725,7 @@ mod tests {
             },
         };
         match adapt(frame) {
-            Some(GwEvent::ToolStatus { id, status }) => {
+            Some(GwEvent::ToolStatus { id, status, .. }) => {
                 assert_eq!(id, "call_001");
                 assert_eq!(status.elapsed_ms, 5_000);
                 assert_eq!(status.pid, Some(1234));
@@ -728,24 +783,48 @@ mod tests {
         assert!(matches!(adapt(frame), Some(GwEvent::AuthChallenge)));
     }
 
+    /// A chunk carries the turn it came from.
+    ///
+    /// `Chunk` has no thread on the wire — it belongs to its turn, and the
+    /// turn announced its thread on `StreamStart`. The core client resolves
+    /// that and hands the attribution down, so the TUI can tell a chunk of
+    /// the answer it is showing from a chunk of one running elsewhere.
+    /// Without it, two concurrent turns splice into a single message.
+    #[test]
+    fn a_chunk_carries_the_turn_it_came_from() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::Chunk,
+            payload: ServerPayload::Chunk {
+                delta: "half an answer".into(),
+            },
+        };
+        match adapt_for(Some(9), frame) {
+            Some(GwEvent::Chunk(Some(9), text)) => assert_eq!(text, "half an answer"),
+            other => panic!("Expected a chunk attributed to thread 9, got {other:?}"),
+        }
+    }
+
     #[test]
     fn streaming_frames_map_to_streaming_events() {
         let start = ServerFrame {
             frame_type: ServerFrameType::StreamStart,
-            payload: ServerPayload::StreamStart,
+            payload: ServerPayload::StreamStart { thread_id: Some(4) },
         };
-        assert!(matches!(adapt(start), Some(GwEvent::StreamStart)));
+        assert!(matches!(adapt(start), Some(GwEvent::StreamStart(Some(4)))));
 
         let thinking = ServerFrame {
             frame_type: ServerFrameType::ThinkingStart,
             payload: ServerPayload::ThinkingStart,
         };
-        assert!(matches!(adapt(thinking), Some(GwEvent::ThinkingStart)));
+        assert!(matches!(adapt(thinking), Some(GwEvent::ThinkingStart(_))));
 
         let done = ServerFrame {
             frame_type: ServerFrameType::ResponseDone,
-            payload: ServerPayload::ResponseDone { ok: true },
+            payload: ServerPayload::ResponseDone {
+                ok: true,
+                thread_id: Some(4),
+            },
         };
-        assert!(matches!(adapt(done), Some(GwEvent::ResponseDone)));
+        assert!(matches!(adapt(done), Some(GwEvent::ResponseDone(Some(4)))));
     }
 }

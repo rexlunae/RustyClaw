@@ -48,13 +48,15 @@ pub(crate) async fn activate_project(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
-    thread_mgr: &ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     projects_path: &Path,
     project_id: ProjectId,
 ) -> Result<()> {
     if project_mgr.contains(project_id) {
         project_mgr.set_active(project_id);
-        repoint_workspace(config, project_mgr, thread_mgr);
+        // Scoped so the thread lock is released before the client write: a
+        // turn running in parallel takes it at every persistence point.
+        repoint_workspace(config, project_mgr, &*thread_mgr.lock().await);
         crate::helpers::persist_projects(project_mgr, projects_path);
         send_projects_update(writer, project_mgr).await?;
     }
@@ -75,7 +77,7 @@ pub(crate) async fn handle_project_create(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
-    thread_mgr: &ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     projects_path: &Path,
     name: String,
     path: PathBuf,
@@ -114,7 +116,7 @@ pub(crate) async fn handle_project_update(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
-    thread_mgr: &ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     projects_path: &Path,
     project_id: u64,
     name: String,
@@ -164,7 +166,7 @@ pub(crate) async fn handle_project_update(
 
     // Moving a project moves the threads that inherit from it, so re-derive
     // the workspace. `repoint_workspace` keeps a thread override in place.
-    repoint_workspace(config, project_mgr, thread_mgr);
+    repoint_workspace(config, project_mgr, &*thread_mgr.lock().await);
 
     send_projects_update(writer, project_mgr).await
 }
@@ -176,7 +178,7 @@ pub(crate) async fn handle_project_delete(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
-    thread_mgr: &ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     projects_path: &Path,
     project_id: u64,
 ) -> Result<()> {
@@ -206,7 +208,7 @@ pub(crate) async fn handle_project_switch(
     writer: &mut dyn transport::TransportWriter,
     config: &mut Config,
     project_mgr: &mut ProjectManager,
-    thread_mgr: &ThreadManager,
+    thread_mgr: &crate::SharedThreadMgr,
     projects_path: &Path,
     project_id: u64,
 ) -> Result<()> {
@@ -275,7 +277,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let mut config = Config::default();
         let mut projects = ProjectManager::new();
-        let threads = ThreadManager::new();
+        let threads: crate::SharedThreadMgr =
+            std::sync::Arc::new(tokio::sync::Mutex::new(ThreadManager::new()));
         let target = tmp.path().join("code/money");
         let mut writer = CapturingWriter::new();
 
@@ -308,7 +311,8 @@ mod tests {
 
         let mut config = Config::default();
         let mut projects = ProjectManager::new();
-        let threads = ThreadManager::new();
+        let threads: crate::SharedThreadMgr =
+            std::sync::Arc::new(tokio::sync::Mutex::new(ThreadManager::new()));
         let before = projects.len();
         let mut writer = CapturingWriter::new();
 
@@ -344,7 +348,8 @@ mod tests {
         let leaf = ".rustyclaw-test-project";
         let mut config = Config::default();
         let mut projects = ProjectManager::new();
-        let threads = ThreadManager::new();
+        let threads: crate::SharedThreadMgr =
+            std::sync::Arc::new(tokio::sync::Mutex::new(ThreadManager::new()));
         let mut writer = CapturingWriter::new();
 
         handle_project_create(
@@ -427,9 +432,10 @@ mod tests {
         }
 
         // A fresh connection: reload both managers, then derive the workspace
-        // exactly as `handle_connection` does.
+        // exactly as `handle_connection` does — including migrating the
+        // legacy single-file layout into the per-thread store.
         let projects = ProjectManager::load_or_new(&projects_path);
-        let threads = ThreadManager::load_or_default(&threads_path);
+        let threads = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
         let mut config = Config::default();
         repoint_workspace(&mut config, &projects, &threads);
 

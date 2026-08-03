@@ -83,6 +83,7 @@ pub(super) fn handle_normal_key(
         mut credential_request_secret_name,
         mut credential_request_message,
         mut credential_request_input,
+        mut credential_request_thread,
         mut show_provider_selector,
         mut provider_selector_items,
         mut provider_selector_ids,
@@ -118,6 +119,14 @@ pub(super) fn handle_normal_key(
         mut tab_selected,
         mut thread_messages_cache,
         mut foreground_thread_id,
+        mut in_flight,
+        queued_tool_approvals: _,
+        tool_approval_thread: _,
+        queued_user_prompts: _,
+        user_prompt_thread: _,
+        queued_credentials: _,
+        queued_device_flows: _,
+        device_flow_owner: _,
         mut command_completions,
         mut command_selected,
         mut model_completion_provider,
@@ -863,12 +872,22 @@ pub(super) fn handle_normal_key(
             streaming.set(false);
             stream_start.set(None);
             elapsed.set(String::new());
+            if let Some(thread) = foreground_thread_id.get() {
+                let mut running = in_flight.read().clone();
+                running.remove(&thread);
+                in_flight.set(running);
+            }
             let mut m = messages.read().clone();
             m.push(DisplayMessage::info("Cancellation requested…"));
             messages.set(m);
             if let Ok(guard) = tx_for_keys.lock() {
                 if let Some(ref tx) = *guard {
-                    let _ = tx.send(UserInput::CancelCurrentRequest);
+                    let _ = tx.send(UserInput::CancelCurrentRequest {
+                        // Stop what the user is looking at. With a turn
+                        // running in several threads, the one on screen is
+                        // the only one they can have meant.
+                        thread_id: foreground_thread_id.get(),
+                    });
                 }
             }
         }
@@ -1080,7 +1099,19 @@ pub(super) fn handle_normal_key(
                             // sees feedback while waiting for the model.
                             streaming.set(true);
                             stream_start.set(Some(Instant::now()));
-                            let _ = tx.send(UserInput::Chat(val));
+                            // Recorded now rather than on `StreamStart`,
+                            // which is a round trip away: switching threads
+                            // in between would otherwise lose the turn and
+                            // with it the spinner and Esc.
+                            if let Some(thread) = foreground_thread_id.get() {
+                                let mut running = in_flight.read().clone();
+                                running.insert(thread);
+                                in_flight.set(running);
+                            }
+                            let _ = tx.send(UserInput::Chat {
+                                text: val,
+                                thread_id: foreground_thread_id.get(),
+                            });
                         }
                     }
                 }

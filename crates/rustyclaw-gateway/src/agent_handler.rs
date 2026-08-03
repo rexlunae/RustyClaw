@@ -9,6 +9,8 @@
 
 use anyhow::Result;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tracing::debug;
 
 use rustyclaw_core::agents::MAIN_AGENT_ID;
@@ -16,11 +18,10 @@ use rustyclaw_core::config::Config;
 use rustyclaw_core::gateway::protocol::server::send_frame;
 use rustyclaw_core::gateway::{ServerFrame, ServerFrameType, ServerPayload, transport};
 use rustyclaw_core::projects::ProjectManager;
-use rustyclaw_core::threads::ThreadManager;
 
-use crate::SharedTaskManager;
 use crate::project_handler;
-use crate::thread_updates::{send_projects_update, send_threads_update};
+use crate::thread_updates::{send_projects_update, send_threads_update_shared};
+use crate::{SharedTaskManager, SharedThreadMgr};
 
 /// Everything about the connection that is scoped to one agent. Swapped
 /// wholesale on agent switch.
@@ -28,7 +29,8 @@ pub(crate) struct AgentSession {
     pub agent_id: String,
     pub threads_path: PathBuf,
     pub projects_path: PathBuf,
-    pub thread_mgr: ThreadManager,
+    /// Shared with the running model task — see [`crate::SharedThreadMgr`].
+    pub thread_mgr: SharedThreadMgr,
     pub project_mgr: ProjectManager,
 }
 
@@ -40,7 +42,7 @@ impl AgentSession {
         let _ = std::fs::create_dir_all(&sessions_dir);
         let threads_path = sessions_dir.join("threads.json");
         let projects_path = sessions_dir.join("projects.json");
-        let thread_mgr = ThreadManager::load_or_default(&threads_path);
+        let thread_mgr = rustyclaw_core::threads::ThreadStore::load_or_migrate(&threads_path);
         let mut project_mgr = ProjectManager::load_or_new(&projects_path);
         project_mgr.ensure_default(config.workspace_dir_for(agent_id));
         crate::helpers::persist_projects(&project_mgr, &projects_path);
@@ -48,14 +50,14 @@ impl AgentSession {
             agent_id: agent_id.to_string(),
             threads_path,
             projects_path,
-            thread_mgr,
+            thread_mgr: Arc::new(Mutex::new(thread_mgr)),
             project_mgr,
         }
     }
 
     /// Persist thread and project state.
-    pub fn save(&self) {
-        crate::helpers::persist_threads(&self.thread_mgr, &self.threads_path);
+    pub async fn save(&self) {
+        crate::helpers::persist_threads(&mut *self.thread_mgr.lock().await, &self.threads_path);
         crate::helpers::persist_projects(&self.project_mgr, &self.projects_path);
     }
 }
@@ -129,7 +131,7 @@ pub(crate) async fn handle_agent_switch(
     }
     debug!(from = %session.agent_id, to = %agent_id, "Switching active agent");
 
-    session.save();
+    session.save().await;
     *session = AgentSession::load(config, &agent_id);
 
     // Non-main agents may carry their own base system prompt; main gets
@@ -166,7 +168,7 @@ pub(crate) async fn handle_agent_switch(
         active_project,
     )
     .await?;
-    send_threads_update(writer, &session.thread_mgr, task_mgr, None).await?;
+    send_threads_update_shared(writer, &session.thread_mgr, task_mgr, None).await?;
     send_projects_update(writer, &session.project_mgr).await?;
 
     Ok(true)

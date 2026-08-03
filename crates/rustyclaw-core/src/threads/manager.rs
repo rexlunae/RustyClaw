@@ -69,6 +69,55 @@ impl ThreadManager {
         self.events_tx.subscribe()
     }
 
+    /// Build a manager from already-loaded threads — the store's loader.
+    /// Callers still need [`Self::ensure_foreground`] afterwards.
+    pub fn from_parts(threads: Vec<AgentThread>, foreground_id: Option<ThreadId>) -> Self {
+        let (events_tx, _) = broadcast::channel(256);
+        let mut mgr = Self {
+            threads: HashMap::new(),
+            foreground_id,
+            events_tx,
+            config: ThreadManagerConfig::default(),
+        };
+        for thread in threads {
+            ThreadId::reserve_above(thread.id.0);
+            mgr.threads.insert(thread.id, thread);
+        }
+        mgr
+    }
+
+    /// Every thread, mutably — the store drains pending log records
+    /// through this.
+    pub fn threads_mut(&mut self) -> impl Iterator<Item = &mut AgentThread> {
+        self.threads.values_mut()
+    }
+
+    /// Record that a turn began in a thread. Until the matching
+    /// [`Self::end_turn`] writes the stop indicator, the thread is open —
+    /// what clients render as streaming, and what a restarted gateway
+    /// resumes.
+    pub fn begin_turn(&mut self, id: ThreadId) {
+        if let Some(thread) = self.threads.get_mut(&id) {
+            thread.begin_turn();
+        }
+    }
+
+    /// Write a thread's stop indicator. `ok` is false for errors and
+    /// cancellations. Threads with no open turn are left alone.
+    pub fn end_turn(&mut self, id: ThreadId, ok: bool) {
+        if let Some(thread) = self.threads.get_mut(&id) {
+            thread.end_turn(ok);
+        }
+    }
+
+    /// The threads whose last turn has no stop indicator — interrupted
+    /// mid-answer by whatever ended the process that ran them.
+    pub fn open_threads(&self) -> Vec<ThreadId> {
+        let mut open: Vec<&AgentThread> = self.threads.values().filter(|t| t.is_open()).collect();
+        open.sort_by_key(|t| t.created_at);
+        open.iter().map(|t| t.id).collect()
+    }
+
     // ── Thread Creation ─────────────────────────────────────────────────────
 
     /// Create a new chat thread and make it foreground.
@@ -459,14 +508,28 @@ impl ThreadManager {
 
     /// Clean up old ephemeral threads.
     pub fn cleanup_ephemeral(&mut self) {
+        self.cleanup_ephemeral_except(None);
+    }
+
+    /// Clean up old ephemeral threads, sparing `keep`.
+    ///
+    /// The exemption exists for the message-arrival sweep: the sweep must
+    /// not remove the very conversation the incoming message was typed
+    /// into — a completed task thread the user was still looking at —
+    /// because resolution would then refuse the message as addressed to a
+    /// thread that "no longer exists" and drop the user's words. The
+    /// message's own activity refreshes the thread's retention window, so
+    /// sparing it here does not keep it forever.
+    pub fn cleanup_ephemeral_except(&mut self, keep: Option<ThreadId>) {
         let now = SystemTime::now();
         let retention = self.config.ephemeral_retention;
 
         let to_remove: Vec<ThreadId> = self
             .threads
             .iter()
-            .filter(|(_, t)| {
-                t.kind.is_ephemeral()
+            .filter(|(id, t)| {
+                Some(**id) != keep
+                    && t.kind.is_ephemeral()
                     && t.status.is_terminal()
                     && now
                         .duration_since(t.last_activity)
@@ -492,6 +555,21 @@ impl ThreadManager {
                 continue;
             }
 
+            // Only work that is actually happening belongs here: this
+            // string is injected into every prompt as "Background Tasks",
+            // and it used to include every backgrounded conversation the
+            // agent had ever had — so a question as small as "status
+            // report?" arrived wrapped in the tail ends of finished work,
+            // and the model dutifully deliberated about tasks that were
+            // done and merged. An open turn is running; a non-interactive
+            // thread's lifecycle says whether it is. An idle conversation
+            // is not a background task.
+            let active =
+                thread.is_open() || (!thread.kind.is_interactive() && thread.status.is_running());
+            if !active {
+                continue;
+            }
+
             // Include summary or recent info for backgrounded threads
             if let Some(summary) = &thread.compact_summary {
                 context.push_str(&format!(
@@ -509,13 +587,21 @@ impl ThreadManager {
                     thread.messages.len()
                 ));
                 for msg in recent.into_iter().rev() {
-                    context.push_str(&format!(
-                        "{:?}: {}\n",
-                        msg.role,
-                        &msg.content[..msg.content.len().min(100)]
-                    ));
+                    // By characters, not bytes: a byte slice can land
+                    // inside a multi-byte character and panic.
+                    let snippet: String = msg.content.chars().take(100).collect();
+                    context.push_str(&format!("{:?}: {}\n", msg.role, snippet));
                 }
                 context.push('\n');
+            } else {
+                // Running work with nothing recorded yet is still work —
+                // name it, so the model knows it exists.
+                context.push_str(&format!(
+                    "## {} ({})\n{}\n\n",
+                    thread.label,
+                    thread.kind.display_name(),
+                    thread.description.as_deref().unwrap_or("In progress")
+                ));
             }
         }
 
@@ -841,6 +927,126 @@ mod tests {
         );
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The retention sweep spares the thread a message just named.
+    ///
+    /// The sweep runs when a message arrives; without the exemption it
+    /// could remove the very conversation the message was typed into — a
+    /// completed task thread the user was still looking at — and the
+    /// gateway would then refuse the message as addressed to a thread
+    /// that "no longer exists", dropping the user's words.
+    #[test]
+    fn the_ephemeral_sweep_spares_the_thread_being_messaged() {
+        let mut mgr = ThreadManager::with_config(ThreadManagerConfig {
+            ephemeral_retention: Duration::from_secs(0),
+            ..ThreadManagerConfig::default()
+        });
+        let addressed = mgr.create_task("Addressed", "the one being replied to", None);
+        let stale = mgr.create_task("Stale", "long done", None);
+        mgr.complete(addressed, None, None);
+        mgr.complete(stale, None, None);
+        // Zero retention: both are eligible the moment they complete.
+        std::thread::sleep(Duration::from_millis(5));
+
+        mgr.cleanup_ephemeral_except(Some(addressed));
+
+        assert!(
+            mgr.get(addressed).is_some(),
+            "the thread the message names must survive the sweep"
+        );
+        assert!(
+            mgr.get(stale).is_none(),
+            "other expired ephemeral threads still go"
+        );
+    }
+
+    /// Finished and idle threads stay out of every prompt's context.
+    ///
+    /// The "Background Tasks" injection used to carry the tail of every
+    /// backgrounded conversation, forever — so a question as small as
+    /// "status report?" arrived wrapped in last night's finished work and
+    /// the model deliberated about tasks that were already done. Only work
+    /// that is actually running belongs there: an open turn, or a
+    /// non-interactive thread whose lifecycle says it is running.
+    #[test]
+    fn idle_and_finished_work_stays_out_of_global_context() {
+        let mut mgr = ThreadManager::new();
+        let old = mgr.create_chat("Last night's dev task");
+        mgr.add_message(old, MessageRole::User, "please fix the thing");
+        mgr.add_message(old, MessageRole::Assistant, "done — merged in #353");
+        let current = mgr.create_chat("Today");
+        mgr.switch_foreground(current);
+
+        assert!(
+            mgr.build_global_context().is_empty(),
+            "an idle backgrounded conversation is not a background task"
+        );
+
+        // The same thread with a turn actually running is background work.
+        mgr.begin_turn(old);
+        assert!(mgr.build_global_context().contains("Last night's dev task"));
+        mgr.end_turn(old, true);
+        assert!(mgr.build_global_context().is_empty());
+
+        // A running task thread appears; a completed one disappears.
+        let task = mgr.create_task("Deploy", "ship it", None);
+        assert!(mgr.build_global_context().contains("Deploy"));
+        mgr.complete(task, Some("shipped".into()), None);
+        assert!(
+            mgr.build_global_context().is_empty(),
+            "completed work must not haunt later prompts"
+        );
+
+        // Multi-byte content must not panic the snippet truncation.
+        let busy = mgr.create_chat("Unicode");
+        mgr.add_message(busy, MessageRole::User, "é".repeat(200));
+        mgr.begin_turn(busy);
+        mgr.switch_foreground(current);
+        assert!(mgr.build_global_context().contains("Unicode"));
+    }
+
+    /// Compaction summarises the model's context; it must never destroy
+    /// the conversation. The old implementation popped the summarised
+    /// messages off the thread — and the thread's messages are the
+    /// transcript every client loads, so switching threads or crossing
+    /// the context threshold truncated the visible conversation to its
+    /// last few messages, permanently.
+    #[test]
+    fn compaction_keeps_the_transcript_whole() {
+        let mut mgr = ThreadManager::new();
+        let id = mgr.create_chat("Long chat");
+        for i in 0..10 {
+            mgr.add_message(id, MessageRole::User, format!("message {i}"));
+        }
+
+        let thread = mgr.get_mut(id).unwrap();
+        thread.apply_compaction_keeping("what came before".into(), 3);
+
+        assert_eq!(
+            thread.messages.len(),
+            10,
+            "every message is still in the record"
+        );
+        assert_eq!(thread.compacted_up_to, 7);
+        let ctx = thread.build_context();
+        assert!(
+            ctx.contains("what came before") && ctx.contains("message 9"),
+            "context is summary plus the uncompacted tail"
+        );
+        assert!(
+            !ctx.contains("message 0"),
+            "summarised messages stay out of the model context"
+        );
+        // Re-compacting covers only the tail, seeded with the prior summary.
+        let prompt = thread.compaction_prompt();
+        assert!(prompt.contains("what came before"));
+        assert!(!prompt.contains("message 0"));
+        // Prompt builders draw from the context window, which is the tail
+        // alone — a prompt built from the whole record would grow every
+        // turn, and compaction would enlarge requests instead of
+        // shrinking them.
+        assert_eq!(thread.context_messages().count(), 3);
     }
 
     /// The elected foreground is an interactive thread, not a sub-agent or

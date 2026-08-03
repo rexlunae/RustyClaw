@@ -19,12 +19,39 @@ use crate::gateway::protocol::event_log::{
 };
 use crate::gateway::{ServerPayload, SshConnection, SshReader, SshWriter};
 
+/// An event, and the thread whose turn produced it.
+///
+/// Turn-scoped frames — chunks, thinking, tool calls — carry no thread of
+/// their own on the wire; they belong to the turn, and the turn's thread is
+/// announced once on `StreamStart`. Resolving that here means every client
+/// gets the attribution without reimplementing the stream bookkeeping, and
+/// none of them can forget to.
+///
+/// `thread_id` is `None` for connection-scoped events (`Hello`,
+/// `ThreadsUpdate`, transport errors) and for turns from a gateway too old to
+/// announce one.
+#[derive(Clone, Debug)]
+pub struct ThreadEvent {
+    pub thread_id: Option<u64>,
+    pub event: GatewayEvent,
+}
+
+impl ThreadEvent {
+    /// An event that belongs to the connection rather than to any turn.
+    pub fn untargeted(event: GatewayEvent) -> Self {
+        Self {
+            thread_id: None,
+            event,
+        }
+    }
+}
+
 /// Client for communicating with the RustyClaw gateway.
 pub struct GatewayClient {
     /// Channel to send commands to the gateway.
     cmd_tx: mpsc::Sender<GatewayCommand>,
     /// Channel to receive events from the gateway.
-    event_rx: Arc<Mutex<mpsc::Receiver<GatewayEvent>>>,
+    event_rx: Arc<Mutex<mpsc::Receiver<ThreadEvent>>>,
     /// Whether we're connected.
     connected: Arc<std::sync::atomic::AtomicBool>,
     /// The underlying SSH connection, held to keep the transport alive for the
@@ -65,12 +92,23 @@ impl GatewayClient {
     ) -> Self {
         // Channels for communication.
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<GatewayCommand>(32);
-        let (event_tx, event_rx) = mpsc::channel::<GatewayEvent>(1024);
+        let (event_tx, event_rx) = mpsc::channel::<ThreadEvent>(1024);
 
         let connected = Arc::new(std::sync::atomic::AtomicBool::new(true));
         let connected_clone = connected.clone();
         let next_stream_id = Arc::new(AtomicU64::new(1));
         let active_stream_id = Arc::new(AtomicU64::new(0));
+        // Which thread each in-flight turn is running in, keyed by the
+        // stream its request went out on. Written from both sides: the
+        // sender seeds it from the thread the client named on `Chat`, and
+        // the reader corrects it from `StreamStart`. Seeding matters
+        // because a turn can ask for things *before* its stream opens — an
+        // auth failure on the first model call raises a credential request
+        // ahead of any `StreamStart` — and an unattributed request cannot
+        // be retired when its turn ends. Plain mutex: every use is one map
+        // operation with no await inside.
+        let stream_threads: Arc<std::sync::Mutex<std::collections::HashMap<u64, u64>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::HashMap::new()));
 
         // Create protocol event log.
         let event_log = default_log_path()
@@ -86,15 +124,22 @@ impl GatewayClient {
         let event_tx_clone = event_tx.clone();
         let next_stream_id_tx = next_stream_id.clone();
         let active_stream_id_tx = active_stream_id.clone();
+        let stream_threads_tx = stream_threads.clone();
         tokio::spawn(async move {
             while let Some(cmd) = cmd_rx.recv().await {
                 let stream_id = match &cmd {
-                    GatewayCommand::Chat { .. } => {
+                    GatewayCommand::Chat { thread_id, .. } => {
                         let id = next_stream_id_tx.fetch_add(2, Ordering::Relaxed);
                         active_stream_id_tx.store(id, Ordering::Relaxed);
+                        if let Some(thread) = thread_id {
+                            stream_threads_tx
+                                .lock()
+                                .expect("stream thread map poisoned")
+                                .insert(id, *thread);
+                        }
                         id
                     }
-                    GatewayCommand::Cancel => active_stream_id_tx.load(Ordering::Relaxed),
+                    GatewayCommand::Cancel { .. } => active_stream_id_tx.load(Ordering::Relaxed),
                     _ => 0,
                 };
 
@@ -110,9 +155,9 @@ impl GatewayClient {
                         error: err.to_string(),
                     });
                     let _ = event_tx_clone
-                        .send(GatewayEvent::Disconnected {
+                        .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                             reason: Some(err.to_string()),
-                        })
+                        }))
                         .await;
                     break;
                 }
@@ -121,14 +166,69 @@ impl GatewayClient {
 
         // ── Spawn task to handle incoming messages ─────────────────────
         let active_stream_id_rx = active_stream_id.clone();
+        let stream_threads_rx = stream_threads;
         tokio::spawn(async move {
             // Streaming stats for the event log.
             let mut stream_chunk_count: u32 = 0;
             let mut stream_total_bytes: usize = 0;
+            // Turn streams whose close-out has already been forwarded.
+            // Stream ids are never reused (the sender allocates a fresh
+            // one per Chat), so a *turn-scoped* frame arriving on one of
+            // these is a displaced turn's leftover output, drained from
+            // the gateway's channel after the abort. By then the thread
+            // mapping is gone, and an unattributed frame renders into
+            // whatever conversation the user is looking at.
+            //
+            // Only turn-scoped frames are dropped. The dispatch tail
+            // legitimately sends connection-scoped frames on the turn's
+            // stream *after* its close-out — above all the completion
+            // snapshot (`ThreadMessages`), which is how a background
+            // turn's transcript reaches the client at all. Those carry
+            // their own thread ids and need no stream attribution.
+            let mut closed_streams: std::collections::HashSet<u64> =
+                std::collections::HashSet::new();
+            fn turn_scoped(payload: &ServerPayload) -> bool {
+                matches!(
+                    payload,
+                    ServerPayload::StreamStart { .. }
+                        | ServerPayload::Chunk { .. }
+                        | ServerPayload::ThinkingStart
+                        | ServerPayload::ThinkingDelta { .. }
+                        | ServerPayload::ThinkingEnd
+                        | ServerPayload::ToolCall { .. }
+                        | ServerPayload::ToolResult { .. }
+                        | ServerPayload::ToolResultMedia { .. }
+                        | ServerPayload::ToolOutputStart { .. }
+                        | ServerPayload::ToolOutputDelta { .. }
+                        | ServerPayload::ToolOutputEnd { .. }
+                        | ServerPayload::ToolStatus { .. }
+                        | ServerPayload::ResponseDone { .. }
+                        | ServerPayload::ToolApprovalRequest { .. }
+                        | ServerPayload::UserPromptRequest { .. }
+                        | ServerPayload::CredentialRequest { .. }
+                        | ServerPayload::DeviceFlowStart { .. }
+                        | ServerPayload::DeviceFlowComplete
+                        | ServerPayload::DomQuery { .. }
+                )
+            }
 
             loop {
                 match reader.recv_wire().await {
                     Ok(Some(envelope)) => {
+                        if closed_streams.contains(&envelope.stream_id)
+                            && turn_scoped(&envelope.frame.payload)
+                        {
+                            event_log_rx.log_frame(
+                                Direction::Received,
+                                &format!(
+                                    "{:?} (dropped: stream closed)",
+                                    envelope.frame.frame_type
+                                ),
+                                envelope.stream_id,
+                                0,
+                            );
+                            continue;
+                        }
                         let len = 0; // wire already consumed, len not available here
                         let frame_type_name = format!("{:?}", envelope.frame.frame_type);
                         event_log_rx.log_frame(
@@ -140,7 +240,7 @@ impl GatewayClient {
 
                         // Track streaming progress.
                         match &envelope.frame.payload {
-                            ServerPayload::StreamStart => {
+                            ServerPayload::StreamStart { .. } => {
                                 stream_chunk_count = 0;
                                 stream_total_bytes = 0;
                                 event_log_rx.log_streaming("started");
@@ -165,10 +265,58 @@ impl GatewayClient {
                             }
                         }
 
+                        // Attribute the frame to a thread before anyone
+                        // sees it. Every frame of a turn shares the stream id
+                        // its request went out on, and `StreamStart` says
+                        // which thread that stream is running in — so the
+                        // mapping is learnable here, once, instead of in each
+                        // client. Without it a chunk is just text, and two
+                        // turns' text interleaves into one message.
+                        let stream_id = envelope.stream_id;
+                        if let ServerPayload::StreamStart {
+                            thread_id: Some(thread),
+                        } = &envelope.frame.payload
+                        {
+                            // The gateway's announcement corrects the seed:
+                            // the client's guess is wrong when it named
+                            // nothing and a thread was elected.
+                            stream_threads_rx
+                                .lock()
+                                .expect("stream thread map poisoned")
+                                .insert(stream_id, *thread);
+                        }
+                        let thread_id = stream_threads_rx
+                            .lock()
+                            .expect("stream thread map poisoned")
+                            .get(&stream_id)
+                            .copied();
+                        let closing =
+                            matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. });
                         if let Some(event) = GatewayEvent::from_server_frame(envelope.frame) {
-                            if event_tx.send(event).await.is_err() {
+                            if event_tx
+                                .send(ThreadEvent { thread_id, event })
+                                .await
+                                .is_err()
+                            {
                                 break;
                             }
+                        }
+                        // Released only after its close-out has been stamped,
+                        // so the frame that ends the turn still names it.
+                        // A stream the map was tracking is a turn's, and a
+                        // turn's stream carries nothing after its close-out
+                        // — so it is closed for good, and later arrivals
+                        // are dropped above. Streams the map never knew
+                        // (an old gateway that attributes nothing) keep
+                        // the old behaviour.
+                        if closing
+                            && stream_threads_rx
+                                .lock()
+                                .expect("stream thread map poisoned")
+                                .remove(&stream_id)
+                                .is_some()
+                        {
+                            closed_streams.insert(stream_id);
                         }
                     }
                     Ok(None) => {
@@ -176,18 +324,28 @@ impl GatewayClient {
                         let ssh_err = reader.drain_stderr().await;
                         let reason = crate::gateway::parse_ssh_error(&ssh_err);
                         let _ = event_tx
-                            .send(GatewayEvent::Disconnected {
+                            .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
                                 reason: Some(reason),
-                            })
+                            }))
                             .await;
                         break;
                     }
                     Err(err) => {
                         event_log_rx.log_decode_error(Direction::Received, 0, &err.to_string());
                         let _ = event_tx
-                            .send(GatewayEvent::Error {
+                            .send(ThreadEvent::untargeted(GatewayEvent::Error {
                                 message: format!("Protocol error: {}", err),
-                            })
+                            }))
+                            .await;
+                        // A decode error is fatal — the frame stream cannot
+                        // be resynced, and this loop ends here, so no
+                        // close-out will ever arrive for the turns still
+                        // tracked. Without a Disconnected the UI keeps its
+                        // spinner and gates the composer forever.
+                        let _ = event_tx
+                            .send(ThreadEvent::untargeted(GatewayEvent::Disconnected {
+                                reason: Some(format!("Protocol error: {}", err)),
+                            }))
                             .await;
                         break;
                     }
@@ -214,13 +372,13 @@ impl GatewayClient {
     }
 
     /// Receive the next event from the gateway (blocks until one arrives).
-    pub async fn recv(&self) -> Option<GatewayEvent> {
+    pub async fn recv(&self) -> Option<ThreadEvent> {
         let mut rx = self.event_rx.lock().await;
         rx.recv().await
     }
 
     /// Drain all currently-buffered events without blocking.
-    pub async fn drain_available(&self) -> Vec<GatewayEvent> {
+    pub async fn drain_available(&self) -> Vec<ThreadEvent> {
         let mut rx = self.event_rx.lock().await;
         let mut events = Vec::new();
         while let Ok(event) = rx.try_recv() {
@@ -234,9 +392,20 @@ impl GatewayClient {
         self.connected.load(std::sync::atomic::Ordering::SeqCst)
     }
 
-    /// Send a chat message.
+    /// Send a chat message on the gateway's current thread.
     pub async fn chat(&self, message: String) -> Result<()> {
-        self.send(GatewayCommand::Chat { message }).await
+        self.send(GatewayCommand::Chat {
+            message,
+            thread_id: None,
+        })
+        .await
+    }
+
+    /// Send a chat message, naming the thread it belongs to. `None` leaves
+    /// the choice to the gateway, for callers that have no thread of their
+    /// own yet — the first message of a fresh session, a headless one-shot.
+    pub async fn chat_in_thread(&self, message: String, thread_id: Option<u64>) -> Result<()> {
+        self.send(GatewayCommand::Chat { message, thread_id }).await
     }
 
     /// Authenticate with TOTP code.

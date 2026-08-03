@@ -10,7 +10,6 @@
 use std::sync::Arc;
 
 use anyhow::Result;
-use tokio::sync::Mutex;
 use tracing::warn;
 
 use rustyclaw_core::config::Config;
@@ -20,10 +19,10 @@ use rustyclaw_core::gateway::{
 };
 
 use crate::dispatch::dispatch_text_message;
-use crate::thread_updates::{send_thread_messages_update, send_threads_update};
+use crate::thread_updates::{send_thread_messages_update_shared, send_threads_update_shared};
 use crate::{
     SharedConfig, SharedCopilotSession, SharedModelCtx, SharedObserver, SharedSkillManager,
-    SharedTaskManager, SharedVault, ToolCancelFlag, providers, system_prompt,
+    SharedTaskManager, SharedThreadMgr, SharedVault, ToolCancelFlag, providers, system_prompt,
 };
 use protocol::server::send_frame;
 use rustyclaw_core::gateway::protocol;
@@ -44,85 +43,82 @@ pub(crate) async fn handle_chat_frame(
     shared_config: &SharedConfig,
     shared_model_ctx: &SharedModelCtx,
     shared_copilot_session: &SharedCopilotSession,
-    approval_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool)>>>,
-    user_prompt_rx: &Arc<
-        Mutex<
-            tokio::sync::mpsc::Receiver<(
-                String,
-                bool,
-                rustyclaw_core::user_prompt_types::PromptResponseValue,
-            )>,
-        >,
+    approvals: &Arc<crate::pending::PendingResponses<bool>>,
+    user_prompts: &Arc<
+        crate::pending::PendingResponses<(
+            bool,
+            rustyclaw_core::user_prompt_types::PromptResponseValue,
+        )>,
     >,
-    credential_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, bool, Option<String>)>>>,
-    dom_query_rx: &Arc<Mutex<tokio::sync::mpsc::Receiver<(String, String, bool)>>>,
-    thread_mgr: &mut rustyclaw_core::threads::ThreadManager,
+    credentials: &Arc<crate::pending::PendingResponses<(bool, Option<String>)>>,
+    dom_queries: &Arc<crate::pending::PendingResponses<(String, bool)>>,
+    thread_mgr: &SharedThreadMgr,
+    turn_thread: Option<rustyclaw_core::threads::ThreadId>,
     threads_path: &std::path::Path,
+    // A resumed turn replays the conversation already in the thread's log;
+    // its last user message is recorded, and recording it again would
+    // duplicate it in the transcript.
+    is_resume: bool,
 ) -> Result<()> {
-    // Check for auto-switch: find better matching thread
-    if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-        if let Some(better_thread_id) = thread_mgr.find_best_match(&last_user.content) {
-            // Found a better match — switch threads
-            if thread_mgr.switch_foreground(better_thread_id) {
-                // Get the context summary from the new foreground thread
-                let context_summary = thread_mgr
-                    .foreground()
-                    .and_then(|t| t.compact_summary.clone());
-                // Send ThreadSwitched notification
-                let frame = ServerFrame {
-                    frame_type: ServerFrameType::ThreadSwitched,
-                    payload: ServerPayload::ThreadSwitched {
-                        thread_id: better_thread_id.0,
-                        context_summary,
-                    },
-                };
-                send_frame(writer, &frame).await?;
-                // Update thread list
-                send_threads_update(writer, thread_mgr, task_mgr, None).await?;
-                send_thread_messages_update(writer, better_thread_id, thread_mgr).await?;
-            }
-        }
-    }
+    // The thread this turn belongs to. The connection loop settles it —
+    // including the auto-switch to a better-matching thread — before
+    // handing the turn off, because that loop keeps serving ThreadSwitch
+    // frames while this runs: anything resolved here, whether now or
+    // lazily through `foreground()`, would file the message and the reply
+    // in whichever thread the user opened next. Every lock scope below is
+    // a single operation that ends before the next client write, since a
+    // write blocking while the lock is held would wedge both sides.
+    let active_thread_id = turn_thread;
 
-    // Add user message to current thread's history
+    // Add user message to the turn's thread history
     let mut did_auto_label = false;
     let mut needs_caption = false;
     let mut did_append_user_message = false;
-    let mut active_thread_id = None;
-    if let Some(thread) = thread_mgr.foreground_mut() {
-        active_thread_id = Some(thread.id);
-        // Find the last user message (typically the new one)
-        if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
-            // Check if this is the first message in a new thread
-            let is_first_message = thread.message_count() == 0
-                && (thread.label.is_empty()
-                    || thread.label.starts_with("Session #")
-                    || thread.label == "Main");
-            thread.add_message(
-                rustyclaw_core::threads::MessageRole::User,
-                &last_user.content,
-            );
-            did_append_user_message = true;
-            if is_first_message {
-                // Set a temporary auto-label as fallback
-                let label = auto_thread_label(&last_user.content);
-                thread.label = label;
-                did_auto_label = true;
-                // Flag for agent captioning
-                needs_caption = true;
+    if let Some(turn_thread) = active_thread_id.filter(|_| !is_resume) {
+        let mut tm = thread_mgr.lock().await;
+        if let Some(thread) = tm.get_mut(turn_thread) {
+            // Find the last user message (typically the new one)
+            if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+                // Check if this is the first message in a new thread
+                let is_first_message = thread.message_count() == 0
+                    && (thread.label.is_empty()
+                        || thread.label.starts_with("Session #")
+                        || thread.label == "Main");
+                thread.add_message(
+                    rustyclaw_core::threads::MessageRole::User,
+                    &last_user.content,
+                );
+                did_append_user_message = true;
+                if is_first_message {
+                    // Set a temporary auto-label as fallback
+                    let label = auto_thread_label(&last_user.content);
+                    thread.label = label;
+                    did_auto_label = true;
+                    // Flag for agent captioning
+                    needs_caption = true;
+                }
             }
         }
-    }
-    if did_append_user_message && let Err(e) = thread_mgr.save_to_file(threads_path) {
-        warn!(error = %e, path = ?threads_path, "Failed to persist user message to thread history");
+        if did_append_user_message {
+            // Through the store, like every other persistence point: the
+            // legacy save wrote a threads.json the loader no longer reads,
+            // so a crash mid-answer lost the message — and left a start
+            // marker with no message behind it, a thread stuck open.
+            crate::helpers::persist_threads(&mut tm, threads_path);
+        }
     }
     if did_auto_label {
-        send_threads_update(writer, thread_mgr, task_mgr, None).await?;
+        send_threads_update_shared(writer, thread_mgr, task_mgr, None).await?;
     }
 
     // Auto-ingest user message into Steel Memory
     #[cfg(feature = "semantic-memory")]
-    if let Some(last_user) = messages.iter().rev().find(|m| m.role == "user") {
+    if let Some(last_user) = messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .filter(|_| !is_resume)
+    {
         let ws = config.workspace_dir().to_path_buf();
         let text = last_user.content.clone();
         tokio::spawn(async move {
@@ -132,7 +128,7 @@ pub(crate) async fn handle_chat_frame(
         });
     }
     if let Some(thread_id) = active_thread_id {
-        send_thread_messages_update(writer, thread_id, thread_mgr).await?;
+        send_thread_messages_update_shared(writer, thread_id, thread_mgr).await?;
     }
 
     // Re-read model_ctx from shared state for each dispatch
@@ -159,8 +155,23 @@ pub(crate) async fn handle_chat_frame(
         // the current user message; we need to
         // include prior turns so the model has
         // context of the conversation.
-        if let Some(thread) = thread_mgr.foreground() {
-            let history = &thread.messages;
+        // Only the messages inside the context window: the record keeps
+        // the whole conversation, and the summary below stands in for the
+        // part before the boundary. Sending both would make compaction
+        // *grow* the prompt.
+        let turn_history = {
+            let tm = thread_mgr.lock().await;
+            active_thread_id.and_then(|id| tm.get(id)).map(|t| {
+                (
+                    t.context_messages().cloned().collect::<Vec<_>>(),
+                    t.compact_summary.clone(),
+                )
+            })
+        };
+        // A resumed turn's `messages` *is* the recorded conversation;
+        // injecting the history again would double every prior message.
+        if let Some((history, compact_summary)) = turn_history.filter(|_| !is_resume) {
+            let history = &history;
             // history includes the message we just
             // added — skip it (last element) to
             // avoid duplication with the client's
@@ -168,7 +179,7 @@ pub(crate) async fn handle_chat_frame(
             let prior_count = history.len().saturating_sub(1);
             if prior_count > 0 {
                 // Optionally include compact summary as context
-                if let Some(summary) = &thread.compact_summary {
+                if let Some(summary) = &compact_summary {
                     messages.insert(
                         1,
                         ChatMessage::text(
@@ -177,11 +188,7 @@ pub(crate) async fn handle_chat_frame(
                         ),
                     );
                 }
-                let insert_pos = if thread.compact_summary.is_some() {
-                    2
-                } else {
-                    1
-                };
+                let insert_pos = if compact_summary.is_some() { 2 } else { 1 };
                 // Reconstruct the history with structured
                 // tool_call / tool_result payloads so that
                 // assistant messages keep their `tool_calls`
@@ -207,21 +214,25 @@ pub(crate) async fn handle_chat_frame(
 
     // Inject thread context into system prompt if available
     let mut messages_with_context = {
-        let global_ctx = thread_mgr.build_global_context();
         let provider_name = current_model_ctx
             .as_deref()
             .map(|c| c.provider.as_str())
             .unwrap_or("openai");
-        let thread_context = active_thread_id.and_then(|thread_id| {
-            thread_mgr.get(thread_id).map(|thread| {
-                let history: Vec<rustyclaw_core::threads::ThreadMessage> =
-                    thread.messages.iter().cloned().collect();
-                (
-                    providers::thread_history_to_chat_messages(provider_name, &history),
-                    thread.compact_summary.clone(),
-                )
-            })
-        });
+        let (global_ctx, thread_context) = {
+            let tm = thread_mgr.lock().await;
+            let thread_context = active_thread_id.and_then(|thread_id| {
+                tm.get(thread_id).map(|thread| {
+                    // The context window, not the record — see above.
+                    let history: Vec<rustyclaw_core::threads::ThreadMessage> =
+                        thread.context_messages().cloned().collect();
+                    (
+                        providers::thread_history_to_chat_messages(provider_name, &history),
+                        thread.compact_summary.clone(),
+                    )
+                })
+            });
+            (tm.build_global_context(), thread_context)
+        };
         let (mut msgs, compact_summary) =
             thread_context.unwrap_or_else(|| (messages.clone(), None));
         if let Some(system_message) = messages.first().filter(|m| m.role == "system") {
@@ -328,11 +339,12 @@ pub(crate) async fn handle_chat_frame(
         tool_cancel,
         shared_config,
         shared_copilot_session,
-        approval_rx,
-        user_prompt_rx,
-        credential_rx,
-        dom_query_rx,
+        approvals,
+        user_prompts,
+        credentials,
+        dom_queries,
         thread_mgr,
+        active_thread_id,
         threads_path,
     )
     .await
