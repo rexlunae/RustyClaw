@@ -536,6 +536,15 @@ impl AgentThread {
         self.open_turn.is_some()
     }
 
+    /// The messages inside the model-context window: everything after the
+    /// compaction boundary. Prompt builders must go through this, never
+    /// `messages` directly — the record keeps everything, and a prompt
+    /// built from the whole record grows every turn until the provider
+    /// rejects it, which is precisely what compaction exists to prevent.
+    pub fn context_messages(&self) -> impl Iterator<Item = &ThreadMessage> {
+        self.messages.iter().skip(self.compacted_up_to)
+    }
+
     /// Add an assistant turn that issued tool calls. `text` may be empty
     /// when the model produced only tool calls. `tool_calls` is the
     /// normalized JSON form (`Vec<{id, name, arguments}>`).
@@ -584,7 +593,7 @@ impl AgentThread {
             prompt.push_str(&format!("Summary of earlier conversation: {}\n\n", summary));
         }
 
-        for msg in self.messages.iter().skip(self.compacted_up_to) {
+        for msg in self.context_messages() {
             let role = match msg.role {
                 MessageRole::User => "User",
                 MessageRole::Assistant => "Assistant",
@@ -636,7 +645,7 @@ impl AgentThread {
         // Include the messages the summary does not cover
         if self.messages.len() > self.compacted_up_to {
             ctx.push_str("## Recent Messages\n");
-            for msg in self.messages.iter().skip(self.compacted_up_to) {
+            for msg in self.context_messages() {
                 let role = match msg.role {
                     MessageRole::User => "User",
                     MessageRole::Assistant => "Assistant",

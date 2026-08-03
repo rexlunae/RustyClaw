@@ -548,14 +548,17 @@ pub(crate) async fn handle_connection(
     // on another connection. The process-wide claim keeps two clients
     // connecting together from both resuming the same turn.
     {
-        let resumable: Vec<rustyclaw_core::threads::ThreadId> = {
+        let (resumable, abandoned): (
+            Vec<rustyclaw_core::threads::ThreadId>,
+            Vec<rustyclaw_core::threads::ThreadId>,
+        ) = {
             let tm = agent_session.thread_mgr.lock().await;
-            tm.open_threads()
+            let crashed: Vec<rustyclaw_core::threads::ThreadId> = tm
+                .open_threads()
                 .into_iter()
                 .filter(|id| {
-                    tm.get(*id).is_some_and(|t| {
-                        !t.messages.is_empty() && t.open_turn.is_some_and(|at| at < *PROCESS_START)
-                    })
+                    tm.get(*id)
+                        .is_some_and(|t| t.open_turn.is_some_and(|at| at < *PROCESS_START))
                 })
                 .filter(|id| {
                     RESUMED_TURNS
@@ -563,8 +566,22 @@ pub(crate) async fn handle_connection(
                         .expect("resume registry poisoned")
                         .insert((agent_session.agent_id.clone(), id.0))
                 })
-                .collect()
+                .collect();
+            crashed
+                .into_iter()
+                .partition(|id| tm.get(*id).is_some_and(|t| !t.messages.is_empty()))
         };
+        // A crashed turn with no recorded conversation has nothing to
+        // resume — but leaving its marker open would report the thread as
+        // Streaming forever, with nothing left that could ever close it.
+        // It gets its overdue stop indicator instead.
+        if !abandoned.is_empty() {
+            let mut tm = agent_session.thread_mgr.lock().await;
+            for thread in abandoned {
+                tm.end_turn(thread, false);
+            }
+            crate::helpers::persist_threads(&mut tm, &agent_session.threads_path);
+        }
         for thread in resumable {
             let (label, messages) = {
                 let tm = agent_session.thread_mgr.lock().await;
@@ -1559,7 +1576,8 @@ pub(crate) async fn handle_connection(
                             // Retire this turn — unless the client's next
                             // message already started another one on this
                             // thread, which `reap_finished` allows.
-                            active_tasks.lock().await.remove_if(&thread_id, turn_id);
+                            let still_this_turn =
+                                active_tasks.lock().await.remove_if(&thread_id, turn_id);
                             let last_turn_drained =
                                 drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
 
@@ -1578,8 +1596,16 @@ pub(crate) async fn handle_connection(
                             // the broadcast below, so the thread list the
                             // clients get says "Ready" — and before the
                             // persist, so a crash after this point still
-                            // leaves a closed turn on disk.
-                            agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
+                            // leaves a closed turn on disk. Only if this
+                            // completion is still the registered turn: a
+                            // Done drained after the thread's next turn
+                            // began belongs to a displaced predecessor,
+                            // whose marker the displacement already
+                            // closed — writing one here would close the
+                            // *new* turn's marker while it streams.
+                            if still_this_turn {
+                                agent_session.thread_mgr.lock().await.end_turn(thread_id, true);
+                            }
 
                             // Send updated thread list (status may have changed)
                             send_threads_update_shared(&mut *writer, &agent_session.thread_mgr, &task_mgr, None).await?;
@@ -1592,12 +1618,17 @@ pub(crate) async fn handle_connection(
                             }
                         }
                         concurrent::ModelTaskMessage::Error { thread_id, stream_id, turn_id, message, closed_out } => {
-                            // A failed turn still ends — with a stop
-                            // indicator that says so.
-                            agent_session.thread_mgr.lock().await.end_turn(thread_id, false);
-                            crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
-                            // Same identity check as Done above.
-                            active_tasks.lock().await.remove_if(&thread_id, turn_id);
+                            // Same identity check as Done above — and the
+                            // same licence: only the turn still registered
+                            // may write its stop indicator.
+                            let still_this_turn =
+                                active_tasks.lock().await.remove_if(&thread_id, turn_id);
+                            if still_this_turn {
+                                // A failed turn still ends — with a stop
+                                // indicator that says so.
+                                agent_session.thread_mgr.lock().await.end_turn(thread_id, false);
+                                crate::helpers::persist_threads(&mut *agent_session.thread_mgr.lock().await, &agent_session.threads_path);
+                            }
                             let last_turn_drained =
                                 drain_deadline.is_some() && active_tasks.lock().await.running_threads().is_empty();
 
@@ -2460,6 +2491,95 @@ mod tests {
         assert!(
             !restored.get(interrupted).expect("thread exists").is_open(),
             "the resumed turn's stop indicator closes the thread"
+        );
+
+        Ok(())
+    }
+
+    /// A crashed turn with nothing recorded is closed, not resumed — and
+    /// not left open.
+    ///
+    /// A process can die between writing a turn's start marker and its
+    /// first message. There is no conversation to resume, but an open
+    /// marker with nothing left to close it would report the thread as
+    /// "Streaming" forever, gating the composer on a reply that will
+    /// never come. The next start writes the overdue stop indicator.
+    #[tokio::test]
+    async fn an_abandoned_open_marker_is_closed_on_start() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+
+        // An empty thread whose log holds only an ancient start marker.
+        let store = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path);
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+        let stuck = manager.create_chat("stuck");
+        store.persist(&mut manager).map_err(anyhow::Error::from)?;
+        {
+            use std::io::Write;
+            let log = threads_path
+                .parent()
+                .unwrap()
+                .join("threads")
+                .join(format!("{}.log.jsonl", stuck.0));
+            let record =
+                serde_json::to_string(&rustyclaw_core::threads::ThreadLogRecord::TurnStarted {
+                    at: std::time::SystemTime::UNIX_EPOCH,
+                })?;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&log)?;
+            writeln!(f, "{record}")?;
+        }
+
+        let peer = PeerInfo {
+            addr: Some("127.0.0.1:2222".parse().unwrap()),
+            username: Some("tester".to_string()),
+            key_fingerprint: Some("SHA256:test".to_string()),
+            transport_type: TransportType::Ssh,
+        };
+        let (mock_transport, outgoing) = MockTransport::with_frames(peer, vec![None]);
+
+        let vault: SharedVault = Arc::new(Mutex::new(SecretsManager::new(cfg.credentials_dir())));
+        let skill_mgr: SharedSkillManager =
+            Arc::new(Mutex::new(SkillManager::new(cfg.skills_dir())));
+        rustyclaw_core::tools::init_plugin_manager(&cfg.workspace_dir());
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let model_registry = rustyclaw_core::models::create_model_registry();
+
+        handle_transport_connection(
+            Box::new(mock_transport),
+            Arc::new(RwLock::new(cfg)),
+            Arc::new(RwLock::new(None)),
+            Arc::new(RwLock::new(None)),
+            vault,
+            skill_mgr,
+            task_mgr,
+            model_registry,
+            None,
+            auth::new_rate_limiter(),
+            CancellationToken::new(),
+        )
+        .await?;
+
+        let frames = outgoing.lock().await;
+        assert!(
+            !frames.iter().any(|f| matches!(
+                &f.payload,
+                ServerPayload::Info { message, .. } if message.contains("Resuming")
+            )),
+            "there is nothing to resume"
+        );
+        let restored = rustyclaw_core::threads::ThreadStore::at_legacy_path(&threads_path)
+            .load()
+            .expect("the store should load");
+        assert!(
+            !restored.get(stuck).expect("thread exists").is_open(),
+            "the abandoned marker must be closed, not left Streaming forever"
         );
 
         Ok(())

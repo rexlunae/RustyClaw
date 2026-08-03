@@ -284,9 +284,17 @@ impl ActiveTasks {
     /// and was already reaped may have been replaced by the next one, and
     /// removing that replacement would leave a running turn nothing can
     /// stop and nothing counts as busy.
-    pub fn remove_if(&mut self, thread_id: &ThreadId, turn_id: u64) {
+    ///
+    /// Returns whether it was still this turn — the caller's licence to
+    /// close the turn's marker. A completion drained after the thread
+    /// already started its next turn must not write that *new* turn's
+    /// stop indicator.
+    pub fn remove_if(&mut self, thread_id: &ThreadId, turn_id: u64) -> bool {
         if self.tasks.get(thread_id).is_some_and(|t| t.id == turn_id) {
             self.tasks.remove(thread_id);
+            true
+        } else {
+            false
         }
     }
 
@@ -479,6 +487,30 @@ mod tests {
             tasks.displace(&thread),
             None,
             "a finished turn closes itself out through its completion message"
+        );
+    }
+
+    /// A stale completion has no licence to close the current turn's
+    /// marker. `remove_if` answers "was this still the registered turn?" —
+    /// a Done drained after the thread already started its next turn must
+    /// report false, or the drain writes the *new* turn's stop indicator
+    /// while it is still streaming.
+    #[tokio::test]
+    async fn a_stale_completion_gets_no_licence() {
+        let mut tasks = ActiveTasks::new();
+        let thread = ThreadId(1);
+        tasks.register(thread, 1, 1, tokio::spawn(std::future::pending()), flag());
+        // The thread's next turn displaces the first and registers itself.
+        tasks.displace(&thread);
+        tasks.register(thread, 2, 3, tokio::spawn(std::future::pending()), flag());
+
+        assert!(
+            !tasks.remove_if(&thread, 1),
+            "the displaced turn's completion must not speak for the thread"
+        );
+        assert!(
+            tasks.remove_if(&thread, 2),
+            "the registered turn's own completion may close it"
         );
     }
 
