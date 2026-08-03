@@ -428,11 +428,20 @@ fn RouteTable(
     thread: Signal<String>,
     on_command: EventHandler<MessengerCommand>,
 ) -> Element {
-    // A thread id typed as text has to become a number before it can be sent;
-    // an unparseable one disables the button rather than sending nonsense.
-    let parsed_thread = thread.read().trim().parse::<u64>().ok();
-    let selected_thread =
-        parsed_thread.and_then(|id| data.threads.iter().find(|t| t.thread_id == id).cloned());
+    // A thread's identity is the pair (agent, id): every agent numbers its
+    // own threads from 1, so the id alone is ambiguous the moment a second
+    // agent exists — resolving it against the first match bound channels to
+    // whichever agent happened to be listed first. The option value carries
+    // both parts; anything unparseable disables the button rather than
+    // sending nonsense.
+    let selected = thread.read().trim().to_string();
+    let selected_thread = selected.rsplit_once('/').and_then(|(agent, id)| {
+        let id = id.parse::<u64>().ok()?;
+        data.threads
+            .iter()
+            .find(|t| t.thread_id == id && t.agent_id == agent)
+            .cloned()
+    });
     let can_add = !account.read().trim().is_empty() && selected_thread.is_some();
 
     rsx! {
@@ -534,7 +543,7 @@ fn RouteTable(
                             for t in data.threads.clone() {
                                 option {
                                     key: "{t.agent_id}/{t.thread_id}",
-                                    value: "{t.thread_id}",
+                                    value: "{t.agent_id}/{t.thread_id}",
                                     "{t.label_for_picker()}"
                                 }
                             }

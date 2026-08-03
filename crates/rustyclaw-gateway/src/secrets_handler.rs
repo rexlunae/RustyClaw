@@ -282,15 +282,17 @@ pub async fn exec_secrets_store(args: &serde_json::Value, vault: &SharedVault) -
     ))
 }
 
-/// Refuse model/client-driven mutation of a gateway-provisioned service
+/// Refuse model/client-driven access to a gateway-provisioned service
 /// credential.
 ///
-/// The write and read paths already fence the reserved namespaces; deleting,
-/// disabling, or re-policying an entry is the remaining way to tamper with
-/// one — it breaks the configured bot's login rather than disclosing
-/// anything. These credentials are managed through the messenger setup
-/// panel, whose handler talks to the vault directly and is not affected.
-fn reserved_mutation_error(name: &str) -> Option<String> {
+/// Applied to every generic vault frame and tool that names a key: stores
+/// (planting an entry the policy-skipping service read path would serve),
+/// deletes/disables/re-policies (breaking a configured bot's login), and the
+/// raw reads `SecretsGet`/`SecretsPeek` (which bypass the `WithAuth` policy
+/// and would hand the value to a client that was deliberately never sent
+/// it). These credentials are managed through the messenger setup panel,
+/// whose handler talks to the vault directly and is not affected.
+fn reserved_namespace_error(name: &str) -> Option<String> {
     rustyclaw_core::secrets::is_reserved_service_name(name).then(|| {
         format!(
             "'{name}' is a gateway-provisioned service credential; manage it \
@@ -306,7 +308,7 @@ pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVau
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
-    if let Some(refusal) = reserved_mutation_error(cred_name) {
+    if let Some(refusal) = reserved_namespace_error(cred_name) {
         return Err(refusal.into());
     }
 
@@ -367,7 +369,7 @@ pub async fn exec_secrets_link_trigger(
         .ok_or_else(|| "Missing required parameter: triggerId".to_string())?;
     let allow = args.get("allow").and_then(|v| v.as_bool()).unwrap_or(true);
 
-    if let Some(refusal) = reserved_mutation_error(cred_name) {
+    if let Some(refusal) = reserved_namespace_error(cred_name) {
         return Err(refusal.into());
     }
 
@@ -470,6 +472,15 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsGet { key } => {
+            // The whole point of vaulting messenger credentials is that a
+            // client is never sent the value ("values travel one way").
+            // `get_secret(_, true)` skips the WithAuth policy they are stored
+            // under, so without this fence the frame hands back the raw bot
+            // token.
+            if let Some(refusal) = reserved_namespace_error(&key) {
+                send_secrets_get_result(writer, false, &key, None, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.get_secret(&key, true);
             match result {
@@ -499,7 +510,7 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsDelete { key } => {
-            if let Some(refusal) = reserved_mutation_error(&key) {
+            if let Some(refusal) = reserved_namespace_error(&key) {
                 send_secrets_delete_result(writer, false, Some(&refusal)).await?;
                 return Ok(());
             }
@@ -518,6 +529,13 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsPeek { name } => {
+            // As for `SecretsGet`: peek renders credential values for
+            // display, which is exactly what a service credential must never
+            // have — the client was deliberately never sent it.
+            if let Some(refusal) = reserved_namespace_error(&name) {
+                send_secrets_peek_result(writer, false, vec![], Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.peek_credential_display(&name);
             match result {
@@ -544,7 +562,7 @@ pub(crate) async fn handle_secrets_frame(
             policy,
             skills,
         } => {
-            if let Some(refusal) = reserved_mutation_error(&name) {
+            if let Some(refusal) = reserved_namespace_error(&name) {
                 send_secrets_set_policy_result(writer, false, Some(&refusal)).await?;
                 return Ok(());
             }
@@ -580,7 +598,7 @@ pub(crate) async fn handle_secrets_frame(
             }
         }
         ClientPayload::SecretsSetDisabled { name, disabled } => {
-            if let Some(refusal) = reserved_mutation_error(&name) {
+            if let Some(refusal) = reserved_namespace_error(&name) {
                 send_secrets_set_disabled_result(writer, false, Some(&refusal)).await?;
                 return Ok(());
             }
@@ -595,7 +613,7 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsDeleteCredential { name } => {
-            if let Some(refusal) = reserved_mutation_error(&name) {
+            if let Some(refusal) = reserved_namespace_error(&name) {
                 send_secrets_delete_credential_result(writer, false, Some(&refusal)).await?;
                 return Ok(());
             }

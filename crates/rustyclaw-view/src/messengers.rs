@@ -699,10 +699,12 @@ impl RouteEditorData {
         }
     }
 
+    /// Move focus to the next row, wrapping.
     pub fn focus_next(&mut self) {
         self.focused = (self.focused + 1) % Self::ROWS;
     }
 
+    /// Move focus to the previous row, wrapping.
     pub fn focus_prev(&mut self) {
         self.focused = (self.focused + Self::ROWS - 1) % Self::ROWS;
     }
@@ -730,6 +732,8 @@ impl RouteEditorData {
         }
     }
 
+    /// Delete the last typed character; as [`insert`](Self::insert), only
+    /// the channel row has text to edit.
     pub fn backspace(&mut self) {
         if self.focused == Self::ROW_CHANNEL {
             self.channel.pop();
