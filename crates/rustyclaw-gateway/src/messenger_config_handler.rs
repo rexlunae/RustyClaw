@@ -414,6 +414,17 @@ async fn save_account(
     if !entry.messenger_type.is_empty() && entry.messenger_type != messenger_type {
         obsolete.extend(entry.secret_refs.values().cloned());
         entry.secret_refs.clear();
+        // The plaintext twins go too. A never-migrated credential otherwise
+        // survives the switch invisibly: the new type's schema no longer
+        // lists it, so `plaintext_credentials` stops reporting it and the
+        // "move to vault" affordance never sees it — while the value sits
+        // re-serialised in config.toml and can even satisfy a same-named
+        // required field on the new backend during validation.
+        if let Some(old_spec) = kind_spec(&entry.messenger_type) {
+            for field in old_spec.fields.iter().filter(|f| f.is_secret()) {
+                let _ = entry.set_field(field.name, "");
+            }
+        }
     }
 
     entry.name = name.clone();
@@ -510,7 +521,16 @@ async fn save_account(
                 }
                 return Err(vec![format!("Could not store {label} in the vault: {e}")]);
             }
-            entry.secret_refs.insert(field.clone(), cred);
+            // A rename arriving together with a fresh credential overwrites
+            // the field's reference before `rename_credentials` ever sees it,
+            // so the key being displaced must be retired here — it is the
+            // only record of the old entry, and without it the previous
+            // credential lives in the vault unreferenced forever.
+            if let Some(displaced) = entry.secret_refs.insert(field.clone(), cred.clone()) {
+                if displaced != cred {
+                    obsolete.push(displaced);
+                }
+            }
             // The vault now owns it; leaving the plaintext twin behind would
             // defeat the entire point of moving it.
             let _ = entry.set_field(field, "");
@@ -1453,6 +1473,134 @@ mod tests {
                 .unwrap(),
             None,
             "a type change must not orphan the old credential in the vault"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rename_with_a_fresh_credential_retires_the_old_vault_entry() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("old-token"))
+            .await
+            .unwrap();
+
+        // Rename and retype in one save: the staging loop overwrites the
+        // field's reference before rename_credentials can see the old key,
+        // so the displaced key has to be retired by the staging loop itself.
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg2".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            vec![("token".to_string(), "new-token".to_string())],
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("rename with a new credential should succeed");
+
+        let mut mgr = vault.lock().await;
+        assert_eq!(
+            mgr.read_service_credential("messenger/tg2/token")
+                .unwrap()
+                .as_deref(),
+            Some("new-token")
+        );
+        assert_eq!(
+            mgr.read_service_credential("messenger/tg/token").unwrap(),
+            None,
+            "the displaced credential must not live on unreferenced"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_type_change_clears_the_old_backends_plaintext_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        // A pre-vault account: the token was hand-written into config.toml
+        // and never migrated.
+        let mut legacy = MessengerConfig {
+            name: "acct".to_string(),
+            messenger_type: "telegram".to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        legacy.set_field("token", "123:plaintext").unwrap();
+        config.messengers.push(legacy);
+
+        // Telegram → IRC: the new schema has no `token`, so nothing would
+        // ever report or migrate the leftover — it would just sit in
+        // config.toml under the new type.
+        save_account(
+            &mut config,
+            &vault,
+            Some("acct".to_string()),
+            "acct".to_string(),
+            "irc".to_string(),
+            true,
+            vec![("server".to_string(), "irc.libera.chat".to_string())],
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("switching type should succeed");
+
+        assert!(
+            config.messengers[0]
+                .field_value("token")
+                .unwrap_or_default()
+                .is_empty(),
+            "the old backend's plaintext credential must not survive the switch"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_leftover_plaintext_credential_does_not_satisfy_the_new_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+
+        let mut legacy = MessengerConfig {
+            name: "acct".to_string(),
+            messenger_type: "telegram".to_string(),
+            enabled: true,
+            ..Default::default()
+        };
+        legacy.set_field("token", "123:plaintext").unwrap();
+        config.messengers.push(legacy);
+
+        // Discord also requires a secret named `token`. The leftover Telegram
+        // value used to satisfy that requirement, letting the save succeed
+        // with the previous backend's credential.
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("acct".to_string()),
+            "acct".to_string(),
+            "discord".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("token") || e.contains("Bot")),
+            "a new backend must demand its own credential: {errors:?}"
         );
     }
 
