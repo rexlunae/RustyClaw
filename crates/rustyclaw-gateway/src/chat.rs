@@ -99,8 +99,12 @@ pub(crate) async fn handle_chat_frame(
                 }
             }
         }
-        if did_append_user_message && let Err(e) = tm.save_to_file(threads_path) {
-            warn!(error = %e, path = ?threads_path, "Failed to persist user message to thread history");
+        if did_append_user_message {
+            // Through the store, like every other persistence point: the
+            // legacy save wrote a threads.json the loader no longer reads,
+            // so a crash mid-answer lost the message — and left a start
+            // marker with no message behind it, a thread stuck open.
+            crate::helpers::persist_threads(&mut tm, threads_path);
         }
     }
     if did_auto_label {
@@ -151,16 +155,22 @@ pub(crate) async fn handle_chat_frame(
         // the current user message; we need to
         // include prior turns so the model has
         // context of the conversation.
+        // Only the messages inside the context window: the record keeps
+        // the whole conversation, and the summary below stands in for the
+        // part before the boundary. Sending both would make compaction
+        // *grow* the prompt.
         let turn_history = {
             let tm = thread_mgr.lock().await;
             active_thread_id.and_then(|id| tm.get(id)).map(|t| {
                 (
-                    t.messages.iter().cloned().collect::<Vec<_>>(),
+                    t.context_messages().cloned().collect::<Vec<_>>(),
                     t.compact_summary.clone(),
                 )
             })
         };
-        if let Some((history, compact_summary)) = turn_history {
+        // A resumed turn's `messages` *is* the recorded conversation;
+        // injecting the history again would double every prior message.
+        if let Some((history, compact_summary)) = turn_history.filter(|_| !is_resume) {
             let history = &history;
             // history includes the message we just
             // added — skip it (last element) to
@@ -212,8 +222,9 @@ pub(crate) async fn handle_chat_frame(
             let tm = thread_mgr.lock().await;
             let thread_context = active_thread_id.and_then(|thread_id| {
                 tm.get(thread_id).map(|thread| {
+                    // The context window, not the record — see above.
                     let history: Vec<rustyclaw_core::threads::ThreadMessage> =
-                        thread.messages.iter().cloned().collect();
+                        thread.context_messages().cloned().collect();
                     (
                         providers::thread_history_to_chat_messages(provider_name, &history),
                         thread.compact_summary.clone(),

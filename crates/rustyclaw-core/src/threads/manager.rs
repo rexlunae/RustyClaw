@@ -928,6 +928,11 @@ mod tests {
         let prompt = thread.compaction_prompt();
         assert!(prompt.contains("what came before"));
         assert!(!prompt.contains("message 0"));
+        // Prompt builders draw from the context window, which is the tail
+        // alone — a prompt built from the whole record would grow every
+        // turn, and compaction would enlarge requests instead of
+        // shrinking them.
+        assert_eq!(thread.context_messages().count(), 3);
     }
 
     /// The elected foreground is an interactive thread, not a sub-agent or
