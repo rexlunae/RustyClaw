@@ -266,7 +266,11 @@ pub(super) fn handle_normal_key(
     // Messenger setup: account list, account editor, and routing table share
     // this overlay. The editor grabs the keyboard whole — it has text fields —
     // so it is checked first.
-    if show_messengers_dialog.get() {
+    // Ctrl+C has to mean quit everywhere, including with this overlay open and
+    // a text field focused, so it is excluded before the panel claims the key.
+    let quit_chord =
+        modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c'));
+    if show_messengers_dialog.get() && !quit_chord {
         use rustyclaw_core::gateway::client_types::GatewayCommand;
         use rustyclaw_view::messengers::{MessengerEditorData, MessengerTab};
 
@@ -287,7 +291,15 @@ pub(super) fn handle_normal_key(
                 KeyCode::Tab | KeyCode::Down => editor.focus_next(),
                 KeyCode::BackTab | KeyCode::Up => editor.focus_prev(),
                 KeyCode::Backspace => editor.backspace(),
-                KeyCode::Char(c) => editor.insert(c),
+                // Unmodified characters only. Inserting the letter of a
+                // Ctrl-combination would mean Ctrl+C types "c" instead of
+                // quitting, and every other Ctrl binding silently becomes
+                // text in whichever field happens to be focused.
+                KeyCode::Char(c)
+                    if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    editor.insert(c)
+                }
                 KeyCode::Enter => match editor.validate() {
                     Ok(()) => {
                         let (display_name, bio, avatar_path) = editor.profile_values();
@@ -347,12 +359,20 @@ pub(super) fn handle_normal_key(
         }
 
         // ── Lists ──
+        //
+        // Letter bindings are guarded on modifiers because this block returns
+        // before the global Ctrl bindings further down are reached. Without
+        // the guard, Ctrl+D — "show message details" everywhere else — would
+        // land on this panel's delete action and destroy an account and its
+        // stored credential, unconfirmed.
+        let plain = !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match code {
             KeyCode::Esc => show_messengers_dialog.set(false),
             KeyCode::Up => data.select_prev(),
             KeyCode::Down => data.select_next(),
-            KeyCode::Char('t') | KeyCode::Tab => data.toggle_tab(),
-            KeyCode::Char('n') => match data.tab {
+            KeyCode::Tab => data.toggle_tab(),
+            KeyCode::Char('t') if plain => data.toggle_tab(),
+            KeyCode::Char('n') if plain => match data.tab {
                 MessengerTab::Accounts => data.kind_picker = Some(0),
                 // Routes are bound from the thread side, where the thread ids
                 // are already on screen; offering a blank id field here would
@@ -362,12 +382,12 @@ pub(super) fn handle_normal_key(
                     false,
                 ),
             },
-            KeyCode::Char('e') => {
+            KeyCode::Char('e') if plain => {
                 if let Some(account) = data.selected_account() {
                     data.editor = Some(MessengerEditorData::edit(account));
                 }
             }
-            KeyCode::Char(' ') => {
+            KeyCode::Char(' ') if plain => {
                 match (data.tab, data.selected_account(), data.selected_route()) {
                     (MessengerTab::Accounts, Some(account), _) => {
                         let (display_name, bio, avatar_path) = (None, None, None);
@@ -403,7 +423,7 @@ pub(super) fn handle_normal_key(
                     _ => {}
                 }
             }
-            KeyCode::Char('m') => {
+            KeyCode::Char('m') if plain => {
                 if let Some(account) = data.selected_account().filter(|a| a.has_plaintext()) {
                     send_input(UserInput::MessengerCommand(
                         GatewayCommand::MessengerSecretsMigrate {
@@ -413,7 +433,7 @@ pub(super) fn handle_normal_key(
                     data.set_status("Moving credentials into the vault…", false);
                 }
             }
-            KeyCode::Char('d') => match (data.selected_account(), data.selected_route()) {
+            KeyCode::Char('d') if plain => match (data.selected_account(), data.selected_route()) {
                 (Some(account), _) => {
                     send_input(UserInput::MessengerCommand(
                         GatewayCommand::MessengerAccountDelete {

@@ -224,11 +224,14 @@ struct Routing {
 
 /// Resolve where a message belongs.
 ///
-/// The account name is what routes match on, but a message only carries its
-/// messenger *type*, so accounts are looked up by type. With two accounts of
-/// one type the first configured wins; naming them separately in a route
-/// requires the per-account channel to differ, which in practice it does.
-fn resolve_routing(config: &Config, messenger_type: &str, msg: &Message) -> Routing {
+/// Matched on the account name the message actually arrived on, so a second
+/// account of the same type gets its own routes rather than the first one's.
+fn resolve_routing(
+    config: &Config,
+    account_name: &str,
+    messenger_type: &str,
+    msg: &Message,
+) -> Routing {
     let channel = msg.channel.as_deref();
     let fallback = || Routing {
         conv_key: format!("{messenger_type}:{}", channel.unwrap_or(&msg.sender)),
@@ -236,10 +239,18 @@ fn resolve_routing(config: &Config, messenger_type: &str, msg: &Message) -> Rout
         thread: None,
     };
 
+    // By name; falling back to the first enabled account of this type only
+    // when the manager's name matches nothing in config.
     let account = config
         .messengers
         .iter()
-        .find(|m| m.messenger_type == messenger_type && m.enabled);
+        .find(|m| m.name == account_name && m.enabled)
+        .or_else(|| {
+            config
+                .messengers
+                .iter()
+                .find(|m| m.messenger_type == messenger_type && m.enabled)
+        });
     let Some(account) = account else {
         return fallback();
     };
@@ -270,7 +281,21 @@ fn resolve_routing(config: &Config, messenger_type: &str, msg: &Message) -> Rout
     Routing {
         // Keyed by thread, not by channel: two channels routed to one thread
         // share a conversation, which is the point of routing them together.
-        conv_key: format!("thread:{}:{}", route.agent(), route.thread_id),
+        //
+        // Direct messages are the exception. They carry no channel, so an
+        // account-wide route claims all of them — and keying purely by thread
+        // would put every correspondent into one history, replaying one
+        // person's private messages as context for answering another. They
+        // keep a per-sender key and take only the thread's working directory.
+        conv_key: match channel {
+            Some(_) => format!("thread:{}:{}", route.agent(), route.thread_id),
+            None => format!(
+                "thread:{}:{}:dm:{}",
+                route.agent(),
+                route.thread_id,
+                msg.sender
+            ),
+        },
         workspace_dir: thread
             .working_dir
             .clone()
@@ -369,7 +394,7 @@ pub async fn run_messenger_loop(
                 eprintln!("DEBUG: Got {} messages", messages.len());
 
                 // Process each message
-                for (messenger_type, msg) in messages {
+                for (account_name, messenger_type, msg) in messages {
                     eprintln!("DEBUG: Processing message from {} in {}", msg.sender, messenger_type);
 
                     if concurrent_mode {
@@ -386,6 +411,7 @@ pub async fn run_messenger_loop(
                         let conversations = Arc::clone(&conversations);
                         let semaphore = Arc::clone(&semaphore);
                         let messenger_type = messenger_type.clone();
+                        let account_name = account_name.clone();
 
                         tokio::spawn(async move {
                             // Acquire permit (blocks if at capacity)
@@ -411,6 +437,7 @@ pub async fn run_messenger_loop(
                                 &model_registry,
                                 copilot_session.as_deref(),
                                 &conversations,
+                                &account_name,
                                 &messenger_type,
                                 msg,
                             )
@@ -452,6 +479,7 @@ pub async fn run_messenger_loop(
                             &model_registry,
                             copilot_session.as_deref(),
                             &conversations,
+                            &account_name,
                             &messenger_type,
                             msg,
                         )
@@ -480,14 +508,24 @@ pub async fn run_messenger_loop(
 }
 
 /// Poll all messengers and collect incoming messages.
-async fn poll_all_messengers(mgr: &MessengerManager) -> Vec<(String, Message)> {
+/// Poll every messenger, tagging each message with the account it came from.
+///
+/// The account *name* matters as much as the type: routes and profiles are
+/// keyed by name, and deriving the name back from the type picks whichever
+/// account happens to be listed first — so with two Telegram accounts the
+/// second one's routes and presented identity would never take effect.
+async fn poll_all_messengers(mgr: &MessengerManager) -> Vec<(String, String, Message)> {
     let mut all_messages = Vec::new();
 
     for messenger in mgr.messengers() {
         match messenger.receive_messages().await {
             Ok(messages) => {
                 for msg in messages {
-                    all_messages.push((messenger.messenger_type().to_string(), msg));
+                    all_messages.push((
+                        messenger.name().to_string(),
+                        messenger.messenger_type().to_string(),
+                        msg,
+                    ));
                 }
             }
             Err(e) => {
@@ -515,6 +553,7 @@ async fn process_incoming_message(
     model_registry: &super::SharedModelRegistry,
     copilot_session: Option<&super::CopilotSession>,
     conversations: &ConversationStore,
+    account_name: &str,
     messenger_type: &str,
     msg: Message,
 ) -> Result<()> {
@@ -531,7 +570,7 @@ async fn process_incoming_message(
 
     // A route binds this channel to a gateway thread, which decides both which
     // conversation the message joins and where its tools run.
-    let routing = resolve_routing(config, messenger_type, &msg);
+    let routing = resolve_routing(config, account_name, messenger_type, &msg);
     let workspace_dir = routing.workspace_dir.clone();
     let conv_key = routing.conv_key.clone();
     if let Some((thread_id, label)) = &routing.thread {
@@ -556,7 +595,13 @@ async fn process_incoming_message(
     let account = config
         .messengers
         .iter()
-        .find(|m| m.messenger_type == messenger_type && m.enabled);
+        .find(|m| m.name == account_name)
+        .or_else(|| {
+            config
+                .messengers
+                .iter()
+                .find(|m| m.messenger_type == messenger_type && m.enabled)
+        });
     let profile = match account {
         Some(a) => resolved_profile(a, config),
         // No matching account means the messenger was built from something
@@ -915,7 +960,7 @@ mod tests {
     fn an_unrouted_channel_keeps_its_own_conversation_and_the_default_workspace() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(dir.path(), "telegram");
-        let routing = resolve_routing(&config, "telegram", &message(Some("-100")));
+        let routing = resolve_routing(&config, "acct", "telegram", &message(Some("-100")));
         assert_eq!(routing.conv_key, "telegram:-100");
         assert_eq!(routing.workspace_dir, config.workspace_dir());
         assert!(routing.thread.is_none());
@@ -925,7 +970,7 @@ mod tests {
     fn a_direct_message_without_a_channel_is_keyed_by_sender() {
         let dir = tempfile::tempdir().unwrap();
         let config = test_config(dir.path(), "telegram");
-        let routing = resolve_routing(&config, "telegram", &message(None));
+        let routing = resolve_routing(&config, "acct", "telegram", &message(None));
         assert_eq!(routing.conv_key, "telegram:someone");
     }
 
@@ -943,7 +988,7 @@ mod tests {
             enabled: true,
         }];
 
-        let routing = resolve_routing(&config, "telegram", &message(Some("-100")));
+        let routing = resolve_routing(&config, "acct", "telegram", &message(Some("-100")));
         assert_eq!(routing.conv_key, format!("thread:main:{thread_id}"));
         assert_eq!(routing.workspace_dir, project);
         assert_eq!(routing.thread, Some((thread_id, "Support".to_string())));
@@ -971,8 +1016,8 @@ mod tests {
             },
         ];
 
-        let a = resolve_routing(&config, "telegram", &message(Some("a")));
-        let b = resolve_routing(&config, "telegram", &message(Some("b")));
+        let a = resolve_routing(&config, "acct", "telegram", &message(Some("a")));
+        let b = resolve_routing(&config, "acct", "telegram", &message(Some("b")));
         assert_eq!(
             a.conv_key, b.conv_key,
             "bridged channels must share history"
@@ -991,7 +1036,7 @@ mod tests {
             agent_id: None,
             enabled: true,
         }];
-        let routing = resolve_routing(&config, "telegram", &message(Some("anything")));
+        let routing = resolve_routing(&config, "acct", "telegram", &message(Some("anything")));
         assert_eq!(routing.workspace_dir, config.workspace_dir());
     }
 
@@ -1007,7 +1052,7 @@ mod tests {
             agent_id: None,
             enabled: true,
         }];
-        let routing = resolve_routing(&config, "telegram", &message(Some("-100")));
+        let routing = resolve_routing(&config, "acct", "telegram", &message(Some("-100")));
         assert_eq!(routing.conv_key, "telegram:-100");
         assert_eq!(routing.workspace_dir, config.workspace_dir());
         assert!(routing.thread.is_none());
@@ -1026,8 +1071,95 @@ mod tests {
             agent_id: None,
             enabled: true,
         }];
-        let routing = resolve_routing(&config, "telegram", &message(Some("c")));
+        let routing = resolve_routing(&config, "acct", "telegram", &message(Some("c")));
         assert!(routing.thread.is_none());
+    }
+
+    #[test]
+    fn a_second_account_of_the_same_type_gets_its_own_routes() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let thread_id = write_thread(&config, "Support", None);
+        // Two Telegram accounts. Routing is keyed by name, and a message
+        // carries only a type, so resolving by type would hand every message
+        // to whichever account is listed first.
+        config
+            .messengers
+            .push(rustyclaw_core::config::MessengerConfig {
+                name: "second".to_string(),
+                messenger_type: "telegram".to_string(),
+                enabled: true,
+                ..Default::default()
+            });
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "second".into(),
+            channel: Some("-100".into()),
+            thread_id,
+            agent_id: None,
+            enabled: true,
+        }];
+
+        let routed = resolve_routing(&config, "second", "telegram", &message(Some("-100")));
+        assert_eq!(
+            routed.thread,
+            Some((thread_id, "Support".to_string())),
+            "the second account's own route must apply"
+        );
+
+        // And the first account, which has no route, is unaffected.
+        let unrouted = resolve_routing(&config, "acct", "telegram", &message(Some("-100")));
+        assert!(unrouted.thread.is_none());
+    }
+
+    #[test]
+    fn a_catch_all_route_does_not_merge_separate_direct_messages() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let project = dir.path().join("project");
+        let thread_id = write_thread(&config, "Inbox", Some(&project));
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "acct".into(),
+            channel: None,
+            thread_id,
+            agent_id: None,
+            enabled: true,
+        }];
+
+        let dm_from = |sender: &str| {
+            let mut msg = message(None);
+            msg.sender = sender.to_string();
+            resolve_routing(&config, "acct", "telegram", &msg)
+        };
+        let alice = dm_from("alice");
+        let bob = dm_from("bob");
+
+        assert_ne!(
+            alice.conv_key, bob.conv_key,
+            "two people's private messages must not share a history"
+        );
+        // The route still applies: both run in the thread's directory.
+        assert_eq!(alice.workspace_dir, project);
+        assert_eq!(bob.workspace_dir, project);
+        assert_eq!(alice.thread, Some((thread_id, "Inbox".to_string())));
+    }
+
+    #[test]
+    fn a_catch_all_route_still_shares_one_history_across_channels() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = test_config(dir.path(), "telegram");
+        let thread_id = write_thread(&config, "Shared", None);
+        config.messenger_routes = vec![ThreadRoute {
+            messenger: "acct".into(),
+            channel: None,
+            thread_id,
+            agent_id: None,
+            enabled: true,
+        }];
+
+        // Group channels are what a catch-all is for; only DMs are split out.
+        let a = resolve_routing(&config, "acct", "telegram", &message(Some("chan-a")));
+        let b = resolve_routing(&config, "acct", "telegram", &message(Some("chan-b")));
+        assert_eq!(a.conv_key, b.conv_key);
     }
 
     #[test]

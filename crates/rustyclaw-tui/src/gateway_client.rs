@@ -541,11 +541,13 @@ pub(crate) fn gateway_event_to_gw_event(
             routes,
             threads,
             available_kinds,
+            vault_locked,
         } => GwEvent::MessengerConfigResult {
             accounts: accounts.iter().map(Into::into).collect(),
             routes: routes.iter().map(Into::into).collect(),
             threads: threads.iter().map(Into::into).collect(),
             available_kinds,
+            vault_locked,
         },
         E::MessengerAccountResult {
             ok,

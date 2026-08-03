@@ -318,6 +318,7 @@ pub(crate) enum GwEvent {
         routes: Vec<rustyclaw_view::MessengerRouteData>,
         threads: Vec<rustyclaw_view::RoutableThreadData>,
         available_kinds: Vec<String>,
+        vault_locked: bool,
     },
     /// A messenger account or route mutation finished.
     MessengerActionResult {

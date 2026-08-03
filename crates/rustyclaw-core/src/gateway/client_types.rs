@@ -195,6 +195,7 @@ pub enum GatewayEvent {
         routes: Vec<ThreadRouteDto>,
         threads: Vec<RoutableThreadDto>,
         available_kinds: Vec<String>,
+        vault_locked: bool,
     },
 
     /// Outcome of an account save, delete, or credential migration.
@@ -1571,11 +1572,13 @@ impl GatewayEvent {
                 routes,
                 threads,
                 available_kinds,
+                vault_locked,
             } => Some(GatewayEvent::MessengerConfigResult {
                 accounts,
                 routes,
                 threads,
                 available_kinds,
+                vault_locked,
             }),
             ServerPayload::MessengerAccountResult {
                 ok,

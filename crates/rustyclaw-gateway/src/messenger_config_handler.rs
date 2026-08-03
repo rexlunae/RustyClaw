@@ -171,6 +171,7 @@ async fn account_dto(
     config: &Config,
     vault: &SharedVault,
     stored: &[String],
+    vault_locked: bool,
 ) -> MessengerAccountDto {
     let spec = kind_spec(&messenger.messenger_type);
 
@@ -199,13 +200,14 @@ async fn account_dto(
     // as the pair `cred:<name>` / `val:<name>`. Comparing against the bare
     // name matches neither, which is how this managed to report *every*
     // account as uncredentialed.
+    //
+    // When the vault is locked there is nothing to check against, so the
+    // references are taken at face value: "we cannot see it from here" is much
+    // closer to the truth than "it is gone".
     let vaulted: BTreeMap<String, String> = messenger
         .secret_refs
         .iter()
-        .filter(|(_, cred)| {
-            let value_key = format!("val:{cred}");
-            stored.contains(&value_key)
-        })
+        .filter(|(_, cred)| vault_locked || stored.contains(&format!("val:{cred}")))
         .map(|(field, cred)| (field.clone(), cred.clone()))
         .collect();
 
@@ -271,14 +273,21 @@ fn agent_identity(config: &Config, agent_id: Option<&str>) -> (String, Option<St
 
 /// The full setup view: accounts, routes, routable threads, available kinds.
 async fn build_view(config: &Config, vault: &SharedVault) -> ServerFrame {
-    let stored = {
+    // A locked vault lists nothing, which is indistinguishable from an empty
+    // one unless we ask. Reporting "no credentials" for a locked vault would
+    // flag every working account as broken and push the user into retyping
+    // tokens that are already stored — over the top of the good ones.
+    let (vault_locked, stored) = {
         let mut mgr = vault.lock().await;
-        mgr.list_secrets()
+        match mgr.is_locked() {
+            true => (true, Vec::new()),
+            false => (false, mgr.list_secrets()),
+        }
     };
 
     let mut accounts = Vec::with_capacity(config.messengers.len());
     for messenger in &config.messengers {
-        accounts.push(account_dto(messenger, config, vault, &stored).await);
+        accounts.push(account_dto(messenger, config, vault, &stored, vault_locked).await);
     }
 
     let threads = routable_threads(config);
@@ -305,6 +314,7 @@ async fn build_view(config: &Config, vault: &SharedVault) -> ServerFrame {
             routes,
             threads,
             available_kinds: available_kinds(),
+            vault_locked,
         },
     }
 }
@@ -331,6 +341,8 @@ async fn save_account(
 ) -> Outcome {
     let name = name.trim().to_string();
     validate_account_name(&name).map_err(|e| vec![e])?;
+    // Captured before `config` is borrowed mutably below.
+    let credentials_dir = config.credentials_dir();
 
     let Some(spec) = kind_spec(&messenger_type) else {
         return Err(vec![format!("Unknown messenger type: '{messenger_type}'")]);
@@ -344,12 +356,25 @@ async fn save_account(
 
     // Renaming to a name already in use would leave two accounts fighting over
     // one set of vault keys, so it is refused rather than merged.
-    let clashes = config
+    //
+    // Compared on the *slug*, not the display name: vault keys are derived by
+    // lowercasing and folding punctuation, so "Telegram Main" and
+    // "telegram-main" are different accounts sharing one set of credentials.
+    // Saving the second would overwrite the first's token, and deleting either
+    // would strand the other.
+    let clash = config
         .messengers
         .iter()
-        .any(|m| m.name == name && Some(&m.name) != original_name.as_ref());
-    if clashes {
-        return Err(vec![format!("An account named '{name}' already exists")]);
+        .filter(|m| Some(&m.name) != original_name.as_ref())
+        .find(|m| setup::slugs_collide(&m.name, &name));
+    if let Some(existing) = clash {
+        return Err(vec![match existing.name == name {
+            true => format!("An account named '{name}' already exists"),
+            false => format!(
+                "'{name}' would share stored credentials with the existing                  account '{}' — the two names differ only in case or                  punctuation. Pick a more distinct name.",
+                existing.name
+            ),
+        }]);
     }
 
     // Start from the existing entry when editing so untouched fields survive.
@@ -459,7 +484,10 @@ async fn save_account(
         profile.bio = override_of(Some(value));
     }
     if let Some(path) = avatar_path {
-        profile.avatar_path = (!path.as_os_str().is_empty()).then_some(path);
+        profile.avatar_path = match path.as_os_str().is_empty() {
+            true => None,
+            false => Some(validate_avatar(&path, &credentials_dir)?),
+        };
     }
     if let Some(id) = agent_id {
         profile.agent_id = override_of(Some(id));
@@ -699,6 +727,61 @@ fn delete_route(
     }
     persist(config).map_err(|e| e.join("; "))?;
     Ok(Some("Route removed".to_string()))
+}
+
+/// Image extensions a profile picture may have.
+const AVATAR_EXTENSIONS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+
+/// Check an avatar path before it can be handed to a chat platform.
+///
+/// `announce_profile` uploads this file's *contents* to a third-party service,
+/// so an unchecked path is an exfiltration primitive: a connected client could
+/// name the credentials vault and have the gateway publish it. The workspace
+/// file frames already refuse anything outside their root; this is the same
+/// idea applied to the one other path a client gets to name.
+fn validate_avatar(
+    path: &std::path::Path,
+    credentials_dir: &std::path::Path,
+) -> Result<std::path::PathBuf, Vec<String>> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|e| vec![format!("Avatar '{}' cannot be read: {e}", path.display())])?;
+
+    // Two checks, deliberately. `is_protected_path` consults a process-global
+    // credentials directory that is only set once the gateway has initialised
+    // its sandbox, so on its own it silently permits everything before that
+    // point. The explicit comparison does not depend on global state.
+    let protected = rustyclaw_core::tools::is_protected_path(&canonical)
+        || credentials_dir
+            .canonicalize()
+            .is_ok_and(|dir| canonical.starts_with(dir));
+    if protected {
+        warn!(path = %canonical.display(), "Refused an avatar inside a protected path");
+        return Err(vec![
+            "That path is inside the credentials store and cannot be published".to_string(),
+        ]);
+    }
+
+    if !canonical.is_file() {
+        return Err(vec![format!("'{}' is not a file", canonical.display())]);
+    }
+
+    // An extension check is not proof of file type, but it stops the whole
+    // class of "point it at a config file and see what happens" by accident,
+    // and a mislabelled image simply fails on the platform's side.
+    let ext = canonical
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .unwrap_or_default();
+    if !AVATAR_EXTENSIONS.contains(&ext.as_str()) {
+        return Err(vec![format!(
+            "An avatar must be one of: {}",
+            AVATAR_EXTENSIONS.join(", ")
+        )]);
+    }
+
+    Ok(canonical)
 }
 
 // ── Shared plumbing ─────────────────────────────────────────────────────────
@@ -1373,6 +1456,7 @@ mod tests {
             .await
             .unwrap();
         let avatar = dir.path().join("face.png");
+        std::fs::write(&avatar, b"png").unwrap();
         save_account(
             &mut config,
             &vault,
@@ -1414,8 +1498,194 @@ mod tests {
                 .profile
                 .as_ref()
                 .and_then(|p| p.avatar_path.clone()),
-            Some(avatar)
+            Some(avatar.canonicalize().unwrap())
         );
+    }
+
+    #[tokio::test]
+    async fn an_account_whose_slug_collides_with_another_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "telegram-main", Some("first"))
+            .await
+            .unwrap();
+
+        // Different display name, same vault keys: accepting this would
+        // overwrite the first account's token.
+        let errors = save_telegram(&mut config, &vault, "Telegram Main", Some("second"))
+            .await
+            .unwrap_err();
+        assert!(errors[0].contains("share stored credentials"), "{errors:?}");
+        assert_eq!(config.messengers.len(), 1);
+        assert_eq!(
+            vault
+                .lock()
+                .await
+                .read_service_credential("messenger/telegram-main/token")
+                .unwrap()
+                .as_deref(),
+            Some("first"),
+            "the existing credential must survive the refused save"
+        );
+    }
+
+    #[tokio::test]
+    async fn renaming_an_account_to_its_own_slug_variant_is_allowed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "telegram-main", Some("t"))
+            .await
+            .unwrap();
+
+        // Colliding with *itself* is not a collision.
+        save_account(
+            &mut config,
+            &vault,
+            Some("telegram-main".to_string()),
+            "Telegram Main".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("an account may be recased");
+        assert_eq!(config.messengers[0].name, "Telegram Main");
+    }
+
+    #[tokio::test]
+    async fn an_avatar_inside_the_credentials_directory_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+
+        // The gateway uploads an avatar's *contents* to a chat platform, so
+        // naming the vault would publish it.
+        let secret = config.credentials_dir().join("secrets.json");
+        std::fs::write(&secret, "{}").unwrap();
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(secret),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(errors[0].contains("credentials store"), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn an_avatar_that_is_not_an_image_is_refused() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+
+        let notes = dir.path().join("notes.txt");
+        std::fs::write(&notes, "private").unwrap();
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(notes),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(errors[0].contains("must be one of"), "{errors:?}");
+    }
+
+    #[tokio::test]
+    async fn an_ordinary_image_is_accepted_as_an_avatar() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+
+        let face = dir.path().join("face.png");
+        std::fs::write(&face, b"\x89PNG").unwrap();
+        save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            Some(face.clone()),
+            None,
+        )
+        .await
+        .expect("a png outside the vault is fine");
+        assert_eq!(
+            config.messengers[0]
+                .profile
+                .as_ref()
+                .and_then(|p| p.avatar_path.clone()),
+            Some(face.canonicalize().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_locked_vault_does_not_report_every_account_as_uncredentialed() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("123:secret"))
+            .await
+            .unwrap();
+
+        // A password-protected vault the daemon has not been given a password
+        // for lists nothing — which must not be read as "the credential is
+        // gone", or the user gets told to retype a token that is already there.
+        // A password-protected vault is one with a secrets file and no key
+        // file beside it — that is what `is_locked` looks for.
+        let _ = std::fs::remove_file(config.credentials_dir().join("secrets.key"));
+        let locked = Arc::new(Mutex::new(rustyclaw_core::secrets::SecretsManager::locked(
+            config.credentials_dir(),
+        )));
+        assert!(locked.lock().await.is_locked(), "fixture should be locked");
+        let frame = build_view(&config, &locked).await;
+        match frame.payload {
+            ServerPayload::MessengerConfigResult {
+                accounts,
+                vault_locked,
+                ..
+            } => {
+                assert!(vault_locked, "the view must say the vault is locked");
+                assert_eq!(
+                    accounts[0].vaulted.get("token").map(String::as_str),
+                    Some("messenger/tg/token"),
+                    "config's reference is the best available answer here"
+                );
+            }
+            other => panic!("expected a config result, got {other:?}"),
+        }
     }
 
     #[test]

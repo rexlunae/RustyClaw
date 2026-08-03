@@ -203,8 +203,26 @@ pub struct EditorField {
     pub one_of: Option<String>,
     /// Help text from the schema.
     pub help: String,
-    /// Whether a credential is already in the vault for this field.
+    /// Whether the row currently counts as already having a credential.
+    ///
+    /// Derived, not owned: it is [`EditorField::had_stored`] AND the buffer
+    /// being empty. Typing replaces the stored credential; emptying the box
+    /// again goes back to keeping it.
     pub stored: bool,
+    /// Whether a credential existed when the form was built.
+    pub had_stored: bool,
+}
+
+impl EditorField {
+    /// Recompute [`stored`](Self::stored) after the buffer changed.
+    ///
+    /// Clearing `stored` on the first keystroke and never restoring it meant
+    /// that typing one character into a credential box and deleting it left
+    /// the row empty *and* marked unset, so validation demanded a token the
+    /// user had never intended to change.
+    fn refresh_stored(&mut self) {
+        self.stored = self.had_stored && self.value.trim().is_empty();
+    }
 }
 
 impl EditorField {
@@ -331,9 +349,7 @@ impl MessengerEditorData {
     pub fn insert(&mut self, c: char) {
         if let Some(field) = self.fields.get_mut(self.focused) {
             field.value.push(c);
-            // Typing into a stored secret replaces it, so the "leave blank to
-            // keep" placeholder must stop claiming otherwise.
-            field.stored = false;
+            field.refresh_stored();
         }
     }
 
@@ -341,6 +357,8 @@ impl MessengerEditorData {
     pub fn backspace(&mut self) {
         if let Some(field) = self.fields.get_mut(self.focused) {
             field.value.pop();
+            // Deleting back to empty returns the row to "keep what is stored".
+            field.refresh_stored();
         }
     }
 
@@ -348,9 +366,7 @@ impl MessengerEditorData {
     pub fn set_value(&mut self, name: &str, value: &str) {
         if let Some(field) = self.fields.iter_mut().find(|f| f.name == name) {
             field.value = value.to_string();
-            if !value.is_empty() {
-                field.stored = false;
-            }
+            field.refresh_stored();
         }
     }
 
@@ -448,6 +464,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
         one_of: None,
         help: "How this account is listed, and how routes refer to it".to_string(),
         stored: false,
+        had_stored: false,
     }];
 
     if let Some(spec) = setup::kind_spec(messenger_type) {
@@ -487,6 +504,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
                 },
                 help: field.help.to_string(),
                 stored,
+                had_stored: stored,
             });
         }
     }
@@ -509,6 +527,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
         one_of: None,
         help: "Name shown to others; blank inherits the agent's name".to_string(),
         stored: false,
+        had_stored: false,
     });
     fields.push(EditorField {
         name: FIELD_BIO.to_string(),
@@ -521,6 +540,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
         one_of: None,
         help: "Status/about text; blank inherits the agent's description".to_string(),
         stored: false,
+        had_stored: false,
     });
     fields.push(EditorField {
         name: FIELD_AVATAR.to_string(),
@@ -531,6 +551,7 @@ fn build_fields(messenger_type: &str, account: Option<&MessengerAccountData>) ->
         one_of: None,
         help: "Image file to upload, where the platform supports one".to_string(),
         stored: false,
+        had_stored: false,
     });
 
     fields
@@ -636,6 +657,8 @@ pub struct MessengersPanelData {
     pub threads: Vec<RoutableThreadData>,
     /// Messenger types this gateway build can run.
     pub available_kinds: Vec<String>,
+    /// Whether the vault is locked, so credential presence is unverifiable.
+    pub vault_locked: bool,
     /// Selected row in the active tab.
     pub selected: Option<usize>,
     /// Open account editor, if any.
@@ -645,6 +668,13 @@ pub struct MessengersPanelData {
     pub kind_picker: Option<usize>,
     /// Last message from the gateway.
     pub status: Option<String>,
+    /// Bumped on every mutation the gateway accepted.
+    ///
+    /// A client that keeps its own editor state needs to know when a save
+    /// actually landed, and cannot infer it from a refreshed account list: the
+    /// gateway pushes one of those after failures too. Watching this counter
+    /// change is how the desktop knows it is safe to discard a form.
+    pub commits: u64,
     /// Whether `status` reports a failure.
     pub status_is_error: bool,
 }
@@ -731,7 +761,9 @@ impl MessengersPanelData {
         routes: Vec<MessengerRouteData>,
         threads: Vec<RoutableThreadData>,
         available_kinds: Vec<String>,
+        vault_locked: bool,
     ) {
+        self.vault_locked = vault_locked;
         self.accounts = accounts;
         self.routes = routes;
         self.threads = threads;
@@ -765,6 +797,11 @@ impl MessengersPanelData {
             .count();
         let plaintext = self.accounts.iter().filter(|a| a.has_plaintext()).count();
         let mut summary = format!("{ready} ready / {} configured", self.accounts.len());
+        if self.vault_locked {
+            // Credential presence is taken from config here, not confirmed
+            // against the vault. Saying so beats quietly implying otherwise.
+            summary.push_str(" · vault locked, credentials unverified");
+        }
         if plaintext > 0 {
             summary.push_str(&format!(
                 " · {plaintext} with plaintext credential{}",
@@ -844,6 +881,34 @@ mod tests {
         let (display_name, _, avatar) = editor.profile_values();
         assert_eq!(display_name.as_deref(), Some("Ada"));
         assert_eq!(avatar, Some(std::path::PathBuf::from("/tmp/face.png")));
+    }
+
+    #[test]
+    fn emptying_a_credential_box_returns_it_to_keeping_the_stored_one() {
+        let mut telegram = account("telegram");
+        telegram.vaulted = vec!["token".into()];
+        let mut editor = MessengerEditorData::edit(&telegram);
+        editor.focused = editor
+            .fields
+            .iter()
+            .position(|f| f.name == "token")
+            .unwrap();
+
+        editor.insert('x');
+        assert!(!editor.fields[editor.focused].stored, "typing replaces it");
+        editor.backspace();
+        assert!(
+            editor.fields[editor.focused].stored,
+            "deleting back to empty must mean 'keep the stored one' again"
+        );
+        assert!(editor.validate().is_ok(), "{:?}", editor.validate());
+        assert!(editor.secret_values().is_empty());
+
+        // Same via the desktop's set_value path.
+        editor.set_value("token", "y");
+        assert!(!editor.fields[editor.focused].stored);
+        editor.set_value("token", "");
+        assert!(editor.fields[editor.focused].stored);
     }
 
     #[test]
@@ -1002,6 +1067,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         );
         panel.selected = Some(2);
         // A refresh that dropped the cursor would move the user's selection
@@ -1011,6 +1077,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         );
         assert_eq!(panel.selected, Some(2));
     }
@@ -1023,11 +1090,12 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            false,
         );
         panel.selected = Some(1);
-        panel.apply(vec![account("telegram")], vec![], vec![], vec![]);
+        panel.apply(vec![account("telegram")], vec![], vec![], vec![], false);
         assert_eq!(panel.selected, Some(0));
-        panel.apply(vec![], vec![], vec![], vec![]);
+        panel.apply(vec![], vec![], vec![], vec![], false);
         assert_eq!(panel.selected, None);
     }
 
@@ -1039,6 +1107,7 @@ mod tests {
             vec![MessengerRouteData::default()],
             vec![],
             vec![],
+            false,
         );
         panel.selected = Some(2);
         panel.toggle_tab();

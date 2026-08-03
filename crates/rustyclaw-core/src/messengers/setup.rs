@@ -451,11 +451,22 @@ pub fn validate_account_name(name: &str) -> Result<(), String> {
             "Account name cannot contain '{bad}' — use letters, digits, spaces, '_', '-', or '.'"
         ));
     }
+    if account_slug(trimmed).is_empty() {
+        // A name of only punctuation slugs to nothing, which would file its
+        // credentials under `messenger//<field>` — a key shared with every
+        // other such name.
+        return Err("Account name must contain at least one letter or digit".to_string());
+    }
     Ok(())
 }
 
 /// Turn an account name into the form used inside vault keys.
-fn slug(name: &str) -> String {
+///
+/// Public because uniqueness has to be checked on the *slug*, not the display
+/// name: the mapping is lossy — case, spaces, `_`, `-` and `.` all collapse —
+/// so two names that look distinct can address one set of vault keys. See
+/// [`slugs_collide`].
+pub fn account_slug(name: &str) -> String {
     name.trim()
         .to_ascii_lowercase()
         .chars()
@@ -470,7 +481,17 @@ fn slug(name: &str) -> String {
 /// The `messenger/` prefix keeps these grouped in the vault listing and makes
 /// it obvious what a stray entry belongs to.
 pub fn secret_name(account: &str, field: &str) -> String {
-    format!("messenger/{}/{}", slug(account), field)
+    format!("messenger/{}/{}", account_slug(account), field)
+}
+
+/// Whether two account names would share one set of vault keys.
+///
+/// `"Telegram Main"`, `"telegram-main"` and `"telegram_main"` all slug to
+/// `telegram-main`. Left unchecked, saving the second would overwrite the
+/// first's token and deleting either would strand the other with a reference
+/// to a credential that no longer exists.
+pub fn slugs_collide(a: &str, b: &str) -> bool {
+    account_slug(a) == account_slug(b)
 }
 
 // ── Profile ─────────────────────────────────────────────────────────────────
@@ -818,6 +839,31 @@ mod tests {
             secret_name("irc.libera", "password"),
             "messenger/irc-libera/password"
         );
+    }
+
+    #[test]
+    fn names_that_differ_only_in_punctuation_are_recognised_as_colliding() {
+        // All of these address messenger/telegram-main/<field>.
+        for name in [
+            "Telegram Main",
+            "telegram-main",
+            "telegram_main",
+            "telegram.main",
+        ] {
+            assert!(
+                slugs_collide("telegram-main", name),
+                "{name} shares a vault key with telegram-main"
+            );
+        }
+        assert!(!slugs_collide("telegram-main", "telegram-alt"));
+    }
+
+    #[test]
+    fn a_name_with_no_alphanumerics_is_rejected() {
+        // Would slug to "" and file credentials under messenger//<field>.
+        assert!(validate_account_name("...").is_err());
+        assert!(validate_account_name("---").is_err());
+        assert!(validate_account_name("a").is_ok());
     }
 
     #[test]

@@ -73,6 +73,10 @@ pub fn MessengersDialog(props: MessengersDialogProps) -> Element {
     let mut tab = use_signal(|| MessengerTab::Accounts);
     let mut editor: Signal<Option<MessengerEditorData>> = use_signal(|| None);
     let mut picking_kind = use_signal(|| false);
+    // Highest commit count this dialog has already reacted to. The gateway
+    // pushes a refreshed view after failed mutations too, so the account list
+    // changing is not evidence that a save landed — the counter is.
+    let mut seen_commits = use_signal(|| 0u64);
     let route_channel = use_signal(String::new);
     let route_thread = use_signal(String::new);
     let route_account = use_signal(String::new);
@@ -82,6 +86,13 @@ pub fn MessengersDialog(props: MessengersDialogProps) -> Element {
     }
 
     let data = props.data.clone();
+
+    // Close the editor once — and only once — a save is confirmed.
+    if data.commits > *seen_commits.read() {
+        seen_commits.set(data.commits);
+        editor.set(None);
+        picking_kind.set(false);
+    }
 
     rsx! {
         RcModal {
@@ -124,6 +135,7 @@ pub fn MessengersDialog(props: MessengersDialogProps) -> Element {
             if let Some(form) = editor.read().clone() {
                 AccountEditor {
                     form: form.clone(),
+                    server_error: data.status_is_error.then(|| data.status.clone()).flatten(),
                     on_change: move |updated| editor.set(Some(updated)),
                     on_cancel: move |_| editor.set(None),
                     on_save: move |form: MessengerEditorData| {
@@ -141,7 +153,14 @@ pub fn MessengersDialog(props: MessengersDialogProps) -> Element {
                                     bio,
                                     avatar_path,
                                 });
-                                editor.set(None);
+                                // The form stays mounted until the gateway
+                                // confirms. Several rejections are only
+                                // detectable server-side — a colliding name,
+                                // an unsupported backend, a vault write that
+                                // failed — and closing here would throw away
+                                // everything typed, including a credential the
+                                // gateway never echoes back and so cannot
+                                // restore.
                             }
                             Err(errors) => {
                                 let mut rejected = form.clone();
@@ -320,6 +339,8 @@ fn AccountList(
 #[component]
 fn AccountEditor(
     form: MessengerEditorData,
+    /// The gateway's complaint about the last save, if it refused one.
+    server_error: Option<String>,
     on_change: EventHandler<MessengerEditorData>,
     on_save: EventHandler<MessengerEditorData>,
     on_cancel: EventHandler<()>,
@@ -378,6 +399,9 @@ fn AccountEditor(
 
             for error in form.errors.clone() {
                 p { class: "has-text-danger is-size-7", "✗ {error}" }
+            }
+            if let Some(rejection) = server_error {
+                p { class: "has-text-danger is-size-7", "✗ {rejection}" }
             }
 
             Buttons {

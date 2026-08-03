@@ -934,6 +934,32 @@ pub enum ClientPayload {
         content: String,
         expected_root: PathBuf,
     },
+    /// Stop a running turn.
+    ///
+    /// `thread_id` names which one. With turns running per thread, "the
+    /// current turn" is not a thing the gateway can resolve on the client's
+    /// behalf — it would have to guess, and guessing which conversation the
+    /// user meant to interrupt is worse than the guesses this whole change
+    /// set exists to remove.
+    ///
+    /// `None` means the client did not say. It is honoured only when exactly
+    /// one turn is running, which is the case every pre-existing client was
+    /// written against; with several running it stops nothing rather than
+    /// stopping the wrong one.
+    ///
+    /// Appended at the end of the enum on purpose: bincode encodes variants
+    /// positionally, so adding here leaves every existing variant's index
+    /// alone.
+    Cancel {
+        #[serde(default)]
+        thread_id: Option<u64>,
+    },
+
+    // NOTE: everything below is appended after `Cancel` on purpose. bincode
+    // encodes enum variants positionally, so inserting above would renumber
+    // `Cancel` and every variant after it — a peer built before this change
+    // would have its "stop" decoded as something else entirely, silently,
+    // because a unit variant parses happily and ignores the trailing bytes.
     // ── Messenger setup ───────────────────────────────────────────────────
     /// Request accounts, routes, and the threads routes may point at.
     MessengerConfigRequest,
@@ -979,27 +1005,6 @@ pub enum ClientPayload {
     MessengerRouteDelete {
         messenger: String,
         channel: Option<String>,
-    },
-
-    /// Stop a running turn.
-    ///
-    /// `thread_id` names which one. With turns running per thread, "the
-    /// current turn" is not a thing the gateway can resolve on the client's
-    /// behalf — it would have to guess, and guessing which conversation the
-    /// user meant to interrupt is worse than the guesses this whole change
-    /// set exists to remove.
-    ///
-    /// `None` means the client did not say. It is honoured only when exactly
-    /// one turn is running, which is the case every pre-existing client was
-    /// written against; with several running it stops nothing rather than
-    /// stopping the wrong one.
-    ///
-    /// Appended at the end of the enum on purpose: bincode encodes variants
-    /// positionally, so adding here leaves every existing variant's index
-    /// alone.
-    Cancel {
-        #[serde(default)]
-        thread_id: Option<u64>,
     },
 }
 
@@ -1514,6 +1519,9 @@ pub enum ServerPayload {
         threads: Vec<RoutableThreadDto>,
         /// Messenger type ids this gateway build can actually run.
         available_kinds: Vec<String>,
+        /// Whether the vault is locked. When it is, `vaulted` reflects what
+        /// config claims rather than what the vault could be asked to confirm.
+        vault_locked: bool,
     },
     /// Outcome of an account save, delete, or credential migration.
     MessengerAccountResult {

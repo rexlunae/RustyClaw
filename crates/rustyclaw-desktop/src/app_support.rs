@@ -590,6 +590,7 @@ pub(crate) fn handle_gateway_event(
             routes,
             threads,
             available_kinds,
+            vault_locked,
         } => {
             // `apply` keeps the current selection in range rather than
             // resetting it; refreshes land after every mutation.
@@ -598,6 +599,7 @@ pub(crate) fn handle_gateway_event(
                 routes.iter().map(Into::into).collect(),
                 threads.iter().map(Into::into).collect(),
                 available_kinds,
+                vault_locked,
             );
         }
         GatewayEvent::MessengerAccountResult {
@@ -616,6 +618,11 @@ pub(crate) fn handle_gateway_event(
                     false => "Failed".to_string(),
                 },
             };
+            if ok {
+                // The desktop editor stays mounted until a save is confirmed;
+                // this is the signal that it can be discarded.
+                state.write().messengers_data.commits += 1;
+            }
             state.write().messengers_data.set_status(text.clone(), !ok);
             state.write().push_notice(
                 match ok {

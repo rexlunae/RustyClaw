@@ -1796,11 +1796,12 @@ pub(super) fn apply_gw_event(
             routes,
             threads,
             available_kinds,
+            vault_locked,
         } => {
             let mut data = messengers_data.read().clone().unwrap_or_default();
             // A refresh arrives after every mutation, so `apply` keeps the
             // cursor where the user left it rather than resetting to the top.
-            data.apply(accounts, routes, threads, available_kinds);
+            data.apply(accounts, routes, threads, available_kinds, vault_locked);
             // The editor is closed by whatever opened it; a refresh landing
             // mid-edit must not discard what the user has typed.
             messengers_data.set(Some(data));
@@ -1815,6 +1816,7 @@ pub(super) fn apply_gw_event(
             // A rejected save leaves the editor open with its contents intact
             // so the user can fix the problem the message just named.
             if ok {
+                data.commits += 1;
                 data.editor = None;
                 data.kind_picker = None;
             }
