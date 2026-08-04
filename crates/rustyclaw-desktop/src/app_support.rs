@@ -1426,7 +1426,7 @@ where
 {
     spawn(async move {
         if let Err(e) = fut.await {
-            tracing::error!(action = what, "{what} failed: {e:?}");
+            tracing::error!(action = what, error = ?e, "Action failed");
         }
     });
 }
