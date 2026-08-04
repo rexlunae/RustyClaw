@@ -622,9 +622,18 @@ impl App {
                     let _ = client.send(GatewayCommand::AgentSwitch { agent_id }).await;
                 }
                 Ok(UserInput::RequestThreadHistory(thread_id)) => {
-                    let _ = client
+                    // A dropped error here reads as an empty thread: the view
+                    // is waiting for a reply to a request that never went out.
+                    if let Err(e) = client
                         .send(GatewayCommand::ThreadHistoryRequest { thread_id })
-                        .await;
+                        .await
+                    {
+                        tracing::error!(
+                            thread_id,
+                            error = %e,
+                            "Thread history request failed to send"
+                        );
+                    }
                 }
                 Ok(UserInput::RefreshThreads) => {
                     let _ = client.send(GatewayCommand::ThreadList).await;
