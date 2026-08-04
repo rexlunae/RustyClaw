@@ -140,6 +140,53 @@ pub(crate) async fn handle_thread_switch(
 
     let target_id = ThreadId(thread_id);
 
+    // Resolve what the id names before acting on its behalf. The compaction
+    // below summarises the outgoing foreground and trims its context — a
+    // cost only justified when the foreground is actually about to move.
+    // Sub-agent/cron sidebar rows reach this handler with pseudo-ids that
+    // are not threads: peeking at one must not burn a provider call or
+    // shrink the active chat's memory.
+    if thread_mgr.lock().await.get(target_id).is_none() {
+        if let Some((_, messages)) = crate::thread_updates::session_transcript(thread_id) {
+            // A read-only session preview. The client is told it "switched"
+            // so it repaints onto this transcript; the manager's foreground
+            // stays put, so a message typed here names the pseudo-id and is
+            // refused by the vanished-thread guard rather than silently
+            // filed elsewhere — and clicking any real thread switches back
+            // normally. No thread-list frame follows: the client re-fetches
+            // the foreground's history whenever one moves its pointer,
+            // which would wipe this view moments after it appeared. The
+            // read-only note is the transcript's own last message (see
+            // `session_transcript`), so every repaint keeps it.
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::ThreadSwitched,
+                payload: ServerPayload::ThreadSwitched {
+                    thread_id,
+                    context_summary: None,
+                },
+            };
+            send_frame(writer, &frame).await?;
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::ThreadMessages,
+                payload: ServerPayload::ThreadMessages {
+                    thread_id,
+                    messages,
+                },
+            };
+            send_frame(writer, &frame).await?;
+        } else {
+            let frame = ServerFrame {
+                frame_type: ServerFrameType::Error,
+                payload: ServerPayload::Error {
+                    ok: false,
+                    message: format!("Thread {} not found", thread_id),
+                },
+            };
+            send_frame(writer, &frame).await?;
+        }
+        return Ok(());
+    }
+
     // Compact the outgoing thread if it has enough history to be worth
     // summarising. The prompt is taken under the lock and the summary
     // applied under it again; the provider round trip in between holds
@@ -214,6 +261,8 @@ pub(crate) async fn handle_thread_switch(
         // Persist thread state (includes compaction summary)
         crate::helpers::persist_threads(&mut *thread_mgr.lock().await, threads_path);
     } else {
+        // Unreachable in practice — the thread existed above and nothing
+        // here removes threads — but a racing close could still take it.
         let frame = ServerFrame {
             frame_type: ServerFrameType::Error,
             payload: ServerPayload::Error {
@@ -279,11 +328,25 @@ pub(crate) async fn handle_thread_history(
             );
             (true, wire, None)
         }
-        None => (
-            false,
-            Vec::new(),
-            Some(format!("Thread {} not found", thread_id)),
-        ),
+        // Not a thread — but sidebar rows for sub-agent and cron *sessions*
+        // carry pseudo-ids, and a row whose count says "300 messages" must
+        // not open onto nothing. Serve the session's transcript.
+        None => match crate::thread_updates::session_transcript(thread_id) {
+            Some((label, messages)) => {
+                info!(
+                    thread_id,
+                    caption = %label,
+                    message_count = messages.len(),
+                    "Serving session transcript for sidebar row"
+                );
+                (true, messages, None)
+            }
+            None => (
+                false,
+                Vec::new(),
+                Some(format!("Thread {} not found", thread_id)),
+            ),
+        },
     };
     drop(tm);
     let frame = ServerFrame {
@@ -806,5 +869,149 @@ mod tests {
                 .any(|f| format!("{:?}", f.payload).contains("Compacting")),
             "the busy thread must not be compacted mid-turn"
         );
+    }
+
+    /// Opening a sub-agent/cron session row is a read-only preview: the
+    /// transcript is served and the manager's foreground — where the next
+    /// typed message goes — must not move. No thread-list frame may follow
+    /// the transcript: a client that sees the foreground pointer move
+    /// re-fetches that thread's history and repaints, which would wipe the
+    /// preview moments after it appeared. And no separate info frame: the
+    /// read-only note lives inside the transcript, where repaints keep it.
+    #[tokio::test]
+    async fn a_session_row_is_a_preview_that_leaves_the_foreground_alone() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut manager = ThreadManager::new();
+        let chat = manager.create_chat("chat");
+        manager.switch_foreground(chat);
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let shared_model_ctx: SharedModelCtx = Arc::new(tokio::sync::RwLock::new(None));
+
+        let key = {
+            let mut mgr = rustyclaw_core::sessions::session_manager().lock().unwrap();
+            let key = mgr.spawn_subagent("main", "preview task", Some("previewer".into()), None);
+            let session = mgr.get_mut(&key).unwrap();
+            session.add_message("assistant", "background progress");
+            key
+        };
+        let pseudo_id = crate::thread_updates::session_row_id(&key);
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_switch(
+            &mut writer,
+            &thread_mgr,
+            &task_mgr,
+            &threads_path,
+            &shared_model_ctx,
+            &reqwest::Client::new(),
+            pseudo_id,
+            &[],
+        )
+        .await
+        .expect("viewing a session row should succeed");
+
+        assert!(writer.errors().is_empty(), "{:?}", writer.errors());
+        assert_eq!(
+            thread_mgr.lock().await.foreground_id(),
+            Some(chat),
+            "a read-only preview must not move where the next message goes"
+        );
+
+        let kinds: Vec<ServerFrameType> = writer.frames.iter().map(|f| f.frame_type).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                ServerFrameType::ThreadSwitched,
+                ServerFrameType::ThreadMessages
+            ],
+            "a preview is the switch and the transcript, nothing else: a \
+             thread-list frame makes the client re-fetch the real foreground \
+             and wipe the view, and a bare info frame is wiped by the next \
+             repaint"
+        );
+        let transcript = writer
+            .frames
+            .iter()
+            .find_map(|f| match &f.payload {
+                ServerPayload::ThreadMessages { messages, .. } => Some(messages.clone()),
+                _ => None,
+            })
+            .expect("transcript payload");
+        let note = transcript.last().expect("transcript is never empty");
+        assert_eq!(
+            note.role, "info",
+            "the read-only note is the transcript's own last message, so \
+             every repaint of this view redraws it"
+        );
+        assert!(
+            note.content.contains("read-only"),
+            "the note explains the view: {}",
+            note.content
+        );
+    }
+
+    /// Peeking at a session row must cost the active chat nothing. The
+    /// compaction step summarises and trims the outgoing foreground on the
+    /// assumption that the user is leaving it — but a session preview leaves
+    /// the foreground exactly where it is, so reaching compaction on the way
+    /// to one burned a provider call and shrank the live chat's context for
+    /// a switch that never happens.
+    #[tokio::test]
+    async fn peeking_at_a_session_row_does_not_compact_the_chat() {
+        let tmp = tempfile::tempdir().expect("temp dir");
+        let threads_path = tmp.path().join("threads.json");
+
+        let mut manager = ThreadManager::new();
+        let chat = manager.create_chat("chat");
+        manager.switch_foreground(chat);
+        // Enough history that a real switch away would compact it.
+        for i in 0..5 {
+            manager.add_message(
+                chat,
+                rustyclaw_core::threads::MessageRole::User,
+                format!("message {i}"),
+            );
+        }
+        let thread_mgr: crate::SharedThreadMgr = Arc::new(Mutex::new(manager));
+        let task_mgr: SharedTaskManager = Arc::new(rustyclaw_core::tasks::TaskManager::new());
+        let shared_model_ctx: SharedModelCtx = Arc::new(tokio::sync::RwLock::new(None));
+
+        let key = {
+            let mut mgr = rustyclaw_core::sessions::session_manager().lock().unwrap();
+            mgr.spawn_subagent("main", "peek task", Some("peeked".into()), None)
+        };
+        let pseudo_id = crate::thread_updates::session_row_id(&key);
+
+        let mut writer = CapturingWriter { frames: Vec::new() };
+        handle_thread_switch(
+            &mut writer,
+            &thread_mgr,
+            &task_mgr,
+            &threads_path,
+            &shared_model_ctx,
+            &reqwest::Client::new(),
+            pseudo_id,
+            &[],
+        )
+        .await
+        .expect("viewing a session row should succeed");
+
+        assert!(
+            !writer
+                .frames
+                .iter()
+                .any(|f| format!("{:?}", f.payload).contains("Compacting")),
+            "a peek must not announce (or perform) compaction of the chat"
+        );
+        let tm = thread_mgr.lock().await;
+        let thread = tm.get(chat).expect("the chat still exists");
+        assert!(
+            thread.compact_summary.is_none(),
+            "the chat's context is untouched by a peek"
+        );
+        assert_eq!(thread.messages.len(), 5, "no messages were folded away");
     }
 }
