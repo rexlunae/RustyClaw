@@ -413,7 +413,7 @@ impl GatewayClient {
         self.cmd_tx
             .send(cmd)
             .await
-            .map_err(|_| anyhow!("Failed to send command"))
+            .map_err(|_| anyhow!("the gateway connection is no longer accepting commands"))
     }
 
     /// Receive the next event from the gateway (blocks until one arrives).
