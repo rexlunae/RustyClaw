@@ -820,7 +820,30 @@ pub(crate) async fn handle_connection(
                                                     ),
                                                 },
                                             };
-                                            let _ = send_frame(&mut history_writer, &reply).await;
+                                            // Bounded too. Enqueuing waits when
+                                            // the outbound queue is full, which
+                                            // is exactly the state a wedged
+                                            // transport produces — so the
+                                            // apology for one stall could park
+                                            // this task forever and cost the
+                                            // user Stop. Shorter than the
+                                            // lookup above: this is a courtesy
+                                            // notice, and a queue with no room
+                                            // means the client is not receiving
+                                            // anything anyway.
+                                            if tokio::time::timeout(
+                                                std::time::Duration::from_secs(2),
+                                                send_frame(&mut history_writer, &reply),
+                                            )
+                                            .await
+                                            .is_err()
+                                            {
+                                                warn!(
+                                                    thread_id,
+                                                    "Gave up enqueuing the thread history timeout notice; \
+                                                     the outbound queue is not draining"
+                                                );
+                                            }
                                         }
                                     }
                                     continue;
