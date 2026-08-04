@@ -607,15 +607,33 @@ pub fn App() -> Element {
                         }
                     }
 
-                    // Only after the buffer is drained. The disconnect is
-                    // announced as an event, so testing the flag first would
-                    // discard the very notice that tells the user the
-                    // connection dropped — and `Disconnected` is what clears
-                    // the spinner and the in-flight requests that died with
-                    // it. The worker's final wake guarantees one last pass
-                    // here, so nothing is left unprocessed.
+                    // Leave only when disconnected *and* drained. The
+                    // disconnect is announced as an event, and
+                    // `handle_gateway_event` is the only thing that clears the
+                    // spinner and the requests that died with the connection —
+                    // so an exit that skips buffered entries strands exactly
+                    // the notice this loop exists to deliver.
+                    //
+                    // The flag alone is not enough. Processing above suspends
+                    // at real await points, and the connection can die during
+                    // one: the writer clears the flag right after queueing its
+                    // `Disconnected`, and the worker buffers that event while
+                    // this batch is still in flight. Testing the flag by
+                    // itself would then break with the notice sitting unread.
+                    //
+                    // Looping again cannot park forever: every push is
+                    // followed by a `notify_one`, and each drain takes *all*
+                    // entries, so a non-empty buffer always has a permit
+                    // behind it.
                     if !client.is_connected() {
-                        break;
+                        let drained = buffer
+                            .lock()
+                            .expect("stream buffer poisoned")
+                            .entries
+                            .is_empty();
+                        if drained {
+                            break;
+                        }
                     }
                 }
             });
