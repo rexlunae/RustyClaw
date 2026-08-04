@@ -374,9 +374,10 @@ pub fn App() -> Element {
                     .await
                     .context("sending EngineList")?;
                 if let Some(engine) = selected {
-                    let _ = client
+                    client
                         .send(GatewayCommand::EngineModelList { engine })
-                        .await;
+                        .await
+                        .context("sending EngineModelList")?;
                 }
                 Ok(())
             });
@@ -424,12 +425,13 @@ pub fn App() -> Element {
                         .context("sending CronList")?;
                 }
                 if memory {
-                    let _ = client
+                    client
                         .send(GatewayCommand::MemoryList {
                             query: None,
                             limit: None,
                         })
-                        .await;
+                        .await
+                        .context("sending MemoryList")?;
                 }
                 if mcp {
                     client
@@ -553,7 +555,13 @@ pub fn App() -> Element {
                                 event: GatewayEvent::DomQuery { id, js },
                                 ..
                             } => {
-                                handle_dom_query(&client_ui, id, js).await;
+                                // The page already ran the script; this is
+                                // the answer going back. Losing it leaves the
+                                // caller waiting on a reply that will never
+                                // arrive, so it is worth naming.
+                                if let Err(e) = handle_dom_query(&client_ui, id, js).await {
+                                    tracing::error!(error = ?e, "Action failed");
+                                }
                             }
                             BufferEntry::Event { thread_id, event } => {
                                 let triggers_refresh = matches!(
@@ -811,13 +819,15 @@ pub fn App() -> Element {
     let on_new_thread_in = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
+            spawn_reporting("ThreadCreate", async move {
+                client
                     .send(GatewayCommand::ThreadCreate {
                         label: None,
                         project_id: Some(project_id),
                     })
-                    .await;
+                    .await
+                    .context("sending ThreadCreate")?;
+                Ok(())
             });
         }
         // Save current thread's messages and start with empty chat.
@@ -961,13 +971,15 @@ pub fn App() -> Element {
     let on_rename_project = move |(project_id, new_name): (u64, String)| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
+            spawn_reporting("ProjectRename", async move {
+                client
                     .send(GatewayCommand::ProjectRename {
                         project_id,
                         new_name,
                     })
-                    .await;
+                    .await
+                    .context("sending ProjectRename")?;
+                Ok(())
             });
         }
     };
@@ -977,10 +989,12 @@ pub fn App() -> Element {
     let on_delete_project = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
+            spawn_reporting("ProjectDelete", async move {
+                client
                     .send(GatewayCommand::ProjectDelete { project_id })
-                    .await;
+                    .await
+                    .context("sending ProjectDelete")?;
+                Ok(())
             });
         }
     };
@@ -994,13 +1008,15 @@ pub fn App() -> Element {
     let on_rename_thread = move |(thread_id, new_label): (u64, String)| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
+            spawn_reporting("ThreadRename", async move {
+                client
                     .send(GatewayCommand::ThreadRename {
                         thread_id,
                         new_label,
                     })
-                    .await;
+                    .await
+                    .context("sending ThreadRename")?;
+                Ok(())
             });
         }
     };
@@ -1052,14 +1068,16 @@ pub fn App() -> Element {
         state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
+            spawn_reporting("UserPromptResponse", async move {
+                client
                     .send(GatewayCommand::UserPromptResponse {
                         id,
                         dismissed: false,
                         value,
                     })
-                    .await;
+                    .await
+                    .context("sending UserPromptResponse")?;
+                Ok(())
             });
         }
     };
@@ -1069,14 +1087,16 @@ pub fn App() -> Element {
         state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                let _ = client
+            spawn_reporting("UserPromptResponse", async move {
+                client
                     .send(GatewayCommand::UserPromptResponse {
                         id,
                         dismissed: true,
                         value: PromptResponseValue::Text(String::new()),
                     })
-                    .await;
+                    .await
+                    .context("sending UserPromptResponse")?;
+                Ok(())
             });
         }
     };
@@ -1090,13 +1110,15 @@ pub fn App() -> Element {
             if event.id == ids.new_thread {
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
-                    spawn(async move {
-                        let _ = client
+                    spawn_reporting("ThreadCreate", async move {
+                        client
                             .send(GatewayCommand::ThreadCreate {
                                 label: None,
                                 project_id: None,
                             })
-                            .await;
+                            .await
+                            .context("sending ThreadCreate")?;
+                        Ok(())
                     });
                 }
                 let mut s = state.write();
@@ -1240,13 +1262,15 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client
+                        spawn_reporting("MemoryList", async move {
+                            client
                                 .send(GatewayCommand::MemoryList {
                                     query: None,
                                     limit: None,
                                 })
-                                .await;
+                                .await
+                                .context("sending MemoryList")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1301,10 +1325,12 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client
+                        spawn_reporting("UsageStats", async move {
+                            client
                                 .send(GatewayCommand::UsageStats { period: None })
-                                .await;
+                                .await
+                                .context("sending UsageStats")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1314,13 +1340,15 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client
+                        spawn_reporting("Logs", async move {
+                            client
                                 .send(GatewayCommand::Logs {
                                     source: "gateway".into(),
                                     tail: None,
                                 })
-                                .await;
+                                .await
+                                .context("sending Logs")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1768,10 +1796,9 @@ pub fn App() -> Element {
                     show_new_project.set(false);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            let _ = client
-                                .send(GatewayCommand::ProjectCreate { name, path })
-                                .await;
+                        spawn_reporting("ProjectCreate", async move {
+                            client.send(GatewayCommand::ProjectCreate { name, path }).await.context("sending ProjectCreate")?;
+                            Ok(())
                         });
                     }
                 },
