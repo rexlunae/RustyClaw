@@ -34,7 +34,7 @@ pub use protocol::{
 // Re-export public types (includes protocol types via types module)
 pub use types::{
     ChatMessage, ChatRequest, CopilotSession, GatewayOptions, MediaRef, ModelContext,
-    ModelResponse, ParsedToolCall, ProbeResult, ProviderRequest, ToolCallResult,
+    ModelResponse, ParsedToolCall, ProbeResult, ProviderRequest, ToolCallRecord, ToolCallResult,
 };
 
 // Re-export transport types

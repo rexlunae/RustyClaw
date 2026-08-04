@@ -1011,3 +1011,166 @@ mod serialization {
         }
     }
 }
+
+// ── Diagnostic: transcripts carrying tool calls ─────────────────────────
+mod thread_history_wire {
+    use super::*;
+    use crate::gateway::{ChatMessage, ToolCallRecord};
+
+    /// The JSON a thread persists for an assistant turn that called a tool.
+    fn stored_tool_calls() -> serde_json::Value {
+        serde_json::json!([{
+            "id": "call_1",
+            "name": "read_file",
+            "arguments": {"path": "src/main.rs"}
+        }])
+    }
+
+    /// A transcript whose assistant turn made a tool call must survive the wire.
+    ///
+    /// This is the bug that made threads with real work in them open empty
+    /// while a short chat opened fine. `tool_calls` was
+    /// `Option<serde_json::Value>`, and frames are bincode — not
+    /// self-describing — so `Value` encoded on the gateway and then failed to
+    /// decode on the client with `AnyNotSupported`. The reply was built and
+    /// sent; it simply could not be read. Every thread that had ever run a
+    /// tool was undeliverable, which is every thread worth opening.
+    #[test]
+    fn a_history_reply_with_tool_calls_survives_the_wire() {
+        let calls = ToolCallRecord::from_stored_json(&stored_tool_calls());
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ThreadHistoryReply,
+            payload: ServerPayload::ThreadHistoryReply {
+                thread_id: 2,
+                ok: true,
+                messages: vec![
+                    ChatMessage::text("user", "read the file"),
+                    ChatMessage {
+                        role: "assistant".into(),
+                        content: String::new(),
+                        tool_calls: Some(calls),
+                        tool_call_id: None,
+                        media: None,
+                    },
+                    ChatMessage {
+                        role: "tool".into(),
+                        content: "fn main() {}".into(),
+                        tool_calls: None,
+                        tool_call_id: Some("call_1".into()),
+                        media: None,
+                    },
+                ],
+                error: None,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("a transcript with tool calls must serialize");
+        let decoded: ServerFrame =
+            deserialize_frame(&bytes).expect("a transcript with tool calls must deserialize");
+
+        match decoded.payload {
+            ServerPayload::ThreadHistoryReply { messages, .. } => {
+                assert_eq!(messages.len(), 3);
+                let calls = messages[1]
+                    .tool_calls
+                    .as_ref()
+                    .expect("the assistant turn kept its tool call");
+                assert_eq!(calls.len(), 1);
+                assert_eq!(calls[0].id, "call_1");
+                assert_eq!(calls[0].name, "read_file");
+                assert!(
+                    calls[0].arguments.contains("src/main.rs"),
+                    "arguments survived as text: {:?}",
+                    calls[0].arguments
+                );
+            }
+            other => panic!("wrong payload: {other:?}"),
+        }
+    }
+
+    /// The same for `ThreadMessages`, the other frame carrying a transcript.
+    ///
+    /// It is served by a different call site, so it broke the same way and had
+    /// to be fixed separately — worth pinning separately too.
+    #[test]
+    fn a_thread_messages_frame_with_tool_calls_survives_the_wire() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ThreadMessages,
+            payload: ServerPayload::ThreadMessages {
+                thread_id: 3,
+                messages: vec![ChatMessage {
+                    role: "assistant".into(),
+                    content: String::new(),
+                    tool_calls: Some(ToolCallRecord::from_stored_json(&stored_tool_calls())),
+                    tool_call_id: None,
+                    media: None,
+                }],
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::ThreadMessages { messages, .. } => {
+                assert_eq!(
+                    messages[0].tool_calls.as_ref().map(|c| c.len()),
+                    Some(1),
+                    "the tool call must survive"
+                );
+            }
+            other => panic!("wrong payload: {other:?}"),
+        }
+    }
+
+    /// The tool-free case, as a control.
+    ///
+    /// It passed throughout the outage, which is precisely why the bug looked
+    /// like "some threads" rather than "the transcript path is broken".
+    #[test]
+    fn a_history_reply_without_tool_calls_survives_the_wire() {
+        let frame = ServerFrame {
+            frame_type: ServerFrameType::ThreadHistoryReply,
+            payload: ServerPayload::ThreadHistoryReply {
+                thread_id: 1,
+                ok: true,
+                messages: vec![
+                    ChatMessage::text("user", "hello"),
+                    ChatMessage::text("assistant", "hi there"),
+                    ChatMessage::text("user", "thanks"),
+                ],
+                error: None,
+            },
+        };
+
+        let bytes = serialize_frame(&frame).expect("serialize should succeed");
+        let decoded: ServerFrame = deserialize_frame(&bytes).expect("deserialize should succeed");
+        match decoded.payload {
+            ServerPayload::ThreadHistoryReply { messages, .. } => assert_eq!(messages.len(), 3),
+            other => panic!("wrong payload: {other:?}"),
+        }
+    }
+
+    /// Arguments already stored as text are not re-quoted on each hop.
+    ///
+    /// Providers differ: some record arguments as an object, some as a JSON
+    /// string. Blind `to_string` would wrap the latter in another set of
+    /// quotes every time a transcript was served.
+    #[test]
+    fn string_arguments_are_not_double_encoded() {
+        let stored = serde_json::json!([{
+            "id": "c", "name": "bash", "arguments": "{\"cmd\":\"ls\"}"
+        }]);
+        let calls = ToolCallRecord::from_stored_json(&stored);
+        assert_eq!(calls[0].arguments, r#"{"cmd":"ls"}"#);
+    }
+
+    /// A malformed stored call degrades rather than disappearing.
+    #[test]
+    fn unrecognised_tool_call_shapes_still_render_something() {
+        let stored = serde_json::json!([{"unexpected": true}]);
+        let calls = ToolCallRecord::from_stored_json(&stored);
+        assert_eq!(calls.len(), 1, "the call is kept, not dropped");
+        assert!(calls[0].id.is_empty());
+        assert!(calls[0].name.is_empty());
+    }
+}

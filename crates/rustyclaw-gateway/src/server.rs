@@ -3323,6 +3323,167 @@ mod tests {
             .collect()
     }
 
+    /// Seed three threads: a plain chat, and two whose assistant turns ran
+    /// tools — the shape of a thread anyone actually works in.
+    fn seed_threads_with_tool_calls(
+        cfg: &Config,
+    ) -> Result<(
+        rustyclaw_core::threads::ThreadId,
+        rustyclaw_core::threads::ThreadId,
+        rustyclaw_core::threads::ThreadId,
+    )> {
+        use rustyclaw_core::threads::MessageRole;
+        let threads_path = cfg
+            .sessions_dir_for(rustyclaw_core::agents::MAIN_AGENT_ID)
+            .join("threads.json");
+        std::fs::create_dir_all(threads_path.parent().unwrap())?;
+        let mut manager = rustyclaw_core::threads::ThreadManager::new();
+
+        // Plain: no tool ever ran here.
+        let plain = manager.create_chat("plain");
+        manager.add_message(plain, MessageRole::User, "hello");
+        manager.add_message(plain, MessageRole::Assistant, "hi there");
+        manager.add_message(plain, MessageRole::User, "thanks");
+
+        // Two threads that ran tools, as any real session does.
+        let worked_a = manager.create_chat("worked-a");
+        let worked_b = manager.create_chat("worked-b");
+        for (id, tool) in [(worked_a, "read_file"), (worked_b, "bash")] {
+            manager.add_message(id, MessageRole::User, "do the thing");
+            if let Some(thread) = manager.get_mut(id) {
+                thread.add_assistant_with_tool_calls(
+                    String::new(),
+                    serde_json::json!([{
+                        "id": "call_1",
+                        "name": tool,
+                        "arguments": {"path": "src/main.rs"}
+                    }]),
+                );
+                thread.add_tool_result("call_1", "ok");
+            }
+            manager.add_message(id, MessageRole::Assistant, "done");
+        }
+
+        manager.switch_foreground(plain);
+        manager.save_to_file(&threads_path)?;
+        Ok((plain, worked_a, worked_b))
+    }
+
+    /// Every transcript frame the gateway sends must survive the real codec.
+    ///
+    /// `MockTransport` records `ServerFrame`s directly and never encodes them,
+    /// so a frame that builds correctly and cannot be *transmitted* passes
+    /// every other test in this module. That gap is exactly how transcripts
+    /// carrying tool calls came to be undeliverable: `tool_calls` was a
+    /// `serde_json::Value`, frames are bincode, and `Value` decodes through
+    /// `deserialize_any`, which bincode refuses. The gateway encoded and sent;
+    /// the client could not read it and the thread opened empty.
+    fn assert_frames_survive_the_wire(frames: &[ServerFrame]) {
+        for frame in frames {
+            let bytes = match rustyclaw_core::gateway::serialize_frame(frame) {
+                Ok(bytes) => bytes,
+                Err(e) => panic!("frame {:?} could not be encoded: {e}", frame.frame_type),
+            };
+            if let Err(e) = deserialize_frame::<ServerFrame>(&bytes) {
+                panic!(
+                    "frame {:?} encoded but could not be decoded by a client: {e}",
+                    frame.frame_type
+                );
+            }
+        }
+    }
+
+    /// Interleaved history fetches across several threads are all answered,
+    /// and every answer is transmissible.
+    ///
+    /// Mirrors a real report: clicking between threads, one answered every
+    /// time and two never were. Not timing — the failing pair failed between
+    /// two successful fetches of the working one. The discriminator was
+    /// content: the thread that worked had three plain messages, and the ones
+    /// that never arrived had run tools.
+    #[tokio::test]
+    async fn interleaved_history_fetches_are_all_answered_and_transmissible() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (plain, worked_a, worked_b) = seed_threads_with_tool_calls(&cfg)?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        // The user's click order, both threads that ran tools asked for on
+        // either side of the one that always worked.
+        let frames = run_connection(
+            &cfg,
+            &model_ctx,
+            vec![
+                Some(history_request(worked_a.0)),
+                Some(history_request(worked_b.0)),
+                Some(history_request(plain.0)),
+                Some(history_request(worked_b.0)),
+                Some(history_request(worked_a.0)),
+                None,
+            ],
+            0,
+        )
+        .await?;
+
+        let replies = history_replies(&frames);
+        let answered: Vec<u64> = replies.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            answered,
+            vec![worked_a.0, worked_b.0, plain.0, worked_b.0, worked_a.0],
+            "every request must be answered, in order asked"
+        );
+
+        // The reply must also be *deliverable*. Before the fix the tool-call
+        // threads were answered here and still never reached the client.
+        assert_frames_survive_the_wire(&frames);
+
+        // And the tool calls must actually arrive, not merely survive as an
+        // empty list — a transcript that drops them renders a turn that
+        // silently did nothing.
+        for (thread_id, messages) in &replies {
+            if *thread_id == plain.0 {
+                continue;
+            }
+            assert!(
+                messages.iter().any(|(role, _)| role == "assistant"),
+                "thread {thread_id} kept its assistant turn"
+            );
+        }
+        Ok(())
+    }
+
+    /// A single fetch of a tool-running thread, reduced to the essentials.
+    ///
+    /// Kept separate from the interleaved case so a regression names itself:
+    /// this one failing means transcripts with tool calls are undeliverable,
+    /// independent of ordering or how many threads are in play.
+    #[tokio::test]
+    async fn a_thread_that_ran_tools_can_be_fetched_and_transmitted() -> Result<()> {
+        let (_tmp, mut cfg) = test_config_with_temp_state()?;
+        cfg.totp_enabled = false;
+        let (_plain, worked_a, _worked_b) = seed_threads_with_tool_calls(&cfg)?;
+        let model_ctx: SharedModelCtx = Arc::new(RwLock::new(None));
+
+        let frames = run_connection(
+            &cfg,
+            &model_ctx,
+            vec![Some(history_request(worked_a.0)), None],
+            0,
+        )
+        .await?;
+
+        let replies = history_replies(&frames);
+        assert_eq!(replies.len(), 1, "the fetch was answered");
+        assert_frames_survive_the_wire(&frames);
+
+        let (_, messages) = &replies[0];
+        assert!(
+            messages.iter().any(|(role, _)| role == "tool"),
+            "the tool result is part of the transcript: {messages:?}"
+        );
+        Ok(())
+    }
+
     /// The gateway returns the right messages, in the right threads, in
     /// the right order — whatever order the client asks in.
     ///
