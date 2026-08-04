@@ -1520,7 +1520,7 @@ pub(crate) async fn handle_connection(
                             | ClientPayload::VoiceAudioChunk { .. }
                             | ClientPayload::PreviewRequest { .. }
                             | ClientPayload::PreviewFollowToggle { .. }) => {
-                                crate::panel_handler::handle_panel_request(&mut *writer, payload, &mut config).await?;
+                                crate::panel_handler::handle_panel_request(&mut *writer, payload, &mut config, &shared_config).await?;
                             }
                             // ── Messenger setup ──
                             payload @ (ClientPayload::MessengerConfigRequest
@@ -1550,9 +1550,16 @@ pub(crate) async fn handle_connection(
                                 ).await?;
                             }
                             ClientPayload::EngineConfigSet { engine, config: new_cfg } => {
-                                // Persist engine config change, then ack.
+                                // Persist through the shared config — writing
+                                // this connection's snapshot would erase
+                                // settings other connections saved since it
+                                // was taken (messenger accounts included).
                                 config.engines.insert(engine.clone(), new_cfg.clone());
-                                crate::helpers::persist_config(&config);
+                                {
+                                    let mut shared = shared_config.write().await;
+                                    shared.engines.insert(engine.clone(), new_cfg.clone());
+                                    crate::helpers::persist_config(&shared);
+                                }
                                 crate::engine_handler::handle_engine_request(
                                     &mut *writer,
                                     ClientPayload::EngineConfigSet { engine, config: new_cfg },

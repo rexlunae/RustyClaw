@@ -26,6 +26,7 @@ pub async fn handle_panel_request(
     writer: &mut dyn TransportWriter,
     payload: ClientPayload,
     config: &mut Config,
+    shared_config: &crate::SharedConfig,
 ) -> Result<()> {
     let response = match payload {
         // ── Cron ─────────────────────────────────────────────────────────
@@ -58,19 +59,19 @@ pub async fn handle_panel_request(
             command,
             url,
             env,
-        } => mcp_connect(config, name, command, url, env).await,
+        } => mcp_connect(config, shared_config, name, command, url, env).await,
         ClientPayload::McpDisconnectRequest { name } => mcp_disconnect(name).await,
 
         // ── Tool config ──────────────────────────────────────────────────
         ClientPayload::ToolConfigRequest => tool_config_list(config),
         ClientPayload::ToolToggleRequest { tool_name, enabled } => {
-            tool_toggle(config, tool_name, enabled)
+            tool_toggle(config, shared_config, tool_name, enabled).await
         }
 
         // ── Channels ─────────────────────────────────────────────────────
         ClientPayload::ChannelStatusRequest => channel_status(config),
         ClientPayload::ChannelPairRequest { channel, action } => {
-            channel_pair(config, channel, action)
+            channel_pair(config, shared_config, channel, action).await
         }
 
         // ── Analytics / logs (from the stats observer) ───────────────────
@@ -735,6 +736,7 @@ async fn mcp_list(config: &Config) -> ServerFrame {
 #[cfg(feature = "mcp")]
 async fn mcp_connect(
     config: &mut Config,
+    shared_config: &crate::SharedConfig,
     name: String,
     command: Option<String>,
     url: Option<String>,
@@ -764,8 +766,15 @@ async fn mcp_connect(
                     ..Default::default()
                 };
                 config.mcp.servers.insert(name.clone(), cfg.clone());
-                if let Err(e) = config.save(None) {
-                    tracing::warn!(error = %e, "Failed to persist MCP server config");
+                // Persisted through the shared config, not this connection's
+                // snapshot — serialising the snapshot erases settings other
+                // connections saved since it was taken.
+                {
+                    let mut shared = shared_config.write().await;
+                    shared.mcp.servers.insert(name.clone(), cfg.clone());
+                    if let Err(e) = shared.save(None) {
+                        tracing::warn!(error = %e, "Failed to persist MCP server config");
+                    }
                 }
                 cfg
             }
@@ -848,6 +857,7 @@ async fn mcp_list(_config: &Config) -> ServerFrame {
 #[cfg(not(feature = "mcp"))]
 async fn mcp_connect(
     _config: &mut Config,
+    _shared_config: &crate::SharedConfig,
     name: String,
     _command: Option<String>,
     _url: Option<String>,
@@ -976,10 +986,20 @@ fn tool_config_list(config: &Config) -> ServerFrame {
     }
 }
 
-fn tool_toggle(config: &mut Config, tool_name: String, enabled: bool) -> ServerFrame {
+async fn tool_toggle(
+    config: &mut Config,
+    shared_config: &crate::SharedConfig,
+    tool_name: String,
+    enabled: bool,
+) -> ServerFrame {
     use rustyclaw_core::tools::{ToolPermission, all_tools};
 
-    let result = (|| -> Result<(), String> {
+    // Mutate and persist the *shared* config, then mirror into this
+    // connection's snapshot. Persisting the snapshot serialised whatever it
+    // held at connect time, so a toggle here silently erased every setting
+    // other connections had saved since — messenger accounts and routes most
+    // destructively, stranding their vault credentials.
+    let result: Result<(), String> = async {
         if !all_tools().iter().any(|def| def.name == tool_name) {
             return Err(format!("Unknown tool: '{}'", tool_name));
         }
@@ -988,9 +1008,17 @@ fn tool_toggle(config: &mut Config, tool_name: String, enabled: bool) -> ServerF
         } else {
             ToolPermission::Deny
         };
+        {
+            let mut shared = shared_config.write().await;
+            shared
+                .tool_permissions
+                .insert(tool_name.clone(), permission.clone());
+            shared.save(None).map_err(|e| e.to_string())?;
+        }
         config.tool_permissions.insert(tool_name, permission);
-        config.save(None).map_err(|e| e.to_string())
-    })();
+        Ok(())
+    }
+    .await;
 
     let (ok, message) = match result {
         Ok(()) => (true, None),
@@ -1044,22 +1072,30 @@ fn channel_status(config: &Config) -> ServerFrame {
     }
 }
 
-fn channel_pair(
+async fn channel_pair(
     config: &mut Config,
+    shared_config: &crate::SharedConfig,
     channel: String,
     action: ChannelPairActionKind,
 ) -> ServerFrame {
-    let result = (|| -> Result<ChannelStatusDto, String> {
-        let target = config
+    // Mutate the *shared* config and persist that, then sync this
+    // connection's snapshot from it. Editing the snapshot meant this toggle
+    // and the messenger setup panel silently reverted each other, and
+    // persisting the snapshot could erase settings other connections saved.
+    let result: Result<ChannelStatusDto, String> = async {
+        let mut shared = shared_config.write().await;
+        let target = shared
             .messengers
             .iter_mut()
             .find(|m| messenger_display_name(m) == channel || m.messenger_type == channel)
             .ok_or_else(|| format!("Unknown channel: '{}'", channel))?;
         target.enabled = matches!(action, ChannelPairActionKind::Pair);
         let dto = messenger_to_dto(target);
-        config.save(None).map_err(|e| e.to_string())?;
+        shared.save(None).map_err(|e| e.to_string())?;
+        config.messengers = shared.messengers.clone();
         Ok(dto)
-    })();
+    }
+    .await;
 
     let (ok, channel, message) = match result {
         Ok(dto) => (true, Some(dto), None),

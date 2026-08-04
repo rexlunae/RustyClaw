@@ -188,8 +188,10 @@ pub enum GatewayEvent {
         root: PathBuf,
     },
 
-    /// The messenger setup view. Also arrives unsolicited after any successful
-    /// mutation, so a form never shows state the gateway has moved past.
+    /// The messenger setup view. Also arrives after every mutation *this
+    /// client* sends, so its form never shows state the gateway has moved
+    /// past. Mutations made from other connections are not pushed here; the
+    /// panel is current as of its last request or mutation.
     MessengerConfigResult {
         accounts: Vec<MessengerAccountDto>,
         routes: Vec<ThreadRouteDto>,

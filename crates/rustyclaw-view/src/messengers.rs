@@ -789,6 +789,13 @@ pub struct MessengersPanelData {
     pub commits: u64,
     /// Whether `status` reports a failure.
     pub status_is_error: bool,
+    /// Account name the first press of the delete key armed.
+    ///
+    /// Deleting an account also destroys its vault credentials, and the list
+    /// opens with a row pre-selected — one mistyped letter must not be
+    /// unrecoverable. The second press (on the same account) deletes; any
+    /// other key disarms.
+    pub pending_delete: Option<String>,
 }
 
 impl MessengersPanelData {

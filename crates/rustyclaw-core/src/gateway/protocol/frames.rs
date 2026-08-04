@@ -1510,8 +1510,13 @@ pub enum ServerPayload {
         root: PathBuf,
     },
     // ── Messenger setup ───────────────────────────────────────────────────
-    /// The full messenger setup view. Sent unsolicited after any successful
-    /// mutation too, so every connected client's form reflects what was saved.
+    /// The full messenger setup view. Also sent after every mutation on
+    /// *this* connection (successful or not), so the requesting client never
+    /// has to guess what the config now looks like. Other connections do not
+    /// receive it — there is no gateway-wide client broadcast — so a second
+    /// open panel can be stale until it refreshes; the gateway guards the
+    /// hazards of acting on stale state (an edit naming a since-deleted
+    /// account is refused rather than resurrected).
     MessengerConfigResult {
         accounts: Vec<MessengerAccountDto>,
         routes: Vec<ThreadRouteDto>,

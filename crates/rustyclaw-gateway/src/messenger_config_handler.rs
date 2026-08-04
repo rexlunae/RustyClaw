@@ -129,11 +129,13 @@ pub async fn handle_messenger_config(
             Reply::Route(delete_route(config, &messenger, channel.as_deref()))
         }
 
-        other => {
-            warn!(
-                ?other,
-                "Non-messenger payload reached the messenger handler"
-            );
+        // Deliberately not logging the payload itself: `ClientPayload`'s
+        // derived `Debug` prints credential-bearing variants (`SecretsStore`,
+        // `MessengerAccountSave.secrets`, …) verbatim, and while today's one
+        // caller only routes messenger frames here, a catch-all that logs
+        // secrets is one refactor away from doing so in production.
+        _ => {
+            warn!("Non-messenger payload reached the messenger handler");
             return Ok(());
         }
     };
@@ -423,6 +425,20 @@ async fn save_account(
                 existing.name
             ),
         }]);
+    }
+
+    // An edit must name an account that still exists. Falling back to
+    // "create" here looked forgiving, but the case it actually served was a
+    // stale panel: another connection deletes or renames the account, this
+    // one submits its old form, and the fallback resurrected the deleted
+    // account as new — with whatever half-stale settings the form held.
+    if let Some(orig) = original_name.as_deref() {
+        if !config.messengers.iter().any(|m| m.name == orig) {
+            return Err(vec![format!(
+                "'{orig}' no longer exists — it was renamed or deleted since this \
+                 form was opened. Refresh the panel and start again."
+            )]);
+        }
     }
 
     // Start from the existing entry when editing so untouched fields survive.
@@ -1528,6 +1544,40 @@ mod tests {
                 .unwrap(),
             None,
             "a type change must not orphan the old credential in the vault"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_edit_naming_a_deleted_account_is_refused_not_resurrected() {
+        let dir = tempfile::tempdir().unwrap();
+        let (mut config, vault) = fixture(dir.path());
+        save_telegram(&mut config, &vault, "tg", Some("t"))
+            .await
+            .unwrap();
+        delete_account(&mut config, &vault, "tg").await.unwrap();
+
+        // A second panel that never saw the delete submits its stale form.
+        // The old fallback pushed this as a brand-new account.
+        let errors = save_account(
+            &mut config,
+            &vault,
+            Some("tg".to_string()),
+            "tg".to_string(),
+            "telegram".to_string(),
+            true,
+            Vec::new(),
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(errors[0].contains("no longer exists"), "{errors:?}");
+        assert!(
+            config.messengers.is_empty(),
+            "a stale edit must not resurrect a deleted account"
         );
     }
 

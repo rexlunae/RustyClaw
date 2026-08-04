@@ -414,6 +414,12 @@ pub(super) fn handle_normal_key(
         // land on this panel's delete action and destroy an account and its
         // stored credential, unconfirmed.
         let plain = !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        // Any key other than a second 'd' disarms a pending account delete —
+        // moving the cursor, switching tabs, or a typo must not leave a
+        // one-keystroke deletion armed on some other row.
+        if !(plain && matches!(code, KeyCode::Char('d'))) {
+            data.pending_delete = None;
+        }
         match code {
             KeyCode::Esc => show_messengers_dialog.set(false),
             KeyCode::Up => data.select_prev(),
@@ -485,24 +491,42 @@ pub(super) fn handle_normal_key(
                     data.set_status("Moving credentials into the vault…", false);
                 }
             }
-            KeyCode::Char('d') if plain => match (data.selected_account(), data.selected_route()) {
-                (Some(account), _) => {
-                    send_input(UserInput::MessengerCommand(
-                        GatewayCommand::MessengerAccountDelete {
-                            name: account.name.clone(),
-                        },
-                    ));
+            KeyCode::Char('d') if plain => {
+                let account = data.selected_account().map(|a| a.name.clone());
+                let route = data
+                    .selected_route()
+                    .map(|r| (r.messenger.clone(), r.channel.clone()));
+                match (account, route) {
+                    // Deleting an account destroys its vault credentials with
+                    // it, and the list opens with a row pre-selected — so the
+                    // first press only arms, and the second press on the same
+                    // account deletes. Routes stay single-press: re-adding
+                    // one is cheap.
+                    (Some(name), _) => {
+                        if data.pending_delete.as_deref() == Some(name.as_str()) {
+                            data.pending_delete = None;
+                            send_input(UserInput::MessengerCommand(
+                                GatewayCommand::MessengerAccountDelete { name },
+                            ));
+                        } else {
+                            data.set_status(
+                                format!(
+                                    "Press 'd' again to delete '{name}' and its stored credentials"
+                                ),
+                                true,
+                            );
+                            data.pending_delete = Some(name);
+                        }
+                    }
+                    (_, Some((messenger, channel))) => {
+                        data.pending_delete = None;
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerRouteDelete { messenger, channel },
+                        ));
+                    }
+                    _ => {}
                 }
-                (_, Some(route)) => {
-                    send_input(UserInput::MessengerCommand(
-                        GatewayCommand::MessengerRouteDelete {
-                            messenger: route.messenger.clone(),
-                            channel: route.channel.clone(),
-                        },
-                    ));
-                }
-                _ => {}
-            },
+            }
             _ => {}
         }
         messengers_data.set(Some(data));
