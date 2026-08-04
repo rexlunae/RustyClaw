@@ -819,7 +819,7 @@ pub fn App() -> Element {
     let on_new_thread_in = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("ThreadCreate", async move {
+            spawn_reporting("create thread", async move {
                 client
                     .send(GatewayCommand::ThreadCreate {
                         label: None,
@@ -971,7 +971,7 @@ pub fn App() -> Element {
     let on_rename_project = move |(project_id, new_name): (u64, String)| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("ProjectRename", async move {
+            spawn_reporting("rename project", async move {
                 client
                     .send(GatewayCommand::ProjectRename {
                         project_id,
@@ -989,7 +989,7 @@ pub fn App() -> Element {
     let on_delete_project = move |project_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("ProjectDelete", async move {
+            spawn_reporting("delete project", async move {
                 client
                     .send(GatewayCommand::ProjectDelete { project_id })
                     .await
@@ -1008,7 +1008,7 @@ pub fn App() -> Element {
     let on_rename_thread = move |(thread_id, new_label): (u64, String)| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("ThreadRename", async move {
+            spawn_reporting("rename thread", async move {
                 client
                     .send(GatewayCommand::ThreadRename {
                         thread_id,
@@ -1068,7 +1068,7 @@ pub fn App() -> Element {
         state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("UserPromptResponse", async move {
+            spawn_reporting("answer prompt", async move {
                 client
                     .send(GatewayCommand::UserPromptResponse {
                         id,
@@ -1087,7 +1087,7 @@ pub fn App() -> Element {
         state.write().answer_user_prompt(&id);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn_reporting("UserPromptResponse", async move {
+            spawn_reporting("answer prompt", async move {
                 client
                     .send(GatewayCommand::UserPromptResponse {
                         id,
@@ -1110,7 +1110,7 @@ pub fn App() -> Element {
             if event.id == ids.new_thread {
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
-                    spawn_reporting("ThreadCreate", async move {
+                    spawn_reporting("create thread", async move {
                         client
                             .send(GatewayCommand::ThreadCreate {
                                 label: None,
@@ -1262,7 +1262,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("MemoryList", async move {
+                        spawn_reporting("load memory", async move {
                             client
                                 .send(GatewayCommand::MemoryList {
                                     query: None,
@@ -1325,7 +1325,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("UsageStats", async move {
+                        spawn_reporting("load usage stats", async move {
                             client
                                 .send(GatewayCommand::UsageStats { period: None })
                                 .await
@@ -1340,7 +1340,7 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("Logs", async move {
+                        spawn_reporting("load logs", async move {
                             client
                                 .send(GatewayCommand::Logs {
                                     source: "gateway".into(),
@@ -1796,7 +1796,7 @@ pub fn App() -> Element {
                     show_new_project.set(false);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn_reporting("ProjectCreate", async move {
+                        spawn_reporting("create project", async move {
                             client.send(GatewayCommand::ProjectCreate { name, path }).await.context("sending ProjectCreate")?;
                             Ok(())
                         });
