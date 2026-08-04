@@ -42,7 +42,7 @@ pub(crate) fn session_transcript(id: u64) -> Option<(String, Vec<protocol::types
         .label
         .clone()
         .unwrap_or_else(|| "Sub-agent".to_string());
-    let messages = session
+    let mut messages: Vec<protocol::types::ChatMessage> = session
         .messages
         .iter()
         .map(|m| protocol::types::ChatMessage {
@@ -53,6 +53,21 @@ pub(crate) fn session_transcript(id: u64) -> Option<(String, Vec<protocol::types
             media: None,
         })
         .collect();
+    // The read-only note travels inside the transcript, as its last message,
+    // rather than as a separate info frame: clients repaint this view from
+    // whichever of `ThreadMessages`/`ThreadHistory` arrives last, and a note
+    // sent outside the transcript is wiped by the very next repaint. Inside
+    // it, every repaint redraws it.
+    messages.push(protocol::types::ChatMessage {
+        role: "info".to_string(),
+        content: format!(
+            "'{label}' is a background session — this transcript is read-only. \
+             Select one of your threads in the sidebar to continue chatting."
+        ),
+        tool_calls: None,
+        tool_call_id: None,
+        media: None,
+    });
     Some((label, messages))
 }
 
@@ -463,8 +478,16 @@ mod tests {
         let (label, messages) = session_transcript(session_row_id(&key))
             .expect("the id the sidebar hands out must resolve to the transcript behind it");
         assert_eq!(label, "researcher");
-        assert_eq!(messages.len(), 2);
+        assert_eq!(
+            messages.len(),
+            3,
+            "the session's two messages plus the trailing read-only note"
+        );
         assert_eq!(messages[1].content, "found three leads");
+        assert_eq!(
+            messages[2].role, "info",
+            "the note rides inside the transcript so repaints keep it"
+        );
 
         assert!(
             session_transcript(0xDEAD_BEEF).is_none(),
