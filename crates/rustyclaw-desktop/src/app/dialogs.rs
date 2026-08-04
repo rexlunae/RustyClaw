@@ -625,7 +625,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     }
                                     let gw = gateway.read().clone();
                                     if let Some(client) = gw {
-                                        spawn_reporting("ThreadSwitch", async move {
+                                        spawn_reporting("delete thread", async move {
                                             if let Some(fallback_id) = fallback_id {
                                                 client.send(GatewayCommand::ThreadSwitch { thread_id: fallback_id }).await.context("sending ThreadSwitch")?;
                                             }
