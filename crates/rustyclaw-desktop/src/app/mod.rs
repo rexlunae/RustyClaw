@@ -455,6 +455,18 @@ pub fn App() -> Element {
             let buffer: Arc<StdMutex<EventBuffer>> =
                 Arc::new(StdMutex::new(EventBuffer::default()));
             let notify = Arc::new(tokio::sync::Notify::new());
+            // End-of-stream, published by the worker once it has made its
+            // final hand-off from the gateway channel into `buffer`.
+            //
+            // The connection flag cannot serve this purpose. The writer
+            // clears it right after queueing `Disconnected` on the channel,
+            // while moving that event into the buffer is the worker's job —
+            // a separate task that need not have been polled yet. A consumer
+            // watching the flag can therefore see "disconnected" with an
+            // empty buffer while the terminal event is still in the channel,
+            // and leave before it is ever handed over. Only the worker knows
+            // when there is genuinely nothing left to deliver.
+            let worker_done = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
             // ── Worker (tokio thread) ──────────────────────────
             // Runs on the tokio runtime, completely independent
@@ -463,9 +475,23 @@ pub fn App() -> Element {
             let client_w = client.clone();
             let buf_w = buffer.clone();
             let notify_w = notify.clone();
+            let done_w = worker_done.clone();
             tokio::spawn(async move {
                 loop {
                     if !client_w.is_connected() {
+                        // Whatever is still queued outlives the flag. The
+                        // writer marks the connection dead immediately after
+                        // queueing its `Disconnected`, so breaking straight
+                        // out here would strand the one event that tells the
+                        // UI the connection is gone — leaving it showing a
+                        // healthy connection and a spinner that never stops.
+                        let remaining = client_w.drain_available().await;
+                        if !remaining.is_empty() {
+                            buf_w
+                                .lock()
+                                .expect("stream buffer poisoned")
+                                .push_events(remaining);
+                        }
                         break;
                     }
                     let first = match client_w.recv().await {
@@ -474,46 +500,16 @@ pub fn App() -> Element {
                     };
                     let extra = client_w.drain_available().await;
 
-                    {
-                        let mut b = buf_w.lock().expect("stream buffer poisoned");
-                        for threaded in std::iter::once(first).chain(extra) {
-                            let thread = threaded.thread_id;
-                            match threaded.event {
-                                GatewayEvent::Chunk { delta } => {
-                                    // Coalesce consecutive chunks into one
-                                    // entry — but only within a thread. Two
-                                    // turns' chunks arrive interleaved now,
-                                    // and merging by adjacency alone would
-                                    // splice two answers into one string.
-                                    match b.entries.last_mut() {
-                                        Some(BufferEntry::Chunks {
-                                            thread_id,
-                                            text,
-                                            count,
-                                            bytes,
-                                        }) if *thread_id == thread => {
-                                            *count += 1;
-                                            *bytes += delta.len();
-                                            text.push_str(&delta);
-                                        }
-                                        _ => b.entries.push(BufferEntry::Chunks {
-                                            thread_id: thread,
-                                            text: delta.clone(),
-                                            count: 1,
-                                            bytes: delta.len(),
-                                        }),
-                                    }
-                                }
-                                other => b.entries.push(BufferEntry::Event {
-                                    thread_id: thread,
-                                    event: other,
-                                }),
-                            }
-                        }
-                    }
+                    buf_w
+                        .lock()
+                        .expect("stream buffer poisoned")
+                        .push_events(std::iter::once(first).chain(extra));
                     notify_w.notify_one();
                 }
-                // Final wake so the UI task can observe disconnect.
+                // Publish end-of-stream only after the final drain above, so
+                // a consumer that observes it has necessarily been handed
+                // everything. Then wake it one last time to come collect.
+                done_w.store(true, std::sync::atomic::Ordering::SeqCst);
                 notify_w.notify_one();
             });
 
@@ -528,10 +524,6 @@ pub fn App() -> Element {
                 let mut refreshed_threads_this_connection = false;
                 loop {
                     notify.notified().await;
-
-                    if !client.is_connected() {
-                        break;
-                    }
 
                     let entries = {
                         let mut b = buffer.lock().expect("stream buffer poisoned");
@@ -628,6 +620,34 @@ pub fn App() -> Element {
                                     s.streaming_bytes += bytes;
                                 }
                             }
+                        }
+                    }
+
+                    // Leave only once the worker has finished *and* its output
+                    // is drained. `handle_gateway_event` is the only thing
+                    // that clears the spinner and the requests that died with
+                    // the connection, so an exit that skips buffered entries
+                    // strands exactly the notice this loop exists to deliver.
+                    //
+                    // Deliberately not the connection flag: that goes false
+                    // while the terminal event may still be in the channel,
+                    // un-handed-over (see `worker_done`). Waiting on the
+                    // worker instead makes the hand-off, not the connection's
+                    // state, the thing that decides there is nothing left.
+                    //
+                    // Neither test alone suffices — the worker can still be
+                    // pushing when the buffer momentarily empties, and it can
+                    // finish while a batch sits unread — and this cannot park
+                    // forever: every push is followed by a `notify_one`, as is
+                    // the store above, and each drain takes *all* entries.
+                    if worker_done.load(std::sync::atomic::Ordering::SeqCst) {
+                        let drained = buffer
+                            .lock()
+                            .expect("stream buffer poisoned")
+                            .entries
+                            .is_empty();
+                        if drained {
+                            break;
                         }
                     }
                 }

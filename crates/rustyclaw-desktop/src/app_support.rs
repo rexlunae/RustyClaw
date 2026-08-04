@@ -8,6 +8,7 @@ use rustyclaw_view::{serde_json, tracing};
 
 use crate::state::AppState;
 use rustyclaw_core::gateway::GatewayClient;
+use rustyclaw_core::gateway::client::ThreadEvent;
 use rustyclaw_core::gateway::client_types::{GatewayCommand, GatewayEvent};
 use rustyclaw_core::types::MessageRole;
 use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
@@ -41,6 +42,44 @@ pub(crate) enum BufferEntry {
 #[derive(Default)]
 pub(crate) struct EventBuffer {
     pub(crate) entries: Vec<BufferEntry>,
+}
+
+impl EventBuffer {
+    /// Append events, coalescing consecutive chunks of the same thread.
+    ///
+    /// Shared by the worker's steady-state path and its shutdown drain: a
+    /// terminal `Disconnected` is the event the UI most needs, and it is the
+    /// one most likely to be sitting in the channel when the worker notices
+    /// the connection is gone.
+    pub(crate) fn push_events(&mut self, events: impl IntoIterator<Item = ThreadEvent>) {
+        for threaded in events {
+            let thread = threaded.thread_id;
+            match threaded.event {
+                GatewayEvent::Chunk { delta } => match self.entries.last_mut() {
+                    Some(BufferEntry::Chunks {
+                        thread_id,
+                        text,
+                        count,
+                        bytes,
+                    }) if *thread_id == thread => {
+                        *count += 1;
+                        *bytes += delta.len();
+                        text.push_str(&delta);
+                    }
+                    _ => self.entries.push(BufferEntry::Chunks {
+                        thread_id: thread,
+                        text: delta.clone(),
+                        count: 1,
+                        bytes: delta.len(),
+                    }),
+                },
+                other => self.entries.push(BufferEntry::Event {
+                    thread_id: thread,
+                    event: other,
+                }),
+            }
+        }
+    }
 }
 
 /// Connect to the gateway.
@@ -1361,4 +1400,102 @@ pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
         }
     }
     load_skills_list()
+}
+
+#[cfg(test)]
+mod event_buffer_tests {
+    use super::*;
+
+    fn chunk(thread_id: Option<u64>, delta: &str) -> ThreadEvent {
+        ThreadEvent {
+            thread_id,
+            event: GatewayEvent::Chunk {
+                delta: delta.to_string(),
+            },
+        }
+    }
+
+    fn disconnected() -> ThreadEvent {
+        ThreadEvent {
+            thread_id: None,
+            event: GatewayEvent::Disconnected {
+                reason: Some("write failed".to_string()),
+            },
+        }
+    }
+
+    #[test]
+    fn chunks_of_one_thread_coalesce() {
+        let mut buf = EventBuffer::default();
+        buf.push_events([chunk(Some(1), "he"), chunk(Some(1), "llo")]);
+
+        assert_eq!(buf.entries.len(), 1, "one coalesced entry");
+        match &buf.entries[0] {
+            BufferEntry::Chunks {
+                thread_id,
+                text,
+                count,
+                bytes,
+            } => {
+                assert_eq!(*thread_id, Some(1));
+                assert_eq!(text, "hello");
+                assert_eq!(*count, 2);
+                assert_eq!(*bytes, 5);
+            }
+            _ => panic!("expected a Chunks entry"),
+        }
+    }
+
+    /// Two turns stream interleaved; merging by adjacency alone would
+    /// splice two different answers into one string.
+    #[test]
+    fn chunks_of_different_threads_stay_apart() {
+        let mut buf = EventBuffer::default();
+        buf.push_events([
+            chunk(Some(1), "a"),
+            chunk(Some(2), "b"),
+            chunk(Some(1), "c"),
+        ]);
+
+        assert_eq!(buf.entries.len(), 3, "no cross-thread coalescing");
+    }
+
+    /// Coalescing must not reorder anything around a non-chunk event —
+    /// StreamStart → Chunks → ResponseDone sequencing is load-bearing.
+    #[test]
+    fn a_non_chunk_event_breaks_the_run_and_keeps_order() {
+        let mut buf = EventBuffer::default();
+        buf.push_events([chunk(Some(1), "a"), disconnected(), chunk(Some(1), "b")]);
+
+        assert_eq!(buf.entries.len(), 3);
+        assert!(matches!(buf.entries[0], BufferEntry::Chunks { .. }));
+        assert!(matches!(
+            buf.entries[1],
+            BufferEntry::Event {
+                event: GatewayEvent::Disconnected { .. },
+                ..
+            }
+        ));
+        assert!(matches!(buf.entries[2], BufferEntry::Chunks { .. }));
+    }
+
+    /// The event the UI most needs off a dying connection: it is what clears
+    /// the spinner and marks the connection dropped. The worker drains it
+    /// into this buffer on its way out, so it must survive intact.
+    #[test]
+    fn a_terminal_disconnect_survives_buffering() {
+        let mut buf = EventBuffer::default();
+        buf.push_events([chunk(Some(1), "partial"), disconnected()]);
+
+        assert!(
+            buf.entries.iter().any(|e| matches!(
+                e,
+                BufferEntry::Event {
+                    event: GatewayEvent::Disconnected { .. },
+                    ..
+                }
+            )),
+            "the disconnect notice must reach the UI"
+        );
+    }
 }
