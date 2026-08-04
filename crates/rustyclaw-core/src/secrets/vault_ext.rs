@@ -4,7 +4,9 @@ use anyhow::{Context, Result};
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
 use super::SecretsManager;
-use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
+use super::types::{
+    AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString,
+};
 
 /// Credential namespaces [`SecretsManager::read_service_credential`] may
 /// address.
@@ -53,14 +55,20 @@ impl SecretsManager {
     /// rather than being fetched. Anything else — and anything reachable from
     /// a tool call — belongs on [`SecretsManager::get_credential`], which
     /// enforces the policy.
-    pub fn read_service_credential(&mut self, name: &str) -> Result<Option<String>> {
+    pub fn read_service_credential(&mut self, name: &str) -> Result<Option<SecretString>> {
         if !Self::is_service_credential_name(name) {
             // Not an error: the caller asked for something this path does not
             // serve, and reporting "no such credential" is both true from here
             // and free of information about what the vault actually holds.
             return Ok(None);
         }
-        self.get_secret(&format!("val:{name}"), true)
+        // `SecretString`, so the decrypted value is zeroed when the caller
+        // drops it instead of lingering in freed heap memory. A caller that
+        // keeps it (the live config a connected messenger runs from) does so
+        // deliberately, not because the transport type leaked.
+        Ok(self
+            .get_secret(&format!("val:{name}"), true)?
+            .map(SecretString::new))
     }
 
     /// Store a service credential the gateway provisions on the user's
@@ -810,7 +818,9 @@ mod service_credential_tests {
             "raw store must refuse reserved keys"
         );
         assert_eq!(
-            mgr.read_service_credential("messenger/tg/token").unwrap(),
+            mgr.read_service_credential("messenger/tg/token")
+                .unwrap()
+                .map(String::from),
             None,
             "nothing may have landed"
         );
@@ -829,6 +839,7 @@ mod service_credential_tests {
         assert_eq!(
             mgr.read_service_credential("messenger/tg/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("123:secret"),
             "the connect path must be able to read what it was configured with"
@@ -841,8 +852,18 @@ mod service_credential_tests {
         let mut mgr = vault(dir.path());
         // `anthropic` is a WithAuth credential that `get_credential` would
         // refuse the agent. This path must not become a way around that.
-        assert_eq!(mgr.read_service_credential("anthropic").unwrap(), None);
-        assert_eq!(mgr.read_service_credential("../anthropic").unwrap(), None);
+        assert_eq!(
+            mgr.read_service_credential("anthropic")
+                .unwrap()
+                .map(String::from),
+            None
+        );
+        assert_eq!(
+            mgr.read_service_credential("../anthropic")
+                .unwrap()
+                .map(String::from),
+            None
+        );
     }
 
     #[test]

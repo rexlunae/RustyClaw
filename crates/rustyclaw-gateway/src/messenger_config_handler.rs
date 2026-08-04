@@ -796,7 +796,7 @@ async fn rename_credentials(
         if !existing.contains(&format!("val:{new}")) {
             created.push(new.clone());
         }
-        if let Err(e) = mgr.store_service_credential(&new, &secret_entry, &value) {
+        if let Err(e) = mgr.store_service_credential(&new, &secret_entry, value.as_str()) {
             for cred in &created {
                 let _ = mgr.delete_credential(cred);
             }
@@ -978,10 +978,13 @@ fn save_route(
     };
 
     let prior_routes = config.messenger_routes.clone();
+    // Identity via `same_key`, which folds case exactly like route matching
+    // does — exact comparison here let `#Rust` and `#rust` coexist as two
+    // routes for one channel, the second permanently shadowed.
     match config
         .messenger_routes
         .iter_mut()
-        .find(|r| r.messenger == messenger && r.channel == channel)
+        .find(|r| r.same_key(&messenger, channel.as_deref()))
     {
         Some(existing) => *existing = route,
         None => config.messenger_routes.push(route),
@@ -1007,9 +1010,10 @@ fn delete_route(
 ) -> Result<Option<String>, String> {
     let channel = channel.filter(|c| !c.trim().is_empty());
     let prior_routes = config.messenger_routes.clone();
+    // Same identity rule as `save_route`: fold case, as matching does.
     config
         .messenger_routes
-        .retain(|r| !(r.messenger == messenger && r.channel.as_deref() == channel));
+        .retain(|r| !r.same_key(messenger, channel));
     if config.messenger_routes.len() == prior_routes.len() {
         return Err("No such route".to_string());
     }
@@ -1232,7 +1236,8 @@ mod tests {
             .lock()
             .await
             .read_service_credential("messenger/tg/token")
-            .unwrap();
+            .unwrap()
+            .map(String::from);
         assert_eq!(stored.as_deref(), Some("123:secret"));
     }
 
@@ -1287,6 +1292,7 @@ mod tests {
                 .await
                 .read_service_credential("messenger/tg/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("123:secret"),
             "the credential must survive an unrelated edit"
@@ -1357,12 +1363,15 @@ mod tests {
         assert_eq!(
             mgr.read_service_credential("messenger/telegram-main/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("123:secret"),
             "the credential must follow the account"
         );
         assert_eq!(
-            mgr.read_service_credential("messenger/tg/token").unwrap(),
+            mgr.read_service_credential("messenger/tg/token")
+                .unwrap()
+                .map(String::from),
             None,
             "the old vault entry must not linger"
         );
@@ -1465,6 +1474,7 @@ mod tests {
                 .await
                 .read_service_credential("messenger/legacy/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("123:plaintext")
         );
@@ -1509,7 +1519,8 @@ mod tests {
                 .lock()
                 .await
                 .read_service_credential("messenger/tg/token")
-                .unwrap(),
+                .unwrap()
+                .map(String::from),
             None,
             "the credential must not outlive the account that used it"
         );
@@ -1554,7 +1565,8 @@ mod tests {
                 .lock()
                 .await
                 .read_service_credential("messenger/acct/token")
-                .unwrap(),
+                .unwrap()
+                .map(String::from),
             None,
             "a type change must not orphan the old credential in the vault"
         );
@@ -1739,11 +1751,14 @@ mod tests {
         assert_eq!(
             mgr.read_service_credential("messenger/tg2/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("new-token")
         );
         assert_eq!(
-            mgr.read_service_credential("messenger/tg/token").unwrap(),
+            mgr.read_service_credential("messenger/tg/token")
+                .unwrap()
+                .map(String::from),
             None,
             "the displaced credential must not live on unreferenced"
         );
@@ -1884,6 +1899,7 @@ mod tests {
                 .await
                 .read_service_credential("messenger/tg/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("123:secret"),
             "a failed rename must never cost the stored credential"
@@ -2099,6 +2115,7 @@ mod tests {
                 .await
                 .read_service_credential("messenger/tg/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("123:secret"),
             "a failed delete must not have destroyed the credential"
@@ -2327,6 +2344,7 @@ mod tests {
                 .await
                 .read_service_credential("messenger/telegram-main/token")
                 .unwrap()
+                .map(String::from)
                 .as_deref(),
             Some("first"),
             "the existing credential must survive the refused save"

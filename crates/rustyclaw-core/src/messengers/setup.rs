@@ -484,15 +484,24 @@ pub fn secret_name(account: &str, field: &str) -> String {
     format!("messenger/{}/{}", account_slug(account), field)
 }
 
+/// Hex SHA-256 of a byte buffer — see [`MessengerProfile::avatar_sha256`].
+///
+/// Callers that go on to *use* the content should hash the bytes they hold
+/// rather than calling [`file_fingerprint`] and reading the file again:
+/// re-opening the path re-introduces the swap window the pin exists to
+/// close.
+pub fn bytes_fingerprint(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::digest(bytes);
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 /// Hex SHA-256 of a file's contents.
 ///
 /// Used to pin a profile avatar to the bytes present when the user saved it
 /// — see [`MessengerProfile::avatar_sha256`].
 pub fn file_fingerprint(path: &std::path::Path) -> std::io::Result<String> {
-    use sha2::{Digest, Sha256};
-    let bytes = std::fs::read(path)?;
-    let digest = Sha256::digest(&bytes);
-    Ok(digest.iter().map(|b| format!("{b:02x}")).collect())
+    Ok(bytes_fingerprint(&std::fs::read(path)?))
 }
 
 /// Whether two account names would share one set of vault keys.
@@ -637,6 +646,22 @@ impl ThreadRoute {
         self.agent_id
             .as_deref()
             .unwrap_or(crate::agents::MAIN_AGENT_ID)
+    }
+
+    /// Whether this route *is* the `(messenger, channel)` binding — the
+    /// identity used when saving or deleting one.
+    ///
+    /// Case-insensitive on both parts because [`matches`](Self::matches) is:
+    /// if identity compared exactly while matching folded case, `#Rust` and
+    /// `#rust` could coexist as two routes for one channel, the first
+    /// shadowing the second, and deleting one would leave the other.
+    pub fn same_key(&self, messenger: &str, channel: Option<&str>) -> bool {
+        self.messenger.eq_ignore_ascii_case(messenger)
+            && match (&self.channel, channel) {
+                (None, None) => true,
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                _ => false,
+            }
     }
 }
 

@@ -70,7 +70,7 @@ async fn resolve_credentials(
                 // messages quote the offending value, and the value here is
                 // a decrypted credential. "Never log secrets" outranks a
                 // better diagnostic.
-                if resolved.set_field(field, &value).is_err() {
+                if resolved.set_field(field, value.as_str()).is_err() {
                     warn!(
                         account = %messenger_config.name,
                         field,
@@ -174,23 +174,34 @@ async fn announce_profile(
                 // hand-editor can bless their image either by saving the
                 // profile once in the setup panel or by writing the
                 // `avatar_sha256` field beside `avatar_path`.
-                let fingerprint = rustyclaw_core::messengers::setup::file_fingerprint(&path);
-                let publishable = match (profile.avatar_sha256.as_deref(), &fingerprint) {
-                    (Some(saved), Ok(current)) => saved == current,
-                    _ => false,
-                };
-                if publishable {
-                    let url = format!("file://{}", path.display());
-                    if let Err(e) = messenger.set_profile_picture(&url).await {
-                        debug!(messenger = %messenger.name(), error = %e, "Could not set avatar");
+                //
+                // The bytes are read ONCE, verified, and re-staged in a
+                // gateway-private file the backend uploads from. Handing the
+                // backend the workspace path would have it re-open a file
+                // anyone with workspace access can swap between our hash and
+                // its read — the exact race the pin exists to close.
+                let verified = match (profile.avatar_sha256.as_deref(), std::fs::read(&path)) {
+                    (Some(saved), Ok(bytes))
+                        if saved
+                            == rustyclaw_core::messengers::setup::bytes_fingerprint(&bytes) =>
+                    {
+                        Some(bytes)
                     }
-                } else {
-                    warn!(
+                    _ => None,
+                };
+                match verified {
+                    Some(bytes) => {
+                        if let Err(e) = upload_staged_avatar(messenger, config, &path, &bytes).await
+                        {
+                            debug!(messenger = %messenger.name(), error = %e, "Could not set avatar");
+                        }
+                    }
+                    None => warn!(
                         path = %path.display(),
                         "Avatar has no recorded fingerprint or its contents changed since \
                          the profile was saved; not publishing it — save the profile in \
                          the messenger setup panel to bless this image"
-                    );
+                    ),
                 }
             }
             Err(reasons) => warn!(
@@ -200,6 +211,39 @@ async fn announce_profile(
             ),
         }
     }
+}
+
+/// Hand verified avatar bytes to the backend via a gateway-private file.
+///
+/// The staging directory lives under the settings dir, which nothing but the
+/// gateway writes; the file is removed again once the upload returns. The
+/// name carries the original extension so backends that infer content type
+/// from it keep working.
+async fn upload_staged_avatar(
+    messenger: &dyn Messenger,
+    config: &Config,
+    original: &std::path::Path,
+    bytes: &[u8],
+) -> Result<()> {
+    let staging = config.settings_dir.join("runtime");
+    std::fs::create_dir_all(&staging)?;
+    let ext = original
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("png");
+    let unique = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or_default();
+    let staged = staging.join(format!("avatar-{}-{unique}.{ext}", std::process::id()));
+    std::fs::write(&staged, bytes)?;
+
+    let url = format!("file://{}", staged.display());
+    let result = messenger.set_profile_picture(&url).await;
+    // Best-effort cleanup either way; a leftover file in the gateway's own
+    // runtime dir is untidy, not dangerous.
+    let _ = std::fs::remove_file(&staged);
+    result
 }
 
 /// Create a messenger manager from config.

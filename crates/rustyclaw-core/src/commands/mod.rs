@@ -190,7 +190,6 @@ fn base_command_names() -> Vec<String> {
         "channels pair".into(),
         "channels unpair".into(),
         "messengers".into(),
-        "messengers routes".into(),
         "analytics".into(),
         "analytics day".into(),
         "analytics week".into(),
