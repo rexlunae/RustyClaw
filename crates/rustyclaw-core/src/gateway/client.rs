@@ -126,8 +126,26 @@ impl GatewayClient {
         let active_stream_id_tx = active_stream_id.clone();
         let stream_threads_tx = stream_threads.clone();
         let connected_tx = connected.clone();
+        // Lets the writer observe the reader's death. The sender lives in the
+        // reader task and nothing is ever sent on it — dropping it when that
+        // task ends is the signal.
+        let (reader_gone_tx, mut reader_gone_rx) = tokio::sync::watch::channel(());
         tokio::spawn(async move {
-            while let Some(cmd) = cmd_rx.recv().await {
+            loop {
+                let cmd = tokio::select! {
+                    received = cmd_rx.recv() => match received {
+                        Some(cmd) => cmd,
+                        None => break,
+                    },
+                    // The reader is gone, so nothing more will arrive and
+                    // nothing sent could be answered. Leaving matters beyond
+                    // this task: it holds the second sender on the event
+                    // channel, so parking here forever would hold that channel
+                    // open, and consumers waiting on it stay alive holding the
+                    // client — which keeps the SSH child running for as long
+                    // as the process lives, once per reconnect.
+                    _ = reader_gone_rx.changed() => break,
+                };
                 let stream_id = match &cmd {
                     GatewayCommand::Chat { thread_id, .. } => {
                         let id = next_stream_id_tx.fetch_add(2, Ordering::Relaxed);
@@ -178,6 +196,9 @@ impl GatewayClient {
         let active_stream_id_rx = active_stream_id.clone();
         let stream_threads_rx = stream_threads;
         tokio::spawn(async move {
+            // Held for this task's lifetime, never sent on: dropping it when
+            // the reader ends is what releases the writer (see its select).
+            let _reader_gone_tx = reader_gone_tx;
             // Streaming stats for the event log.
             let mut stream_chunk_count: u32 = 0;
             let mut stream_total_bytes: usize = 0;
@@ -511,6 +532,53 @@ mod tests {
         assert!(
             last.is_err(),
             "a send on a dead command channel must surface an error, not vanish"
+        );
+    }
+
+    /// Spawn a child whose stdout is closed but whose stdin stays open: the
+    /// read side ends while the write side is still perfectly healthy — the
+    /// mirror of `half_open_child`.
+    ///
+    /// stderr is closed alongside stdout because the EOF path drains it for a
+    /// diagnostic reason; a child holding it open would stall the reader there
+    /// rather than at the thing under test.
+    fn read_dead_child() -> tokio::process::Child {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg("exec 1>&- 2>&-; sleep 30")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .expect("spawning a shell should succeed")
+    }
+
+    /// A connection whose reader has died must end its event stream.
+    ///
+    /// The writer parks on the command channel until the last client is
+    /// dropped, and it holds the second sender on the event channel — so
+    /// unless the reader's death releases it, the stream never ends. That is
+    /// not merely an idle task: consumers waiting on the stream hold the
+    /// client, the client holds the SSH child, and the child outlives the
+    /// connection it belonged to, once per reconnect.
+    #[tokio::test]
+    async fn a_read_dead_connection_ends_its_event_stream() {
+        let (conn, writer, reader) =
+            SshConnection::from_child(read_dead_child()).expect("splitting the child");
+        let client = GatewayClient::from_transport(conn, writer, reader, None);
+
+        // The reader announces the disconnect before it goes, so drain rather
+        // than expecting `None` first.
+        let ended = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while client.recv().await.is_some() {}
+        })
+        .await;
+
+        assert!(
+            ended.is_ok(),
+            "a client whose reader has died must end its event stream, \
+             not park its consumers on it forever"
         );
     }
 }
