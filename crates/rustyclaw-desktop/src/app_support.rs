@@ -1153,7 +1153,11 @@ pub(crate) fn normalize_provider_id(id: &str) -> &str {
 
 /// Execute a JavaScript expression in the webview and send the result
 /// back to the gateway as a `DomQueryResponse`.
-pub(crate) async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js: String) {
+pub(crate) async fn handle_dom_query(
+    client: &Arc<GatewayClient>,
+    id: String,
+    js: String,
+) -> anyhow::Result<()> {
     let wrapped = format!(
         r#"(function() {{
             try {{
@@ -1206,13 +1210,15 @@ pub(crate) async fn handle_dom_query(client: &Arc<GatewayClient>, id: String, js
         }
     };
 
-    let _ = client
+    client
         .send(GatewayCommand::DomQueryResponse {
             id,
             result,
             is_error,
         })
-        .await;
+        .await
+        .context("sending DomQueryResponse")?;
+    Ok(())
 }
 
 pub(crate) fn display_path(path: &str) -> String {

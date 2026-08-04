@@ -105,12 +105,14 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::ThreadNew(label) => {
             // Send thread create to gateway
-            let _ = client
+            client
                 .send(GatewayCommand::ThreadCreate {
                     label: Some(label),
                     project_id: None,
                 })
-                .await;
+                .await
+                .context("sending ThreadCreate")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::ThreadList => {
             // Focus sidebar to show threads
@@ -121,25 +123,31 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::ThreadClose(id) => {
             // Send thread close to gateway
-            let _ = client
+            client
                 .send(GatewayCommand::ThreadClose { thread_id: id })
-                .await;
+                .await
+                .context("sending ThreadClose")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::ThreadRename(id, new_label) => {
             // Send thread rename to gateway
-            let _ = client
+            client
                 .send(GatewayCommand::ThreadRename {
                     thread_id: id,
                     new_label,
                 })
-                .await;
+                .await
+                .context("sending ThreadRename")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::ThreadBackground => {
             // Background the current foreground thread by switching
             // to thread_id 0 (sentinel: no foreground thread).
-            let _ = client
+            client
                 .send(GatewayCommand::ThreadSwitch { thread_id: 0 })
-                .await;
+                .await
+                .context("sending ThreadSwitch")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
             crate::app::events::emit(
                 gw_tx,
                 GwEvent::Info(
@@ -150,9 +158,11 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::ThreadForeground(id) => {
             // Foreground a thread by ID — reuse ThreadSwitch
-            let _ = client
+            client
                 .send(GatewayCommand::ThreadSwitch { thread_id: id })
-                .await;
+                .await
+                .context("sending ThreadSwitch")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::SetModel(model_name) => {
             // /model only changes the model, never the provider.
@@ -333,9 +343,11 @@ pub(super) async fn handle_command_action(
                 .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::EngineAction(engine, action) => {
-            let _ = client
+            client
                 .send(GatewayCommand::EngineAction { engine, action })
-                .await;
+                .await
+                .context("sending EngineAction")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::EngineModelList(engine) => {
             // Open the panel so the model list has somewhere to land.
@@ -345,9 +357,11 @@ pub(super) async fn handle_command_action(
                 .await
                 .context("sending EngineList")
                 .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
-            let _ = client
+            client
                 .send(GatewayCommand::EngineModelList { engine })
-                .await;
+                .await
+                .context("sending EngineModelList")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::EngineModelPull(engine, model) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowEngines);
@@ -356,13 +370,15 @@ pub(super) async fn handle_command_action(
                 .await
                 .context("sending EngineList")
                 .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
-            let _ = client
+            client
                 .send(GatewayCommand::EngineModelPull {
                     engine,
                     model,
                     expected_size_bytes: None,
                 })
-                .await;
+                .await
+                .context("sending EngineModelPull")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::EngineModelSearch(query) => {
             // Query the Hugging Face Hub directly — discovery is a public
@@ -430,7 +446,7 @@ pub(super) async fn handle_command_action(
             });
         }
         CommandAction::EngineModelAction(engine, model, action) => {
-            let _ = client
+            client
                 .send(GatewayCommand::EngineModelAction {
                     engine,
                     model,
@@ -438,7 +454,9 @@ pub(super) async fn handle_command_action(
                     context_length: None,
                     extra_args: Vec::new(),
                 })
-                .await;
+                .await
+                .context("sending EngineModelAction")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::ClearMessages => {
             crate::app::events::emit(gw_tx, GwEvent::ClearMessages);
@@ -456,7 +474,7 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::CronAdd(name, expr, payload) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowCron);
-            let _ = client
+            client
                 .send(GatewayCommand::CronUpsert {
                     id: None,
                     name,
@@ -464,7 +482,9 @@ pub(super) async fn handle_command_action(
                     payload,
                     paused: false,
                 })
-                .await;
+                .await
+                .context("sending CronUpsert")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::CronAction(id, action) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowCron);
@@ -481,19 +501,23 @@ pub(super) async fn handle_command_action(
                     query: query.clone(),
                 },
             );
-            let _ = client
+            client
                 .send(GatewayCommand::MemoryList { query, limit: None })
-                .await;
+                .await
+                .context("sending MemoryList")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::MemoryAdd(category, content) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowMemory { query: None });
-            let _ = client
+            client
                 .send(GatewayCommand::MemoryUpsert {
                     id: None,
                     content,
                     category,
                 })
-                .await;
+                .await
+                .context("sending MemoryUpsert")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::MemoryDelete(id) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowMemory { query: None });
@@ -511,15 +535,19 @@ pub(super) async fn handle_command_action(
                 },
             );
             // Populate both halves of the memory panel.
-            let _ = client
+            client
                 .send(GatewayCommand::MemoryList {
                     query: Some(query.clone()),
                     limit: None,
                 })
-                .await;
-            let _ = client
+                .await
+                .context("sending MemoryList")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
+            client
                 .send(GatewayCommand::HistorySearch { query, limit: None })
-                .await;
+                .await
+                .context("sending HistorySearch")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::ShowMcp => {
             crate::app::events::emit(gw_tx, GwEvent::ShowMcp);
@@ -531,14 +559,16 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::McpConnect(name, command) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowMcp);
-            let _ = client
+            client
                 .send(GatewayCommand::McpConnect {
                     name,
                     command,
                     url: None,
                     env: Vec::new(),
                 })
-                .await;
+                .await
+                .context("sending McpConnect")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::McpDisconnect(name) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowMcp);
@@ -566,9 +596,11 @@ pub(super) async fn handle_command_action(
         }
         CommandAction::ChannelPair(channel, action) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowChannels);
-            let _ = client
+            client
                 .send(GatewayCommand::ChannelPair { channel, action })
-                .await;
+                .await
+                .context("sending ChannelPair")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::ShowAnalytics(period) => {
             crate::app::events::emit(gw_tx, GwEvent::ShowAnalytics);
@@ -608,13 +640,15 @@ pub(super) async fn handle_command_action(
                 .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::AgentNew(name) => {
-            let _ = client
+            client
                 .send(GatewayCommand::AgentCreate {
                     name,
                     agent_id: None,
                     description: None,
                 })
-                .await;
+                .await
+                .context("sending AgentCreate")
+                .unwrap_or_else(|e| crate::app::events::report(gw_tx, e));
         }
         CommandAction::AgentDelete(agent_id) => {
             client

@@ -74,9 +74,10 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                             .context("sending SecretsHasTotp")?;
                     }
                     SecretsCommand::Store { key, value } => {
-                        let _ = client
+                        client
                             .send(GatewayCommand::SecretsStore { key, value })
-                            .await;
+                            .await
+                            .context("sending SecretsStore")?;
                         // Re-fetch so the new entry shows up immediately
                         // (the gateway handles frames in order).
                         client
@@ -95,13 +96,14 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                             .context("sending SecretsList")?;
                     }
                     SecretsCommand::SetPolicy { name, policy } => {
-                        let _ = client
+                        client
                             .send(GatewayCommand::SecretsSetPolicy {
                                 name,
                                 policy,
                                 skills: Vec::new(),
                             })
-                            .await;
+                            .await
+                            .context("sending SecretsSetPolicy")?;
                         client
                             .send(GatewayCommand::SecretsList)
                             .await
@@ -623,15 +625,12 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                     }
                                     let gw = gateway.read().clone();
                                     if let Some(client) = gw {
-                                        spawn(async move {
+                                        spawn_reporting("ThreadSwitch", async move {
                                             if let Some(fallback_id) = fallback_id {
-                                                let _ = client
-                                                    .send(GatewayCommand::ThreadSwitch { thread_id: fallback_id })
-                                                    .await;
+                                                client.send(GatewayCommand::ThreadSwitch { thread_id: fallback_id }).await.context("sending ThreadSwitch")?;
                                             }
-                                            let _ = client
-                                                .send(GatewayCommand::ThreadClose { thread_id })
-                                                .await;
+                                            client.send(GatewayCommand::ThreadClose { thread_id }).await.context("sending ThreadClose")?;
+                                            Ok(())
                                         });
                                     }
                                 },

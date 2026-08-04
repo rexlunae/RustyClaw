@@ -377,12 +377,14 @@ impl App {
                             attachments: prompt_attachments.clone(),
                         },
                     );
-                    let _ = client
+                    client
                         .send(GatewayCommand::Chat {
                             message: prompt,
                             thread_id,
                         })
-                        .await;
+                        .await
+                        .context("sending Chat")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::AuthResponse(code)) => {
                     client
@@ -392,9 +394,11 @@ impl App {
                         .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::ToolApprovalResponse { id, approved }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::ToolApprove { id, approved })
-                        .await;
+                        .await
+                        .context("sending ToolApprove")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::VaultUnlock(password)) => {
                     // Unlock locally so /secrets can read the vault
@@ -410,26 +414,30 @@ impl App {
                     dismissed,
                     value,
                 }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::UserPromptResponse {
                             id,
                             dismissed,
                             value,
                         })
-                        .await;
+                        .await
+                        .context("sending UserPromptResponse")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::CredentialResponse {
                     id,
                     dismissed,
                     value,
                 }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::CredentialResponse {
                             id,
                             dismissed,
                             value,
                         })
-                        .await;
+                        .await
+                        .context("sending CredentialResponse")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::CancelCurrentRequest { thread_id }) => {
                     client
@@ -439,9 +447,11 @@ impl App {
                         .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::ProcessControl { pid, action }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::ProcessControl { pid, action })
-                        .await;
+                        .await
+                        .context("sending ProcessControl")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::AssistantResponse(text)) => {
                     let _ = text;
@@ -597,23 +607,29 @@ impl App {
                         // AccessPolicy::cycled); cycle it back to OPEN.
                         AccessPolicy::TriggerOnly(_) => "always",
                     };
-                    let _ = client
+                    client
                         .send(GatewayCommand::SecretsSetPolicy {
                             name,
                             policy: next_policy.to_string(),
                             skills: vec![],
                         })
-                        .await;
+                        .await
+                        .context("sending SecretsSetPolicy")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::DeleteSecret { name }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::SecretsDeleteCredential { name })
-                        .await;
+                        .await
+                        .context("sending SecretsDeleteCredential")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::AddSecret { name, value }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::SecretsStore { key: name, value })
-                        .await;
+                        .await
+                        .context("sending SecretsStore")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::RefreshSecrets) => {
                     client
@@ -646,14 +662,18 @@ impl App {
                         .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::RefreshTasks) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::TasksRequest { session: None })
-                        .await;
+                        .await
+                        .context("sending TasksRequest")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::ThreadSwitch(thread_id)) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::ThreadSwitch { thread_id })
-                        .await;
+                        .await
+                        .context("sending ThreadSwitch")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::AgentSwitch(agent_id)) => {
                     client
@@ -1142,14 +1162,18 @@ impl App {
                     // User cancelled — nothing to do
                 }
                 Ok(UserInput::EngineSelect(engine)) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::EngineModelList { engine })
-                        .await;
+                        .await
+                        .context("sending EngineModelList")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                 }
                 Ok(UserInput::EngineAction { engine, action }) => {
-                    let _ = client
+                    client
                         .send(GatewayCommand::EngineAction { engine, action })
-                        .await;
+                        .await
+                        .context("sending EngineAction")
+                        .unwrap_or_else(|e| crate::app::events::report(&gw_tx, e));
                     // Refresh the list so status changes show up.
                     client
                         .send(GatewayCommand::EngineList)
