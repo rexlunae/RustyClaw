@@ -24,6 +24,7 @@ use rustyclaw_view::{
 mod dialogs;
 mod signals;
 
+use anyhow::Context;
 use dialogs::render_dialogs;
 use signals::do_reconnect;
 
@@ -367,13 +368,17 @@ pub fn App() -> Element {
             .and_then(|d| d.selected_engine.clone());
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
-                client.send_or_log(GatewayCommand::EngineList).await;
+            spawn_reporting("EngineList", async move {
+                client
+                    .send(GatewayCommand::EngineList)
+                    .await
+                    .context("sending EngineList")?;
                 if let Some(engine) = selected {
                     let _ = client
                         .send(GatewayCommand::EngineModelList { engine })
                         .await;
                 }
+                Ok(())
             });
         }
     });
@@ -411,9 +416,12 @@ pub fn App() -> Element {
         }
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
+            spawn_reporting("CronList", async move {
                 if cron {
-                    client.send_or_log(GatewayCommand::CronList).await;
+                    client
+                        .send(GatewayCommand::CronList)
+                        .await
+                        .context("sending CronList")?;
                 }
                 if memory {
                     let _ = client
@@ -424,14 +432,24 @@ pub fn App() -> Element {
                         .await;
                 }
                 if mcp {
-                    client.send_or_log(GatewayCommand::McpList).await;
+                    client
+                        .send(GatewayCommand::McpList)
+                        .await
+                        .context("sending McpList")?;
                 }
                 if channels {
-                    client.send_or_log(GatewayCommand::ChannelStatus).await;
+                    client
+                        .send(GatewayCommand::ChannelStatus)
+                        .await
+                        .context("sending ChannelStatus")?;
                 }
                 if tools {
-                    client.send_or_log(GatewayCommand::ToolConfigList).await;
+                    client
+                        .send(GatewayCommand::ToolConfigList)
+                        .await
+                        .context("sending ToolConfigList")?;
                 }
+                Ok(())
             });
         }
     });
@@ -899,31 +917,26 @@ pub fn App() -> Element {
             PendingWorkspaceChange::Thread(thread_id) => {
                 // `switch_thread` resets the view itself.
                 if let Some(client) = gw {
-                    spawn(async move {
-                        if let Err(e) = client
+                    spawn_reporting("open thread", async move {
+                        client
                             .send(GatewayCommand::ThreadSwitch { thread_id })
                             .await
-                        {
-                            tracing::error!(thread_id, error = %e, "ThreadSwitch send failed");
-                        }
+                            .with_context(|| format!("switching to thread {thread_id}"))?;
                         tracing::info!(
                             thread_id,
                             "Desktop requesting thread history after ThreadSwitch"
                         );
-                        // Discarding this error is how clicking a thread came
-                        // to do nothing at all: the view had already been
-                        // reset for the incoming thread, and the request that
-                        // would have filled it never left the process.
-                        if let Err(e) = client
+                        // Stopping here matters: the view has already been
+                        // reset for the incoming thread, so a history request
+                        // that never leaves the process is the empty
+                        // transcript the user ends up looking at.
+                        client
                             .send(GatewayCommand::ThreadHistoryRequest { thread_id })
                             .await
-                        {
-                            tracing::error!(
-                                thread_id,
-                                error = %e,
-                                "Thread history request failed to send"
-                            );
-                        }
+                            .with_context(|| {
+                                format!("requesting history for thread {thread_id}")
+                            })?;
+                        Ok(())
                     });
                 }
                 state.write().switch_thread(thread_id);
@@ -997,10 +1010,12 @@ pub fn App() -> Element {
     let on_delete_thread = move |thread_id: u64| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
+            spawn_reporting("ThreadClose", async move {
                 client
-                    .send_or_log(GatewayCommand::ThreadClose { thread_id })
-                    .await;
+                    .send(GatewayCommand::ThreadClose { thread_id })
+                    .await
+                    .context("sending ThreadClose")?;
+                Ok(())
             });
         }
     };
@@ -1016,10 +1031,12 @@ pub fn App() -> Element {
         drop(s);
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
+            spawn_reporting("Cancel", async move {
                 client
-                    .send_or_log(GatewayCommand::Cancel { thread_id })
-                    .await;
+                    .send(GatewayCommand::Cancel { thread_id })
+                    .await
+                    .context("sending Cancel")?;
+                Ok(())
             });
         }
     };
@@ -1105,17 +1122,28 @@ pub fn App() -> Element {
                 show_messengers.set(true);
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
-                    spawn(async move {
-                        client.send_or_log(GatewayCommand::MessengerConfig).await;
+                    spawn_reporting("MessengerConfig", async move {
+                        client
+                            .send(GatewayCommand::MessengerConfig)
+                            .await
+                            .context("sending MessengerConfig")?;
+                        Ok(())
                     });
                 }
             } else if event.id == ids.secrets {
                 show_secrets.set(true);
                 let gw = gateway.read().clone();
                 if let Some(client) = gw {
-                    spawn(async move {
-                        client.send_or_log(GatewayCommand::SecretsList).await;
-                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
+                    spawn_reporting("SecretsList", async move {
+                        client
+                            .send(GatewayCommand::SecretsList)
+                            .await
+                            .context("sending SecretsList")?;
+                        client
+                            .send(GatewayCommand::SecretsHasTotp)
+                            .await
+                            .context("sending SecretsHasTotp")?;
+                        Ok(())
                     });
                 }
             } else if event.id == ids.pair {
@@ -1136,11 +1164,18 @@ pub fn App() -> Element {
                     let need_host = state.read().host_info.is_none();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
+                        spawn_reporting("HostInfoRequest", async move {
                             if need_host {
-                                client.send_or_log(GatewayCommand::HostInfoRequest).await;
+                                client
+                                    .send(GatewayCommand::HostInfoRequest)
+                                    .await
+                                    .context("sending HostInfoRequest")?;
                             }
-                            client.send_or_log(GatewayCommand::LoadStatusRequest).await;
+                            client
+                                .send(GatewayCommand::LoadStatusRequest)
+                                .await
+                                .context("sending LoadStatusRequest")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1151,8 +1186,12 @@ pub fn App() -> Element {
                     // Opening: fetch the service list.
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::ServiceList).await;
+                        spawn_reporting("ServiceList", async move {
+                            client
+                                .send(GatewayCommand::ServiceList)
+                                .await
+                                .context("sending ServiceList")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1165,11 +1204,18 @@ pub fn App() -> Element {
                     let need_host = state.read().host_info.is_none();
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::EngineList).await;
+                        spawn_reporting("EngineList", async move {
+                            client
+                                .send(GatewayCommand::EngineList)
+                                .await
+                                .context("sending EngineList")?;
                             if need_host {
-                                client.send_or_log(GatewayCommand::HostInfoRequest).await;
+                                client
+                                    .send(GatewayCommand::HostInfoRequest)
+                                    .await
+                                    .context("sending HostInfoRequest")?;
                             }
+                            Ok(())
                         });
                     }
                 }
@@ -1179,8 +1225,12 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::CronList).await;
+                        spawn_reporting("CronList", async move {
+                            client
+                                .send(GatewayCommand::CronList)
+                                .await
+                                .context("sending CronList")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1206,8 +1256,12 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::McpList).await;
+                        spawn_reporting("McpList", async move {
+                            client
+                                .send(GatewayCommand::McpList)
+                                .await
+                                .context("sending McpList")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1217,8 +1271,12 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::ChannelStatus).await;
+                        spawn_reporting("ChannelStatus", async move {
+                            client
+                                .send(GatewayCommand::ChannelStatus)
+                                .await
+                                .context("sending ChannelStatus")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1228,8 +1286,12 @@ pub fn App() -> Element {
                 if !v {
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::ToolConfigList).await;
+                        spawn_reporting("ToolConfigList", async move {
+                            client
+                                .send(GatewayCommand::ToolConfigList)
+                                .await
+                                .context("sending ToolConfigList")?;
+                            Ok(())
                         });
                     }
                 }
@@ -1388,9 +1450,10 @@ pub fn App() -> Element {
                             show_secrets.set(true);
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
-                                spawn(async move {
-                                    client.send_or_log(GatewayCommand::SecretsList).await;
-                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
+                                spawn_reporting("SecretsList", async move {
+                                    client.send(GatewayCommand::SecretsList).await.context("sending SecretsList")?;
+                        client.send(GatewayCommand::SecretsHasTotp).await.context("sending SecretsHasTotp")?;
+                                    Ok(())
                                 });
                             }
                         },
@@ -1457,9 +1520,10 @@ pub fn App() -> Element {
                             show_secrets.set(true);
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
-                                spawn(async move {
-                                    client.send_or_log(GatewayCommand::SecretsList).await;
-                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
+                                spawn_reporting("SecretsList", async move {
+                                    client.send(GatewayCommand::SecretsList).await.context("sending SecretsList")?;
+                        client.send(GatewayCommand::SecretsHasTotp).await.context("sending SecretsHasTotp")?;
+                                    Ok(())
                                 });
                             }
                         },
@@ -1469,11 +1533,12 @@ pub fn App() -> Element {
                             let need_host = state.read().host_info.is_none();
                             let gw = gateway.read().clone();
                             if let Some(client) = gw {
-                                spawn(async move {
-                                    client.send_or_log(GatewayCommand::EngineList).await;
+                                spawn_reporting("EngineList", async move {
+                                    client.send(GatewayCommand::EngineList).await.context("sending EngineList")?;
                                     if need_host {
-                                        client.send_or_log(GatewayCommand::HostInfoRequest).await;
+                                        client.send(GatewayCommand::HostInfoRequest).await.context("sending HostInfoRequest")?;
                                     }
+                                    Ok(())
                                 });
                             }
                         },

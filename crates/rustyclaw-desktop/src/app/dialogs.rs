@@ -10,7 +10,8 @@ use dioxus_bulma::prelude::{
 use rustyclaw_view::tracing;
 
 use crate::app_support::{
-    connect_to_gateway, create_swarm_from_template, delete_swarm, get_swarm_infos, stop_swarm,
+    connect_to_gateway, create_swarm_from_template, delete_swarm, get_swarm_infos, spawn_reporting,
+    stop_swarm,
 };
 use crate::components::*;
 use crate::state::{AppState, Theme};
@@ -21,6 +22,7 @@ use rustyclaw_core::ui::{ConnectionStatus, ThreadInfo};
 use rustyclaw_view::*;
 
 use super::signals::{AppSignals, do_reconnect};
+use anyhow::Context;
 
 pub(super) fn render_dialogs(sig: AppSignals) -> Element {
     #[allow(unused_mut, unused_variables)]
@@ -59,11 +61,17 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
     let on_secrets_command = move |cmd: SecretsCommand| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
+            spawn_reporting("SecretsList", async move {
                 match cmd {
                     SecretsCommand::Refresh => {
-                        client.send_or_log(GatewayCommand::SecretsList).await;
-                        client.send_or_log(GatewayCommand::SecretsHasTotp).await;
+                        client
+                            .send(GatewayCommand::SecretsList)
+                            .await
+                            .context("sending SecretsList")?;
+                        client
+                            .send(GatewayCommand::SecretsHasTotp)
+                            .await
+                            .context("sending SecretsHasTotp")?;
                     }
                     SecretsCommand::Store { key, value } => {
                         let _ = client
@@ -71,13 +79,20 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                             .await;
                         // Re-fetch so the new entry shows up immediately
                         // (the gateway handles frames in order).
-                        client.send_or_log(GatewayCommand::SecretsList).await;
+                        client
+                            .send(GatewayCommand::SecretsList)
+                            .await
+                            .context("sending SecretsList")?;
                     }
                     SecretsCommand::Delete { key } => {
                         client
-                            .send_or_log(GatewayCommand::SecretsDelete { key })
-                            .await;
-                        client.send_or_log(GatewayCommand::SecretsList).await;
+                            .send(GatewayCommand::SecretsDelete { key })
+                            .await
+                            .context("sending SecretsDelete")?;
+                        client
+                            .send(GatewayCommand::SecretsList)
+                            .await
+                            .context("sending SecretsList")?;
                     }
                     SecretsCommand::SetPolicy { name, policy } => {
                         let _ = client
@@ -87,9 +102,13 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                                 skills: Vec::new(),
                             })
                             .await;
-                        client.send_or_log(GatewayCommand::SecretsList).await;
+                        client
+                            .send(GatewayCommand::SecretsList)
+                            .await
+                            .context("sending SecretsList")?;
                     }
                 }
+                Ok(())
             });
         }
     };
@@ -101,7 +120,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
     let on_messenger_command = move |cmd: MessengerCommand| {
         let gw = gateway.read().clone();
         if let Some(client) = gw {
-            spawn(async move {
+            spawn_reporting("command", async move {
                 let command = match cmd {
                     MessengerCommand::Refresh => GatewayCommand::MessengerConfig,
                     MessengerCommand::SaveAccount {
@@ -149,7 +168,8 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         GatewayCommand::MessengerRouteDelete { messenger, channel }
                     }
                 };
-                client.send_or_log(command).await;
+                client.send(command).await.context("sending command")?;
+                Ok(())
             });
         }
     };
@@ -222,8 +242,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     // Persist the name to the gateway config.
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::SetAgentName { name }).await;
+                        spawn_reporting("SetAgentName", async move {
+                            client.send(GatewayCommand::SetAgentName { name }).await.context("sending SetAgentName")?;
+                            Ok(())
                         });
                     }
                 },
@@ -423,8 +444,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::ToolApprove { id, approved: true }).await;
+                        spawn_reporting("ToolApprove", async move {
+                            client.send(GatewayCommand::ToolApprove { id, approved: true }).await.context("sending ToolApprove")?;
+                            Ok(())
                         });
                     }
                 },
@@ -435,8 +457,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_tool_approval(None, &id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::ToolApprove { id, approved: false }).await;
+                        spawn_reporting("ToolApprove", async move {
+                            client.send(GatewayCommand::ToolApprove { id, approved: false }).await.context("sending ToolApprove")?;
+                            Ok(())
                         });
                     }
                 },
@@ -452,8 +475,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     vault_unlock_error.set(None);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::VaultUnlock { password }).await;
+                        spawn_reporting("VaultUnlock", async move {
+                            client.send(GatewayCommand::VaultUnlock { password }).await.context("sending VaultUnlock")?;
+                            Ok(())
                         });
                     }
                 },
@@ -477,12 +501,13 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::CredentialResponse {
+                        spawn_reporting("CredentialResponse", async move {
+                            client.send(GatewayCommand::CredentialResponse {
                                 id,
                                 dismissed: false,
                                 value: Some(value),
-                            }).await;
+                            }).await.context("sending CredentialResponse")?;
+                            Ok(())
                         });
                     }
                 },
@@ -490,12 +515,13 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                     state.write().retire_credential_request(&id);
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::CredentialResponse {
+                        spawn_reporting("CredentialResponse", async move {
+                            client.send(GatewayCommand::CredentialResponse {
                                 id,
                                 dismissed: true,
                                 value: None,
-                            }).await;
+                            }).await.context("sending CredentialResponse")?;
+                            Ok(())
                         });
                     }
                 },
@@ -554,8 +580,9 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         .push_notice(MessageRole::Info, "Device flow cancelled.");
                     let gw = gateway.read().clone();
                     if let Some(client) = gw {
-                        spawn(async move {
-                            client.send_or_log(GatewayCommand::Cancel { thread_id }).await;
+                        spawn_reporting("Cancel", async move {
+                            client.send(GatewayCommand::Cancel { thread_id }).await.context("sending Cancel")?;
+                            Ok(())
                         });
                     }
                 },

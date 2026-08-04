@@ -1402,6 +1402,35 @@ pub(crate) fn toggle_skill(name: &str) -> Vec<rustyclaw_view::SkillInfoData> {
     load_skills_list()
 }
 
+// ── Task boundary ───────────────────────────────────────────────────────────
+
+/// Spawn a task whose failure is reported where the whole path is visible.
+///
+/// These tasks are detached: `spawn` hands back nothing to await, so there is
+/// no caller for `?` to reach and every one of them used to end in
+/// `let _ = client.send(..)`. Logging at the send site is not much better —
+/// "command was not sent" names the leaf and not the thing the user did, and
+/// the leaf is the least interesting frame in the stack.
+///
+/// This gives the task the boundary it was missing. The body is ordinary
+/// fallible Rust — `?` after each step, `.context(..)` naming what that step
+/// was for — and the error arrives here carrying the chain that produced it,
+/// which is reported in one place. `{:?}` on an `anyhow::Error` prints the
+/// whole chain, so the log line reads as the path rather than the symptom.
+///
+/// `what` names the user action, since it is the outermost frame and the one
+/// the chain hangs from.
+pub fn spawn_reporting<F>(what: &'static str, fut: F)
+where
+    F: std::future::Future<Output = anyhow::Result<()>> + 'static,
+{
+    spawn(async move {
+        if let Err(e) = fut.await {
+            tracing::error!(action = what, "{what} failed: {e:?}");
+        }
+    });
+}
+
 #[cfg(test)]
 mod event_buffer_tests {
     use super::*;

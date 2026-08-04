@@ -450,7 +450,7 @@ pub enum GatewayEvent {
 // ── Commands (client → server) ──────────────────────────────────────────────
 
 /// Commands to send to the gateway.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, strum::IntoStaticStr)]
 #[allow(dead_code)]
 #[serde(tag = "type")]
 pub enum GatewayCommand {
@@ -903,14 +903,17 @@ impl GatewayCommand {
     /// Taken from the debug rendering rather than matched variant by variant:
     /// there are 77 of them, and a match would be one `_ => "Unknown"` away
     /// from silently mislabelling whichever command was added last.
-    pub fn name(&self) -> String {
-        // `Debug` renders `Name { .. }` for a struct variant, `Name(..)` for a
-        // tuple variant and bare `Name` for a unit one, so the identifier
-        // always ends at the first space, brace or paren.
-        let mut rendered = format!("{self:?}");
-        let end = rendered.find([' ', '{', '(']).unwrap_or(rendered.len());
-        rendered.truncate(end);
-        rendered
+    pub fn name(&self) -> &'static str {
+        // `AsRefStr` generates a match returning a literal per variant, so the
+        // payload is never rendered — not on the success path, not on the
+        // failure path, not into a temporary that outlives the call. Getting
+        // this from `{:?}` and truncating would materialise the TOTP code and
+        // the vault password in a heap `String` first, which is the exact
+        // thing naming instead of debugging was meant to avoid.
+        //
+        // Exhaustive by construction: a new variant that nobody names does
+        // not compile, so this cannot drift behind the enum.
+        self.into()
     }
 
     /// Convert this command into the wire frame the gateway expects.
@@ -2031,9 +2034,15 @@ mod command_name_tests {
     ///
     /// The whole reason `name` exists rather than `{:?}` is that these
     /// commands hold TOTP codes, vault passwords and credential answers, and
-    /// they are named on a failure path that writes to the log. A regression
-    /// here writes secrets to disk, so it is worth a test rather than a
-    /// comment.
+    /// they are named on a path that writes to the log. A regression here
+    /// writes secrets to disk, so it is worth a test rather than a comment.
+    ///
+    /// The first version of this passed while still being wrong: it rendered
+    /// the whole command with `{:?}` and truncated, so the log was clean but
+    /// the password had already been materialised in a heap `String` that is
+    /// never zeroized. The name now comes from a generated match, so the
+    /// payload is not rendered at all — but the assertion below cannot tell
+    /// those two apart, which is worth knowing when reading it.
     #[test]
     fn naming_a_command_never_carries_its_secrets() {
         let auth = GatewayCommand::Auth {

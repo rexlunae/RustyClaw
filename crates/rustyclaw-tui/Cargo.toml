@@ -15,6 +15,7 @@ rust-version.workspace = true
 workspace = true
 
 [dependencies]
+strum.workspace = true
 rustyclaw-core.workspace = true
 rustyclaw-view.workspace = true
 
