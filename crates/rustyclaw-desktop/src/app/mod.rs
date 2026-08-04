@@ -466,6 +466,19 @@ pub fn App() -> Element {
             tokio::spawn(async move {
                 loop {
                     if !client_w.is_connected() {
+                        // Whatever is still queued outlives the flag. The
+                        // writer marks the connection dead immediately after
+                        // queueing its `Disconnected`, so breaking straight
+                        // out here would strand the one event that tells the
+                        // UI the connection is gone — leaving it showing a
+                        // healthy connection and a spinner that never stops.
+                        let remaining = client_w.drain_available().await;
+                        if !remaining.is_empty() {
+                            buf_w
+                                .lock()
+                                .expect("stream buffer poisoned")
+                                .push_events(remaining);
+                        }
                         break;
                     }
                     let first = match client_w.recv().await {
@@ -474,43 +487,10 @@ pub fn App() -> Element {
                     };
                     let extra = client_w.drain_available().await;
 
-                    {
-                        let mut b = buf_w.lock().expect("stream buffer poisoned");
-                        for threaded in std::iter::once(first).chain(extra) {
-                            let thread = threaded.thread_id;
-                            match threaded.event {
-                                GatewayEvent::Chunk { delta } => {
-                                    // Coalesce consecutive chunks into one
-                                    // entry — but only within a thread. Two
-                                    // turns' chunks arrive interleaved now,
-                                    // and merging by adjacency alone would
-                                    // splice two answers into one string.
-                                    match b.entries.last_mut() {
-                                        Some(BufferEntry::Chunks {
-                                            thread_id,
-                                            text,
-                                            count,
-                                            bytes,
-                                        }) if *thread_id == thread => {
-                                            *count += 1;
-                                            *bytes += delta.len();
-                                            text.push_str(&delta);
-                                        }
-                                        _ => b.entries.push(BufferEntry::Chunks {
-                                            thread_id: thread,
-                                            text: delta.clone(),
-                                            count: 1,
-                                            bytes: delta.len(),
-                                        }),
-                                    }
-                                }
-                                other => b.entries.push(BufferEntry::Event {
-                                    thread_id: thread,
-                                    event: other,
-                                }),
-                            }
-                        }
-                    }
+                    buf_w
+                        .lock()
+                        .expect("stream buffer poisoned")
+                        .push_events(std::iter::once(first).chain(extra));
                     notify_w.notify_one();
                 }
                 // Final wake so the UI task can observe disconnect.
@@ -528,10 +508,6 @@ pub fn App() -> Element {
                 let mut refreshed_threads_this_connection = false;
                 loop {
                     notify.notified().await;
-
-                    if !client.is_connected() {
-                        break;
-                    }
 
                     let entries = {
                         let mut b = buffer.lock().expect("stream buffer poisoned");
@@ -629,6 +605,17 @@ pub fn App() -> Element {
                                 }
                             }
                         }
+                    }
+
+                    // Only after the buffer is drained. The disconnect is
+                    // announced as an event, so testing the flag first would
+                    // discard the very notice that tells the user the
+                    // connection dropped — and `Disconnected` is what clears
+                    // the spinner and the in-flight requests that died with
+                    // it. The worker's final wake guarantees one last pass
+                    // here, so nothing is left unprocessed.
+                    if !client.is_connected() {
+                        break;
                     }
                 }
             });
