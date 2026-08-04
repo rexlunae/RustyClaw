@@ -29,6 +29,19 @@ use serde::{Deserialize, Serialize};
 
 use super::{AgentThread, ThreadId, ThreadLogRecord, ThreadManager, ThreadStatus};
 
+/// A thread's identity as [`ThreadStore::peek`] reports it — enough to list
+/// it and to route to it, without the weight (or side effects) of a full
+/// load.
+#[derive(Clone, Debug)]
+pub struct ThreadSummary {
+    /// Thread id within its agent's store.
+    pub id: u64,
+    /// Label as the sidebar shows it.
+    pub label: String,
+    /// Effective working directory, when one was set.
+    pub working_dir: Option<PathBuf>,
+}
+
 /// A thread's metadata, exactly as written to `<id>.meta.json` — everything
 /// but the message log, which lives in the sibling `.log.jsonl`.
 #[derive(Debug, Serialize, Deserialize)]
@@ -252,6 +265,59 @@ impl ThreadStore {
         let mut mgr = ThreadManager::from_parts(threads, state.foreground_id);
         mgr.ensure_foreground();
         Ok(mgr)
+    }
+
+    /// Enumerate a store's threads without loading logs, creating anything,
+    /// or touching the process-wide id counter.
+    ///
+    /// `None` means the agent has no store at all. Unlike
+    /// [`load_or_migrate`](Self::load_or_migrate), looking is not an event:
+    /// no "Main" thread is materialised for an agent nobody has opened, no
+    /// migration rewrites the store, and the global id floor is left alone —
+    /// this is the one path that reads *other* agents' stores, and reserving
+    /// from here would inflate every new thread's id to the
+    /// installation-wide maximum.
+    pub fn peek(threads_json: &Path) -> Option<Vec<ThreadSummary>> {
+        let store = Self::at_legacy_path(threads_json);
+        if store.state_path().exists() {
+            let mut out = Vec::new();
+            for entry in std::fs::read_dir(&store.root).ok()?.flatten() {
+                let name = entry.file_name();
+                let Some(name) = name.to_str() else { continue };
+                if !name.ends_with(".meta.json") {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(entry.path()) else {
+                    continue;
+                };
+                let Ok(meta) = serde_json::from_str::<ThreadMeta>(&text) else {
+                    continue;
+                };
+                out.push(ThreadSummary {
+                    id: meta.id.0,
+                    label: meta.label,
+                    working_dir: meta.working_dir,
+                });
+            }
+            return Some(out);
+        }
+        if threads_json.exists() {
+            // Not yet migrated. Reading the legacy file does reserve ids —
+            // a transitional wrinkle that disappears on the first real load,
+            // which migrates the store — but it does not rewrite anything.
+            let mgr = ThreadManager::load_from_file(threads_json).ok()?;
+            return Some(
+                mgr.list()
+                    .iter()
+                    .map(|t| ThreadSummary {
+                        id: t.id.0,
+                        label: t.label.clone(),
+                        working_dir: t.working_dir.clone(),
+                    })
+                    .collect(),
+            );
+        }
+        None
     }
 
     /// Load the per-thread store, migrating a legacy `threads.json` on the

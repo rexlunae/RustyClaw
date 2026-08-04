@@ -143,6 +143,41 @@ name = "example"
 enabled = false
 ```
 
+### Setting Up Messengers
+
+Rather than hand-editing `[[messengers]]`, use the setup UI — it stores
+credentials in the encrypted vault instead of in `config.toml`:
+
+- **TUI** — `/messengers`
+- **Desktop** — *Tools → Messenger Setup…*
+
+The panel has two tabs:
+
+**Accounts.** Pick a backend and fill in the form it asks for. Credentials go
+to the vault as `messenger/<account>/<field>`; `config.toml` gets only a
+reference. Each account also has a profile — the name and description the
+agent presents there — which defaults to the agent's own and can be
+overridden per messenger.
+
+If you already have tokens sitting in `config.toml`, the account is flagged
+and offers to move them into the vault. Nothing is rewritten until you ask.
+
+**Thread routing.** Bind a channel to a gateway thread:
+
+```toml
+[[messenger_routes]]
+messenger = "telegram-main"
+channel = "-1001234567890"
+thread_id = 4
+```
+
+A routed channel takes on that thread's conversation and working directory,
+so tools run where the thread lives. Two channels pointed at one thread share
+a single conversation — that is how a Matrix room and an IRC channel become
+one discussion. Omitting `channel` routes every channel on the account, and a
+channel-specific route wins over that catch-all. Channels with no route keep
+their own conversation and the default workspace.
+
 ### Custom Configuration Path
 
 You can specify a custom configuration by modifying the code or setting environment variables (future feature).

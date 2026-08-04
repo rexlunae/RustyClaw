@@ -536,6 +536,34 @@ pub(crate) fn gateway_event_to_gw_event(
             ok,
             message,
         },
+        E::MessengerConfigResult {
+            accounts,
+            routes,
+            threads,
+            available_kinds,
+            vault_locked,
+        } => GwEvent::MessengerConfigResult {
+            accounts: accounts.iter().map(Into::into).collect(),
+            routes: routes.iter().map(Into::into).collect(),
+            threads: threads.iter().map(Into::into).collect(),
+            available_kinds,
+            vault_locked,
+        },
+        E::MessengerAccountResult {
+            ok,
+            errors,
+            message,
+            ..
+        } => GwEvent::MessengerActionResult {
+            ok,
+            // Several validation problems come back at once; joining them
+            // keeps every one visible in a one-line status area.
+            message: match errors.is_empty() {
+                true => message,
+                false => Some(errors.join("; ")),
+            },
+        },
+        E::MessengerRouteResult { ok, message } => GwEvent::MessengerActionResult { ok, message },
         // The TUI edits tool permissions through its local dialog.
         E::ToolConfigResult { .. } | E::ToolToggleResult { .. } => return None,
         E::UsageStatsResult {

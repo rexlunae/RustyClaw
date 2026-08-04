@@ -179,6 +179,18 @@ pub enum ClientFrameType {
     WorkspaceReadFile = 83,
     /// Write a file inside the thread's working directory.
     WorkspaceWriteFile = 84,
+    /// Request the messenger setup view: accounts, routes, routable threads.
+    MessengerConfigRequest = 85,
+    /// Create or update a messenger account.
+    MessengerAccountSave = 86,
+    /// Delete a messenger account, its vault credentials, and its routes.
+    MessengerAccountDelete = 87,
+    /// Move an account's plaintext credentials into the vault.
+    MessengerSecretsMigrate = 88,
+    /// Create or update a channel-to-thread route.
+    MessengerRouteSave = 89,
+    /// Delete a channel-to-thread route.
+    MessengerRouteDelete = 90,
 }
 
 /// Outgoing frame types from gateway to client.
@@ -367,6 +379,12 @@ pub enum ServerFrameType {
     WorkspaceFileContent = 88,
     /// Result of a `WorkspaceWriteFile`.
     WorkspaceWriteResult = 89,
+    /// The messenger setup view: accounts, routes, and routable threads.
+    MessengerConfigResult = 90,
+    /// Outcome of an account save, delete, or credential migration.
+    MessengerAccountResult = 91,
+    /// Outcome of a route save or delete.
+    MessengerRouteResult = 92,
 }
 
 /// Status frame sub-types.
@@ -916,7 +934,6 @@ pub enum ClientPayload {
         content: String,
         expected_root: PathBuf,
     },
-
     /// Stop a running turn.
     ///
     /// `thread_id` names which one. With turns running per thread, "the
@@ -936,6 +953,63 @@ pub enum ClientPayload {
     Cancel {
         #[serde(default)]
         thread_id: Option<u64>,
+    },
+
+    // NOTE: everything below is appended after `Cancel` on purpose. bincode
+    // encodes enum variants positionally, so inserting above would renumber
+    // `Cancel` and every variant after it — a peer built before this change
+    // would have its "stop" decoded as something else entirely, silently,
+    // because a unit variant parses happily and ignores the trailing bytes.
+    // ── Messenger setup ───────────────────────────────────────────────────
+    /// Request accounts, routes, and the threads routes may point at.
+    MessengerConfigRequest,
+    /// Create or update an account.
+    ///
+    /// `secrets` carries credential values on their way *in*; they are written
+    /// to the vault and never stored in config or echoed back. Omitting a
+    /// secret field leaves whatever is already in the vault alone, so editing
+    /// a channel list does not require retyping a token.
+    MessengerAccountSave {
+        /// Name of the account being edited, or `None` when creating.
+        original_name: Option<String>,
+        name: String,
+        messenger_type: String,
+        enabled: bool,
+        /// Non-secret field values, keyed by schema field name.
+        fields: Vec<(String, String)>,
+        /// Secret field values to store in the vault.
+        ///
+        /// `SecretString`, not `String`: this enum's derived `Debug` is one
+        /// stray `warn!(?payload, ..)` away from a log line, and these are
+        /// live bot tokens and passwords. The wire encoding is identical —
+        /// redaction is a formatting property of the type.
+        secrets: Vec<(String, crate::secrets::SecretString)>,
+        /// Profile overrides. An empty string clears an override.
+        display_name: Option<String>,
+        bio: Option<String>,
+        avatar_path: Option<PathBuf>,
+        agent_id: Option<String>,
+    },
+    /// Delete an account along with its vault credentials and routes.
+    MessengerAccountDelete {
+        name: String,
+    },
+    /// Move an account's plaintext credentials into the vault.
+    MessengerSecretsMigrate {
+        name: String,
+    },
+    /// Create or update a route. Identity is `(messenger, channel)`.
+    MessengerRouteSave {
+        messenger: String,
+        channel: Option<String>,
+        thread_id: u64,
+        agent_id: Option<String>,
+        enabled: bool,
+    },
+    /// Delete the route for `(messenger, channel)`.
+    MessengerRouteDelete {
+        messenger: String,
+        channel: Option<String>,
     },
 }
 
@@ -1439,6 +1513,40 @@ pub enum ServerPayload {
         error: Option<String>,
         /// See [`ServerPayload::WorkspaceDirListing::root`].
         root: PathBuf,
+    },
+    // ── Messenger setup ───────────────────────────────────────────────────
+    /// The full messenger setup view. Also sent after every mutation on
+    /// *this* connection (successful or not), so the requesting client never
+    /// has to guess what the config now looks like. Other connections do not
+    /// receive it — there is no gateway-wide client broadcast — so a second
+    /// open panel can be stale until it refreshes; the gateway guards the
+    /// hazards of acting on stale state (an edit naming a since-deleted
+    /// account is refused rather than resurrected).
+    MessengerConfigResult {
+        accounts: Vec<MessengerAccountDto>,
+        routes: Vec<ThreadRouteDto>,
+        /// Threads a route may point at, across all agents.
+        threads: Vec<RoutableThreadDto>,
+        /// Messenger type ids this gateway build can actually run.
+        available_kinds: Vec<String>,
+        /// Whether the vault is locked. When it is, `vaulted` reflects what
+        /// config claims rather than what the vault could be asked to confirm.
+        vault_locked: bool,
+    },
+    /// Outcome of an account save, delete, or credential migration.
+    MessengerAccountResult {
+        ok: bool,
+        /// Account the operation applied to.
+        name: String,
+        /// One line per problem when `ok` is false.
+        errors: Vec<String>,
+        /// Human-readable note on success (what was migrated, for instance).
+        message: Option<String>,
+    },
+    /// Outcome of a route save or delete.
+    MessengerRouteResult {
+        ok: bool,
+        message: Option<String>,
     },
 }
 

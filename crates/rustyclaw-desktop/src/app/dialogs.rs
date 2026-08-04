@@ -49,6 +49,7 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
         mut qr_code_url,
         mut public_key,
         mut show_secrets,
+        mut show_messengers,
         mut pending_thread_delete,
         mut did_init_directories,
         mut show_connection,
@@ -87,6 +88,66 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                         let _ = client.send(GatewayCommand::SecretsList).await;
                     }
                 }
+            });
+        }
+    };
+
+    // Every messenger mutation is followed by a refresh request. The gateway
+    // pushes a fresh view after a successful change, but not after a rejected
+    // one — and a form left showing what the gateway refused is a form that
+    // lies about what is saved.
+    let on_messenger_command = move |cmd: MessengerCommand| {
+        let gw = gateway.read().clone();
+        if let Some(client) = gw {
+            spawn(async move {
+                let command = match cmd {
+                    MessengerCommand::Refresh => GatewayCommand::MessengerConfig,
+                    MessengerCommand::SaveAccount {
+                        original_name,
+                        name,
+                        messenger_type,
+                        enabled,
+                        fields,
+                        secrets,
+                        display_name,
+                        bio,
+                        avatar_path,
+                    } => GatewayCommand::MessengerAccountSave {
+                        original_name,
+                        name,
+                        messenger_type,
+                        enabled,
+                        fields,
+                        secrets,
+                        display_name,
+                        bio,
+                        avatar_path,
+                        agent_id: None,
+                    },
+                    MessengerCommand::DeleteAccount { name } => {
+                        GatewayCommand::MessengerAccountDelete { name }
+                    }
+                    MessengerCommand::MigrateSecrets { name } => {
+                        GatewayCommand::MessengerSecretsMigrate { name }
+                    }
+                    MessengerCommand::SaveRoute {
+                        messenger,
+                        channel,
+                        thread_id,
+                        agent_id,
+                        enabled,
+                    } => GatewayCommand::MessengerRouteSave {
+                        messenger,
+                        channel,
+                        thread_id,
+                        agent_id,
+                        enabled,
+                    },
+                    MessengerCommand::DeleteRoute { messenger, channel } => {
+                        GatewayCommand::MessengerRouteDelete { messenger, channel }
+                    }
+                };
+                let _ = client.send(command).await;
             });
         }
     };
@@ -443,6 +504,13 @@ pub(super) fn render_dialogs(sig: AppSignals) -> Element {
                 data: state.read().secrets_data.clone(),
                 on_command: on_secrets_command,
                 on_close: move |_| show_secrets.set(false),
+            }
+
+            MessengersDialog {
+                visible: *show_messengers.read(),
+                data: state.read().messengers_data.clone(),
+                on_command: on_messenger_command,
+                on_close: move |_| show_messengers.set(false),
             }
 
             DeviceFlowDialog {

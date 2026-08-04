@@ -22,6 +22,7 @@ use crate::components::logs_dialog::LogsDialog;
 use crate::components::mcp_dialog::McpDialog;
 use crate::components::memory_dialog::MemoryDialog;
 use crate::components::messages::Messages;
+use crate::components::messengers_dialog::MessengersDialog;
 use crate::components::model_selector_dialog::ModelSelectorDialog;
 use crate::components::pairing_dialog::PairingDialog;
 use crate::components::provider_selector_dialog::ProviderSelectorDialog;
@@ -189,6 +190,8 @@ pub struct RootProps {
     pub mcp_data: Option<rustyclaw_view::McpPanelData>,
     pub show_channels_dialog: bool,
     pub channels_data: Option<rustyclaw_view::ChannelsPanelData>,
+    pub show_messengers_dialog: bool,
+    pub messengers_data: Option<rustyclaw_view::MessengersPanelData>,
     pub show_analytics_dialog: bool,
     pub analytics_data: Option<rustyclaw_view::AnalyticsPanelData>,
     pub show_logs_dialog: bool,
@@ -276,6 +279,8 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
     let mcp = props.mcp_data.clone();
     let show_channels = props.show_channels_dialog;
     let channels = props.channels_data.clone();
+    let show_messengers = props.show_messengers_dialog;
+    let messengers = props.messengers_data.clone();
     let show_analytics = props.show_analytics_dialog;
     let analytics = props.analytics_data.clone();
     let show_logs = props.show_logs_dialog;
@@ -802,6 +807,25 @@ pub fn Root(props: &mut RootProps) -> impl Into<AnyElement<'static>> {
                     ) {
                         ChannelsDialog(
                             data: channels,
+                        )
+                    }
+                }.into_any()
+            } else {
+                element! { View() }.into_any()
+            })
+
+            // ── Messenger setup overlay (/messengers) ───────────────────
+            #(if show_messengers {
+                element! {
+                    View(
+                        width: props.width,
+                        height: props.height,
+                        position: Position::Absolute,
+                        top: 0,
+                        left: 0,
+                    ) {
+                        MessengersDialog(
+                            data: messengers,
                         )
                     }
                 }.into_any()

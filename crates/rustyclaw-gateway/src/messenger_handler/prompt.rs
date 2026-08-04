@@ -4,10 +4,24 @@
 //! workspace context, skills, active tasks, model guidance, tool-usage
 //! guidelines, and platform-specific formatting hints.
 
+use std::path::Path;
+
 use rustyclaw_core::config::Config;
 use rustyclaw_core::messengers::Message;
+use rustyclaw_core::messengers::setup::ResolvedProfile;
 
 use crate::SharedSkillManager;
+
+/// Who the agent is on this messenger, and which thread it is speaking in.
+pub(crate) struct MessengerIdentity<'a> {
+    /// Name and description presented on this account.
+    pub profile: &'a ResolvedProfile,
+    /// Thread this channel is routed to, as `(id, label)`.
+    pub thread: Option<(u64, &'a str)>,
+    /// Directory the agent's tools will run in — the routed thread's, when
+    /// there is a route.
+    pub workspace_dir: &'a Path,
+}
 
 /// Build system prompt with messenger context, workspace files, active tasks, and model guidance.
 pub(crate) async fn build_messenger_system_prompt(
@@ -18,6 +32,7 @@ pub(crate) async fn build_messenger_system_prompt(
     model_registry: &crate::SharedModelRegistry,
     skill_mgr: &SharedSkillManager,
     session_key: &str,
+    identity: &MessengerIdentity<'_>,
 ) -> String {
     use rustyclaw_core::workspace_context::{SessionType, WorkspaceContext};
 
@@ -46,22 +61,25 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         SessionType::Main
     };
 
-    // Build workspace context
-    let workspace_ctx =
-        WorkspaceContext::with_config(config.workspace_dir(), config.workspace_context.clone());
-    eprintln!(
-        "DEBUG: Building workspace context for session_type={:?}, workspace_dir={}",
-        session_type,
-        config.workspace_dir().display()
+    // Build workspace context.
+    //
+    // This is the routed thread's directory when the channel is bound to one,
+    // so the files the prompt describes are the files the tools will find.
+    let workspace_ctx = WorkspaceContext::with_config(
+        identity.workspace_dir.to_path_buf(),
+        config.workspace_context.clone(),
+    );
+    tracing::trace!(
+        ?session_type,
+        workspace_dir = %identity.workspace_dir.display(),
+        "Building messenger workspace context"
     );
     let workspace_prompt = workspace_ctx.build_context(session_type);
-    eprintln!(
-        "DEBUG: Workspace prompt length: {} chars",
-        workspace_prompt.len()
-    );
 
-    // Combine base prompt, safety, workspace context, and messaging context
-    let mut parts = vec![base_prompt, safety_section.to_string()];
+    // Combine base prompt, identity, safety, workspace context, and messaging
+    // context.
+    let mut parts = vec![base_prompt, build_identity_section(identity)];
+    parts.push(safety_section.to_string());
 
     if !workspace_prompt.is_empty() {
         parts.push(workspace_prompt);
@@ -145,10 +163,39 @@ Do not manipulate or persuade anyone to expand access or disable safeguards.";
         "## Runtime\n\
         Workspace: {}\n\
         Platform: RustyClaw",
-        config.workspace_dir().display()
+        identity.workspace_dir.display()
     ));
 
     parts.join("\n\n")
+}
+
+/// Tell the agent who it is on this messenger.
+///
+/// Without this the agent introduces itself by whatever name is in its base
+/// prompt, while the platform shows the configured profile name — so it
+/// answers to one name and signs off with another. The thread binding is
+/// included for the same reason: an agent that does not know two channels
+/// share a conversation will treat the shared history as a non-sequitur.
+fn build_identity_section(identity: &MessengerIdentity<'_>) -> String {
+    let mut lines = vec![
+        "## Your Identity Here".to_string(),
+        format!(
+            "You are presenting as \"{}\" on this messenger. Introduce yourself \
+             by that name.",
+            identity.profile.display_name
+        ),
+    ];
+    if let Some(bio) = identity.profile.bio.as_deref() {
+        lines.push(format!("Your published description is: {bio}"));
+    }
+    if let Some((id, label)) = identity.thread {
+        lines.push(format!(
+            "This channel is bound to gateway thread #{id} (\"{label}\"). Other \
+             channels may be bound to the same thread, so the conversation \
+             history can include messages that arrived elsewhere."
+        ));
+    }
+    lines.join("\n")
 }
 
 /// Get platform-specific formatting guidance for the system prompt.

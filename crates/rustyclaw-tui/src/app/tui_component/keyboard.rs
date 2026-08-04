@@ -167,6 +167,8 @@ pub(super) fn apply_key_event(
         mcp_data: _,
         show_channels_dialog: _,
         channels_data: _,
+        show_messengers_dialog: _,
+        messengers_data: _,
         show_analytics_dialog: _,
         analytics_data: _,
         show_logs_dialog: _,

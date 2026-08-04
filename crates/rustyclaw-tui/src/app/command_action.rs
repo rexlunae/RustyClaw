@@ -465,6 +465,10 @@ pub(super) async fn handle_command_action(
             let _ = gw_tx.send(GwEvent::ShowMcp);
             let _ = client.send(GatewayCommand::McpDisconnect { name }).await;
         }
+        CommandAction::ShowMessengers => {
+            let _ = gw_tx.send(GwEvent::ShowMessengers);
+            let _ = client.send(GatewayCommand::MessengerConfig).await;
+        }
         CommandAction::ShowChannels => {
             let _ = gw_tx.send(GwEvent::ShowChannels);
             let _ = client.send(GatewayCommand::ChannelStatus).await;

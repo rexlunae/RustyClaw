@@ -585,6 +585,60 @@ pub(crate) fn handle_gateway_event(
                     .push_notice(MessageRole::Error, "Failed to list secrets.");
             }
         }
+        GatewayEvent::MessengerConfigResult {
+            accounts,
+            routes,
+            threads,
+            available_kinds,
+            vault_locked,
+        } => {
+            // `apply` keeps the current selection in range rather than
+            // resetting it; refreshes land after every mutation.
+            state.write().messengers_data.apply(
+                accounts.iter().map(Into::into).collect(),
+                routes.iter().map(Into::into).collect(),
+                threads.iter().map(Into::into).collect(),
+                available_kinds,
+                vault_locked,
+            );
+        }
+        GatewayEvent::MessengerAccountResult {
+            ok,
+            errors,
+            message,
+            ..
+        } => {
+            // Several validation problems arrive together; all of them belong
+            // in the notice, not just the first.
+            let text = match (errors.is_empty(), message) {
+                (false, _) => errors.join("; "),
+                (true, Some(message)) => message,
+                (true, None) => match ok {
+                    true => "Saved".to_string(),
+                    false => "Failed".to_string(),
+                },
+            };
+            if ok {
+                // The desktop editor stays mounted until a save is confirmed;
+                // this is the signal that it can be discarded.
+                state.write().messengers_data.commits += 1;
+            }
+            state.write().messengers_data.set_status(text.clone(), !ok);
+            state.write().push_notice(
+                match ok {
+                    true => MessageRole::Success,
+                    false => MessageRole::Error,
+                },
+                text,
+            );
+        }
+        GatewayEvent::MessengerRouteResult { ok, message } => {
+            let text = message.unwrap_or_else(|| match ok {
+                true => "Route saved".to_string(),
+                false => "Route change failed".to_string(),
+            });
+            state.write().messengers_data.set_status(text, !ok);
+        }
         GatewayEvent::SecretsStoreResult { ok, message } => {
             if ok {
                 state

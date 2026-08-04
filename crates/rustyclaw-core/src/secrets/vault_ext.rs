@@ -4,9 +4,127 @@ use anyhow::{Context, Result};
 use totp_rs::{Algorithm, Secret as TotpSecret, TOTP};
 
 use super::SecretsManager;
-use super::types::{AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind};
+use super::types::{
+    AccessContext, AccessPolicy, CredentialValue, SecretEntry, SecretKind, SecretString,
+};
+
+/// Credential namespaces [`SecretsManager::read_service_credential`] may
+/// address.
+///
+/// A service credential is one the *gateway* uses on the user's behalf, and
+/// reading it skips the agent-facing permission check. Restricting which names
+/// that path can even name keeps the bypass from becoming a general-purpose
+/// way to read `WithAuth` secrets: a future call site that passed an arbitrary
+/// name would get `None`, not someone's API key. Add a namespace here only
+/// alongside a subsystem that provisions its own credentials the way
+/// [`crate::messengers::setup::secret_name`] does.
+pub const SERVICE_CREDENTIAL_NAMESPACES: &[&str] = &["messenger/"];
+
+/// Whether a caller-supplied credential name (or raw vault key) lands inside
+/// a service namespace.
+///
+/// [`SecretsManager::read_service_credential`]'s safety rests on service
+/// namespaces holding only gateway-provisioned entries — a lexical guarantee
+/// until the *write* paths enforce it. Agent- and client-facing store
+/// handlers call this to refuse names that would smuggle an entry into the
+/// namespace, whether as a bare name or as a pre-prefixed raw key.
+pub fn is_reserved_service_name(name: &str) -> bool {
+    let bare = name
+        .strip_prefix("val:")
+        .or_else(|| name.strip_prefix("cred:"))
+        .unwrap_or(name);
+    SERVICE_CREDENTIAL_NAMESPACES
+        .iter()
+        .any(|ns| bare.starts_with(ns))
+}
 
 impl SecretsManager {
+    /// Read a single-value credential that the *gateway process* needs in
+    /// order to do what the user configured — a messenger's bot token, for
+    /// instance.
+    ///
+    /// This deliberately bypasses [`AccessPolicy`]. That policy governs
+    /// whether the *agent* may read a secret, and the agent is not the caller
+    /// here: the user wrote this token into their messenger settings so the
+    /// gateway would log in with it. Routing that through the agent's
+    /// permission check would mean a bot could not connect unless the model
+    /// were also allowed to read its token, which is exactly backwards.
+    ///
+    /// Because that is a real bypass, it is confined to
+    /// [`SERVICE_CREDENTIAL_NAMESPACES`]: a name outside them reads as absent
+    /// rather than being fetched. Anything else — and anything reachable from
+    /// a tool call — belongs on [`SecretsManager::get_credential`], which
+    /// enforces the policy.
+    pub fn read_service_credential(&mut self, name: &str) -> Result<Option<SecretString>> {
+        if !Self::is_service_credential_name(name) {
+            // Not an error: the caller asked for something this path does not
+            // serve, and reporting "no such credential" is both true from here
+            // and free of information about what the vault actually holds.
+            return Ok(None);
+        }
+        // `SecretString`, so the decrypted value is zeroed when the caller
+        // drops it instead of lingering in freed heap memory. A caller that
+        // keeps it (the live config a connected messenger runs from) does so
+        // deliberately, not because the transport type leaked.
+        Ok(self
+            .get_secret(&format!("val:{name}"), true)?
+            .map(SecretString::new))
+    }
+
+    /// Store a service credential the gateway provisions on the user's
+    /// behalf — the ONLY write path allowed inside a service namespace.
+    ///
+    /// `store_secret` and `store_credential` refuse reserved names outright,
+    /// so the invariant `read_service_credential` depends on — nothing but
+    /// gateway provisioning writes there — is enforced at the vault, not by
+    /// convention across every handler. The name must have the exact
+    /// provisioned shape; anything else is refused.
+    pub fn store_service_credential(
+        &mut self,
+        name: &str,
+        entry: &SecretEntry,
+        value: &str,
+    ) -> Result<()> {
+        if !Self::is_service_credential_name(name) {
+            anyhow::bail!(
+                "'{name}' is not a valid service-credential name \
+                 (expected <namespace><account>/<field>)"
+            );
+        }
+        self.store_credential_unchecked(name, entry, value, None)
+    }
+
+    /// Whether `name` has the exact shape of a provisioned service credential.
+    ///
+    /// A prefix check alone would let any string that merely *starts with* a
+    /// namespace through the policy bypass. Requiring the full
+    /// `<namespace><account>/<field>` shape — two further non-empty segments
+    /// in the slug/field character set that
+    /// [`crate::messengers::setup::secret_name`] produces — means the only
+    /// names this path can address are ones the gateway's own provisioning
+    /// could have written. Anything else (extra segments, empty account,
+    /// uppercase, `:` that could collide with the vault's key patterns) reads
+    /// as absent.
+    fn is_service_credential_name(name: &str) -> bool {
+        SERVICE_CREDENTIAL_NAMESPACES.iter().any(|ns| {
+            let Some(rest) = name.strip_prefix(ns) else {
+                return false;
+            };
+            let mut segments = rest.split('/');
+            let (Some(account), Some(field), None) =
+                (segments.next(), segments.next(), segments.next())
+            else {
+                return false;
+            };
+            let ok = |s: &str| {
+                !s.is_empty()
+                    && s.chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || "-_".contains(c))
+            };
+            ok(account) && ok(field)
+        })
+    }
+
     /// Delete a typed credential and all its associated vault keys.
     pub fn delete_credential(&mut self, name: &str) -> Result<()> {
         // Every possible sub-key pattern — best-effort removal.
@@ -651,5 +769,135 @@ impl SecretsManager {
             .storage(origin)
             .map(|s| s.keys().cloned().collect())
             .unwrap_or_default())
+    }
+}
+
+#[cfg(test)]
+mod service_credential_tests {
+    use super::*;
+
+    /// A vault holding one messenger credential and one ordinary API key.
+    fn vault(dir: &std::path::Path) -> SecretsManager {
+        let mut mgr = SecretsManager::new(dir);
+        let entry = |label: &str| SecretEntry {
+            label: label.to_string(),
+            kind: SecretKind::Token,
+            policy: AccessPolicy::WithAuth,
+            description: None,
+            disabled: false,
+        };
+        mgr.store_service_credential("messenger/tg/token", &entry("bot"), "123:secret")
+            .unwrap();
+        mgr.store_credential("anthropic", &entry("api"), "sk-ant-live", None)
+            .unwrap();
+        mgr
+    }
+
+    #[test]
+    fn the_general_store_paths_refuse_service_namespaces_at_the_vault() {
+        // The invariant read_service_credential rests on — only gateway
+        // provisioning writes inside a service namespace — is enforced here
+        // at the vault, not just by the per-handler guards upstream.
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = SecretsManager::new(dir.path());
+        let entry = SecretEntry {
+            label: "planted".to_string(),
+            kind: SecretKind::Token,
+            policy: AccessPolicy::Always,
+            description: None,
+            disabled: false,
+        };
+        assert!(
+            mgr.store_credential("messenger/tg/token", &entry, "planted", None)
+                .is_err(),
+            "typed store must refuse reserved names"
+        );
+        assert!(
+            mgr.store_secret("val:messenger/tg/token", "planted")
+                .is_err(),
+            "raw store must refuse reserved keys"
+        );
+        assert_eq!(
+            mgr.read_service_credential("messenger/tg/token")
+                .unwrap()
+                .map(String::from),
+            None,
+            "nothing may have landed"
+        );
+
+        // And the provisioning path itself only accepts the exact shape.
+        assert!(
+            mgr.store_service_credential("messenger/tg", &entry, "x")
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn a_messenger_credential_is_readable_by_the_gateway() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = vault(dir.path());
+        assert_eq!(
+            mgr.read_service_credential("messenger/tg/token")
+                .unwrap()
+                .map(String::from)
+                .as_deref(),
+            Some("123:secret"),
+            "the connect path must be able to read what it was configured with"
+        );
+    }
+
+    #[test]
+    fn the_bypass_cannot_reach_a_credential_outside_a_service_namespace() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut mgr = vault(dir.path());
+        // `anthropic` is a WithAuth credential that `get_credential` would
+        // refuse the agent. This path must not become a way around that.
+        assert_eq!(
+            mgr.read_service_credential("anthropic")
+                .unwrap()
+                .map(String::from),
+            None
+        );
+        assert_eq!(
+            mgr.read_service_credential("../anthropic")
+                .unwrap()
+                .map(String::from),
+            None
+        );
+    }
+
+    #[test]
+    fn reserved_namespaces_are_recognised_in_every_spelling() {
+        // The write-path guard has to catch the bare name and both raw key
+        // spellings, or a caller could plant an entry the policy-skipping
+        // service read path is willing to serve.
+        assert!(is_reserved_service_name("messenger/tg/token"));
+        assert!(is_reserved_service_name("val:messenger/tg/token"));
+        assert!(is_reserved_service_name("cred:messenger/tg/token"));
+        assert!(!is_reserved_service_name("anthropic"));
+        assert!(!is_reserved_service_name("val:anthropic"));
+        assert!(!is_reserved_service_name("my-messenger/token"));
+    }
+
+    #[test]
+    fn only_the_exact_provisioned_shape_is_addressable() {
+        // The namespace prefix alone is not the contract — the whole
+        // `messenger/<account>/<field>` shape is, in the character set the
+        // provisioning path produces. Anything looser turns the policy
+        // bypass into a read primitive for whatever else shares the prefix.
+        let ok = SecretsManager::is_service_credential_name;
+        assert!(ok("messenger/tg/token"));
+        assert!(ok("messenger/tg-main/app_token"));
+
+        assert!(!ok("messenger/"), "namespace alone");
+        assert!(!ok("messenger/tg"), "missing field segment");
+        assert!(!ok("messenger//token"), "empty account segment");
+        assert!(!ok("messenger/tg/"), "empty field segment");
+        assert!(!ok("messenger/tg/token/extra"), "extra segment");
+        assert!(!ok("messenger/Tg/token"), "outside the slug charset");
+        assert!(
+            !ok("messenger/tg/token:pub"),
+            "':' collides with the vault's own key patterns"
+        );
     }
 }

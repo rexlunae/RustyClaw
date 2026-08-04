@@ -1,6 +1,6 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 
 use crate::memory_flush::MemoryFlushConfig;
@@ -112,6 +112,13 @@ pub struct Config {
     /// Messenger configurations
     #[serde(default)]
     pub messengers: Vec<MessengerConfig>,
+    /// Bindings from messenger channels to gateway threads.
+    ///
+    /// Kept flat rather than nested under each messenger because it is edited
+    /// as one table — "which thread does this channel talk to" is a question
+    /// asked across accounts, not within one.
+    #[serde(default)]
+    pub messenger_routes: Vec<crate::messengers::setup::ThreadRoute>,
     /// Whether to use secrets storage
     pub use_secrets: bool,
     /// Gateway WebSocket URL for the TUI to connect to
@@ -197,7 +204,14 @@ pub struct Config {
 }
 
 /// Configuration for a messenger backend.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+///
+/// `Debug` is implemented by hand rather than derived so credentials are
+/// redacted; see the impl below.
+///
+/// `PartialEq` lets the messenger loop notice a setup-panel edit — it
+/// compares the shared config's account list against the one its
+/// connections were built from on each poll tick.
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessengerConfig {
     /// Display name for this messenger instance.
     #[serde(default)]
@@ -295,10 +309,78 @@ pub struct MessengerConfig {
     /// DM handling configuration.
     #[serde(default)]
     pub dm: Option<DmConfig>,
+
+    // ── Vault-backed credentials ───────────────────────────────────────
+    /// Vault credential names backing this account's secret fields, keyed by
+    /// field name (`token`, `password`, …).
+    ///
+    /// A field listed here is read from the vault at connect time and its
+    /// plaintext twin above is ignored, which is how a credential stops living
+    /// in `config.toml`. Fields absent from this map fall back to the
+    /// plaintext value, so configs written before the vault existed keep
+    /// working — see [`crate::messengers::setup::plaintext_fields`].
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub secret_refs: BTreeMap<String, String>,
+
+    // ── Presented identity ─────────────────────────────────────────────
+    /// How the agent introduces itself on this messenger. Unset fields fall
+    /// back to the agent's own name and description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<crate::messengers::setup::MessengerProfile>,
+}
+
+impl std::fmt::Debug for MessengerConfig {
+    /// Redacts every credential field.
+    ///
+    /// `MessengerConfig` is logged on initialization failure, and a derived
+    /// `Debug` would put a live bot token in the log. The non-secret fields are
+    /// what make a failure diagnosable, so they are kept.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        /// Distinguishes "no credential" from "a credential we are not
+        /// printing" — those are very different failures to be looking at.
+        fn redact(value: &Option<String>) -> &'static str {
+            match value {
+                Some(_) => "***",
+                None => "None",
+            }
+        }
+        f.debug_struct("MessengerConfig")
+            .field("name", &self.name)
+            .field("messenger_type", &self.messenger_type)
+            .field("enabled", &self.enabled)
+            .field("config_path", &self.config_path)
+            .field("token", &redact(&self.token))
+            .field("webhook_url", &redact(&self.webhook_url))
+            .field("homeserver", &self.homeserver)
+            .field("user_id", &self.user_id)
+            .field("password", &redact(&self.password))
+            .field("access_token", &redact(&self.access_token))
+            .field("phone", &redact(&self.phone))
+            .field("allowed_chats", &self.allowed_chats)
+            .field("allowed_users", &self.allowed_users)
+            .field("app_token", &redact(&self.app_token))
+            .field("default_channel", &self.default_channel)
+            .field("server", &self.server)
+            .field("port", &self.port)
+            .field("nick", &self.nick)
+            .field("irc_channels", &self.irc_channels)
+            .field("use_tls", &self.use_tls)
+            .field("credentials_path", &self.credentials_path)
+            .field("spaces", &self.spaces)
+            .field("app_id", &self.app_id)
+            .field("app_password", &redact(&self.app_password))
+            .field("pairing_code", &redact(&self.pairing_code))
+            .field("require_pairing", &self.require_pairing)
+            .field("paired_users", &self.paired_users)
+            .field("dm", &self.dm)
+            .field("secret_refs", &self.secret_refs.keys().collect::<Vec<_>>())
+            .field("profile", &self.profile)
+            .finish()
+    }
 }
 
 /// DM (Direct Message) configuration for messengers.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct DmConfig {
     /// Whether DMs are enabled.
     #[serde(default)]
@@ -311,7 +393,7 @@ pub struct DmConfig {
     pub allow_from: Vec<String>,
 }
 
-fn default_true() -> bool {
+pub(crate) fn default_true() -> bool {
     true
 }
 
@@ -325,6 +407,7 @@ impl Default for Config {
             workspace_dir: None,
             credentials_dir: None,
             messengers: Vec::new(),
+            messenger_routes: Vec::new(),
             use_secrets: true,
             gateway_url: None,
             model: None,

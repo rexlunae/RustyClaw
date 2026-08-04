@@ -81,6 +81,8 @@ pub enum CommandAction {
     McpDisconnect(String),
     /// Show the messenger channels panel
     ShowChannels,
+    /// Show the messenger setup panel (accounts, profile, thread routing)
+    ShowMessengers,
     /// Pair/unpair a messenger channel
     ChannelPair(String, ChannelPairActionKind),
     /// Show the usage analytics panel with an optional period filter
@@ -187,6 +189,7 @@ fn base_command_names() -> Vec<String> {
         "channels".into(),
         "channels pair".into(),
         "channels unpair".into(),
+        "messengers".into(),
         "analytics".into(),
         "analytics day".into(),
         "analytics week".into(),
@@ -416,6 +419,8 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
                 "  /memory [query]          - Browse MEMORY.md (add/rm/history)".to_string(),
                 "  /mcp                     - MCP servers panel (connect/disconnect)".to_string(),
                 "  /channels                - Messenger channels panel (pair/unpair)".to_string(),
+                "  /messengers              - Set up messenger accounts, profile, and thread routing"
+                    .to_string(),
                 "  /analytics [period]      - Usage stats (day/week/month/all)".to_string(),
                 "  /logs [source] [n]       - Recent logs (gateway/agent/service name)".to_string(),
                 "  /clawhub                 - ClawHub skill registry commands".to_string(),
@@ -619,6 +624,10 @@ pub fn handle_command(input: &str, context: &mut CommandContext<'_>) -> CommandR
         "memory" | "mem" => handle_memory_subcommand(&parts[1..]),
         "mcp" => handle_mcp_subcommand(&parts[1..]),
         "channels" | "channel" => handle_channels_subcommand(&parts[1..]),
+        "messengers" | "messenger" => CommandResponse {
+            messages: Vec::new(),
+            action: CommandAction::ShowMessengers,
+        },
         "analytics" | "usage" => match parts.get(1).copied() {
             None => CommandResponse {
                 messages: Vec::new(),

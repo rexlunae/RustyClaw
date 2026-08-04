@@ -173,6 +173,8 @@ pub(super) fn handle_normal_key(
         mut mcp_data,
         mut show_channels_dialog,
         mut channels_data,
+        mut show_messengers_dialog,
+        mut messengers_data,
         mut show_analytics_dialog,
         mut analytics_data,
         mut show_logs_dialog,
@@ -259,6 +261,275 @@ pub(super) fn handle_normal_key(
             }
             _ => {}
         }
+        return;
+    }
+    // Messenger setup: account list, account editor, and routing table share
+    // this overlay. The editor grabs the keyboard whole — it has text fields —
+    // so it is checked first.
+    // Ctrl+C has to mean quit everywhere, including with this overlay open and
+    // a text field focused, so it is excluded before the panel claims the key.
+    let quit_chord =
+        modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('c'));
+    if show_messengers_dialog.get() && !quit_chord {
+        use rustyclaw_core::gateway::client_types::GatewayCommand;
+        use rustyclaw_view::messengers::{MessengerEditorData, MessengerTab, RouteEditorData};
+
+        let send_input = |input: UserInput| {
+            if let Ok(guard) = tx_for_keys.lock() {
+                if let Some(ref tx) = *guard {
+                    let _ = tx.send(input);
+                }
+            }
+        };
+        let mut data = messengers_data.read().clone().unwrap_or_default();
+
+        // ── Account editor ──
+        if let Some(editor) = data.editor.clone() {
+            let mut editor = editor;
+            match code {
+                KeyCode::Esc => data.editor = None,
+                KeyCode::Tab | KeyCode::Down => editor.focus_next(),
+                KeyCode::BackTab | KeyCode::Up => editor.focus_prev(),
+                KeyCode::Backspace => editor.backspace(),
+                // Unmodified characters only. Inserting the letter of a
+                // Ctrl-combination would mean Ctrl+C types "c" instead of
+                // quitting, and every other Ctrl binding silently becomes
+                // text in whichever field happens to be focused.
+                KeyCode::Char(c)
+                    if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    editor.insert(c)
+                }
+                KeyCode::Enter => match editor.validate() {
+                    Ok(()) => {
+                        let (display_name, bio, avatar_path) = editor.profile_values();
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerAccountSave {
+                                original_name: editor.editing.clone(),
+                                name: editor.account_name().to_string(),
+                                messenger_type: editor.messenger_type.clone(),
+                                enabled: editor.enabled,
+                                fields: editor.field_values(),
+                                secrets: editor.secret_values(),
+                                display_name,
+                                bio,
+                                avatar_path,
+                                agent_id: None,
+                            },
+                        ));
+                        data.set_status("Saving…", false);
+                        // The editor stays open until the gateway confirms, so
+                        // a rejected save still has the typed values in it.
+                    }
+                    Err(errors) => editor.errors = errors,
+                },
+                _ => {}
+            }
+            if data.editor.is_some() {
+                data.editor = Some(editor);
+            }
+            messengers_data.set(Some(data));
+            return;
+        }
+
+        // ── Route editor ──
+        if let Some(editor) = data.route_editor.clone() {
+            let mut editor = editor;
+            match code {
+                KeyCode::Esc => data.route_editor = None,
+                KeyCode::Tab | KeyCode::Down => editor.focus_next(),
+                KeyCode::BackTab | KeyCode::Up => editor.focus_prev(),
+                KeyCode::Left => editor.cycle(-1, data.threads.len()),
+                KeyCode::Right => editor.cycle(1, data.threads.len()),
+                KeyCode::Backspace => editor.backspace(),
+                // Unmodified characters only, for the same reason as the
+                // account editor above.
+                KeyCode::Char(c)
+                    if !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    editor.insert(c)
+                }
+                KeyCode::Enter => {
+                    match (editor.account(), data.threads.get(editor.thread_idx)) {
+                        (Some(account), Some(thread)) => {
+                            send_input(UserInput::MessengerCommand(
+                                GatewayCommand::MessengerRouteSave {
+                                    messenger: account.to_string(),
+                                    channel: editor.channel_value(),
+                                    thread_id: thread.thread_id,
+                                    agent_id: Some(thread.agent_id.clone()),
+                                    enabled: true,
+                                },
+                            ));
+                            data.set_status("Saving…", false);
+                            // Open until the gateway confirms, like the
+                            // account editor.
+                        }
+                        (None, _) => {
+                            editor.errors = vec!["Add a messenger account first".to_string()]
+                        }
+                        (_, None) => editor.errors = vec!["No thread to route to".to_string()],
+                    }
+                }
+                _ => {}
+            }
+            if data.route_editor.is_some() {
+                data.route_editor = Some(editor);
+            }
+            messengers_data.set(Some(data));
+            return;
+        }
+
+        // ── Backend picker (step one of "new account") ──
+        if let Some(cursor) = data.kind_picker {
+            let kinds = data.selectable_kinds();
+            match code {
+                KeyCode::Esc => data.kind_picker = None,
+                KeyCode::Up if !kinds.is_empty() => {
+                    data.kind_picker = Some(match cursor {
+                        0 => kinds.len() - 1,
+                        n => n - 1,
+                    });
+                }
+                KeyCode::Down if !kinds.is_empty() => {
+                    data.kind_picker = Some((cursor + 1) % kinds.len());
+                }
+                KeyCode::Enter => {
+                    if let Some(kind) = kinds.get(cursor) {
+                        data.editor = Some(MessengerEditorData::new(kind.id));
+                        data.kind_picker = None;
+                    }
+                }
+                _ => {}
+            }
+            messengers_data.set(Some(data));
+            return;
+        }
+
+        // ── Lists ──
+        //
+        // Letter bindings are guarded on modifiers because this block returns
+        // before the global Ctrl bindings further down are reached. Without
+        // the guard, Ctrl+D — "show message details" everywhere else — would
+        // land on this panel's delete action and destroy an account and its
+        // stored credential, unconfirmed.
+        let plain = !modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        // Any key other than a second 'd' disarms a pending account delete —
+        // moving the cursor, switching tabs, or a typo must not leave a
+        // one-keystroke deletion armed on some other row.
+        if !(plain && matches!(code, KeyCode::Char('d'))) {
+            data.pending_delete = None;
+        }
+        match code {
+            KeyCode::Esc => show_messengers_dialog.set(false),
+            KeyCode::Up => data.select_prev(),
+            KeyCode::Down => data.select_next(),
+            KeyCode::Tab => data.toggle_tab(),
+            KeyCode::Char('t') if plain => data.toggle_tab(),
+            KeyCode::Char('n') if plain => match data.tab {
+                MessengerTab::Accounts => data.kind_picker = Some(0),
+                MessengerTab::Routes => {
+                    let accounts: Vec<String> =
+                        data.accounts.iter().map(|a| a.name.clone()).collect();
+                    if accounts.is_empty() {
+                        data.set_status("Add a messenger account first ('t' switches tabs)", true);
+                    } else if data.threads.is_empty() {
+                        data.set_status("No threads to route to — create a thread first", true);
+                    } else {
+                        data.route_editor = Some(RouteEditorData::new(accounts, None));
+                    }
+                }
+            },
+            KeyCode::Char('e') if plain => {
+                if let Some(account) = data.selected_account() {
+                    data.editor = Some(MessengerEditorData::edit(account));
+                }
+            }
+            KeyCode::Char(' ') if plain => {
+                match (data.tab, data.selected_account(), data.selected_route()) {
+                    (MessengerTab::Accounts, Some(account), _) => {
+                        let (display_name, bio, avatar_path) = (None, None, None);
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerAccountSave {
+                                original_name: Some(account.name.clone()),
+                                name: account.name.clone(),
+                                messenger_type: account.messenger_type.clone(),
+                                enabled: !account.enabled,
+                                // Toggling enabled must not disturb anything else,
+                                // so no fields and no secrets are sent: the gateway
+                                // starts from the stored entry.
+                                fields: Vec::new(),
+                                secrets: Vec::new(),
+                                display_name,
+                                bio,
+                                avatar_path,
+                                agent_id: None,
+                            },
+                        ));
+                    }
+                    (MessengerTab::Routes, _, Some(route)) => {
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerRouteSave {
+                                messenger: route.messenger.clone(),
+                                channel: route.channel.clone(),
+                                thread_id: route.thread_id,
+                                agent_id: Some(route.agent_id.clone()),
+                                enabled: !route.enabled,
+                            },
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            KeyCode::Char('m') if plain => {
+                if let Some(account) = data.selected_account().filter(|a| a.has_plaintext()) {
+                    send_input(UserInput::MessengerCommand(
+                        GatewayCommand::MessengerSecretsMigrate {
+                            name: account.name.clone(),
+                        },
+                    ));
+                    data.set_status("Moving credentials into the vault…", false);
+                }
+            }
+            KeyCode::Char('d') if plain => {
+                let account = data.selected_account().map(|a| a.name.clone());
+                let route = data
+                    .selected_route()
+                    .map(|r| (r.messenger.clone(), r.channel.clone()));
+                match (account, route) {
+                    // Deleting an account destroys its vault credentials with
+                    // it, and the list opens with a row pre-selected — so the
+                    // first press only arms, and the second press on the same
+                    // account deletes. Routes stay single-press: re-adding
+                    // one is cheap.
+                    (Some(name), _) => {
+                        if data.pending_delete.as_deref() == Some(name.as_str()) {
+                            data.pending_delete = None;
+                            send_input(UserInput::MessengerCommand(
+                                GatewayCommand::MessengerAccountDelete { name },
+                            ));
+                        } else {
+                            data.set_status(
+                                format!(
+                                    "Press 'd' again to delete '{name}' and its stored credentials"
+                                ),
+                                true,
+                            );
+                            data.pending_delete = Some(name);
+                        }
+                    }
+                    (_, Some((messenger, channel))) => {
+                        data.pending_delete = None;
+                        send_input(UserInput::MessengerCommand(
+                            GatewayCommand::MessengerRouteDelete { messenger, channel },
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+        messengers_data.set(Some(data));
         return;
     }
     if show_analytics_dialog.get() {

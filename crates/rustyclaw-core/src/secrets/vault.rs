@@ -138,6 +138,25 @@ impl SecretsManager {
 
     /// Store (or overwrite) a secret in the vault and persist to disk.
     pub fn store_secret(&mut self, key: &str, value: &str) -> Result<()> {
+        // The service namespaces are readable through the policy-skipping
+        // `read_service_credential`, so their integrity — "only gateway
+        // provisioning writes here" — is enforced at this choke point rather
+        // than by convention at every caller. Provisioning goes through
+        // `store_service_credential`, which bypasses this check by design.
+        if super::vault_ext::is_reserved_service_name(key) {
+            anyhow::bail!(
+                "'{key}' is in a namespace reserved for gateway-provisioned \
+                 service credentials"
+            );
+        }
+        self.set_raw(key, value)
+    }
+
+    /// Write a raw key without the reserved-namespace check.
+    ///
+    /// For internal use by the typed store paths, which have already decided
+    /// whether the name is legitimate for their caller.
+    pub(super) fn set_raw(&mut self, key: &str, value: &str) -> Result<()> {
         let vault = self.ensure_vault()?;
         vault.set(key, value);
         vault.save().context("Failed to save secrets vault")?;
@@ -195,17 +214,38 @@ impl SecretsManager {
         value: &str,
         username: Option<&str>,
     ) -> Result<()> {
+        // See `store_secret`: service namespaces are written only by
+        // gateway provisioning, through `store_service_credential`.
+        if super::vault_ext::is_reserved_service_name(name) {
+            anyhow::bail!(
+                "'{name}' is in a namespace reserved for gateway-provisioned \
+                 service credentials"
+            );
+        }
+        self.store_credential_unchecked(name, entry, value, username)
+    }
+
+    /// [`store_credential`](Self::store_credential) without the
+    /// reserved-namespace check, for the provisioning path that owns those
+    /// namespaces.
+    pub(super) fn store_credential_unchecked(
+        &mut self,
+        name: &str,
+        entry: &SecretEntry,
+        value: &str,
+        username: Option<&str>,
+    ) -> Result<()> {
         let meta_key = format!("cred:{}", name);
         let val_key = format!("val:{}", name);
 
         let meta_json =
             serde_json::to_string(entry).context("Failed to serialize credential metadata")?;
-        self.store_secret(&meta_key, &meta_json)?;
-        self.store_secret(&val_key, value)?;
+        self.set_raw(&meta_key, &meta_json)?;
+        self.set_raw(&val_key, value)?;
 
         if entry.kind == SecretKind::UsernamePassword {
             let user_key = format!("val:{}:user", name);
-            self.store_secret(&user_key, username.unwrap_or(""))?;
+            self.set_raw(&user_key, username.unwrap_or(""))?;
         }
 
         Ok(())

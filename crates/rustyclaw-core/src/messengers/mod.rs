@@ -3,6 +3,8 @@
 //! All messenger implementations are now in the `chat-system` crate.
 //! This module re-exports them for backwards compatibility.
 
+pub mod setup;
+
 pub use chat_system::messengers::{
     ConsoleMessenger, DiscordMessenger, GoogleChatMessenger, IMessageMessenger, IrcMessenger,
     SlackMessenger, TeamsMessenger, TelegramMessenger, WebhookMessenger,

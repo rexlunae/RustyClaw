@@ -248,6 +248,18 @@ pub async fn exec_secrets_store(args: &serde_json::Value, vault: &SharedVault) -
         return Err("username_password credentials require the 'username' parameter.".into());
     }
 
+    // Service namespaces are readable through `read_service_credential`,
+    // which skips the access policy — their safety rests on nothing but the
+    // gateway's own provisioning ever writing there. This path is driven by
+    // the model, so it does not get to.
+    if rustyclaw_core::secrets::is_reserved_service_name(cred_name) {
+        return Err(format!(
+            "'{cred_name}' is in a namespace reserved for gateway-provisioned service \
+             credentials. Choose a name outside it."
+        )
+        .into());
+    }
+
     let entry = SecretEntry {
         label: cred_name.to_string(),
         kind,
@@ -270,6 +282,25 @@ pub async fn exec_secrets_store(args: &serde_json::Value, vault: &SharedVault) -
     ))
 }
 
+/// Refuse model/client-driven access to a gateway-provisioned service
+/// credential.
+///
+/// Applied to every generic vault frame and tool that names a key: stores
+/// (planting an entry the policy-skipping service read path would serve),
+/// deletes/disables/re-policies (breaking a configured bot's login), and the
+/// raw reads `SecretsGet`/`SecretsPeek` (which bypass the `WithAuth` policy
+/// and would hand the value to a client that was deliberately never sent
+/// it). These credentials are managed through the messenger setup panel,
+/// whose handler talks to the vault directly and is not affected.
+fn reserved_namespace_error(name: &str) -> Option<String> {
+    rustyclaw_core::secrets::is_reserved_service_name(name).then(|| {
+        format!(
+            "'{name}' is a gateway-provisioned service credential; manage it \
+             through the messenger setup panel instead."
+        )
+    })
+}
+
 /// Change the access policy of an existing credential.
 #[instrument(skip(args, vault))]
 pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVault) -> ToolResult {
@@ -277,6 +308,9 @@ pub async fn exec_secrets_set_policy(args: &serde_json::Value, vault: &SharedVau
         .get("name")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: name".to_string())?;
+    if let Some(refusal) = reserved_namespace_error(cred_name) {
+        return Err(refusal.into());
+    }
 
     let policy_str = args
         .get("policy")
@@ -334,6 +368,10 @@ pub async fn exec_secrets_link_trigger(
         .and_then(|v| v.as_str())
         .ok_or_else(|| "Missing required parameter: triggerId".to_string())?;
     let allow = args.get("allow").and_then(|v| v.as_bool()).unwrap_or(true);
+
+    if let Some(refusal) = reserved_namespace_error(cred_name) {
+        return Err(refusal.into());
+    }
 
     let mut mgr = vault.lock().await;
     mgr.set_credential_trigger_link(cred_name, trigger_id, allow)
@@ -401,6 +439,21 @@ pub(crate) async fn handle_secrets_frame(
             send_secrets_list_result(writer, true, dto_entries).await?;
         }
         ClientPayload::SecretsStore { key, value } => {
+            // Same reservation as the agent-facing store: a raw key like
+            // `val:messenger/x/token` would otherwise plant an entry the
+            // policy-skipping service read path is willing to serve.
+            if rustyclaw_core::secrets::is_reserved_service_name(&key) {
+                send_secrets_store_result(
+                    writer,
+                    false,
+                    &format!(
+                        "'{key}' is in a namespace reserved for gateway-provisioned \
+                         service credentials. Choose a key outside it."
+                    ),
+                )
+                .await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.store_secret(&key, &value);
             match result {
@@ -419,6 +472,15 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsGet { key } => {
+            // The whole point of vaulting messenger credentials is that a
+            // client is never sent the value ("values travel one way").
+            // `get_secret(_, true)` skips the WithAuth policy they are stored
+            // under, so without this fence the frame hands back the raw bot
+            // token.
+            if let Some(refusal) = reserved_namespace_error(&key) {
+                send_secrets_get_result(writer, false, &key, None, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.get_secret(&key, true);
             match result {
@@ -448,6 +510,10 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsDelete { key } => {
+            if let Some(refusal) = reserved_namespace_error(&key) {
+                send_secrets_delete_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.delete_secret(&key);
             match result {
@@ -463,6 +529,13 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsPeek { name } => {
+            // As for `SecretsGet`: peek renders credential values for
+            // display, which is exactly what a service credential must never
+            // have — the client was deliberately never sent it.
+            if let Some(refusal) = reserved_namespace_error(&name) {
+                send_secrets_peek_result(writer, false, vec![], Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.peek_credential_display(&name);
             match result {
@@ -489,6 +562,10 @@ pub(crate) async fn handle_secrets_frame(
             policy,
             skills,
         } => {
+            if let Some(refusal) = reserved_namespace_error(&name) {
+                send_secrets_set_policy_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let policy_str = policy.clone();
             let policy = match policy.as_str() {
@@ -521,6 +598,10 @@ pub(crate) async fn handle_secrets_frame(
             }
         }
         ClientPayload::SecretsSetDisabled { name, disabled } => {
+            if let Some(refusal) = reserved_namespace_error(&name) {
+                send_secrets_set_disabled_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let result = v.set_credential_disabled(&name, disabled);
             match result {
@@ -532,6 +613,10 @@ pub(crate) async fn handle_secrets_frame(
             };
         }
         ClientPayload::SecretsDeleteCredential { name } => {
+            if let Some(refusal) = reserved_namespace_error(&name) {
+                send_secrets_delete_credential_result(writer, false, Some(&refusal)).await?;
+                return Ok(());
+            }
             let mut v = vault.lock().await;
             let meta_key = format!("cred:{}", name);
             let is_legacy = v.get_secret(&meta_key, true).ok().flatten().is_none();
@@ -597,4 +682,48 @@ pub(crate) async fn handle_secrets_frame(
         _ => {}
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod reserved_namespace_tests {
+    use super::*;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    fn vault(dir: &std::path::Path) -> SharedVault {
+        Arc::new(Mutex::new(rustyclaw_core::secrets::SecretsManager::new(
+            dir,
+        )))
+    }
+
+    #[tokio::test]
+    async fn the_model_cannot_store_or_repolicy_a_service_credential() {
+        let dir = tempfile::tempdir().unwrap();
+        let vault = vault(dir.path());
+
+        // Storing into the reserved namespace would plant an entry the
+        // policy-skipping service read path is willing to serve…
+        let store = exec_secrets_store(
+            &serde_json::json!({
+                "name": "messenger/tg/token",
+                "kind": "token",
+                "value": "planted"
+            }),
+            &vault,
+        )
+        .await;
+        assert!(store.is_err(), "reserved store must be refused");
+
+        // …and re-policying an existing one would let the agent-facing read
+        // path at it, or break the bot's login via TriggerOnly.
+        let policy = exec_secrets_set_policy(
+            &serde_json::json!({
+                "name": "messenger/tg/token",
+                "policy": "always"
+            }),
+            &vault,
+        )
+        .await;
+        assert!(policy.is_err(), "reserved re-policy must be refused");
+    }
 }

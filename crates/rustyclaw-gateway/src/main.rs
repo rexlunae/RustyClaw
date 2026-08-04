@@ -19,6 +19,7 @@ mod helpers;
 mod kernel_handler;
 mod listen;
 mod mcp_handler;
+mod messenger_config_handler;
 mod messenger_handler;
 mod model_handler;
 mod panel_handler;

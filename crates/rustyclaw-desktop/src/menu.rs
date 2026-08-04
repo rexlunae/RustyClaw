@@ -23,6 +23,7 @@ pub struct AppMenuIds {
     pub memory: muda::MenuId,
     pub mcp: muda::MenuId,
     pub channels: muda::MenuId,
+    pub messengers: muda::MenuId,
     pub tool_perms: muda::MenuId,
     pub analytics: muda::MenuId,
     pub logs: muda::MenuId,
@@ -68,6 +69,7 @@ pub fn build_app_menu() -> muda::Menu {
     let memory = muda::MenuItem::new("Memory…", true, None);
     let mcp = muda::MenuItem::new("MCP Servers…", true, None);
     let channels = muda::MenuItem::new("Channels…", true, None);
+    let messengers = muda::MenuItem::new("Messenger Setup…", true, None);
     let tool_perms = muda::MenuItem::new("Tool Permissions…", true, None);
     let analytics = muda::MenuItem::new("Usage Analytics…", true, None);
     let logs = muda::MenuItem::new("Logs…", true, None);
@@ -91,6 +93,7 @@ pub fn build_app_menu() -> muda::Menu {
         memory: memory.id().clone(),
         mcp: mcp.id().clone(),
         channels: channels.id().clone(),
+        messengers: messengers.id().clone(),
         tool_perms: tool_perms.id().clone(),
         analytics: analytics.id().clone(),
         logs: logs.id().clone(),
@@ -154,6 +157,7 @@ pub fn build_app_menu() -> muda::Menu {
             &memory,
             &mcp,
             &channels,
+            &messengers,
             &tool_perms,
         ],
     )

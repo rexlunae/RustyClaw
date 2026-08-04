@@ -257,18 +257,19 @@ pub async fn run_gateway(
 
     // ── Initialize and start messenger loop ─────────────────────────
     //
-    // If messengers are configured, we poll them for incoming messages
-    // and route them through the model.
-    eprintln!("DEBUG: messengers configured: {}", config.messengers.len());
-    let messenger_mgr = if !config.messengers.is_empty() {
-        eprintln!("DEBUG: Creating messenger manager...");
-        match messenger_handler::create_messenger_manager(&config).await {
+    // Spawned unconditionally, not just when messengers exist at boot: the
+    // setup panel adds accounts at runtime, and the loop is what notices
+    // them (it re-reads the shared config each tick). Gating on the boot
+    // config meant a first account saved through the panel could never
+    // connect until a restart. With nothing configured, polling an empty
+    // manager is a no-op.
+    let messenger_mgr = {
+        match messenger_handler::create_messenger_manager(&config, &vault).await {
             Ok(mgr) => {
-                eprintln!("DEBUG: Messenger manager created successfully");
                 let shared_mgr: SharedMessengerManager = Arc::new(Mutex::new(mgr));
 
                 // Spawn messenger loop
-                let messenger_config = config.clone();
+                let messenger_config = shared_config.clone();
                 let messenger_ctx = model_ctx.clone();
                 let messenger_vault = vault.clone();
                 let messenger_skills = skill_mgr.clone();
@@ -279,13 +280,7 @@ pub async fn run_gateway(
                 // Read current copilot session from shared state
                 let messenger_copilot = shared_copilot_session.read().await.clone();
 
-                eprintln!("DEBUG: Spawning messenger loop task...");
                 tokio::spawn(async move {
-                    eprintln!("DEBUG: Messenger loop task started");
-                    eprintln!(
-                        "DEBUG: messenger_ctx.is_some() = {}",
-                        messenger_ctx.is_some()
-                    );
                     if let Err(e) = messenger_handler::run_messenger_loop(
                         messenger_config,
                         mgr_clone,
@@ -299,10 +294,8 @@ pub async fn run_gateway(
                     )
                     .await
                     {
-                        eprintln!("DEBUG: Messenger loop error: {}", e);
                         error!(error = %e, "Messenger loop error");
                     }
-                    eprintln!("DEBUG: Messenger loop exited");
                 });
 
                 Some(shared_mgr)
@@ -312,8 +305,6 @@ pub async fn run_gateway(
                 None
             }
         }
-    } else {
-        None
     };
 
     // ── External triggers ───────────────────────────────────────────

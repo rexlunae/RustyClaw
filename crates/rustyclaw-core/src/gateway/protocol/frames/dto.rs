@@ -4,6 +4,7 @@
 //! domain types live here as `From` impls so producers can use `.into()`.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 /// DTO for local engine info in protocol results.
@@ -392,6 +393,85 @@ pub struct ChannelStatusDto {
     pub paired: bool,
     pub online: bool,
     pub last_message: Option<String>,
+}
+
+// ============================================================================
+// Messenger setup DTOs
+// ============================================================================
+
+/// One messenger account as the configuration UI sees it.
+///
+/// Secret values are never carried here in either direction on a *read*: the
+/// gateway reports which secret fields are set and where they live, not what
+/// they are. A client that wanted to display a bot token would be a client
+/// that leaks one over the wire and into a scrollback buffer.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MessengerAccountDto {
+    /// Account name, unique within the config.
+    pub name: String,
+    /// Messenger type id, matching a `KindSpec` in
+    /// [`crate::messengers::setup::KINDS`].
+    pub messenger_type: String,
+    /// Whether the gateway should connect this account.
+    pub enabled: bool,
+    /// Non-secret field values, keyed by schema field name.
+    pub fields: BTreeMap<String, String>,
+    /// Secret fields that have a value in the vault, and the credential name
+    /// holding it.
+    pub vaulted: BTreeMap<String, String>,
+    /// Secret fields still sitting in plaintext config, as `(field, label)`.
+    /// Empty for accounts created through this UI.
+    pub plaintext: Vec<(String, String)>,
+    /// Presented identity, with unset fields already resolved against the
+    /// agent's own name and description.
+    pub profile: MessengerProfileDto,
+    /// Whether the gateway build can actually run this messenger type.
+    pub available: bool,
+    /// Why not, when `available` is false.
+    pub unavailable_reason: Option<String>,
+}
+
+/// The identity an account presents, and how much of it is inherited.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct MessengerProfileDto {
+    /// Name after fallback — what other people in the chat actually see.
+    pub display_name: String,
+    /// About/status text after fallback.
+    pub bio: Option<String>,
+    /// Avatar image path, where the backend supports one.
+    pub avatar_path: Option<PathBuf>,
+    /// Agent this account speaks as.
+    pub agent_id: String,
+    /// Whether `display_name` is an override rather than the agent's name.
+    pub display_name_overridden: bool,
+    /// Whether `bio` is an override rather than the agent's description.
+    pub bio_overridden: bool,
+}
+
+/// A binding from a messenger channel to a gateway thread.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ThreadRouteDto {
+    /// Account the route applies to.
+    pub messenger: String,
+    /// Channel id, or `None` for every channel on the account.
+    pub channel: Option<String>,
+    /// Thread the conversation belongs to.
+    pub thread_id: u64,
+    /// Agent owning the thread.
+    pub agent_id: String,
+    /// Whether the route is in effect.
+    pub enabled: bool,
+    /// Thread's label, for display. `None` when the route points at a thread
+    /// that no longer exists — which is exactly when a user needs to see it.
+    pub thread_label: Option<String>,
+}
+
+/// A thread a route may point at.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RoutableThreadDto {
+    pub thread_id: u64,
+    pub label: String,
+    pub agent_id: String,
 }
 
 // ============================================================================
