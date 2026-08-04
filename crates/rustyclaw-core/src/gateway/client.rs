@@ -323,6 +323,7 @@ impl GatewayClient {
                             .copied();
                         let closing =
                             matches!(envelope.frame.payload, ServerPayload::ResponseDone { .. });
+                        let announced = envelope.frame.frame_type;
                         if let Some(event) = GatewayEvent::from_server_frame(envelope.frame) {
                             if event_tx
                                 .send(ThreadEvent { thread_id, event })
@@ -331,6 +332,19 @@ impl GatewayClient {
                             {
                                 break;
                             }
+                        } else {
+                            // Some payloads carry nothing a client acts on, so
+                            // this is not always wrong — but it is the last
+                            // place a frame can disappear, and it used to do so
+                            // without a word. A frame whose type promised a
+                            // reply and whose payload had decoded into
+                            // something else went missing here, and the only
+                            // visible symptom was a view that never filled in.
+                            tracing::debug!(
+                                frame_type = ?announced,
+                                stream_id = envelope.stream_id,
+                                "Received frame carried no client event"
+                            );
                         }
                         // Released only after its close-out has been stamped,
                         // so the frame that ends the turn still names it.

@@ -325,14 +325,83 @@ impl SshConnection {
 fn bare_to_wire_frame(
     data: &[u8],
 ) -> std::result::Result<WireFrame<ServerFrame>, crate::gateway::protocol::FrameCodecError> {
-    let frame: ServerFrame =
-        bincode::serde::decode_from_slice(data, bincode::config::standard()).map(|(f, _)| f)?;
+    // Strict: the whole buffer must be a bare frame, or this is not one.
+    //
+    // This runs only after the wire-frame decode has already failed, so a
+    // lenient decode here answers "is there any frame at the front of these
+    // bytes" — and for a control-stream wire frame the answer is always yes,
+    // because its header reads as `Hello`/`Empty` in two bytes. That turned
+    // every genuine decode failure into a plausible frame the client then
+    // discarded without a word, instead of the error it was.
+    let frame: ServerFrame = crate::gateway::protocol::deserialize_frame(data)?;
     Ok(WireFrame::control(frame))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The legacy fallback must not swallow a real wire frame.
+    ///
+    /// It runs only when the wire decode has already failed, so whatever it
+    /// accepts is what the client believes arrived. A control-stream wire
+    /// frame starts `[version=3, stream=0, …]`, and those two bytes read as a
+    /// complete bare `ServerFrame` — `Hello` with an `Empty` payload — which
+    /// `from_server_frame` maps to no event at all. Every undecodable frame
+    /// therefore became a frame that silently was not there: no error, no log,
+    /// a healthy connection, and a view that never filled in. That is what
+    /// hid an undeliverable transcript for as long as it did.
+    #[test]
+    fn the_bare_fallback_rejects_a_wire_frame() {
+        use crate::gateway::protocol::types::ChatMessage;
+        use crate::gateway::{ServerFrameType, ServerPayload, serialize_wire_frame};
+
+        let wire = WireFrame::control(ServerFrame {
+            frame_type: ServerFrameType::ThreadHistoryReply,
+            payload: ServerPayload::ThreadHistoryReply {
+                thread_id: 2,
+                ok: true,
+                messages: vec![ChatMessage::text("user", "hello there")],
+                error: None,
+            },
+        });
+        let bytes = serialize_wire_frame(&wire).expect("a wire frame encodes");
+
+        match bare_to_wire_frame(&bytes) {
+            Ok(decoded) => panic!(
+                "the fallback claimed a wire frame was a bare {:?}, discarding the payload",
+                decoded.frame.frame_type
+            ),
+            Err(e) => {
+                // Rejected because it did not account for the whole buffer —
+                // the specific check that closes this hole.
+                assert!(
+                    matches!(
+                        e,
+                        crate::gateway::protocol::FrameCodecError::TrailingBytes { .. }
+                    ),
+                    "expected a trailing-bytes rejection, got: {e}"
+                );
+            }
+        }
+    }
+
+    /// A genuine bare frame still decodes, so old gateways keep working.
+    ///
+    /// The strictness above must reject partial reads without rejecting the
+    /// case the fallback exists for.
+    #[test]
+    fn the_bare_fallback_still_accepts_a_bare_frame() {
+        use crate::gateway::{ServerFrameType, ServerPayload, serialize_frame};
+
+        let bare = ServerFrame {
+            frame_type: ServerFrameType::Status,
+            payload: ServerPayload::Empty,
+        };
+        let bytes = serialize_frame(&bare).expect("a bare frame encodes");
+        let decoded = bare_to_wire_frame(&bytes).expect("a bare frame is still accepted");
+        assert_eq!(decoded.frame.frame_type, ServerFrameType::Status);
+    }
 
     #[test]
     fn parse_ssh_error_prefers_known_diagnostics() {
